@@ -8,6 +8,8 @@ import { expandHome, paths } from './config.js';
 import { DEFAULT_ENGINE, ENGINES, engineOf, installed, notInstalled } from './engines/index.js';
 import {
   DOC_KINDS,
+  diagramsOnly,
+  diagramsPrompt,
   briefDir,
   briefPath,
   briefPrompt,
@@ -33,11 +35,24 @@ const SUMMARIES = {
   insights: { field: 'insights', prompt: insightsPrompt },
   ...Object.fromEntries(Object.keys(DOC_KINDS).map((k) => [k, { doc: k, prompt: (ctx) => docPrompt(k, ctx) }])),
   humanai: { doc: 'humanai', run: 'runHumanAi' },
+  diagrams: { doc: 'diagrams', run: 'runDiagrams' },
 };
 /** Read / write where a summary of `kind` is kept on the agent record. */
 const getSummary = (agent, kind) => (SUMMARIES[kind].doc ? agent.docs?.[kind] : agent[SUMMARIES[kind].field]);
 const summaryPatch = (agent, kind, value) =>
   SUMMARIES[kind].doc ? { docs: { ...agent.docs, [kind]: value } } : { [SUMMARIES[kind].field]: value };
+
+/** The folders of a repo with how many files each holds, two levels deep: a map for drawing it. */
+async function repoLayout(dir) {
+  const files = (await git.run('git', ['ls-files'], { cwd: dir, timeout: 20_000 })).split('\n').filter(Boolean);
+  const counts = new Map();
+  for (const f of files) {
+    const parts = f.split('/');
+    const key = parts.length > 2 ? `${parts[0]}/${parts[1]}/` : parts.length === 2 ? `${parts[0]}/` : f;
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return [...counts].slice(0, 150).map(([k, n]) => (k.endsWith('/') ? `${k} (${n} files)` : k)).join('\n');
+}
 import { spawn } from 'node:child_process';
 import * as git from './git.js';
 import { conflictMessage, findConflicts, related, repoKey, summarize as summarizeConflicts } from './conflicts.js';
@@ -1943,6 +1958,37 @@ export class AgentManager extends EventEmitter {
       });
       child.stdin.end(engine.oneShotStdin === false ? '' : text);
     });
+  }
+
+  /** Diagrams only: the problem and its solution drawn from the documents already written and the live context. */
+  async runDiagrams(agent, ctx) {
+    const cur0 = this.store.get(agent.id) ?? agent;
+    const written = [
+      ...['analysis', 'design', 'flow', 'proposal'].map((k) => [DOC_KINDS[k].title, cur0.docs?.[k]?.markdown]),
+      ['Implementation plan', cur0.planReview?.markdown],
+      ['Explanation', cur0.explanation?.markdown],
+    ].filter(([, md]) => md);
+    const documents = written.map(([title, md]) => `<document title="${title}">\n${md.slice(0, 12_000)}\n</document>`).join('\n');
+    const repoMap = agent.workdir ? await repoLayout(agent.workdir).catch(() => '') : '';
+    const writer = this.writerFor(agent);
+    const markdown = diagramsOnly(await this.oneShot(agent, diagramsPrompt({ ...ctx, documents, repoMap }), writer));
+    const cur = this.store.get(agent.id);
+    if (!cur) return null;
+    const from = written.map(([title]) => title);
+    return this.view(
+      this.patch(
+        agent.id,
+        summaryPatch(cur, 'diagrams', {
+          markdown,
+          from,
+          writer: `${writer.engine.label}${writer.model ? ` (${writer.model})` : ''}`,
+          at: now(),
+          briefUpdatedAt: cur.brief?.updatedAt ?? null,
+          pending: false,
+          error: null,
+        }),
+      ),
+    );
   }
 
   /** Human vs AI: the writer splits and answers the open questions, then another model double-checks it. */

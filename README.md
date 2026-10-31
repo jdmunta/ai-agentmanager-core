@@ -327,6 +327,7 @@ The Brief panel's **Share for review** buttons, or `agentmgr doc <agent> <kind>`
 | **Flow** | Summary, end-to-end flowchart with a step-by-step walk-through, key interactions as a sequence diagram, failure and edge cases |
 | **Proposal** | Summary, problem, recommendation, scope, plan, effort and dependencies, risks, decisions needed |
 | **Human vs AI** | Your top 5 decisions, each with why it needs you, the stakes, options and what the work suggests, plus a box for your answer. Up to 5 questions the AI answers, each with its confidence, evidence and how to check it. A second model's verdict on each. |
+| **Diagrams** | Diagrams only, for a quick grasp: the problem, the architecture (with what changes highlighted), the design, the data flow (animated) and the key interaction, plus the plan. Drawn from the documents already written and the agent's work. Optional: **Write all** leaves it out. |
 
 **Human vs AI.** This review takes two separate read-only calls.
 1. **The split.** The agent's engine splits the open questions. *For you to decide* covers judgment calls such as intent, priorities, risk appetite and trade-offs. *Answered by AI* covers reasoning and evaluation: correctness, edge cases, test coverage and what's left.

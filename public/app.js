@@ -245,7 +245,9 @@ const INSIGHT_ICONS = { why: '🎯', what: '📦', how: '🛠', now: '📍' };
 
 // ------------------------------------------------------------------ stakeholder documents
 
-const DOCS = { analysis: 'Analysis', design: 'Design', flow: 'Flow', proposal: 'Proposal', humanai: 'Human vs AI' };
+const DOCS = { analysis: 'Analysis', design: 'Design', flow: 'Flow', proposal: 'Proposal', humanai: 'Human vs AI', diagrams: 'Diagrams' };
+// Optional extras that "Write all" leaves out.
+const DOC_EXTRAS = new Set(['diagrams']);
 const DOC_TITLES = { ...DOCS, plan: 'Implementation plan' };
 /** What the document dialog shows: a stakeholder document, or the agent's plan under review. */
 const docOf = (a, kind) => (kind === 'plan' ? a?.planReview && { markdown: a.planReview.markdown, at: a.planReview.updatedAt } : a?.docs?.[kind]);
@@ -308,7 +310,7 @@ function docHtml(markdown) {
 }
 
 function docButtons(a) {
-  const missing = Object.keys(DOCS).filter((k) => !a.docs?.[k]?.markdown && !a.docs?.[k]?.pending);
+  const missing = Object.keys(DOCS).filter((k) => !DOC_EXTRAS.has(k) && !a.docs?.[k]?.markdown && !a.docs?.[k]?.pending);
   const all = missing.length
     ? `<button class="small ghost" data-doc-all title="Write ${missing.map((k) => DOCS[k]).join(', ')} in the background; you'll be told when each is ready">Write all in background</button>`
     : '';
@@ -317,7 +319,7 @@ function docButtons(a) {
       const d = a.docs?.[k];
       const stale = d?.markdown && a.brief?.updatedAt && d.briefUpdatedAt !== a.brief.updatedAt;
       return `<button class="small doc-btn ${d?.markdown ? 'has' : ''}" data-doc="${k}" ${d?.pending ? 'disabled' : ''}
-        title="${d?.markdown ? `Open the ${label.toLowerCase()} document${stale ? ' (the brief changed since)' : ''}` : `Write a ${label.toLowerCase()} document for stakeholders`}">${d?.pending ? `${label}…` : label}${d?.markdown ? (stale ? ' •' : ' ✓') : ''}</button>`;
+        title="${k === 'diagrams' ? (d?.markdown ? `Open the diagrams${stale ? ' (the brief changed since)' : ''}` : 'Draw the problem and its solution for a quick grasp: architecture, design, data flow (animated) and the key interaction, diagrams only. Built from the documents already written and the agent\'s work') : d?.markdown ? `Open the ${label.toLowerCase()} document${stale ? ' (the brief changed since)' : ''}` : `Write a ${label.toLowerCase()} document for stakeholders`}">${d?.pending ? `${label}…` : label}${d?.markdown ? (stale ? ' •' : ' ✓') : ''}</button>`;
     })
     .join('')}</span>`;
 }
@@ -332,8 +334,9 @@ function renderDocDialog() {
   const plan = docView.kind === 'plan';
   $('#doc-title').textContent = `${label} · ${a?.name ?? ''}`;
   const body = $('#doc-body');
+  body.classList.toggle('diagrams-view', docView.kind === 'diagrams');
   if (d?.pending) {
-    body.innerHTML = `<p class="hint">${docView.kind === 'humanai' ? 'Splitting the open questions and answering the AI ones, then asking a second model to check…' : `Writing the ${label.toLowerCase()} document from the agent's work so far…`}</p>`;
+    body.innerHTML = `<p class="hint">${docView.kind === 'humanai' ? 'Splitting the open questions and answering the AI ones, then asking a second model to check…' : docView.kind === 'diagrams' ? "Drawing the diagrams from the documents and the agent's work so far…" : `Writing the ${label.toLowerCase()} document from the agent's work so far…`}</p>`;
     body.dataset.rendered = '';
   } else if (d?.error) body.innerHTML = `<p class="error">Couldn't write it: ${esc(d.error)}</p>`;
   else if (plan && !d?.markdown) body.innerHTML = '<p class="hint">The agent is investigating and hasn\'t written its plan yet. You\'ll see it here (and in the inbox) when it has.</p>';
@@ -345,8 +348,8 @@ function renderDocDialog() {
     }
   }
   const stale = !plan && d?.markdown && a.brief?.updatedAt && d.briefUpdatedAt !== a.brief.updatedAt;
-  const by = d?.writer ? ` by ${d.writer}${d.critique ? `, checked by ${d.critique.label}` : ''}` : '';
-  $('#doc-meta').textContent = d?.markdown ? `${plan ? `Plan · ${PLAN_LABEL[a.planReview.status]} · updated` : 'Written'} ${ago(d.at)}${by}${stale ? ' · the brief has changed since; Regenerate for the latest' : ''}` : '';
+  const by = d?.writer ? ` by ${d.writer}${d.critique ? `, checked by ${d.critique.label}` : ''}${d.from ? ` from ${d.from.length ? d.from.join(', ') : "the agent's work"}` : ''}` : '';
+  $('#doc-meta').textContent = d?.markdown ? `${plan ? `Plan · ${PLAN_LABEL[a.planReview.status]} · updated` : docView.kind === 'diagrams' ? 'Drawn' : 'Written'} ${ago(d.at)}${by}${stale ? ' · the brief has changed since; Regenerate for the latest' : ''}` : '';
   for (const id of ['doc-copy', 'doc-download', 'doc-print']) $(`#${id}`).disabled = !d?.markdown;
   $('#doc-print').hidden = plan;
   $('#doc-regen').hidden = plan;

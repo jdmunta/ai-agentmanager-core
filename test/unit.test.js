@@ -1062,3 +1062,15 @@ test("the daemon's terminals are marked so a restart typed there outlives them",
   assert.equal(env.AGENTMGR_AGENT_ID, 'a1');
   assert.equal(AgentManager.prototype.childEnv.call({}, null).AGENTMGR_TERMINAL, '1', 'the machine terminal too');
 });
+
+test('diagramsOnly keeps the title, diagram headings and Mermaid blocks, nothing else', async () => {
+  const { diagramsOnly, diagramsPrompt } = await import('../src/brief.js');
+  const out = diagramsOnly('Sure!\n# Diagrams: X\ntext\n## A\n```Mermaid\nflowchart LR\n  a --> b\n```\n### Deeper\n## B\nno diagram\n## C\n```mermaid\n```\n```js\ncode\n```');
+  assert.equal(out, '# Diagrams: X\n\n## A\n\n```mermaid\nflowchart LR\n  a --> b\n```');
+  assert.throws(() => diagramsOnly('# Diagrams: X\nNo pictures.'), /no diagrams/);
+  const p = diagramsPrompt({ intent: 'Fix login', status: 's', digest: '', repo: '', briefMarkdown: '', documents: '<document title="Design">D</document>', repoMap: 'src/ (3 files)' });
+  assert.match(p, /^Draw diagrams/);
+  assert.match(p, /<documents_already_written>\n<document title="Design">D<\/document>/);
+  assert.match(p, /src\/ \(3 files\)/);
+  assert.match(p, /e1@\{ animate: true \}/);
+});

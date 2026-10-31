@@ -404,9 +404,9 @@ export async function main(argv) {
 
   program
     .command('doc')
-    .description('Write a stakeholder document from the agent work: analysis, design, flow, proposal or humanai (Human vs AI)')
+    .description('Write a stakeholder document from the agent work: analysis, design, flow, proposal, humanai (Human vs AI) or diagrams (diagrams only)')
     .argument('<agent>')
-    .argument('<kind>', 'analysis, design, flow, proposal, humanai, or all (background)')
+    .argument('<kind>', 'analysis, design, flow, proposal, humanai, diagrams, or all (background; diagrams not included)')
     .option('-o, --output <file>', 'also save the Markdown to this file')
     .option('--cached', 'print the last version instead of writing a new one')
     .option('-b, --background', 'start writing and return at once (kind "all" writes all five)')

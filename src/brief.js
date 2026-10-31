@@ -342,6 +342,75 @@ export function docPrompt(kind, { intent, status, digest, repo, briefMarkdown, a
   ].join('\n');
 }
 
+// ------------------------------------------------------------------ Diagrams
+
+const DIAGRAM_SET = [
+  ['The problem', 'a flowchart of the situation today and where it goes wrong (the root cause, from the analysis)'],
+  ['Architecture', 'a flowchart of the components and how they connect, grouped with subgraphs; mark the components this work adds or changes with class "changed"'],
+  ['Design', 'a classDiagram (or erDiagram for data) of the key modules, types or records and their relationships'],
+  ['Data flow', 'a flowchart LR of how data moves through the system, with the main path animated'],
+  ['Key interaction', 'a sequenceDiagram (with autonumber) of the most important exchange between components, services or the user'],
+  ['Plan', 'a flowchart of the delivery steps or a stateDiagram-v2 of the main lifecycle, whichever the work is about'],
+];
+
+/**
+ * Diagrams only: the problem and its solution drawn for a quick grasp, from the documents
+ * already written for this work (analysis, design, flow, plan) and the agent's live context.
+ */
+export function diagramsPrompt({ intent, status, digest, repo, briefMarkdown, documents, repoMap }) {
+  return [
+    "Draw diagrams that let a person grasp an AI coding agent's work at a glance: the problem and how it is being solved.",
+    'Diagrams only. No paragraphs, bullets, captions, notes or explanations outside the diagrams.',
+    '',
+    'Output Markdown in exactly this shape: a level-1 title "# Diagrams: <short name of the work>", then for each diagram a',
+    'level-2 heading with its name followed by one ```mermaid code block. Nothing else.',
+    '',
+    'The diagrams, in this order (leave one out only when the context has nothing for it):',
+    ...DIAGRAM_SET.map(([name, what], i) => `${i + 1}. "${name}": ${what}.`),
+    '',
+    'Rules:',
+    '- Valid Mermaid syntax. At most about 15 nodes per diagram; labels of five words or fewer; quote labels with punctuation, e.g. A["Parse (JSON)"]. No HTML in labels.',
+    '- Animate the main path in every flowchart: give its edges ids and animate them, e.g.',
+    '    A e1@--> B',
+    '    B e2@-->|"saves"| C',
+    '    e1@{ animate: true }',
+    '    e2@{ animate: true }',
+    '- In the architecture diagram, style what this work adds or changes: `classDef changed stroke-width:3px,stroke:#22c55e` then `class X,Y changed`.',
+    '- Use the real names of files, modules, services and data from the context. Prefer what the documents below say; do not invent components.',
+    '- Output only the Markdown.',
+    '',
+    contextBlock({ intent, status, digest, repo, briefMarkdown }).join('\n'),
+    '<documents_already_written>',
+    documents || '(none yet: draw from the context above)',
+    '</documents_already_written>',
+    '<repository_layout>',
+    repoMap || '(no repository)',
+    '</repository_layout>',
+  ].join('\n');
+}
+
+/** Keep only the title, the diagram headings and the Mermaid blocks of a reply. */
+export function diagramsOnly(markdown) {
+  const out = [];
+  let block = null;
+  for (const line of String(markdown ?? '').split('\n')) {
+    if (block) {
+      if (/^\s*```\s*$/.test(line)) {
+        if (block.length) out.push('```mermaid', ...block, '```', '');
+        block = null;
+      } else block.push(line);
+    } else if (/^\s*```\s*mermaid\s*$/i.test(line)) block = [];
+    else if (/^#{1,2} \S/.test(line)) out.push(line, '');
+  }
+  if (!out.some((l) => l === '```mermaid')) throw new Error('The reply had no diagrams');
+  // A heading left with no diagram under it says nothing.
+  return out
+    .filter((l, i) => !/^## /.test(l) || out.slice(i + 1).find((x) => x !== '') === '```mermaid')
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 // ------------------------------------------------------------------ Human vs AI
 
 export const contextBlock = ({ intent, status, digest, repo, briefMarkdown }) => [

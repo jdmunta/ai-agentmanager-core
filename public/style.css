@@ -814,3 +814,10 @@ input.inline { display: inline-block; width: 80px; padding: 1px 4px; }
 .machine-dialog[open] { display: flex; flex-direction: column; }
 .machine-dialog .terminal { flex: 1; min-height: 0; }
 .machine-dialog #machine-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #8b93a7; margin-left: 8px; }
+
+/* Diagrams: big pictures, one under another, for a quick grasp. */
+#doc-body.diagrams-view h2 { margin: 26px 0 8px; padding-top: 14px; border-top: 1px solid var(--border); }
+#doc-body.diagrams-view h2:first-of-type { border-top: 0; padding-top: 0; }
+#doc-body.diagrams-view .diagram { display: flex; justify-content: center; padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); overflow-x: auto; }
+#doc-body.diagrams-view .diagram svg { max-width: 100%; height: auto; }
+@media (prefers-reduced-motion: reduce) { .diagram svg * { animation: none !important; } }
