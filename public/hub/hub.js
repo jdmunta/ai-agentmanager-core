@@ -631,12 +631,40 @@ function agentActions(a, runner) {
     'div',
     { class: 'actions' },
     btn('Message', () => (state.open.has(tellKey) ? state.open.delete(tellKey) : state.open.add(tellKey), render(true), document.querySelector(`[data-draft="${CSS.escape(`${tellKey}:text`)}"]`)?.focus()), { title: 'Type a message into its session (sent when it is idle; resumes it if closed)' }),
-    running
-      ? btn('Stop', () => act(r, 'stop', { agent: a.id }, { key: key('stop'), done: `Stopping ${a.name}; its session is kept` }), { key: key('stop'), cls: 'ghost' })
-      : a.status !== 'preparing'
-        ? btn('Start', () => act(r, 'start', { agent: a.id }, { key: key('start'), done: `Starting ${a.name}` }), { key: key('start') })
-        : null,
+    a.movedTo
+      ? el('span', { class: 'hint' }, `Moved to ${a.movedTo}`)
+      : running
+        ? btn('Stop', () => act(r, 'stop', { agent: a.id }, { key: key('stop'), done: `Stopping ${a.name}; its session is kept` }), { key: key('stop'), cls: 'ghost' })
+        : a.status !== 'preparing'
+          ? btn('Start', () => act(r, 'start', { agent: a.id }, { key: key('start'), done: `Starting ${a.name}` }), { key: key('start') })
+          : null,
+    !a.movedTo && a.kind === 'task' && a.status !== 'preparing' && allows(runner, 'move') && state.fleet.runners.some((x) => x.id !== r && allows(x, 'move'))
+      ? btn('Move to…', () => moveAgent(a, runner), { key: key('move'), cls: 'ghost', title: 'Continue it on another machine: same conversation, branch and uncommitted work (its work goes through the repo\'s remote)' })
+      : null,
   );
+}
+
+/** Move an agent to another machine that allows it; the hub reports when it runs there. */
+async function moveAgent(a, runner) {
+  const targets = state.fleet.runners.filter((x) => x.id !== runner.id && allows(x, 'move'));
+  const name = targets.length === 1 ? targets[0].name : prompt(`Move ${a.name} to which machine?\n${targets.map((t) => `• ${t.name}`).join('\n')}`, targets[0]?.name ?? '');
+  if (!name) return;
+  const to = targets.find((t) => t.name.toLowerCase() === name.trim().toLowerCase());
+  if (!to) return toast(`No machine "${name}" that allows moves`, true);
+  if (!confirm(`Move ${a.name} from ${runner.name} to ${to.name}?\n\nIts session closes here, its uncommitted work goes to ${to.name} through the repo's remote, and it continues there with the same conversation.`)) return;
+  const key = `${runner.id}:${a.id}:move`;
+  busy.add(key);
+  render(true);
+  toast(`Moving ${a.name} to ${to.name}…`);
+  try {
+    const out = await call('POST', `/runners/${encodeURIComponent(runner.id)}/agents/${encodeURIComponent(a.id)}/move`, { to: to.id });
+    toast(`${a.name} now runs on ${out.to.machine}`);
+  } catch (err) {
+    toast(`Couldn't move ${a.name}: ${err.message}`, true);
+  } finally {
+    busy.delete(key);
+    render(true);
+  }
 }
 
 function tellForm(a) {

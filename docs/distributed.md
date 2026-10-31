@@ -16,7 +16,7 @@ AI Agent Manager runs every agent on the machine its daemon runs on. Once you ha
 
 ## Non-goals (for now)
 
-- Moving a running agent between machines. A fork across machines is in scope for a later phase; a live migration isn't.
+- Live migration (moving a process mid-turn). Moving an agent between turns is supported: see **Moving agents** below.
 - Several people sharing one hub. The design leaves room for it, but 0.3 is single-user.
 - A multi-user hosted service. The hub will move to Railway, but as a single-user hub with one access token.
 
@@ -100,6 +100,7 @@ The hub sends `rpc create` to the chosen runner, which runs the agent through it
 - **Inbox:** the union of every runner's inbox items, each tagged with its machine. Answers go back as `rpc`.
 - **Conflict radar across machines:** runners send their change sets (files and line ranges, not file contents). The hub runs the same `findConflicts` across runners, keyed by normalized repo URL instead of the local clone path.
 - **Races across machines:** a race may place each attempt on a different runner, for example the same intent on macOS and Linux. Tests run on the attempt's own runner.
+- **Moving agents:** the hub runs a move as fixed steps on both machines (`handoff-export`, `-chunk`, `-done` on the source; `handoff-import`, `-put`, `-finish`, `-cancel` on the target). Steps can't be called one by one from the actions API. Both machines must allow `move`. Code goes through the repo's own remote, as a snapshot commit on `agentmgr-handoff/<id>` that is deleted afterwards. The transcript goes through the hub in 512 KB pieces (base64, under the runner link's 1 MB frames), held in memory only. The target rewrites `cwd` in the transcript to its own folder. The source copy is marked `movedTo` and refuses to start.
 - **Forks across machines (later):** packing the checkpoint as a `git bundle` with the transcript and unpacking it on the target runner. This is the only feature that moves code between machines, so it waits for the trust model to settle.
 
 ## Security

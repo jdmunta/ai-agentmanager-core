@@ -3506,3 +3506,101 @@ test('Open Terminal: a shell in the home folder, not tied to an agent', async ()
   await waitFor(async () => (await call('GET', '/machine/shells')).body.shells.length === 0);
   ws.close();
 });
+
+test('hub move: an agent continues on another machine with its conversation, branch and uncommitted work', async () => {
+  const { spawn } = await import('node:child_process');
+  const { startHub } = await import('../src/hub.js');
+  const { transcriptPath } = await import('../src/tracker.js');
+  const hub = await startHub({ port: 0, home: path.join(home, 'hub-move'), name: 'test-hub', log: () => {} });
+  const hubBase = `http://127.0.0.1:${hub.server.address().port}`;
+  const hubCall = async (method, route, body) => {
+    const res = await fetch(`${hubBase}/api${route}`, { method, headers: { 'content-type': 'application/json', authorization: `Bearer ${hub.token}` }, body: body && JSON.stringify(body) });
+    return { status: res.status, body: await res.json().catch(() => ({})) };
+  };
+  // Machine B: a second daemon with its own home, port and Claude folder.
+  const hB = fs.mkdtempSync(path.join(os.tmpdir(), 'agentmgr-moveB-'));
+  const portB = port + 9;
+  fs.writeFileSync(path.join(hB, 'config.json'), JSON.stringify({ claudeBin: process.execPath, claudeArgs: [path.join(here, 'fake-claude.js')], judge: { enabled: false }, cleanup: { strategy: 'off' }, updates: { check: false }, hub: { allow: ['view', 'control', 'move'] } }));
+  const envB = { ...process.env, AGENTMGR_HOME: hB, AGENTMGR_PORT: String(portB), AGENTMGR_REMOTE: '0', AGENTMGR_PLUGINS: '', CLAUDE_CONFIG_DIR: path.join(hB, 'claude'), FAKE_CLAUDE_LOG: path.join(hB, 'fake.log'), AGENTMGR_SERVICE_LABEL: `com.agentmgr.test-${process.pid}` };
+  const callB = async (method, route, body) => {
+    const res = await fetch(`http://127.0.0.1:${portB}/api${route}`, { method, headers: { 'content-type': 'application/json', 'x-agentmgr': '1' }, body: body && JSON.stringify(body) });
+    return { status: res.status, body: await res.json().catch(() => ({})) };
+  };
+  const daemonB = spawn(process.execPath, [path.join(here, '..', 'bin', 'agentmgr.js'), 'serve'], { env: envB, stdio: 'ignore' });
+  const before = hubLink.config.hub;
+  try {
+    await waitFor(async () => (await callB('GET', '/health').catch(() => null))?.status === 200, 15000, 'machine B');
+    const origin = makeOrigin('mv');
+    assert.equal((await call('POST', '/projects', { shortcut: 'mv', repo: `file://${origin}` })).status, 200);
+    assert.equal((await callB('POST', '/projects', { shortcut: 'mv', repo: `file://${origin}` })).status, 200);
+    await call('POST', '/hub/leave').catch(() => {});
+    hubLink.config.hub = { allow: ['view', 'control', 'move'], projects: ['*'] };
+    assert.equal((await call('POST', '/hub/join', { url: hubBase, code: (await hubCall('POST', '/invites')).body.code, name: 'mini' })).status, 200);
+    assert.equal((await callB('POST', '/hub/join', { url: hubBase, code: (await hubCall('POST', '/invites')).body.code, name: 'laptop' })).status, 200);
+    const runners = await waitFor(async () => {
+      const r = (await hubCall('GET', '/fleet')).body.runners;
+      return r.filter((x) => x.online).length === 2 ? r : null;
+    }, 10000, 'both machines online');
+    const mini = runners.find((r) => r.name === 'mini');
+
+    // On the mini: an agent with a commit on its branch, uncommitted edits and a conversation.
+    const [a] = (await call('POST', '/agents', { intent: 'Carry on elsewhere', project: 'mv' })).body;
+    const ready = await waitFor(async () => {
+      const x = await agentNow(a.id);
+      return x.runtime?.running && x.workdir ? x : null;
+    }, 20000, 'running on the mini');
+    const g = (cwd, ...args) => execFileSync('git', ['-c', 'commit.gpgsign=false', '-c', 'user.email=t@t', '-c', 'user.name=t', ...args], { cwd }).toString().trim();
+    fs.writeFileSync(path.join(ready.workdir, 'done.txt'), 'committed\n');
+    g(ready.workdir, 'add', '.');
+    g(ready.workdir, 'commit', '-q', '-m', 'Step one');
+    fs.writeFileSync(path.join(ready.workdir, 'README.md'), 'hi\nedited, not committed\n');
+    fs.writeFileSync(path.join(ready.workdir, 'wip.txt'), 'new, untracked\n');
+    const realA = fs.realpathSync(ready.workdir);
+    const tFile = transcriptPath(ready.workdir, ready.sessionId);
+    fs.mkdirSync(path.dirname(tFile), { recursive: true });
+    const lines = [{ type: 'user', cwd: realA, sessionId: ready.sessionId, message: { content: 'carry on' } }, { type: 'assistant', cwd: `${realA}/sub`, sessionId: ready.sessionId, message: { content: 'ok' } }];
+    fs.writeFileSync(tFile, `${lines.map((l) => JSON.stringify(l)).join('\n')}\n`);
+    const branch = g(ready.workdir, 'rev-parse', '--abbrev-ref', 'HEAD');
+
+    // Steps can't be called one by one; a move needs both machines' "move".
+    assert.equal((await hubCall('POST', `/runners/${mini.id}/actions`, { action: 'handoff-export', args: { agent: a.id } })).status, 400);
+    const moved = await hubCall('POST', `/runners/${mini.id}/agents/${a.id}/move`, { to: 'laptop' });
+    assert.equal(moved.status, 200, JSON.stringify(moved.body));
+    assert.equal(moved.body.to.machine, 'laptop');
+
+    // On the laptop: same session, same branch, the commit and the uncommitted work, resumed.
+    const b = await waitFor(async () => {
+      const x = (await callB('GET', `/agents/${moved.body.to.agent}`)).body;
+      return x.runtime?.running ? x : null;
+    }, 20000, 'running on the laptop');
+    assert.equal(b.sessionId, ready.sessionId);
+    assert.equal(b.movedFrom.machine, 'mini');
+    assert.equal(g(b.workdir, 'rev-parse', '--abbrev-ref', 'HEAD'), branch);
+    assert.equal(fs.readFileSync(path.join(b.workdir, 'done.txt'), 'utf8'), 'committed\n');
+    assert.equal(fs.readFileSync(path.join(b.workdir, 'README.md'), 'utf8'), 'hi\nedited, not committed\n');
+    assert.equal(fs.readFileSync(path.join(b.workdir, 'wip.txt'), 'utf8'), 'new, untracked\n');
+    assert.match(g(b.workdir, 'status', '--porcelain'), /README\.md[\s\S]*wip\.txt|wip\.txt[\s\S]*README\.md/, 'still uncommitted there');
+    const realB = fs.realpathSync(b.workdir);
+    const slug = realB.replace(/[^a-zA-Z0-9]/g, '-');
+    const moved1 = fs.readFileSync(path.join(hB, 'claude', 'projects', slug, `${b.sessionId}.jsonl`), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+    // (Records without a folder may be added while the agent is open; only folders matter here.)
+    assert.deepEqual(moved1.filter((l) => l.cwd).map((l) => l.cwd), [realB, `${realB}/sub`], 'paths point at the new folder');
+    assert.equal(moved1.filter((l) => l.message?.content === 'carry on').length, 1, 'the conversation came along');
+    await waitFor(() => fs.existsSync(path.join(hB, 'fake.log')) && fs.readFileSync(path.join(hB, 'fake.log'), 'utf8').includes('--resume'), 10000, 'resumed with --resume');
+
+    // On the mini: closed, marked moved, can't be resumed; the handoff branch is gone.
+    const left = await agentNow(a.id);
+    assert.equal(left.runtime.running, false);
+    assert.equal(left.movedTo.machine, 'laptop');
+    assert.equal((await call('POST', `/agents/${a.id}/start`, {})).status, 409);
+    assert.equal(execFileSync('git', ['ls-remote', origin, `refs/heads/agentmgr-handoff/${a.id}`]).toString().trim(), '');
+    // Moving it again from the mini is refused.
+    assert.equal((await hubCall('POST', `/runners/${mini.id}/agents/${a.id}/move`, { to: 'laptop' })).status, 409);
+  } finally {
+    hubLink.config.hub = before;
+    await call('POST', '/hub/leave').catch(() => {});
+    daemonB.kill('SIGTERM');
+    await new Promise((r) => setTimeout(r, 500));
+    await hub.close?.();
+  }
+});

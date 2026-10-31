@@ -45,6 +45,7 @@ export function fleetAgent(a) {
     stuck: Array.isArray(a.stuck) ? a.stuck.length : num(a.stuck) ?? 0,
     conflicts: Array.isArray(a.conflicts) ? a.conflicts.length : num(a.conflicts) ?? 0,
     raceId: str(a.raceId, 20),
+    movedTo: str(typeof a.movedTo === 'string' ? a.movedTo : a.movedTo?.machine, 60),
     error: str(a.error, 300),
     createdAt: iso(a.createdAt),
     updatedAt: iso(a.updatedAt),
