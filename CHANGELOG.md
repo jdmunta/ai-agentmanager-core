@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- **Restart from the app's own terminal:** `agentmgr restart` or `agentmgr update` typed in an agent's shell or the Terminal no longer dies halfway (daemon stopped, never started) when the restart closes that terminal; it finishes, and the terminal can be reopened.
+- **Remote typing:** over remote access, typing or a paste whose request fails (a network blip) is retried in order instead of dropped, and you're told if it still can't get through.
+
 ## 1.4.0 (2026-10-31)
 
 - **Move an agent to another machine:** **Move to…** on the hub (or `agentmgr fleet move <machine>/<agent> --to <machine>`) continues an agent elsewhere with its conversation, branch and uncommitted work. The work goes through the repo's remote on a temporary handoff branch; the conversation goes through the hub in pieces (not stored). Both machines must allow the new `move` permission. A failed move puts everything back; the copy left behind is marked moved and can't be resumed.

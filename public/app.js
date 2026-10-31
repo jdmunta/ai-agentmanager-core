@@ -1842,6 +1842,7 @@ const term = {
           this.conn = null;
           if (ev.code === 1008) toast(`Terminal unavailable: ${ev.reason}`, 5000);
         },
+        onInputLost: () => this.conn === conn && toast('Some typing did not reach the computer (connection lost); check the terminal before going on', 8000),
       },
     );
     this.conn = conn;

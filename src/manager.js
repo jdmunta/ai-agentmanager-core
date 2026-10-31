@@ -1168,7 +1168,7 @@ export class AgentManager extends EventEmitter {
   }
 
   childEnv(agent) {
-    const env = { ...process.env, ...(agent ? { AGENTMGR_AGENT_ID: agent.id } : {}), TERM: 'xterm-256color', COLORTERM: 'truecolor' };
+    const env = { ...process.env, ...(agent ? { AGENTMGR_AGENT_ID: agent.id } : {}), TERM: 'xterm-256color', COLORTERM: 'truecolor', AGENTMGR_TERMINAL: '1' };
     for (const key of STRIP_ENV) delete env[key];
     return env;
   }

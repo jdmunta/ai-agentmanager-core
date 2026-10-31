@@ -51,6 +51,7 @@ export function initMachine({ api, esc, toast, $, Terminal, FitAddon }) {
           else if (msg.t === 'error') xterm.write(`\r\n\x1b[31m${msg.error}\x1b[0m\r\n`);
         },
         onClose: ({ reason }) => reason && xterm.write(`\r\n\x1b[2m[${reason}]\x1b[0m\r\n`),
+        onInputLost: () => xterm.write('\r\n\x1b[33m[some typing did not reach the computer (connection lost); check before going on]\x1b[0m\r\n'),
       },
     );
     xterm.focus();

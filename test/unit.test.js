@@ -1021,3 +1021,44 @@ test('moving a transcript: folder paths point at the new folder, nothing else ch
   assert.equal(out[4], '');
   assert.equal(moveTranscript(lines, '/a/work', '/a/work'), lines);
 });
+
+test('remote terminal input is retried in order, not dropped, when a request fails', async () => {
+  const saved = { location: globalThis.location, fetch: globalThis.fetch, EventSource: globalThis.EventSource };
+  globalThis.location = { protocol: 'https:', host: 'phone.test' };
+  globalThis.EventSource = class {
+    close() {}
+  };
+  const bodies = [];
+  let failures = 2;
+  globalThis.fetch = async (url, opts) => {
+    if (failures-- > 0) throw new TypeError('network down');
+    bodies.push(JSON.parse(opts.body).d);
+    return { ok: true, status: 200 };
+  };
+  try {
+    const { openStream } = await import('../public/transport.js?retry');
+    const lost = [];
+    const conn = openStream({ agentId: 'a1', kind: 'shell:1' }, { onMessage() {}, onInputLost: (d) => lost.push(d) });
+    conn.send({ t: 'i', d: 'echo one\r' });
+    await new Promise((r) => setTimeout(r, 30));
+    conn.send({ t: 'i', d: 'echo two\r' });
+    for (let i = 0; i < 100 && bodies.join('') !== 'echo one\recho two\r'; i++) await new Promise((r) => setTimeout(r, 50));
+    assert.equal(bodies.join(''), 'echo one\recho two\r', 'everything arrives, in order, after the failed attempts');
+    assert.deepEqual(lost, []);
+    // A refusal is not retried, and is reported.
+    globalThis.fetch = async () => ({ ok: false, status: 401 });
+    conn.send({ t: 'i', d: 'x' });
+    for (let i = 0; i < 40 && !lost.length; i++) await new Promise((r) => setTimeout(r, 25));
+    assert.deepEqual(lost, ['x']);
+    conn.close();
+  } finally {
+    Object.assign(globalThis, saved);
+  }
+});
+
+test("the daemon's terminals are marked so a restart typed there outlives them", () => {
+  const env = AgentManager.prototype.childEnv.call({}, { id: 'a1' });
+  assert.equal(env.AGENTMGR_TERMINAL, '1');
+  assert.equal(env.AGENTMGR_AGENT_ID, 'a1');
+  assert.equal(AgentManager.prototype.childEnv.call({}, null).AGENTMGR_TERMINAL, '1', 'the machine terminal too');
+});
