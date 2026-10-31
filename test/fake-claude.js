@@ -68,6 +68,15 @@ if (args.includes('-p')) {
       process.stdout.write('```json\n' + JSON.stringify(reply) + '\n```\n', () => process.exit(0));
       return;
     }
+    if (input.startsWith('Draw diagrams')) {
+      // Prose around the diagrams (to be stripped), and what it was given to draw from.
+      const docs = (input.match(/<document title="([^"]+)">/g) ?? []).map((m) => m.slice(17, -2));
+      process.stdout.write(
+        `Here are the diagrams.\n# Diagrams: ${section('intent')}\nIntro paragraph.\n## Architecture\n- a bullet\n\`\`\`mermaid\nflowchart LR\n  A["${docs.join(' + ') || 'none'}"] e1@--> B\n  e1@{ animate: true }\n\`\`\`\nA caption.\n## Empty\nNothing drawn.\n## Key interaction\n\`\`\`mermaid\nsequenceDiagram\n  autonumber\n  A->>B: hi\n\`\`\`\nThat's all.\n`,
+        () => process.exit(0),
+      );
+      return;
+    }
     const doc = input.match(/^Write a (\w+) document/)?.[1];
     if (doc) {
       process.stdout.write(

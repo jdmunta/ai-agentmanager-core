@@ -42,7 +42,7 @@ function toast(msg, bad = false) {
   toast.timer = setTimeout(() => (t.hidden = true), bad ? 6000 : 2500);
 }
 
-const ENGINE_LABEL = { claude: 'Claude Code', codex: 'Codex', antigravity: 'Antigravity' };
+const ENGINE_LABEL = { claude: 'Claude Code', codex: 'Codex', antigravity: 'Antigravity', muse: 'Muse Code' };
 /** Engines a machine reports installed (its engine:* labels). */
 const enginesOf = (runner) => (runner?.labels ?? []).filter((l) => l.startsWith('engine:')).map((l) => l.slice(7));
 /** Fill an engine picker; hidden while Claude Code is the only choice. */

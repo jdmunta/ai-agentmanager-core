@@ -163,8 +163,14 @@
     <dialog id="new-dialog">
       <form id="new-form" method="dialog">
         <h2>New agents</h2>
+        <div class="row intent-split">
+          <span>What to do</span>
+          <label class="check" title="Each line starts its own agent: a list of tickets or small tasks"><input type="radio" name="split" value="lines" checked /> One agent per line</label>
+          <label class="check" title="The whole text goes to one agent: a long description, a spec, pasted notes"><input type="radio" name="split" value="one" /> One agent for all of it</label>
+          <span class="spacer"></span><span class="hint" id="intent-count"></span>
+        </div>
         <label>
-          Intents <span class="hint">one per line; each gets its own agent</span>
+          <span class="sr-only">Intents</span>
           <textarea name="intents" rows="6" required placeholder="Add a dark mode toggle that remembers the user's choice&#10;Make search results show up as you type&#10;Find out why the dashboard takes 5 seconds to load and speed it up&#10;Add a one-click CSV export to the reports page"></textarea>
         </label>
         <div class="row">
@@ -195,6 +201,7 @@
           <label id="engine-field" hidden>
             Engine
             <select name="engine"><option value="">Claude Code</option></select>
+            <span class="hint warn" id="engine-notice" hidden></span>
           </label>
         </div>
         <label>

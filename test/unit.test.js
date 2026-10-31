@@ -1021,3 +1021,104 @@ test('moving a transcript: folder paths point at the new folder, nothing else ch
   assert.equal(out[4], '');
   assert.equal(moveTranscript(lines, '/a/work', '/a/work'), lines);
 });
+
+test('remote terminal input is retried in order, not dropped, when a request fails', async () => {
+  const saved = { location: globalThis.location, fetch: globalThis.fetch, EventSource: globalThis.EventSource };
+  globalThis.location = { protocol: 'https:', host: 'phone.test' };
+  globalThis.EventSource = class {
+    close() {}
+  };
+  const bodies = [];
+  let failures = 2;
+  globalThis.fetch = async (url, opts) => {
+    if (failures-- > 0) throw new TypeError('network down');
+    bodies.push(JSON.parse(opts.body).d);
+    return { ok: true, status: 200 };
+  };
+  try {
+    const { openStream } = await import('../public/transport.js?retry');
+    const lost = [];
+    const conn = openStream({ agentId: 'a1', kind: 'shell:1' }, { onMessage() {}, onInputLost: (d) => lost.push(d) });
+    conn.send({ t: 'i', d: 'echo one\r' });
+    await new Promise((r) => setTimeout(r, 30));
+    conn.send({ t: 'i', d: 'echo two\r' });
+    for (let i = 0; i < 100 && bodies.join('') !== 'echo one\recho two\r'; i++) await new Promise((r) => setTimeout(r, 50));
+    assert.equal(bodies.join(''), 'echo one\recho two\r', 'everything arrives, in order, after the failed attempts');
+    assert.deepEqual(lost, []);
+    // A refusal is not retried, and is reported.
+    globalThis.fetch = async () => ({ ok: false, status: 401 });
+    conn.send({ t: 'i', d: 'x' });
+    for (let i = 0; i < 40 && !lost.length; i++) await new Promise((r) => setTimeout(r, 25));
+    assert.deepEqual(lost, ['x']);
+    conn.close();
+  } finally {
+    Object.assign(globalThis, saved);
+  }
+});
+
+test("the daemon's terminals are marked so a restart typed there outlives them", () => {
+  const env = AgentManager.prototype.childEnv.call({}, { id: 'a1' });
+  assert.equal(env.AGENTMGR_TERMINAL, '1');
+  assert.equal(env.AGENTMGR_AGENT_ID, 'a1');
+  assert.equal(AgentManager.prototype.childEnv.call({}, null).AGENTMGR_TERMINAL, '1', 'the machine terminal too');
+});
+
+test('diagramsOnly keeps the title, diagram headings and Mermaid blocks, nothing else', async () => {
+  const { diagramsOnly, diagramsPrompt } = await import('../src/brief.js');
+  const out = diagramsOnly('Sure!\n# Diagrams: X\ntext\n## A\n```Mermaid\nflowchart LR\n  a --> b\n```\n### Deeper\n## B\nno diagram\n## C\n```mermaid\n```\n```js\ncode\n```');
+  assert.equal(out, '# Diagrams: X\n\n## A\n\n```mermaid\nflowchart LR\n  a --> b\n```');
+  assert.throws(() => diagramsOnly('# Diagrams: X\nNo pictures.'), /no diagrams/);
+  const p = diagramsPrompt({ intent: 'Fix login', status: 's', digest: '', repo: '', briefMarkdown: '', documents: '<document title="Design">D</document>', repoMap: 'src/ (3 files)' });
+  assert.match(p, /^Draw diagrams/);
+  assert.match(p, /<documents_already_written>\n<document title="Design">D<\/document>/);
+  assert.match(p, /src\/ \(3 files\)/);
+  assert.match(p, /e1@\{ animate: true \}/);
+});
+
+test('engines: Muse Code adapter reads real Muse Code 1.4.14 output (fixtures)', async () => {
+  const muse = (await import('../src/engines/muse.js')).default;
+  const fx = (f) => path.join(path.dirname(new URL(import.meta.url).pathname), 'fixtures', 'muse', f);
+  // The session log: the person's messages, the replies and usage, read incrementally.
+  const cursor = {};
+  const res = muse.scan(fx('session-1.4.14.jsonl'), cursor);
+  assert.equal(res.lastPrompt, 'second message');
+  assert.equal(cursor.usage.size, 3, 'one usage entry per model call');
+  assert.equal(muse.scan(fx('session-1.4.14.jsonl'), cursor).lastPrompt, null, 'incremental: nothing new on a second scan');
+  assert.equal(muse.digest(fx('session-1.4.14.jsonl')).digest, '[user] 1\n[agent] echo: 1\n[user] hello there\n[agent] echo: hello there\n[user] second message\n[agent] echo: second message');
+  // Finding sessions: by id, and the new one in a folder (from runtime.session.metadata).
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'muse-home-'));
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), 'muse-work-'));
+  const d = new Date();
+  const day = path.join(home, 'sessions', String(d.getFullYear()), String(d.getMonth() + 1).padStart(2, '0'), String(d.getDate()).padStart(2, '0'));
+  const id = '01a193d4-feb2-78f0-846a-873ac85401dd';
+  fs.mkdirSync(path.join(day, id), { recursive: true });
+  fs.writeFileSync(path.join(day, id, 'session.jsonl'), fs.readFileSync(fx('session-1.4.14.jsonl'), 'utf8').replaceAll('/tmp/muse-probe', fs.realpathSync(work)));
+  const prev = process.env.MUSE_DATA_HOME;
+  process.env.MUSE_DATA_HOME = home;
+  try {
+    assert.deepEqual(muse.recentSessions(work, Date.now() - 60_000).map((s) => s.sessionId), [id]);
+    assert.deepEqual(muse.recentSessions(os.tmpdir(), Date.now() - 60_000), [], 'another folder');
+    assert.ok(muse.hasSession(work, id));
+    assert.equal(muse.hasSession(work, '01a193d4-0000-78f0-846a-873ac85401dd'), false);
+  } finally {
+    if (prev === undefined) delete process.env.MUSE_DATA_HOME;
+    else process.env.MUSE_DATA_HOME = prev;
+  }
+  // The trust question, from a real screen.
+  const trust = fs.readFileSync(fx('trust-screen-1.4.14.txt'), 'utf8');
+  const flat = (s) => s.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '').replace(/\s+/g, '');
+  assert.equal(muse.attention.find(([re]) => re.test(flat(trust)))?.[1], 'Folder trust prompt');
+  assert.deepEqual(muse.promptChoices(trust), { question: 'Do you trust this workspace?', choices: [{ key: '1', label: 'Trust and continue' }, { key: '2', label: 'Quit' }] });
+  // Launch, resume (no message: it's typed later) and one-shot arguments, all real flags in the help.
+  assert.deepEqual(muse.launchArgs({ permissionMode: 'plan', model: 'm', instructions: 'Keep a brief.', prompt: '-x Fix it' }), ['--trust-workspace', '--permission-profile', ':read-only', '--model', 'm', '--', 'Keep a brief.\n\n---\n\nYour task:\n-x Fix it']);
+  assert.deepEqual(muse.launchArgs({ permissionMode: 'bypassPermissions', resume: true, sessionId: id, prompt: 'go on' }), ['resume', id, '--trust-workspace', '--yolo']);
+  assert.equal(muse.supports.resumePrompt, false);
+  assert.equal(muse.stopSignal, 'SIGTERM', 'a hangup leaves no clean end in its log');
+  // Each command's flags are checked against that command's own help (exec refuses some of the TUI's).
+  const flags = (args) => [...new Set(args.filter((a) => a.startsWith('--') && a !== '--'))];
+  const help = fs.readFileSync(fx('help-1.4.14.txt'), 'utf8');
+  for (const flag of flags([...muse.launchArgs({ permissionMode: 'plan', model: 'm' }), ...muse.launchArgs({ permissionMode: 'bypassPermissions' })])) assert.match(help, new RegExp(`^\\s+${flag}\\b`, 'm'), `${flag} is a muse flag`);
+  const execHelp = fs.readFileSync(fx('exec-help-1.4.14.txt'), 'utf8');
+  for (const flag of flags(muse.oneShotArgs({}, { model: 'm', prompt: 'p' }))) assert.match(execHelp, new RegExp(`^\\s+${flag}\\b`, 'm'), `${flag} is a muse exec flag`);
+  assert.match(fs.readFileSync(fx('resume-help-1.4.14.txt'), 'utf8'), /muse resume <session-ref>/);
+});

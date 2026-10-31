@@ -245,7 +245,9 @@ const INSIGHT_ICONS = { why: '🎯', what: '📦', how: '🛠', now: '📍' };
 
 // ------------------------------------------------------------------ stakeholder documents
 
-const DOCS = { analysis: 'Analysis', design: 'Design', flow: 'Flow', proposal: 'Proposal', humanai: 'Human vs AI' };
+const DOCS = { analysis: 'Analysis', design: 'Design', flow: 'Flow', proposal: 'Proposal', humanai: 'Human vs AI', diagrams: 'Diagrams' };
+// Optional extras that "Write all" leaves out.
+const DOC_EXTRAS = new Set(['diagrams']);
 const DOC_TITLES = { ...DOCS, plan: 'Implementation plan' };
 /** What the document dialog shows: a stakeholder document, or the agent's plan under review. */
 const docOf = (a, kind) => (kind === 'plan' ? a?.planReview && { markdown: a.planReview.markdown, at: a.planReview.updatedAt } : a?.docs?.[kind]);
@@ -308,7 +310,7 @@ function docHtml(markdown) {
 }
 
 function docButtons(a) {
-  const missing = Object.keys(DOCS).filter((k) => !a.docs?.[k]?.markdown && !a.docs?.[k]?.pending);
+  const missing = Object.keys(DOCS).filter((k) => !DOC_EXTRAS.has(k) && !a.docs?.[k]?.markdown && !a.docs?.[k]?.pending);
   const all = missing.length
     ? `<button class="small ghost" data-doc-all title="Write ${missing.map((k) => DOCS[k]).join(', ')} in the background; you'll be told when each is ready">Write all in background</button>`
     : '';
@@ -317,7 +319,7 @@ function docButtons(a) {
       const d = a.docs?.[k];
       const stale = d?.markdown && a.brief?.updatedAt && d.briefUpdatedAt !== a.brief.updatedAt;
       return `<button class="small doc-btn ${d?.markdown ? 'has' : ''}" data-doc="${k}" ${d?.pending ? 'disabled' : ''}
-        title="${d?.markdown ? `Open the ${label.toLowerCase()} document${stale ? ' (the brief changed since)' : ''}` : `Write a ${label.toLowerCase()} document for stakeholders`}">${d?.pending ? `${label}…` : label}${d?.markdown ? (stale ? ' •' : ' ✓') : ''}</button>`;
+        title="${k === 'diagrams' ? (d?.markdown ? `Open the diagrams${stale ? ' (the brief changed since)' : ''}` : 'Draw the problem and its solution for a quick grasp: architecture, design, data flow (animated) and the key interaction, diagrams only. Built from the documents already written and the agent\'s work') : d?.markdown ? `Open the ${label.toLowerCase()} document${stale ? ' (the brief changed since)' : ''}` : `Write a ${label.toLowerCase()} document for stakeholders`}">${d?.pending ? `${label}…` : label}${d?.markdown ? (stale ? ' •' : ' ✓') : ''}</button>`;
     })
     .join('')}</span>`;
 }
@@ -332,8 +334,9 @@ function renderDocDialog() {
   const plan = docView.kind === 'plan';
   $('#doc-title').textContent = `${label} · ${a?.name ?? ''}`;
   const body = $('#doc-body');
+  body.classList.toggle('diagrams-view', docView.kind === 'diagrams');
   if (d?.pending) {
-    body.innerHTML = `<p class="hint">${docView.kind === 'humanai' ? 'Splitting the open questions and answering the AI ones, then asking a second model to check…' : `Writing the ${label.toLowerCase()} document from the agent's work so far…`}</p>`;
+    body.innerHTML = `<p class="hint">${docView.kind === 'humanai' ? 'Splitting the open questions and answering the AI ones, then asking a second model to check…' : docView.kind === 'diagrams' ? "Drawing the diagrams from the documents and the agent's work so far…" : `Writing the ${label.toLowerCase()} document from the agent's work so far…`}</p>`;
     body.dataset.rendered = '';
   } else if (d?.error) body.innerHTML = `<p class="error">Couldn't write it: ${esc(d.error)}</p>`;
   else if (plan && !d?.markdown) body.innerHTML = '<p class="hint">The agent is investigating and hasn\'t written its plan yet. You\'ll see it here (and in the inbox) when it has.</p>';
@@ -345,8 +348,8 @@ function renderDocDialog() {
     }
   }
   const stale = !plan && d?.markdown && a.brief?.updatedAt && d.briefUpdatedAt !== a.brief.updatedAt;
-  const by = d?.writer ? ` by ${d.writer}${d.critique ? `, checked by ${d.critique.label}` : ''}` : '';
-  $('#doc-meta').textContent = d?.markdown ? `${plan ? `Plan · ${PLAN_LABEL[a.planReview.status]} · updated` : 'Written'} ${ago(d.at)}${by}${stale ? ' · the brief has changed since; Regenerate for the latest' : ''}` : '';
+  const by = d?.writer ? ` by ${d.writer}${d.critique ? `, checked by ${d.critique.label}` : ''}${d.from ? ` from ${d.from.length ? d.from.join(', ') : "the agent's work"}` : ''}` : '';
+  $('#doc-meta').textContent = d?.markdown ? `${plan ? `Plan · ${PLAN_LABEL[a.planReview.status]} · updated` : docView.kind === 'diagrams' ? 'Drawn' : 'Written'} ${ago(d.at)}${by}${stale ? ' · the brief has changed since; Regenerate for the latest' : ''}` : '';
   for (const id of ['doc-copy', 'doc-download', 'doc-print']) $(`#${id}`).disabled = !d?.markdown;
   $('#doc-print').hidden = plan;
   $('#doc-regen').hidden = plan;
@@ -1784,6 +1787,9 @@ const term = {
     this.xterm.loadAddon(this.fit);
     this.xterm.open($('#terminal'));
     this.xterm.onData((d) => {
+      // Replaying the backlog makes xterm answer the color and cursor queries in it again; those
+      // answers are stale, and the program would get them as typing.
+      if (this.replaying) return;
       lastTyped = Date.now();
       this.send({ t: 'i', d });
     });
@@ -1842,6 +1848,7 @@ const term = {
           this.conn = null;
           if (ev.code === 1008) toast(`Terminal unavailable: ${ev.reason}`, 5000);
         },
+        onInputLost: () => this.conn === conn && toast('Some typing did not reach the computer (connection lost); check the terminal before going on', 8000),
       },
     );
     this.conn = conn;
@@ -1852,7 +1859,8 @@ const term = {
       if (msg.t === 'hello') {
         // Also sent again after a reconnect: start from a clean screen and replay.
         this.xterm.reset();
-        this.xterm.write(msg.backlog);
+        this.replaying = true;
+        this.xterm.write(msg.backlog, () => (this.replaying = false));
         if (!matchMedia('(pointer: coarse)').matches) this.xterm.focus();
       } else if (msg.t === 'error') {
         toast(`Terminal unavailable: ${msg.error}`, 5000);
@@ -1888,6 +1896,8 @@ const term = {
   renderTabs() {
     renderSignIn();
     const a = this.agentId && agents.get(this.agentId);
+    // The agent's own session tab is named after its engine (Codex, Muse Code, …).
+    $('.term-tab[data-kind="claude"]').textContent = ENGINE_LABEL[a?.engine] ?? 'Claude';
     const nums = new Set(a?.runtime.shells ?? []);
     if (isShell(this.kind)) nums.add(shellNum(this.kind));
     $('#shell-tabs').innerHTML = [...nums]
@@ -3147,6 +3157,7 @@ function openNewDialog(mode = 'now') {
   renderProjectOptions();
   $('#new-error').hidden = true;
   dialog.querySelector(`input[name="when"][value="${mode}"]`).checked = true;
+  restoreIntentSplit();
   syncWhen();
   dialog.showModal();
   dialog.querySelector('textarea').focus();
@@ -3156,7 +3167,55 @@ function syncWhen() {
   dialog.querySelector('.now-only').hidden = when !== 'now';
   dialog.querySelector('.race-only').hidden = when !== 'race';
   dialog.querySelector('.team-only').hidden = when !== 'team';
-  dialog.querySelector('button[type=submit]').textContent = { backlog: 'Add to backlog', race: 'Start race', team: 'Start team' }[when] ?? 'Create agents';
+  // A race or a team always works on the whole text.
+  dialog.querySelector('.intent-split').hidden = when === 'race' || when === 'team';
+  syncIntentPlaceholder();
+  syncIntentCount();
+}
+
+/** The form's intents: one per line, or the whole text as one (kept as written, blank lines and all). */
+function formIntents(form) {
+  const text = form.intents.value;
+  const whole = form.split.value === 'one' || ['race', 'team'].includes(form.when.value);
+  if (whole) return text.trim() ? [text.trim()] : [];
+  return text
+    .split('\n')
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+function syncIntentCount() {
+  const form = $('#new-form');
+  const when = form.when.value;
+  const n = formIntents(form).length;
+  const split = !['race', 'team'].includes(when);
+  $('#intent-count').textContent = split && n ? (when === 'backlog' ? `${n} item${n > 1 ? 's' : ''}` : `${n} agent${n > 1 ? 's' : ''}`) : '';
+  const submit = dialog.querySelector('button[type=submit]');
+  submit.textContent = { backlog: n > 1 ? `Add ${n} to backlog` : 'Add to backlog', race: 'Start race', team: 'Start team' }[when] ?? (n > 1 ? `Create ${n} agents` : 'Create agent');
+}
+$('#new-form').intents.addEventListener('input', syncIntentCount);
+for (const r of dialog.querySelectorAll('input[name="split"]')) {
+  r.addEventListener('change', () => {
+    try {
+      localStorage.setItem('agentmgr.intentSplit', r.value);
+    } catch {}
+    syncIntentPlaceholder();
+    syncIntentCount();
+  });
+}
+const LINES_PLACEHOLDER = $('#new-form').intents.placeholder;
+const WHOLE_PLACEHOLDER = 'Describe the work in as much detail as you like: the problem, what done looks like, constraints, links. It all goes to one agent.';
+/** The remembered choice (a form reset forgets it), and a placeholder to match. */
+function restoreIntentSplit() {
+  const form = $('#new-form');
+  try {
+    form.split.value = localStorage.getItem('agentmgr.intentSplit') === 'one' ? 'one' : 'lines';
+  } catch {}
+  syncIntentPlaceholder();
+}
+function syncIntentPlaceholder() {
+  const form = $('#new-form');
+  form.intents.placeholder = form.split.value === 'one' || ['race', 'team'].includes(form.when.value) ? WHOLE_PLACEHOLDER : LINES_PLACEHOLDER;
 }
 for (const r of dialog.querySelectorAll('input[name="when"]')) r.addEventListener('change', syncWhen);
 $('#new-btn').onclick = () => openNewDialog('now');
@@ -3164,10 +3223,7 @@ $('#new-cancel').onclick = () => dialog.close();
 $('#new-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   const f = new FormData(e.target);
-  const intents = String(f.get('intents'))
-    .split('\n')
-    .map((s) => s.trim())
-    .filter(Boolean);
+  const intents = formIntents(e.target);
   if (f.get('when') === 'team') {
     // "analyst=opus reviewer=opus"
     const models = Object.fromEntries(
@@ -3951,13 +4007,22 @@ $('#login-form').addEventListener('submit', async (e) => {
 });
 
 // Engines this machine can run; the New agent form offers a choice once there's more than Claude.
-const ENGINE_LABEL = { claude: 'Claude', codex: 'Codex', antigravity: 'Antigravity' };
+const ENGINE_LABEL = { claude: 'Claude', codex: 'Codex', antigravity: 'Antigravity', muse: 'Muse Code' };
 async function loadEngines() {
   try {
     const list = (await api('GET', '/engines')).filter((e) => e.installed && e.id !== 'claude');
     const sel = document.querySelector('#engine-field select');
     for (const e of list) sel.append(Object.assign(document.createElement('option'), { value: e.id, textContent: e.label }));
     $('#engine-field').hidden = !list.length;
+    // Something to know before choosing an engine (Muse Code in contributor mode, say).
+    const notices = Object.fromEntries(list.filter((e) => e.notice).map((e) => [e.id, e.notice]));
+    const show = () => {
+      const n = $('#engine-notice');
+      n.textContent = notices[sel.value] ?? '';
+      n.hidden = !notices[sel.value];
+    };
+    sel.addEventListener('change', show);
+    show();
   } catch {}
 }
 

@@ -5,8 +5,9 @@ import path from 'node:path';
 import antigravity from './antigravity.js';
 import claude from './claude.js';
 import codex from './codex.js';
+import muse from './muse.js';
 
-export const ENGINES = { claude, codex, antigravity };
+export const ENGINES = { claude, codex, antigravity, muse };
 export const DEFAULT_ENGINE = 'claude';
 
 /** Adds an engine from a plugin. Built-in engines can't be replaced. */
@@ -33,7 +34,14 @@ export function notInstalled(engine, config) {
 
 /** Every engine, with whether it can run here, for pickers and the hub. */
 export function listEngines(config) {
-  return Object.values(ENGINES).map((e) => ({ id: e.id, label: e.label, installed: installed(e, config), permissionModes: e.permissionModes, supports: e.supports }));
+  return Object.values(ENGINES).map((e) => {
+    const ok = installed(e, config);
+    let notice = null;
+    try {
+      notice = ok ? (e.notice?.(config) ?? null) : null;
+    } catch {}
+    return { id: e.id, label: e.label, installed: ok, permissionModes: e.permissionModes, supports: e.supports, notice };
+  });
 }
 
 /** The engine for an agent (or an engine id). */

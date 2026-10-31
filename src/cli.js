@@ -404,9 +404,9 @@ export async function main(argv) {
 
   program
     .command('doc')
-    .description('Write a stakeholder document from the agent work: analysis, design, flow, proposal or humanai (Human vs AI)')
+    .description('Write a stakeholder document from the agent work: analysis, design, flow, proposal, humanai (Human vs AI) or diagrams (diagrams only)')
     .argument('<agent>')
-    .argument('<kind>', 'analysis, design, flow, proposal, humanai, or all (background)')
+    .argument('<kind>', 'analysis, design, flow, proposal, humanai, diagrams, or all (background; diagrams not included)')
     .option('-o, --output <file>', 'also save the Markdown to this file')
     .option('--cached', 'print the last version instead of writing a new one')
     .option('-b, --background', 'start writing and return at once (kind "all" writes all five)')
@@ -2020,10 +2020,21 @@ export async function main(argv) {
       console.log(`${green('✓')} saved ${r.agents} agents (${r.running} running), scrollback for ${r.scrollback}, at ${r.at}`);
     });
 
+  // The daemon's own terminals (agent shells, Open Terminal, the agents themselves) close when it
+  // stops, and the hangup would end a restart typed there halfway: daemon stopped, never started.
+  // So a restart from one ignores the hangup and its closed output, and finishes without it.
+  const outliveTerminal = () => {
+    if (!process.env.AGENTMGR_TERMINAL) return;
+    console.log(dim('This terminal belongs to the daemon and closes while it restarts; the restart carries on. Reopen the terminal afterwards.'));
+    process.on('SIGHUP', () => {});
+    for (const out of [process.stdout, process.stderr]) out.on('error', () => {});
+  };
+
   program
     .command('restart')
     .description('Flush, stop the daemon, and start it again; running agents resume their sessions')
     .action(async () => {
+      outliveTerminal();
       const svc = await import('./service.js');
       const before = await health();
       if (before && !before.closing) {
@@ -2075,6 +2086,7 @@ export async function main(argv) {
       const r = await up.installUpdate({ log: (m) => console.log(dim(m)) });
       console.log(`${green('✓')} installed ${r.to} (was ${r.from})`);
       if (!(await health())) return console.log(dim('The daemon is not running; it starts on the new version next time'));
+      outliveTerminal();
       // The new version's own restart, not the copy of it loaded in this process.
       const { spawnSync } = await import('node:child_process');
       const res = spawnSync(process.execPath, [process.argv[1], 'restart'], { stdio: 'inherit' });

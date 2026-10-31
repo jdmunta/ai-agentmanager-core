@@ -8,6 +8,8 @@ import { expandHome, paths } from './config.js';
 import { DEFAULT_ENGINE, ENGINES, engineOf, installed, notInstalled } from './engines/index.js';
 import {
   DOC_KINDS,
+  diagramsOnly,
+  diagramsPrompt,
   briefDir,
   briefPath,
   briefPrompt,
@@ -33,11 +35,24 @@ const SUMMARIES = {
   insights: { field: 'insights', prompt: insightsPrompt },
   ...Object.fromEntries(Object.keys(DOC_KINDS).map((k) => [k, { doc: k, prompt: (ctx) => docPrompt(k, ctx) }])),
   humanai: { doc: 'humanai', run: 'runHumanAi' },
+  diagrams: { doc: 'diagrams', run: 'runDiagrams' },
 };
 /** Read / write where a summary of `kind` is kept on the agent record. */
 const getSummary = (agent, kind) => (SUMMARIES[kind].doc ? agent.docs?.[kind] : agent[SUMMARIES[kind].field]);
 const summaryPatch = (agent, kind, value) =>
   SUMMARIES[kind].doc ? { docs: { ...agent.docs, [kind]: value } } : { [SUMMARIES[kind].field]: value };
+
+/** The folders of a repo with how many files each holds, two levels deep: a map for drawing it. */
+async function repoLayout(dir) {
+  const files = (await git.run('git', ['ls-files'], { cwd: dir, timeout: 20_000 })).split('\n').filter(Boolean);
+  const counts = new Map();
+  for (const f of files) {
+    const parts = f.split('/');
+    const key = parts.length > 2 ? `${parts[0]}/${parts[1]}/` : parts.length === 2 ? `${parts[0]}/` : f;
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return [...counts].slice(0, 150).map(([k, n]) => (k.endsWith('/') ? `${k} (${n} files)` : k)).join('\n');
+}
 import { spawn } from 'node:child_process';
 import * as git from './git.js';
 import { conflictMessage, findConflicts, related, repoKey, summarize as summarizeConflicts } from './conflicts.js';
@@ -847,15 +862,15 @@ export class AgentManager extends EventEmitter {
         resume = true;
       }
     }
-    const args = engine.launchArgs({
-      ...this.launchOptions(agent),
-      sessionId: sid,
-      resume,
-      name: agent.name,
-      // A team member's first message is its first step, not just the problem.
-      prompt: resume ? (handoff ? handoffMessage(agent) : null) : (agent.kickoff ?? agent.intent),
-    });
+    // A team member's first message is its first step, not just the problem.
+    const prompt = resume ? (handoff ? handoffMessage(agent) : null) : (agent.kickoff ?? agent.intent);
+    const args = engine.launchArgs({ ...this.launchOptions(agent), sessionId: sid, resume, name: agent.name, prompt });
     const proc = this.spawnAgent(agent, agent.workdir, args);
+    // Engines whose resume takes no message get it typed once the session is idle.
+    if (resume && prompt && engine.supports.resumePrompt === false) {
+      if (!this.outbox.has(agent.id)) this.outbox.set(agent.id, []);
+      this.outbox.get(agent.id).unshift({ text: prompt, source: 'system', at: now() });
+    }
 
     const session = agent.sessions.find((s) => s.id === sid);
     if (session) {
@@ -1102,7 +1117,8 @@ export class AgentManager extends EventEmitter {
         done.dispose();
         resolve(this.view(this.store.get(agent.id) ?? agent));
       });
-      rt.pty.kill('SIGHUP');
+      // A hangup, as when a terminal closes, unless the engine shuts down cleanly on another signal.
+      rt.pty.kill(engineOf(agent).stopSignal ?? 'SIGHUP');
       rt.killTimer = setTimeout(() => rt.pty?.kill('SIGKILL'), timeoutMs);
     });
   }
@@ -1168,7 +1184,7 @@ export class AgentManager extends EventEmitter {
   }
 
   childEnv(agent) {
-    const env = { ...process.env, ...(agent ? { AGENTMGR_AGENT_ID: agent.id } : {}), TERM: 'xterm-256color', COLORTERM: 'truecolor' };
+    const env = { ...process.env, ...(agent ? { AGENTMGR_AGENT_ID: agent.id } : {}), TERM: 'xterm-256color', COLORTERM: 'truecolor', AGENTMGR_TERMINAL: '1' };
     for (const key of STRIP_ENV) delete env[key];
     return env;
   }
@@ -1926,8 +1942,10 @@ export class AgentManager extends EventEmitter {
 
   /** One tool-less, read-only call to an engine; resolves to its text output. */
   oneShot(agent, text, { engine, model, timeoutMs = 300_000 }) {
-    // Some engines take the prompt as an argument instead of on stdin.
-    const args = [...engine.extraArgs(this.config), ...engine.oneShotArgs(this.config, { model, prompt: text })];
+    // Some engines take the prompt as an argument instead of on stdin, and some need their extra
+    // arguments after a subcommand (oneShotExtra: they place them).
+    const extra = engine.extraArgs(this.config);
+    const args = engine.oneShotExtra ? engine.oneShotArgs(this.config, { model, prompt: text, extra }) : [...extra, ...engine.oneShotArgs(this.config, { model, prompt: text })];
     return new Promise((resolve, reject) => {
       const child = spawn(engine.bin(this.config), args, { cwd: paths.home, env: this.childEnv(agent), stdio: ['pipe', 'pipe', 'pipe'] });
       let out = '';
@@ -1943,6 +1961,37 @@ export class AgentManager extends EventEmitter {
       });
       child.stdin.end(engine.oneShotStdin === false ? '' : text);
     });
+  }
+
+  /** Diagrams only: the problem and its solution drawn from the documents already written and the live context. */
+  async runDiagrams(agent, ctx) {
+    const cur0 = this.store.get(agent.id) ?? agent;
+    const written = [
+      ...['analysis', 'design', 'flow', 'proposal'].map((k) => [DOC_KINDS[k].title, cur0.docs?.[k]?.markdown]),
+      ['Implementation plan', cur0.planReview?.markdown],
+      ['Explanation', cur0.explanation?.markdown],
+    ].filter(([, md]) => md);
+    const documents = written.map(([title, md]) => `<document title="${title}">\n${md.slice(0, 12_000)}\n</document>`).join('\n');
+    const repoMap = agent.workdir ? await repoLayout(agent.workdir).catch(() => '') : '';
+    const writer = this.writerFor(agent);
+    const markdown = diagramsOnly(await this.oneShot(agent, diagramsPrompt({ ...ctx, documents, repoMap }), writer));
+    const cur = this.store.get(agent.id);
+    if (!cur) return null;
+    const from = written.map(([title]) => title);
+    return this.view(
+      this.patch(
+        agent.id,
+        summaryPatch(cur, 'diagrams', {
+          markdown,
+          from,
+          writer: `${writer.engine.label}${writer.model ? ` (${writer.model})` : ''}`,
+          at: now(),
+          briefUpdatedAt: cur.brief?.updatedAt ?? null,
+          pending: false,
+          error: null,
+        }),
+      ),
+    );
   }
 
   /** Human vs AI: the writer splits and answers the open questions, then another model double-checks it. */

@@ -14,7 +14,8 @@ export const post = (url, body) =>
 
 /**
  * Open the event stream (`{ events: true }`) or a terminal (`{ agentId, kind }`).
- * Handlers: onOpen(), onMessage(msg), onClose({ code, reason }) when it ends for good.
+ * Handlers: onOpen(), onMessage(msg), onClose({ code, reason }) when it ends for good, and
+ * onInputLost(text) when typing could not be delivered (remote only).
  * Returns { send(msg), close() } where msg is { t: 'i', d } (input) or { t: 'r', cols, rows } (resize).
  */
 export function openStream({ events = false, agentId, kind = 'claude' }, h) {
@@ -43,16 +44,31 @@ export function openStream({ events = false, agentId, kind = 'claude' }, h) {
     }
   };
 
-  // Keystrokes: coalesced and sent strictly in order, one request at a time.
+  // Keystrokes: coalesced and sent strictly in order, one request at a time. A request that fails
+  // (a network blip, a phone waking up) is retried, not dropped: losing a line of a paste would run
+  // the rest without it.
   let queue = '';
   let inflight = false;
+  const deliver = async (d) => {
+    for (let attempt = 0; attempt < 6 && !closed; attempt++) {
+      try {
+        const res = await post(`/api/agents/${agentId}/term/input`, { d, kind });
+        // A refusal (signed out, terminal gone) won't change on a retry.
+        if (res.ok || (res.status >= 400 && res.status < 500 && res.status !== 408 && res.status !== 429)) return res.ok;
+      } catch {
+        // Offline for a moment; try again.
+      }
+      await new Promise((r) => setTimeout(r, 250 * 2 ** attempt));
+    }
+    return false;
+  };
   const pump = async () => {
     if (inflight || !queue) return;
     inflight = true;
     const d = queue;
     queue = '';
     try {
-      await post(`/api/agents/${agentId}/term/input`, { d, kind });
+      if (!(await deliver(d)) && !closed) h.onInputLost?.(d);
     } finally {
       inflight = false;
       if (queue) pump();

@@ -1245,6 +1245,21 @@ test('documents in the background: returns at once, all five, at most two Claude
   await waitFor(async () => !(await agentNow(a.id)).docs.design.pending, 10000, 'design rewritten');
 });
 
+test('diagrams: only diagrams, drawn from the documents already written, not part of "all"', async () => {
+  const [a] = (await call('POST', '/agents', { intent: 'Draw it', start: false })).body;
+  await waitFor(async () => (await agentNow(a.id)).status === 'stopped', 8000, 'ready');
+  await call('POST', `/agents/${a.id}/docs/design`);
+  const res = await call('POST', `/agents/${a.id}/docs/diagrams`);
+  assert.equal(res.status, 200);
+  const d = res.body.docs.diagrams;
+  assert.deepEqual(d.from, ['Design']);
+  assert.match(d.markdown, /^# Diagrams: Draw it\n/);
+  assert.match(d.markdown, /A\["Design"\] e1@--> B\n {2}e1@\{ animate: true \}/, 'given the design document; animation kept');
+  assert.match(d.markdown, /## Key interaction\n\n```mermaid\nsequenceDiagram/);
+  assert.doesNotMatch(d.markdown, /Here are|Intro|bullet|caption|That's all|## Empty/, 'prose and empty headings dropped');
+  assert.equal(d.pending, false);
+});
+
 test('project shortcuts: auto-assigned, "@cc"-style use fills the repo, rename, register ahead, backlog', async () => {
   const origin = makeOrigin('short-cut');
   const url = `file://${origin}`;

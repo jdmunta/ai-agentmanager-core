@@ -1,0 +1,17 @@
+muse resume — resume a previous session
+
+Usage: muse resume
+       muse resume --last
+       muse resume <session-ref>
+
+<session-ref> is an exact session UUID or Session Name.
+
+With no argument it opens the session picker for this workspace.
+
+Options:
+      --last
+          Resume the most recent session in this workspace
+
+Root options (`--provider`, `--workspace`, …) may appear on either side of
+`resume`. Run `muse --help` for the full list.
+
