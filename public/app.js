@@ -3151,6 +3151,7 @@ function openNewDialog(mode = 'now') {
   renderProjectOptions();
   $('#new-error').hidden = true;
   dialog.querySelector(`input[name="when"][value="${mode}"]`).checked = true;
+  restoreIntentSplit();
   syncWhen();
   dialog.showModal();
   dialog.querySelector('textarea').focus();
@@ -3160,7 +3161,55 @@ function syncWhen() {
   dialog.querySelector('.now-only').hidden = when !== 'now';
   dialog.querySelector('.race-only').hidden = when !== 'race';
   dialog.querySelector('.team-only').hidden = when !== 'team';
-  dialog.querySelector('button[type=submit]').textContent = { backlog: 'Add to backlog', race: 'Start race', team: 'Start team' }[when] ?? 'Create agents';
+  // A race or a team always works on the whole text.
+  dialog.querySelector('.intent-split').hidden = when === 'race' || when === 'team';
+  syncIntentPlaceholder();
+  syncIntentCount();
+}
+
+/** The form's intents: one per line, or the whole text as one (kept as written, blank lines and all). */
+function formIntents(form) {
+  const text = form.intents.value;
+  const whole = form.split.value === 'one' || ['race', 'team'].includes(form.when.value);
+  if (whole) return text.trim() ? [text.trim()] : [];
+  return text
+    .split('\n')
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
+function syncIntentCount() {
+  const form = $('#new-form');
+  const when = form.when.value;
+  const n = formIntents(form).length;
+  const split = !['race', 'team'].includes(when);
+  $('#intent-count').textContent = split && n ? (when === 'backlog' ? `${n} item${n > 1 ? 's' : ''}` : `${n} agent${n > 1 ? 's' : ''}`) : '';
+  const submit = dialog.querySelector('button[type=submit]');
+  submit.textContent = { backlog: n > 1 ? `Add ${n} to backlog` : 'Add to backlog', race: 'Start race', team: 'Start team' }[when] ?? (n > 1 ? `Create ${n} agents` : 'Create agent');
+}
+$('#new-form').intents.addEventListener('input', syncIntentCount);
+for (const r of dialog.querySelectorAll('input[name="split"]')) {
+  r.addEventListener('change', () => {
+    try {
+      localStorage.setItem('agentmgr.intentSplit', r.value);
+    } catch {}
+    syncIntentPlaceholder();
+    syncIntentCount();
+  });
+}
+const LINES_PLACEHOLDER = $('#new-form').intents.placeholder;
+const WHOLE_PLACEHOLDER = 'Describe the work in as much detail as you like: the problem, what done looks like, constraints, links. It all goes to one agent.';
+/** The remembered choice (a form reset forgets it), and a placeholder to match. */
+function restoreIntentSplit() {
+  const form = $('#new-form');
+  try {
+    form.split.value = localStorage.getItem('agentmgr.intentSplit') === 'one' ? 'one' : 'lines';
+  } catch {}
+  syncIntentPlaceholder();
+}
+function syncIntentPlaceholder() {
+  const form = $('#new-form');
+  form.intents.placeholder = form.split.value === 'one' || ['race', 'team'].includes(form.when.value) ? WHOLE_PLACEHOLDER : LINES_PLACEHOLDER;
 }
 for (const r of dialog.querySelectorAll('input[name="when"]')) r.addEventListener('change', syncWhen);
 $('#new-btn').onclick = () => openNewDialog('now');
@@ -3168,10 +3217,7 @@ $('#new-cancel').onclick = () => dialog.close();
 $('#new-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   const f = new FormData(e.target);
-  const intents = String(f.get('intents'))
-    .split('\n')
-    .map((s) => s.trim())
-    .filter(Boolean);
+  const intents = formIntents(e.target);
   if (f.get('when') === 'team') {
     // "analyst=opus reviewer=opus"
     const models = Object.fromEntries(

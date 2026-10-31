@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **One agent or one per line:** New agents asks whether each line starts its own agent (a list of tickets) or the whole text goes to one agent (a long description, kept as written). The button shows how many agents it will create, and the choice is remembered.
 - **Diagrams:** a **Diagrams** button beside the documents draws the problem and its solution for a quick grasp, diagrams only: the problem, architecture (changes highlighted), design, data flow with animated arrows, the key interaction and the plan. Drawn from the analysis, design, flow, proposal and plan already written, plus the agent's work and the repo layout. Also `agentmgr doc <agent> diagrams`.
 - **Home page:** shows what you can do (agents, teams and races, Inbox, Code, shells and the browser, Terminal, review and Land, Backlog and the assistant, Results, your phone, several machines), each with a button to it, and stays after Getting started is done or hidden. It scrolls when it doesn't fit.
 - **Restart from the app's own terminal:** `agentmgr restart` or `agentmgr update` typed in an agent's shell or the Terminal no longer dies halfway (daemon stopped, never started) when the restart closes that terminal; it finishes, and the terminal can be reopened.
