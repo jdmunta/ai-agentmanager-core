@@ -1696,6 +1696,19 @@ export async function main(argv) {
       .action((ref, opts) => fleetAct(opts, ref, action, {}, (a, r) => `${action === 'start' ? 'starting' : 'stopping'} ${r.name}/${a.name}`));
   }
   fleetCmd
+    .command('move')
+    .description('Move an agent to another machine and continue it there: same conversation, branch and uncommitted work (both machines need "move")')
+    .argument('<agent>', 'machine/agent (or a unique agent id or name)')
+    .requiredOption('--to <machine>', 'the machine to move it to')
+    .option('--url <url>', 'hub address')
+    .action(async (ref, opts) => {
+      const f = await hubApi(opts, 'GET', '/fleet');
+      const { runner, agent } = resolveFleetAgent(f, ref);
+      console.log(dim(`moving ${runner.name}/${agent.name} to ${opts.to}…`));
+      const out = await hubApi(opts, 'POST', `/runners/${runner.id}/agents/${agent.id}/move`, { to: opts.to });
+      console.log(`${green('✓')} ${agent.name} now runs on ${out.to.machine} as ${out.to.agent}${out.agent?.status ? ` (${out.agent.status})` : ''}`);
+    });
+  fleetCmd
     .command('new')
     .description('Start a new agent on another machine, in one of its projects (needs "create")')
     .argument('<machine>')

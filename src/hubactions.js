@@ -10,11 +10,13 @@
 //   terminal  live Claude terminals
 //   shell     shells in an agent's folder (runs any command: grant with care)
 //   signin    one-time sign-in links to this machine's own page (full access there: grant with care)
+//   move      move agents to and from other machines (their work goes through the repo's remote)
 import { engineOf, installed } from './engines/index.js';
 import { allowedProject } from './fleet.js';
 import { createTicket } from './remote.js';
+import { Handoff } from './handoff.js';
 
-export const PERMISSIONS = ['view', 'inbox', 'control', 'create', 'terminal', 'shell', 'signin'];
+export const PERMISSIONS = ['view', 'inbox', 'control', 'create', 'terminal', 'shell', 'signin', 'move'];
 // The hub may not start agents that skip permission prompts.
 const HUB_PERMISSION_MODES = new Set(['default', 'acceptEdits', 'plan']);
 
@@ -58,7 +60,17 @@ export const ACTIONS = {
   priority: { perm: 'control', run: (m, a, args) => m.update(a.id, { priority: args.priority }) },
   create: { perm: 'create', agentless: true, run: (m, _a, args, policy) => createAgent(m, args, policy) },
   signin: { perm: 'signin', agentless: true, run: () => ({ ticket: createTicket() }) },
+  // Moving an agent between machines (src/handoff.js); both machines must allow "move".
+  'handoff-export': { perm: 'move', raw: true, run: (m, a) => handoffOf(m).export(a) },
+  'handoff-chunk': { perm: 'move', agentless: true, raw: true, run: (m, _a, args) => handoffOf(m).chunk(args.exportId, args.i) },
+  'handoff-done': { perm: 'move', agentless: true, run: (m, _a, args) => handoffOf(m).done(args.exportId, { ok: Boolean(args.ok), machine: args.machine, agentId: args.agentId }) },
+  'handoff-import': { perm: 'move', agentless: true, raw: true, run: (m, _a, args, policy) => handoffOf(m).import(args.manifest, policy, allowedProject) },
+  'handoff-put': { perm: 'move', agentless: true, raw: true, run: (m, _a, args) => handoffOf(m).put(args.importId, args.i, args.data) },
+  'handoff-finish': { perm: 'move', agentless: true, run: (m, _a, args) => handoffOf(m).finish(args.importId) },
+  'handoff-cancel': { perm: 'move', agentless: true, raw: true, run: (m, _a, args) => handoffOf(m).cancel(args.importId) },
 };
+
+const handoffOf = (m) => (m.handoff ??= new Handoff({ manager: m }));
 
 function createAgent(manager, args, policy) {
   const entry = manager.resolveProject(String(args.project ?? ''));
@@ -89,6 +101,7 @@ export async function runAction(manager, policy, action, args = {}) {
   manager.plugins?.check('hub.action', { action, agent: agent ? manager.auditView(agent) : null });
   manager.plugins?.emit('hub.action', { action, agent: agent ? manager.auditView(agent) : null });
   const out = await def.run(manager, agent, args, policy);
+  if (def.raw) return { ok: true, ...out };
   // Enough for the hub to confirm; the next state frame carries the rest.
   if (out?.ticket) return { ok: true, ticket: out.ticket };
   if (Array.isArray(out)) return { ok: true, agents: out.map((a) => ({ id: a.id, name: a.name })) };

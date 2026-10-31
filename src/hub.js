@@ -35,7 +35,10 @@ export const ACTION_PERMS = {
   answer: 'inbox', 'prompt-key': 'inbox', nudge: 'inbox', 'dismiss-stuck': 'inbox', 'warn-conflict': 'inbox',
   tell: 'control', start: 'control', stop: 'control', checkpoint: 'control', priority: 'control', create: 'create',
   signin: 'signin',
+  'handoff-export': 'move', 'handoff-chunk': 'move', 'handoff-done': 'move', 'handoff-import': 'move', 'handoff-put': 'move', 'handoff-finish': 'move', 'handoff-cancel': 'move',
 };
+// Run only as steps of a move (POST /api/runners/:id/agents/:agent/move), never one by one.
+const HANDOFF_STEP = /^handoff-/;
 
 const sha256 = (s) => crypto.createHash('sha256').update(String(s)).digest('hex');
 const secret = () => crypto.randomBytes(32).toString('base64url');
@@ -490,7 +493,7 @@ export async function startHub({
   };
 
   /** Ask a machine to do something; resolves with its reply. */
-  function rpc(runnerId, action, args) {
+  function rpc(runnerId, action, args, { timeoutMs = RPC_TIMEOUT_MS } = {}) {
     const l = live.get(runnerId);
     if (!l?.hello) return Promise.reject(fail(409, 'That machine is offline'));
     const perm = ACTION_PERMS[action];
@@ -501,7 +504,7 @@ export async function startHub({
       const timer = setTimeout(() => {
         l.rpcs.delete(id);
         reject(fail(504, 'The machine did not answer in time'));
-      }, RPC_TIMEOUT_MS);
+      }, timeoutMs);
       l.rpcs.set(id, { resolve, reject, timer });
       l.ws.send(JSON.stringify({ t: 'rpc', id, action, args }));
     });
@@ -550,12 +553,57 @@ export async function startHub({
     }),
   );
 
+  // Move an agent to another machine: its work through the repo's remote, its conversation through
+  // here in pieces (kept in memory only for the move). Both machines must allow "move".
+  async function moveAgent(from, agentId, to, by) {
+    const step = (what) => log(`move ${agentId} ${from.name} → ${to.name}: ${what}`);
+    const exp = await rpc(from.id, 'handoff-export', { agent: agentId }, { timeoutMs: 240_000 });
+    step('packed');
+    let imp = null;
+    try {
+      imp = await rpc(to.id, 'handoff-import', { manifest: { ...exp.manifest, fromMachine: from.name } }, { timeoutMs: 60_000 });
+      for (let i = 0; i < exp.manifest.chunks; i++) {
+        const piece = await rpc(from.id, 'handoff-chunk', { exportId: exp.exportId, i }, { timeoutMs: 60_000 });
+        await rpc(to.id, 'handoff-put', { importId: imp.importId, i, data: piece.data }, { timeoutMs: 60_000 });
+      }
+      step(`conversation sent (${exp.manifest.chunks} piece(s))`);
+      const fin = await rpc(to.id, 'handoff-finish', { importId: imp.importId }, { timeoutMs: 240_000 });
+      await rpc(from.id, 'handoff-done', { exportId: exp.exportId, ok: true, machine: to.name, agentId: imp.agentId }, { timeoutMs: 60_000 }).catch((e) => step(`marking it moved failed: ${e.message}`));
+      audit(`${by} moved ${from.name}/${agentId} to ${to.name}/${imp.agentId}`);
+      return { ok: true, from: { machine: from.name, agent: agentId }, to: { machine: to.name, agent: imp.agentId }, agent: fin.agent };
+    } catch (e) {
+      step(`failed: ${e.message}`);
+      if (imp) await rpc(to.id, 'handoff-cancel', { importId: imp.importId }, { timeoutMs: 60_000 }).catch(() => {});
+      await rpc(from.id, 'handoff-done', { exportId: exp.exportId, ok: false }, { timeoutMs: 60_000 }).catch(() => {});
+      audit(`${by} failed to move ${from.name}/${agentId} to ${to.name}: ${e.message}`);
+      throw e;
+    }
+  }
+  const runnerByRef = (ref) => store.data.runners[ref] ?? Object.values(store.data.runners).find((x) => x.name.toLowerCase() === String(ref ?? '').toLowerCase());
+  api.post(
+    '/runners/:id/agents/:agent/move',
+    wrap(async (req) => {
+      const from = runnerByRef(req.params.id);
+      const to = runnerByRef(req.body?.to);
+      if (!from) throw fail(404, `No machine ${req.params.id}`);
+      if (!to) throw fail(400, 'Pick the machine to move it to');
+      if (to.id === from.id) throw fail(400, 'It is already on that machine');
+      for (const r of [from, to]) {
+        const l = live.get(r.id);
+        if (!l?.hello) throw fail(409, `${r.name} is offline`);
+        if (!l.hello.policy.allow.includes('move')) throw fail(403, `${r.name} doesn't allow "move" from the hub`);
+      }
+      return moveAgent(from, String(req.params.agent).slice(0, 40), to, req.auth);
+    }),
+  );
+
   api.post(
     '/runners/:id/actions',
     wrap(async (req) => {
       const r = store.data.runners[req.params.id];
       if (!r) throw fail(404, `No machine ${req.params.id}`);
       const { action, args = {} } = req.body ?? {};
+      if (HANDOFF_STEP.test(String(action))) throw fail(400, 'Moving an agent is one request: POST /api/runners/<machine>/agents/<agent>/move');
       const what = `${String(action).slice(0, 40)}${args.agent ? ` on ${r.name}/${String(args.agent).slice(0, 40)}` : ` on ${r.name}`}`;
       try {
         const out = await rpc(r.id, action, args);

@@ -1619,6 +1619,8 @@ function renderDetail() {
         ${it.status === 'review' ? `<span class="spacer"></span><button class="small primary" data-backlog-accept="${it.id}">Accept</button> <button class="small" data-backlog-reopen="${it.id}">Reopen</button>` : ''}</div>`;
     })()}
     ${a.error ? `<div class="error-box">${esc(a.error)}</div>` : ''}
+    ${a.movedTo ? `<p class="hint">Moved to <b>${esc(a.movedTo.machine)}</b> ${ago(a.movedTo.at)}: it continues there with the same conversation and work. This copy stays closed; delete it when you no longer need its folder.</p>` : ''}
+    ${a.movedFrom ? `<p class="hint">Moved here from <b>${esc(a.movedFrom.machine ?? 'another machine')}</b> ${ago(a.movedFrom.at)}, with its conversation and uncommitted work.</p>` : ''}
     ${!running && a.closedBy === 'cap' ? `<p class="hint">Closed ${ago(a.closedAt)} to stay under the limit on open agents (Settings), as the one idle longest. Resume it any time${a.keep ? '' : ', or mark it Keep'}.</p>` : ''}
     ${!running && a.closedBy === 'cleanup' ? `<p class="hint">Closed by clean up ${ago(a.closedAt)}, after a while with no activity. Resume it any time${a.keep ? '' : ', or mark it Keep'}.</p>` : ''}
     ${a.status === 'preparing'

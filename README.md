@@ -770,6 +770,7 @@ agentmgr leave           # the hub forgets this Mac
 | `terminal` | Open the live Claude terminal |
 | `shell` | Open shells in an agent's folder. These run any command, so grant with care. |
 | `signin` | Open this machine's own page already signed in: **Open on <machine>** asks for a one-time link (single use, valid for a minute) instead of the access token. That page has full control, beyond the rest of this policy, so grant it only on a hub that only you can sign in to. |
+| `move` | Move agents to and from other machines that also allow it (**Move to…** on the hub, or `agentmgr fleet move`). See **Moving an agent** below. |
 
 `projects` (names or shortcuts) limits all of it to those projects: other agents aren't shown and can't be touched. `"allow": []` stops sharing but stays joined. The machine checks every request itself, even if the hub thinks it's allowed, matches agents by exact ID, and only runs a fixed list of actions (deleting agents isn't one). Each request, and every refusal, is written to `~/.agentmanager/hub-audit.log`; the hub keeps its own `audit.log` too.
 
@@ -781,6 +782,14 @@ agentmgr leave           # the hub forgets this Mac
 - **Review.** As with the local backlog, an agent whose brief says done moves to **review**: **Accept** finishes it, and **Reopen** sends a note back to the same agent (this needs `control` on that machine). An item waiting for room says why, for example `laptop is full (2/2 in this project)`.
 - **When a machine drops mid-item.** Its item shows as **stalled** and isn't restarted elsewhere on its own, because the work in that machine's worktree would be lost or duplicated. Wait for the machine, or **Requeue** to start over on a different one.
 - **Pausing.** `agentmgr fleet backlog pause` (or **Auto-start** off) stops new starts; **Start now** runs one item past the limits.
+
+**Moving an agent to another machine.** **Move to…** on an agent in the hub (or `agentmgr fleet move mini/3fa2b1 --to laptop`) continues it on another machine with the same conversation, the same branch and its uncommitted work. Use it to pick up on the laptop what the mini started, or to free a busy machine. Both machines must allow `move`, and the other machine needs the same project (matched by repo).
+
+1. On the machine it leaves, its session closes. A snapshot of the folder (commits, edits and new files) is pushed to the repo's own remote as `agentmgr-handoff/<id>`.
+2. The other machine creates the agent in its matching project with the same session id. It checks out the branch, restores the uncommitted work, places the conversation where Claude looks for it (with folder paths rewritten), and resumes it if it was running.
+3. The first machine marks its copy **Moved to <machine>**, which can't be resumed (two copies of one conversation would diverge), and the handoff branch is deleted.
+
+The conversation passes through the hub in pieces, in memory only for the move, so the hub keeps neither code nor transcripts. If any step fails, the copy made on the other machine is removed, and the agent opens again where it was. It needs a repository with a remote that both machines can reach; Claude Code agents only, for now.
 
 **How machines prove who they are.** Joining makes an Ed25519 key pair on the Mac. The private key stays in `~/.agentmanager/hub-link.json` (mode 600), and the hub keeps only the public key. Each connection signs a fresh challenge from the hub. Invite codes work once. **Remove** on the hub (or `agentmgr hub remove <machine>`) disconnects a machine, and it stops retrying until it joins again.
 

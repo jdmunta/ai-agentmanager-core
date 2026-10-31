@@ -795,6 +795,8 @@ export class AgentManager extends EventEmitter {
   start(ref, { fresh = false, sessionId } = {}) {
     const agent = this.mustGet(ref);
     if (this.closing) throw Object.assign(new Error('AI Agent Manager is shutting down'), { status: 503 });
+    // Its session continues on the other machine; two copies of one conversation would diverge.
+    if (agent.movedTo) throw Object.assign(new Error(`${agent.name} moved to ${agent.movedTo.machine}; it continues there`), { status: 409 });
     const live = this.runtimes.get(agent.id);
     if (!live?.pty) {
       this.plugins.check('agent.start', { agent: this.auditView(agent), fresh });

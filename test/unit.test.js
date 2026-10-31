@@ -22,6 +22,7 @@ import { Cleanup, cleanupSettings } from '../src/cleanup.js';
 import { checkUpdate, gitBlocker, installUpdate, newestTag } from '../src/update.js';
 import { claudeAccount } from '../src/identity.js';
 import { isText, languageOf, resolveInside } from '../src/studio.js';
+import { moveTranscript } from '../src/handoff.js';
 import { commentsMessage, parseBaseRef, prBase } from '../src/review.js';
 import { parseDiff } from '../public/review.js';
 import { VERDICTS, gapsOf, leadPrompt, readCoverage, readVerdict, subagents, summarize, teamPrompt } from '../src/teams.js';
@@ -1001,4 +1002,22 @@ test('studio: paths stay inside the folder; languages by file name', () => {
   assert.deepEqual(['x.ts', 'Dockerfile', 'a.py', 'b.unknown', 'c.YML'].map(languageOf), ['typescript', 'dockerfile', 'python', 'plaintext', 'yaml']);
   assert.equal(isText(Buffer.from('hello')), true);
   assert.equal(isText(Buffer.from([104, 0, 105])), false);
+});
+
+test('moving a transcript: folder paths point at the new folder, nothing else changes', () => {
+  const lines = [
+    JSON.stringify({ type: 'user', cwd: '/a/work', message: { content: 'see /a/work/x.js' } }),
+    JSON.stringify({ type: 'assistant', cwd: '/a/work/sub' }),
+    JSON.stringify({ type: 'other', cwd: '/a/workshop' }),
+    'not json /a/work',
+    '',
+  ].join('\n');
+  const out = moveTranscript(lines, '/a/work', '/b/w').split('\n');
+  assert.equal(JSON.parse(out[0]).cwd, '/b/w');
+  assert.equal(JSON.parse(out[0]).message.content, 'see /a/work/x.js', 'message text is left alone');
+  assert.equal(JSON.parse(out[1]).cwd, '/b/w/sub');
+  assert.equal(JSON.parse(out[2]).cwd, '/a/workshop', 'a different folder with the same prefix is untouched');
+  assert.equal(out[3], 'not json /a/work');
+  assert.equal(out[4], '');
+  assert.equal(moveTranscript(lines, '/a/work', '/a/work'), lines);
 });
