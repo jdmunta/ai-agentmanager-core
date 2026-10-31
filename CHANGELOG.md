@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- **Home page:** shows what you can do (agents, teams and races, Inbox, Code, shells and the browser, Terminal, review and Land, Backlog and the assistant, Results, your phone, several machines), each with a button to it, and stays after Getting started is done or hidden. It scrolls when it doesn't fit.
 - **Restart from the app's own terminal:** `agentmgr restart` or `agentmgr update` typed in an agent's shell or the Terminal no longer dies halfway (daemon stopped, never started) when the restart closes that terminal; it finishes, and the terminal can be reopened.
 - **Remote typing:** over remote access, typing or a paste whose request fails (a network blip) is retried in order instead of dropped, and you're told if it still can't get through.
 
