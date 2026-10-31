@@ -827,3 +827,5 @@ input.inline { display: inline-block; width: 80px; padding: 1px 4px; }
 .intent-split .check { margin: 0; }
 .intent-split[hidden] { display: none; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.hint.warn { display: block; margin-top: 4px; color: var(--yellow); }
+.hint.warn[hidden] { display: none; }

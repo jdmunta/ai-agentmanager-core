@@ -1787,6 +1787,9 @@ const term = {
     this.xterm.loadAddon(this.fit);
     this.xterm.open($('#terminal'));
     this.xterm.onData((d) => {
+      // Replaying the backlog makes xterm answer the color and cursor queries in it again; those
+      // answers are stale, and the program would get them as typing.
+      if (this.replaying) return;
       lastTyped = Date.now();
       this.send({ t: 'i', d });
     });
@@ -1856,7 +1859,8 @@ const term = {
       if (msg.t === 'hello') {
         // Also sent again after a reconnect: start from a clean screen and replay.
         this.xterm.reset();
-        this.xterm.write(msg.backlog);
+        this.replaying = true;
+        this.xterm.write(msg.backlog, () => (this.replaying = false));
         if (!matchMedia('(pointer: coarse)').matches) this.xterm.focus();
       } else if (msg.t === 'error') {
         toast(`Terminal unavailable: ${msg.error}`, 5000);
@@ -1892,6 +1896,8 @@ const term = {
   renderTabs() {
     renderSignIn();
     const a = this.agentId && agents.get(this.agentId);
+    // The agent's own session tab is named after its engine (Codex, Muse Code, …).
+    $('.term-tab[data-kind="claude"]').textContent = ENGINE_LABEL[a?.engine] ?? 'Claude';
     const nums = new Set(a?.runtime.shells ?? []);
     if (isShell(this.kind)) nums.add(shellNum(this.kind));
     $('#shell-tabs').innerHTML = [...nums]
@@ -4001,13 +4007,22 @@ $('#login-form').addEventListener('submit', async (e) => {
 });
 
 // Engines this machine can run; the New agent form offers a choice once there's more than Claude.
-const ENGINE_LABEL = { claude: 'Claude', codex: 'Codex', antigravity: 'Antigravity' };
+const ENGINE_LABEL = { claude: 'Claude', codex: 'Codex', antigravity: 'Antigravity', muse: 'Muse Code' };
 async function loadEngines() {
   try {
     const list = (await api('GET', '/engines')).filter((e) => e.installed && e.id !== 'claude');
     const sel = document.querySelector('#engine-field select');
     for (const e of list) sel.append(Object.assign(document.createElement('option'), { value: e.id, textContent: e.label }));
     $('#engine-field').hidden = !list.length;
+    // Something to know before choosing an engine (Muse Code in contributor mode, say).
+    const notices = Object.fromEntries(list.filter((e) => e.notice).map((e) => [e.id, e.notice]));
+    const show = () => {
+      const n = $('#engine-notice');
+      n.textContent = notices[sel.value] ?? '';
+      n.hidden = !notices[sel.value];
+    };
+    sel.addEventListener('change', show);
+    show();
   } catch {}
 }
 

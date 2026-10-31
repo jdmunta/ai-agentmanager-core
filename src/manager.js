@@ -862,15 +862,15 @@ export class AgentManager extends EventEmitter {
         resume = true;
       }
     }
-    const args = engine.launchArgs({
-      ...this.launchOptions(agent),
-      sessionId: sid,
-      resume,
-      name: agent.name,
-      // A team member's first message is its first step, not just the problem.
-      prompt: resume ? (handoff ? handoffMessage(agent) : null) : (agent.kickoff ?? agent.intent),
-    });
+    // A team member's first message is its first step, not just the problem.
+    const prompt = resume ? (handoff ? handoffMessage(agent) : null) : (agent.kickoff ?? agent.intent);
+    const args = engine.launchArgs({ ...this.launchOptions(agent), sessionId: sid, resume, name: agent.name, prompt });
     const proc = this.spawnAgent(agent, agent.workdir, args);
+    // Engines whose resume takes no message get it typed once the session is idle.
+    if (resume && prompt && engine.supports.resumePrompt === false) {
+      if (!this.outbox.has(agent.id)) this.outbox.set(agent.id, []);
+      this.outbox.get(agent.id).unshift({ text: prompt, source: 'system', at: now() });
+    }
 
     const session = agent.sessions.find((s) => s.id === sid);
     if (session) {
@@ -1117,7 +1117,8 @@ export class AgentManager extends EventEmitter {
         done.dispose();
         resolve(this.view(this.store.get(agent.id) ?? agent));
       });
-      rt.pty.kill('SIGHUP');
+      // A hangup, as when a terminal closes, unless the engine shuts down cleanly on another signal.
+      rt.pty.kill(engineOf(agent).stopSignal ?? 'SIGHUP');
       rt.killTimer = setTimeout(() => rt.pty?.kill('SIGKILL'), timeoutMs);
     });
   }
@@ -1941,8 +1942,10 @@ export class AgentManager extends EventEmitter {
 
   /** One tool-less, read-only call to an engine; resolves to its text output. */
   oneShot(agent, text, { engine, model, timeoutMs = 300_000 }) {
-    // Some engines take the prompt as an argument instead of on stdin.
-    const args = [...engine.extraArgs(this.config), ...engine.oneShotArgs(this.config, { model, prompt: text })];
+    // Some engines take the prompt as an argument instead of on stdin, and some need their extra
+    // arguments after a subcommand (oneShotExtra: they place them).
+    const extra = engine.extraArgs(this.config);
+    const args = engine.oneShotExtra ? engine.oneShotArgs(this.config, { model, prompt: text, extra }) : [...extra, ...engine.oneShotArgs(this.config, { model, prompt: text })];
     return new Promise((resolve, reject) => {
       const child = spawn(engine.bin(this.config), args, { cwd: paths.home, env: this.childEnv(agent), stdio: ['pipe', 'pipe', 'pipe'] });
       let out = '';

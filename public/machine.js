@@ -8,6 +8,7 @@ const MACHINE = '__machine__';
 export function initMachine({ api, esc, toast, $, Terminal, FitAddon }) {
   const dialog = $('#machine-dialog');
   let xterm = null;
+  let replaying = false; // writing the backlog (see onData)
   let fit = null;
   let conn = null;
   let current = null;
@@ -19,7 +20,8 @@ export function initMachine({ api, esc, toast, $, Terminal, FitAddon }) {
     fit = new FitAddon();
     xterm.loadAddon(fit);
     xterm.open($('#machine-term'));
-    xterm.onData((d) => conn?.send({ t: 'i', d }));
+    // Answers xterm gives to queries in the replayed backlog are stale; don't send them as typing.
+    xterm.onData((d) => !replaying && conn?.send({ t: 'i', d }));
     xterm.onResize(({ cols, rows }) => conn?.send({ t: 'r', cols, rows }));
     new ResizeObserver(() => dialog.open && fit.fit()).observe($('#machine-term'));
   }
@@ -45,7 +47,10 @@ export function initMachine({ api, esc, toast, $, Terminal, FitAddon }) {
           xterm.focus();
         },
         onMessage: (msg) => {
-          if (msg.t === 'hello' && msg.backlog) xterm.write(msg.backlog);
+          if (msg.t === 'hello' && msg.backlog) {
+            replaying = true;
+            xterm.write(msg.backlog, () => (replaying = false));
+          }
           else if (msg.t === 'o') xterm.write(msg.d);
           else if (msg.t === 'exit') xterm.write('\r\n\x1b[2m[terminal ended; reopen it with + Terminal]\x1b[0m\r\n');
           else if (msg.t === 'error') xterm.write(`\r\n\x1b[31m${msg.error}\x1b[0m\r\n`);

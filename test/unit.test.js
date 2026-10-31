@@ -1074,3 +1074,51 @@ test('diagramsOnly keeps the title, diagram headings and Mermaid blocks, nothing
   assert.match(p, /src\/ \(3 files\)/);
   assert.match(p, /e1@\{ animate: true \}/);
 });
+
+test('engines: Muse Code adapter reads real Muse Code 1.4.14 output (fixtures)', async () => {
+  const muse = (await import('../src/engines/muse.js')).default;
+  const fx = (f) => path.join(path.dirname(new URL(import.meta.url).pathname), 'fixtures', 'muse', f);
+  // The session log: the person's messages, the replies and usage, read incrementally.
+  const cursor = {};
+  const res = muse.scan(fx('session-1.4.14.jsonl'), cursor);
+  assert.equal(res.lastPrompt, 'second message');
+  assert.equal(cursor.usage.size, 3, 'one usage entry per model call');
+  assert.equal(muse.scan(fx('session-1.4.14.jsonl'), cursor).lastPrompt, null, 'incremental: nothing new on a second scan');
+  assert.equal(muse.digest(fx('session-1.4.14.jsonl')).digest, '[user] 1\n[agent] echo: 1\n[user] hello there\n[agent] echo: hello there\n[user] second message\n[agent] echo: second message');
+  // Finding sessions: by id, and the new one in a folder (from runtime.session.metadata).
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'muse-home-'));
+  const work = fs.mkdtempSync(path.join(os.tmpdir(), 'muse-work-'));
+  const d = new Date();
+  const day = path.join(home, 'sessions', String(d.getFullYear()), String(d.getMonth() + 1).padStart(2, '0'), String(d.getDate()).padStart(2, '0'));
+  const id = '01a193d4-feb2-78f0-846a-873ac85401dd';
+  fs.mkdirSync(path.join(day, id), { recursive: true });
+  fs.writeFileSync(path.join(day, id, 'session.jsonl'), fs.readFileSync(fx('session-1.4.14.jsonl'), 'utf8').replaceAll('/tmp/muse-probe', fs.realpathSync(work)));
+  const prev = process.env.MUSE_DATA_HOME;
+  process.env.MUSE_DATA_HOME = home;
+  try {
+    assert.deepEqual(muse.recentSessions(work, Date.now() - 60_000).map((s) => s.sessionId), [id]);
+    assert.deepEqual(muse.recentSessions(os.tmpdir(), Date.now() - 60_000), [], 'another folder');
+    assert.ok(muse.hasSession(work, id));
+    assert.equal(muse.hasSession(work, '01a193d4-0000-78f0-846a-873ac85401dd'), false);
+  } finally {
+    if (prev === undefined) delete process.env.MUSE_DATA_HOME;
+    else process.env.MUSE_DATA_HOME = prev;
+  }
+  // The trust question, from a real screen.
+  const trust = fs.readFileSync(fx('trust-screen-1.4.14.txt'), 'utf8');
+  const flat = (s) => s.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '').replace(/\s+/g, '');
+  assert.equal(muse.attention.find(([re]) => re.test(flat(trust)))?.[1], 'Folder trust prompt');
+  assert.deepEqual(muse.promptChoices(trust), { question: 'Do you trust this workspace?', choices: [{ key: '1', label: 'Trust and continue' }, { key: '2', label: 'Quit' }] });
+  // Launch, resume (no message: it's typed later) and one-shot arguments, all real flags in the help.
+  assert.deepEqual(muse.launchArgs({ permissionMode: 'plan', model: 'm', instructions: 'Keep a brief.', prompt: '-x Fix it' }), ['--trust-workspace', '--permission-profile', ':read-only', '--model', 'm', '--', 'Keep a brief.\n\n---\n\nYour task:\n-x Fix it']);
+  assert.deepEqual(muse.launchArgs({ permissionMode: 'bypassPermissions', resume: true, sessionId: id, prompt: 'go on' }), ['resume', id, '--trust-workspace', '--yolo']);
+  assert.equal(muse.supports.resumePrompt, false);
+  assert.equal(muse.stopSignal, 'SIGTERM', 'a hangup leaves no clean end in its log');
+  // Each command's flags are checked against that command's own help (exec refuses some of the TUI's).
+  const flags = (args) => [...new Set(args.filter((a) => a.startsWith('--') && a !== '--'))];
+  const help = fs.readFileSync(fx('help-1.4.14.txt'), 'utf8');
+  for (const flag of flags([...muse.launchArgs({ permissionMode: 'plan', model: 'm' }), ...muse.launchArgs({ permissionMode: 'bypassPermissions' })])) assert.match(help, new RegExp(`^\\s+${flag}\\b`, 'm'), `${flag} is a muse flag`);
+  const execHelp = fs.readFileSync(fx('exec-help-1.4.14.txt'), 'utf8');
+  for (const flag of flags(muse.oneShotArgs({}, { model: 'm', prompt: 'p' }))) assert.match(execHelp, new RegExp(`^\\s+${flag}\\b`, 'm'), `${flag} is a muse exec flag`);
+  assert.match(fs.readFileSync(fx('resume-help-1.4.14.txt'), 'utf8'), /muse resume <session-ref>/);
+});

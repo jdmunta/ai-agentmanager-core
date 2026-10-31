@@ -724,11 +724,13 @@ Or use **Remote access** in the header of the UI on this computer.
 - **Firewall.** If the macOS firewall is off, the port is open to your whole network while remote access is on. Turn it off when you don't need it.
 - **Streaming.** The phone UI streams with Server-Sent Events plus plain HTTPS requests. iOS Safari doesn't apply an accepted self-signed certificate to WebSockets.
 
-## Engines: Claude Code, Codex and Antigravity
+## Engines: Claude Code, Codex, Antigravity and Muse Code
 
 Agents run Claude Code by default. With OpenAI's Codex CLI installed (`npm i -g @openai/codex`, signed in), an agent can run Codex instead: `agentmgr add --engine codex …`, or the **Engine** picker in New agent (shown once a second engine is installed). Everything else works the same way: worktrees, the brief and questions, the inbox (Codex's approval menus included), token usage, stuck detection, PR tracking, Explain, the backlog and the hub. Codex records no cost, and planning while a repo clones and forks are Claude-only for now. Set `"engine": "codex"` in config.json to make it the default; `engines.codex.bin` points at another binary. On the hub, each machine reports the engines it has (`engine:codex`), so shared backlog work can ask for one. See [docs/engines.md](docs/engines.md).
 
 Google's **Antigravity CLI** (`agy`, signed in with your Google account) works the same way: `--engine antigravity`. It replaced Gemini CLI for personal Google accounts in June 2026. AI Agent Manager adopts the conversation agy starts, resumes it with `--conversation`, reads token usage, commands and file writes from its transcript, shows its permission menus (commands, file changes, access outside the folder) in the inbox, pre-trusts agent folders in agy's settings, and runs Explain in agy's print mode. agy asks before writing the brief too, unless the agent runs in `acceptEdits` mode. `engines.antigravity.bin` points at another binary.
+
+Meta's **Muse Code** (`muse`, installed with `curl -fsSL https://dev.meta.ai/install.sh | bash` and signed in with `muse login`) works the same way: `--engine muse`. AI Agent Manager adopts the session Muse starts, resumes it with `muse resume` (a message for a resumed session is typed once Muse is idle), trusts the agent's folder for each run with `--trust-workspace` instead of saving it, reads the conversation and token usage from Muse's session log, shows its trust and approval questions in the inbox, stops it cleanly with SIGTERM, and runs Explain with `muse exec` in the read-only profile. Commands and edits aren't read from its log yet, so stuck detection has less to go on for Muse agents. When Muse runs in contributor mode (an account without a plan), the engine picker says so: Meta may use your code and conversations to improve its products. `engines.muse.bin` points at another binary, and `engines.muse.args` adds arguments to every run.
 
 ## Several machines: the hub
 
