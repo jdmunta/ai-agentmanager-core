@@ -161,6 +161,8 @@
           </div>
           <div id="term-drop" class="term-drop" hidden>Drop files to attach</div>
           <div class="keybar" id="keybar" aria-label="Terminal keys">
+            <button data-clip-act="copy" title="Copy text from the terminal">Copy</button>
+            <button data-clip-act="paste" title="Paste into the terminal">Paste</button>
             <button data-key="esc">Esc</button>
             <button data-key="tab">Tab</button>
             <button data-key="stab" title="Shift+Tab: cycle permission mode">⇧Tab</button>
@@ -767,6 +769,8 @@
         <button class="term-tab term-add" id="machine-new" title="Open another terminal">+ Terminal</button>
         <span id="machine-title" class="hint"></span>
         <span class="spacer"></span>
+        <button id="machine-copy" class="ghost small" title="Copy text from the terminal">Copy</button>
+        <button id="machine-paste" class="ghost small" title="Paste into the terminal">Paste</button>
         <button id="machine-close" class="ghost small" title="Hide (the shells keep running)">Hide</button>
       </div>
       <div id="machine-term" class="terminal"></div>

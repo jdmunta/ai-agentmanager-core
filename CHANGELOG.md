@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.11.1 (2026-11-01)
+
+- **Copy and paste in terminals on phones:** **Copy** and **Paste** in the terminal's key bar (and in the Terminal's bar). A phone can't select the terminal's text or paste into it directly, so Copy opens its recent output as plain text you can select (or **Copy all**), and Paste reads the clipboard (the phone asks first) or offers a box to paste into, then inserts it as one paste without pressing Enter.
+
 ## 1.11.0 (2026-11-01)
 
 - **Inbox:** permission menus that newer Claude Code draws as one run of text ("Do you want to proceed? ❯ 1. Yes 2. … 3. No") get their choices again, so they can be answered from the inbox.

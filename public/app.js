@@ -6,6 +6,7 @@ import { touchScroll } from '/touchscroll.js';
 import { openStream, post, REMOTE } from '/transport.js';
 import { attachBox } from '/attach.js';
 import { initSide } from '/side.js';
+import { openCopy, pasteInto } from '/termclip.js';
 import { addTools, download, htmlFile, initExport } from '/export.js';
 import { badgeHtml as scoreBadge, scorecardHtml, scorecardSpeech } from '/scorecard.js';
 import { bindListen, listenHtml, play, speakable, now as speaking, stop as stopSpeaking } from '/speak.js';
@@ -3660,6 +3661,10 @@ const KEYS = {
   enter: '\r', ctrlc: '\x03', 1: '1', 2: '2', 3: '3', 4: '4',
 };
 $('#keybar').addEventListener('click', (e) => {
+  // Copy / Paste: a phone can't select xterm's text or paste into it directly (termclip.js).
+  const clip = e.target.closest('[data-clip-act]')?.dataset.clipAct;
+  if (clip === 'copy') return openCopy(term.xterm, { esc, toast });
+  if (clip === 'paste') return pasteInto(term.xterm, { toast });
   const key = e.target.closest('[data-key]')?.dataset.key;
   if (key) term.send({ t: 'i', d: KEYS[key] });
 });

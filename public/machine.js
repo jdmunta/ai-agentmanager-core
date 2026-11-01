@@ -2,6 +2,7 @@
 // any signed-in device (over remote access it streams like an agent's shell). The shells keep
 // running when the window is hidden; × ends one.
 import { openStream } from '/transport.js';
+import { openCopy, pasteInto } from '/termclip.js';
 
 const MACHINE = '__machine__';
 
@@ -86,6 +87,9 @@ export function initMachine({ api, esc, toast, $, Terminal, FitAddon }) {
     shells = [...new Set([...shells, n])];
     connect(n);
   };
+  // Copy / Paste buttons: on a phone the terminal's text can't be selected or pasted into directly.
+  $('#machine-copy').onclick = () => xterm && openCopy(xterm, { esc, toast });
+  $('#machine-paste').onclick = () => xterm && pasteInto(xterm, { toast });
   $('#machine-close').onclick = () => {
     conn?.close();
     conn = null;
