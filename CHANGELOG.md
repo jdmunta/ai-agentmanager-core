@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.10.0 (2026-10-31)
+
+- **Review scorecard:** an agent's changes scored 0-100 for Intent, Spec (each acceptance criterion met / not met / unverified, with evidence), Tests, Safety, Scope and Plan, with an overall readiness, a recommendation (Ready to approve / Look at these first / Not ready) and **Where to look**: the few hunks a person should read. Facts the app measures cap the model's scores (failing CI, failing checks, code without tests, plan steps ticked, unassessed criteria) and the recommendation follows fixed rules. At the top of Review changes, as a **Scorecard** document, as a badge in Land, in the PR description, and posted on the PR with **Post to PR** (posting again updates the comment). Runs by itself when the agent marks its work done (`"scorecard": { "auto": false }` turns that off); `agentmgr doc <agent> scorecard`.
+
 ## 1.9.0 (2026-10-31)
 
 - **Intent, spec and plan:** each task agent now has INTENT.md (the request as given, its Jira summary, attachments and who started it; written by AI Agent Manager), SPEC.md (requirements, acceptance criteria, out of scope; the agent writes it before changing code) and PLAN.md (steps it ticks off), next to its brief. **Intent · Spec · Plan** buttons and the split view's Docs menu show them; Explain, the documents and AI review read the spec and plan; **Push & open PR** puts them in the pull request's description (intent in full, spec and plan folded). `"specs": false` in config.json turns the spec and plan instructions off.

@@ -68,6 +68,15 @@ if (args.includes('-p')) {
       process.stdout.write('```json\n' + JSON.stringify(reply) + '\n```\n', () => process.exit(0));
       return;
     }
+    if (input.startsWith("You score an AI coding agent's changes")) {
+      const ids = [...input.matchAll(/<hunk id="(H\d+)"/g)].map((m) => m[1]);
+      return json({
+        summary: `Scored: ${section('intent').split('\n').find((l) => l.startsWith('# ')) ?? 'no intent file'}`,
+        scores: { intent: { score: 88, why: 'Does what was asked' }, scope: { score: 92, why: 'On task' }, plan: { score: 80, why: 'As planned' }, tests: { score: 90, why: 'Tested' }, safety: { score: 85, why: 'Nothing risky' } },
+        criteria: [],
+        look: ids.slice(0, 1).map((id) => ({ id, reason: 'The core change' })),
+      });
+    }
     if (input.startsWith("You help a person review an AI coding agent's changes")) {
       // Every hunk but the last, in reverse order (a reading order other than the diff's).
       const ids = [...input.matchAll(/<hunk id="(H\d+)" file="([^"]+)">/g)].map((m) => [m[1], m[2]]);

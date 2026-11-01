@@ -906,3 +906,31 @@ form.dropping { outline: 2px dashed var(--accent, #6b8cff); outline-offset: 4px;
 .say.on button:first-child { min-width: 30px; }
 .explain-foot { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .sd-step.current { box-shadow: 0 0 0 2px var(--accent, #6b8cff); }
+
+/* Review scorecard. */
+.scorecard { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); }
+.sc-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.sc-overall { display: flex; align-items: baseline; gap: 2px; padding: 4px 10px; border-radius: 8px; border: 2px solid currentColor; }
+.sc-overall b { font-size: 26px; line-height: 1; }
+.sc-overall small { opacity: .7; }
+.sc-verdict { min-width: 0; flex: 1 1 260px; }
+.good { color: var(--green); } .mid { color: var(--yellow); } .bad { color: var(--red); }
+.sc-rows { display: flex; flex-direction: column; gap: 4px; }
+.sc-row { display: grid; grid-template-columns: 64px 140px 32px 1fr; gap: 8px; align-items: center; font-size: 13px; }
+.sc-label { font-weight: 600; }
+.sc-bar { height: 8px; border-radius: 4px; background: var(--panel-2); overflow: hidden; }
+.sc-bar > span { display: block; height: 100%; background: currentColor; }
+.sc-n { text-align: right; font-variant-numeric: tabular-nums; }
+.sc-note { color: var(--yellow); }
+.sc-row.na { opacity: .6; }
+.sc-crit ul, .sc-look ol { margin: 4px 0 0; padding-left: 20px; }
+.sc-crit li { list-style: none; margin-left: -16px; }
+.sc-mark { display: inline-block; width: 16px; font-weight: 700; }
+.sc-crit li.met .sc-mark { color: var(--green); } .sc-crit li.not_met .sc-mark { color: var(--red); } .sc-crit li.unverified .sc-mark { color: var(--yellow); }
+.sc-facts { font-size: 11.5px; }
+.sc-badge { display: inline-block; padding: 1px 8px; border-radius: 999px; border: 1px solid currentColor; font-size: 12px; white-space: nowrap; }
+.rv-score { margin: 0 12px 8px; }
+.rv-score-empty { display: flex; align-items: center; gap: 10px; margin: 0 12px 8px; }
+.rv-hunk.flash td { animation: rvflash 1.6s; }
+@keyframes rvflash { 0%, 60% { background: var(--accent); color: var(--accent-text); } }
+@media (max-width: 640px) { .sc-row { grid-template-columns: 56px 1fr 28px; } .sc-why { grid-column: 1 / -1; } }

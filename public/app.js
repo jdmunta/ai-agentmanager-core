@@ -7,6 +7,7 @@ import { openStream, post, REMOTE } from '/transport.js';
 import { attachBox } from '/attach.js';
 import { initSide } from '/side.js';
 import { addTools, download, htmlFile, initExport } from '/export.js';
+import { badgeHtml as scoreBadge, scorecardHtml, scorecardSpeech } from '/scorecard.js';
 import { bindListen, listenHtml, play, speakable, now as speaking, stop as stopSpeaking } from '/speak.js';
 import { initReview } from '/review.js';
 import { initLand, prChips } from '/land.js';
@@ -123,7 +124,7 @@ $('#new-playbook').onclick = () => {
   playbooksUi.open({ intent: f.intents.value.trim(), projects: f.project.value.trim() ? [f.project.value.trim()] : [], model: f.model.value.trim(), permissionMode: f.permissionMode.value });
 };
 $('#triggers-open').onclick = () => triggersUi.open();
-const landUi = initLand({ api, esc, toast, agents, $, select: (id) => (showTab('agents'), select(id)), openReview: (id) => reviewUi.open(id), isOpen: () => sideTab === 'land' });
+const landUi = initLand({ api, esc, toast, agents, $, scoreBadge, select: (id) => (showTab('agents'), select(id)), openReview: (id) => reviewUi.open(id), isOpen: () => sideTab === 'land' });
 
 function statusOf(a) {
   if (a.runtime.planning) return a.runtime.attention ? 'attention' : 'planning';
@@ -267,9 +268,9 @@ const INSIGHT_ICONS = { why: '🎯', what: '📦', how: '🛠', now: '📍' };
 
 // ------------------------------------------------------------------ stakeholder documents
 
-const DOCS = { analysis: 'Analysis', design: 'Design', flow: 'Flow', proposal: 'Proposal', humanai: 'Human vs AI', diagrams: 'Diagrams' };
+const DOCS = { analysis: 'Analysis', design: 'Design', flow: 'Flow', proposal: 'Proposal', humanai: 'Human vs AI', diagrams: 'Diagrams', scorecard: 'Scorecard' };
 // Optional extras that "Write all" leaves out.
-const DOC_EXTRAS = new Set(['diagrams']);
+const DOC_EXTRAS = new Set(['diagrams', 'scorecard']);
 const DOC_TITLES = { ...DOCS, plan: 'Plan', intent: 'Intent', spec: 'Spec' };
 // The agent's intent, spec and plan files (read from the daemon when opened; kept here by agent and kind).
 const SPEC_KINDS = { intent: 'Intent', spec: 'Spec', plan: 'Plan' };
@@ -350,7 +351,7 @@ function docButtons(a) {
       const d = a.docs?.[k];
       const stale = d?.markdown && a.brief?.updatedAt && d.briefUpdatedAt !== a.brief.updatedAt;
       return `<button class="small doc-btn ${d?.markdown ? 'has' : ''}" data-doc="${k}" ${d?.pending ? 'disabled' : ''}
-        title="${k === 'diagrams' ? (d?.markdown ? `Open the diagrams${stale ? ' (the brief changed since)' : ''}` : 'Draw the problem and its solution for a quick grasp: architecture, design, data flow (animated) and the key interaction, diagrams only. Built from the documents already written and the agent\'s work') : d?.markdown ? `Open the ${label.toLowerCase()} document${stale ? ' (the brief changed since)' : ''}` : `Write a ${label.toLowerCase()} document for stakeholders`}">${d?.pending ? `${label}…` : label}${d?.markdown ? (stale ? ' •' : ' ✓') : ''}</button>`;
+        title="${k === 'scorecard' ? (d?.markdown ? `Open the review scorecard: ${d.data?.overall ?? '—'}/100` : 'Score the changes for review: intent, spec, scope, plan, tests and safety, with an overall readiness and where to look') : k === 'diagrams' ? (d?.markdown ? `Open the diagrams${stale ? ' (the brief changed since)' : ''}` : 'Draw the problem and its solution for a quick grasp: architecture, design, data flow (animated) and the key interaction, diagrams only. Built from the documents already written and the agent\'s work') : d?.markdown ? `Open the ${label.toLowerCase()} document${stale ? ' (the brief changed since)' : ''}` : `Write a ${label.toLowerCase()} document for stakeholders`}">${d?.pending ? `${label}…` : label}${d?.markdown ? (stale ? ' •' : ' ✓') : ''}</button>`;
     })
     .join('')}</span>${specButtons(a)}`;
 }
@@ -388,7 +389,7 @@ function renderDocDialog() {
   else if (specKind && !d?.markdown) body.innerHTML = `<p class="hint">${docView.kind === 'intent' ? 'No intent file for this agent (agents created before 1.9 have none).' : `The agent hasn't written its ${label.toLowerCase()} yet. It writes ${docView.kind === 'spec' ? 'the spec before changing code' : 'the plan and keeps it current'}.`}</p>`;
   else if (d?.markdown) {
     if (body.dataset.rendered !== d.at) {
-      body.innerHTML = d.data ? humanAiHtml(d) : docHtml(d.markdown);
+      body.innerHTML = docView.kind === 'scorecard' ? scorecardHtml(d, esc) : d.data ? humanAiHtml(d) : docHtml(d.markdown);
       body.dataset.rendered = d.at;
       renderDiagrams(body);
     }
@@ -399,7 +400,7 @@ function renderDocDialog() {
   for (const id of ['doc-copy', 'doc-download', 'doc-print']) $(`#${id}`).disabled = !d?.markdown;
   // Diagrams: the whole document as one HTML file with every diagram (each also has Copy / PNG / SVG).
   $('#doc-html').hidden = !/```mermaid/.test(d?.markdown ?? '');
-  $('#doc-listen').innerHTML = d?.markdown && docView.kind !== 'diagrams' ? listenHtml(`doc:${docView.agentId}:${docView.kind}`, { title: 'Read the document aloud' }) : '';
+  $('#doc-listen').innerHTML = d?.markdown && docView.kind !== 'diagrams' ? listenHtml(docView.kind === 'scorecard' ? `score:${docView.agentId}` : `doc:${docView.agentId}:${docView.kind}`, { title: 'Read the document aloud' }) : '';
   $('#doc-print').hidden = plan || specKind;
   $('#doc-regen').hidden = plan || specKind;
   $('#doc-regen').disabled = Boolean(d?.pending);
@@ -538,6 +539,7 @@ bindListen((id) => {
   if (what === 'explain') parts = [speakable(a?.explanation?.markdown)];
   else if (what === 'doc') parts = [speakable(kind === 'explain' ? a?.explanation?.markdown : docOf(a, kind)?.markdown)];
   else if (what === 'walk') parts = reviewUi.listenParts();
+  else if (what === 'score') parts = a?.docs?.scorecard?.data ? scorecardSpeech(a.docs.scorecard) : null;
   else if (what === 'sidewalk') parts = sidePane?.listenParts();
   if (!parts?.length || !play(id, parts)) toast('Nothing to read aloud here (or this browser has no speech)');
 });

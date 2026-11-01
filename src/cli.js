@@ -430,9 +430,9 @@ export async function main(argv) {
 
   program
     .command('doc')
-    .description('Write a stakeholder document from the agent work: analysis, design, flow, proposal, humanai (Human vs AI), diagrams (diagrams only) or walkthrough (its changes explained one by one)')
+    .description('Write a stakeholder document from the agent work: analysis, design, flow, proposal, humanai (Human vs AI), diagrams (diagrams only), walkthrough (its changes explained one by one) or scorecard (its changes scored for review)')
     .argument('<agent>')
-    .argument('<kind>', 'analysis, design, flow, proposal, humanai, diagrams, walkthrough, or all (background; diagrams and walkthrough not included)')
+    .argument('<kind>', 'analysis, design, flow, proposal, humanai, diagrams, walkthrough, scorecard, or all (background; diagrams, walkthrough and scorecard not included)')
     .option('-o, --output <file>', 'also save the Markdown to this file')
     .option('--cached', 'print the last version instead of writing a new one')
     .option('-b, --background', 'start writing and return at once (kind "all" writes all five)')

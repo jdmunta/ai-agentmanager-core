@@ -3,6 +3,7 @@
 // With a walkthrough, each hunk shows its explanation and ◀ / ▶ step through them in reading order.
 import { cardHtml, explainButton, listenParts as walkParts, stepOf, walkthroughOf } from './walkthrough.js';
 import { listenHtml, now as speaking, stop as stopSpeaking } from './speak.js';
+import { scorecardHtml, scorecardOf } from './scorecard.js';
 
 /** Unified diff -> [{ path, status, binary, hunks: [{ head, lines: [{ t, old, new, text }] }] }] */
 export function parseDiff(text) {
@@ -138,7 +139,7 @@ export function initReview({ api, esc, toast, agents, $ }) {
     for (const h of f.hunks) {
       const i = w.doc ? stepOf(w.doc, f.path, h.head) : -1;
       if (i >= 0) rows.push(`<tr class="rv-explain ${st.step === i ? 'current' : ''}" id="rv-step-${i}"><td colspan="3">${cardHtml(w.doc.data.changes[i], i, w.doc.data.changes.length, esc)}</td></tr>`);
-      rows.push(`<tr class="rv-hunk"><td colspan="3">${esc(h.head)}</td></tr>`);
+      rows.push(`<tr class="rv-hunk" data-rv-hunk="${esc(`${f.path}\t${h.head}`)}"><td colspan="3">${esc(h.head)}</td></tr>`);
       for (const l of h.lines) {
         const side = l.t === 'del' ? 'old' : 'new';
         const line = side === 'old' ? l.old : l.new;
@@ -155,6 +156,32 @@ export function initReview({ api, esc, toast, agents, $ }) {
       }
     }
     return `<div class="rv-file" id="rv-${encodeURIComponent(f.path)}">${head}<table class="rv-table">${rows.join('')}</table></div>`;
+  }
+
+  /** The review scorecard at the top: scores, verdict and where to look, or the button to score. */
+  function scorePanel() {
+    if (!st.data?.files.length) return '';
+    const sc = scorecardOf(agents.get(st.id), st.data.diffHash);
+    const openPr = st.data.prs.find((p) => p.state === 'OPEN');
+    const run = `<button type="button" class="small ${sc.doc && !sc.stale ? 'ghost' : 'primary'}" data-sc-run ${sc.pending ? 'disabled' : ''} title="Score the changes against the intent, spec, plan and tests, with where to look (a separate one-off call)">${sc.pending ? 'Scoring…' : sc.doc ? (sc.stale ? 'Score again (changed)' : 'Score again') : '📊 Score changes'}</button>`;
+    if (!sc.doc) {
+      return `<div class="rv-score-empty">${run}<span class="hint">${sc.error && !sc.pending ? `<span class="error">Couldn't score: ${esc(sc.error)}</span>` : 'Scores against the intent, spec, scope, plan, tests and safety, with an overall readiness and the few places to read.'}</span></div>`;
+    }
+    const post = openPr ? `<button type="button" class="small ghost" data-sc-post title="Post the scorecard on the pull request as a comment (posting again updates it)">${sc.doc.postedTo === openPr.url ? 'Update on PR' : 'Post to PR'}</button>` : '';
+    return `<div class="rv-score">${scorecardHtml(sc.doc, esc, { stale: sc.stale, actions: `${listenHtml(`score:${st.id}`, { title: 'Hear the scorecard' })}${post}${run}` })}</div>`;
+  }
+
+  /** Open the file of a hunk (from "where to look") and scroll to it. */
+  function gotoHunk(key) {
+    const [file] = key.split('\t');
+    st.collapsed.delete(file);
+    keepInputs();
+    render();
+    const row = [...body.querySelectorAll('[data-rv-hunk]')].find((r) => r.dataset.rvHunk === key);
+    if (!row) return toast('That part of the change has moved since it was scored');
+    row.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    row.classList.add('flash');
+    setTimeout(() => row.classList.remove('flash'), 1600);
   }
 
   /** Explain changes, then ◀ n of N ▶ once there is a walkthrough. */
@@ -221,6 +248,7 @@ export function initReview({ api, esc, toast, agents, $ }) {
         ${d.files.length ? walkNav() : ''}
         <button type="button" class="small ghost" data-rv-reload>${st.loading ? 'Loading…' : 'Reload'}</button>
       </div>
+      ${scorePanel()}
       ${walkNote()}
       ${d.busy ? '<p class="hint rv-warn">The agent is working, so the changes may still move. Reload when it is idle.</p>' : ''}
       ${d.truncated ? '<p class="hint rv-warn">The diff is large and was cut short; open a shell for the rest.</p>' : ''}
@@ -289,6 +317,29 @@ export function initReview({ api, esc, toast, agents, $ }) {
     if (t.closest('[data-rv-reload]')) return keepInputs(), reload();
     const stepBtn = t.closest('[data-rv-step]');
     if (stepBtn) return step(Number(stepBtn.dataset.rvStep));
+    const look = t.closest('[data-sc-look]');
+    if (look) return gotoHunk(look.dataset.scLook);
+    if (t.closest('[data-sc-run]')) {
+      keepInputs();
+      try {
+        agents.set(st.id, await api('POST', `/agents/${st.id}/docs/scorecard?background=1`));
+        render();
+      } catch (err) {
+        toast(`Error: ${err.message}`, 5000);
+      }
+      return;
+    }
+    if (t.closest('[data-sc-post]')) {
+      t.disabled = true;
+      try {
+        const r = await api('POST', `/agents/${st.id}/scorecard/post`);
+        toast(r.edited ? 'Scorecard updated on the pull request' : 'Scorecard posted on the pull request', 4000, { label: 'Open', run: () => window.open(r.url, '_blank', 'noopener') });
+      } catch (err) {
+        toast(`Error: ${err.message}`, 6000);
+      }
+      t.disabled = false;
+      return;
+    }
     if (t.closest('[data-rv-explain]')) {
       keepInputs();
       try {
@@ -442,7 +493,8 @@ export function initReview({ api, esc, toast, agents, $ }) {
   function agentChanged(a) {
     if (!dlg.open || a.id !== st.id || !st.data) return;
     const w = a.docs?.walkthrough;
-    const sig = `${w?.at}|${w?.pending}|${w?.error}`;
+    const sc = a.docs?.scorecard;
+    const sig = `${w?.at}|${w?.pending}|${w?.error}|${sc?.at}|${sc?.pending}|${sc?.error}|${sc?.postedTo}`;
     if (sig === st.walkSig) return;
     st.walkSig = sig;
     keepInputs();

@@ -85,13 +85,13 @@ Runs on macOS and Linux; on Windows, use WSL2. Requires Node 20+, `git`, and the
 
 ```sh
 npm install -g ai-agentmanager          # the latest release
-npm install -g ai-agentmanager@1.9.0    # or a specific one
+npm install -g ai-agentmanager@1.10.0    # or a specific one
 ```
 
 Or from the repository, at a release tag:
 
 ```sh
-git clone --branch v1.9.0 --depth 1 https://github.com/jdmunta/ai-agentmanager-core.git
+git clone --branch v1.10.0 --depth 1 https://github.com/jdmunta/ai-agentmanager-core.git
 cd ai-agentmanager-core
 npm install
 npm link            # optional: puts `agentmgr` on your PATH
@@ -111,7 +111,7 @@ npm link
 | Installed with | Update |
 | --- | --- |
 | npm | `npm install -g ai-agentmanager@latest` |
-| A clone at a release tag | `git fetch --tags && git checkout v1.9.0 && npm install` (the tag you want) |
+| A clone at a release tag | `git fetch --tags && git checkout v1.10.0 && npm install` (the tag you want) |
 | A clone of `main` | `git pull && npm install` |
 
 **Check your setup.** `agentmgr doctor` checks Node.js, Claude Code and its sign-in, git, `gh`, the data folder, the daemon's port and Chrome, and says how to fix anything missing.
@@ -387,6 +387,7 @@ Each card has at most **three points of about 12 words each**, so they're easy t
 
 - **Files and diff.** The changed files on the left with lines added and removed, and the diff file by file on the right. Click a file header to fold it; very large files start folded.
 - **Line comments.** Click **+** next to a line (or its line number) to comment on it, and add an overall comment if you like. **Send to agent** types them into the agent as one message, each with its file, line and the code it is about, and asks it to address them. Comments not sent yet are kept in this browser.
+- **Review scorecard.** **📊 Score changes** (it also runs by itself when the agent marks its work done) scores the changes 0-100 for **Intent**, **Spec** (each acceptance criterion met, not met or unverified, with evidence), **Tests**, **Safety**, **Scope** and **Plan**, and gives an overall readiness with a recommendation: *Ready to approve*, *Look at these first* or *Not ready*, plus **Where to look**, the few hunks worth a person's time. What the app measures caps the model: failing CI or checks, code changed without tests, plan steps not ticked, criteria not assessed. **Post to PR** puts it on the pull request as a comment (again: updates it), and Push & open PR includes it in the description. It also shows as a badge in Land. Turn the automatic run off with `"scorecard": { "auto": false }`.
 - **Explain changes** explains each change one by one: a title, what it changes, why (from the request and the conversation), the risk and what to check, in the order a reviewer should read them. Each explanation sits above its hunk, and **◀ / ▶** (or **[** and **]**) step through them, opening folded files on the way. When the agent changes the code afterwards, the page says so and **Explain again** brings it up to date. From the CLI: `agentmgr doc <agent> walkthrough`.
 - **Commit all** commits everything in the worktree, new files included, with your git name and email.
 - **Intent, spec and plan.** Each agent keeps INTENT.md (what was asked, written by AI Agent Manager), SPEC.md (requirements and acceptance criteria, written by the agent before it changes code) and PLAN.md (steps, ticked off as it goes) next to its brief. Open them with **Intent · Spec · Plan** or in the split view's Docs; Explain, the documents and AI review read them too. `"specs": false` in config.json stops asking agents for the spec and plan.

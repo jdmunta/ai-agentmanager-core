@@ -143,6 +143,32 @@ export class Review {
     };
   }
 
+  /**
+   * Post the review scorecard on the agent's open pull request as a comment, so approvers see it in
+   * GitHub. Posting again edits the last comment instead of adding another.
+   */
+  async postScorecard(ref) {
+    const agent = this.agentWithRepo(ref);
+    const sc = agent.docs?.scorecard;
+    if (!sc?.markdown) throw err(409, 'Score the changes first');
+    const pr = Object.values(agent.prs ?? {}).find((p) => p.state === 'OPEN');
+    if (!pr) throw err(409, 'No open pull request for this agent');
+    this.manager.plugins.check('agent.pr', { agent: this.manager.auditView(agent), title: 'scorecard comment', draft: false });
+    const opts = { cwd: agent.workdir, timeout: 60_000 };
+    const args = ['pr', 'comment', pr.url, '--body', sc.markdown];
+    const again = sc.postedTo === pr.url;
+    try {
+      await git.run(ghBin(), again ? [...args, '--edit-last'] : args, opts);
+    } catch (e) {
+      // The comment we edited may be gone; add a new one.
+      if (!again) throw err(502, `Posting the scorecard failed: ${e.message.replace(/^gh .*? failed: /, '')}`);
+      await git.run(ghBin(), args, opts);
+    }
+    const cur = this.manager.store.get(agent.id);
+    this.manager.patch(agent.id, { docs: { ...cur.docs, scorecard: { ...cur.docs.scorecard, postedTo: pr.url, postedAt: new Date().toISOString() } } });
+    return { url: pr.url, edited: again };
+  }
+
   /** Send the comments to the agent as one message (typed in when it is idle). */
   comment(ref, { comments = [], note = '' } = {}) {
     const agent = this.agentWithRepo(ref);
@@ -194,8 +220,14 @@ export class Review {
     }
     const args = ['pr', 'create', '--head', branch];
     if (target) args.push('--base', target);
-    // The description: your text (else the commits), then the intent, spec and plan.
-    const sections = prSections(agent.id);
+    // The description: your text (else the commits), the review scorecard, then the intent, spec and plan.
+    const sc = agent.docs?.scorecard;
+    let card = '';
+    if (sc?.markdown) {
+      const now = base ? hash(await git.fullDiff(dir, base.sha)) : null;
+      card = sc.diffHash && now && sc.diffHash !== now ? `${sc.markdown}\n\n<sub>Scored before the latest changes.</sub>` : sc.markdown;
+    }
+    const sections = [card, prSections(agent.id)].filter(Boolean).join('\n\n');
     if (String(title).trim() || sections) {
       const log = base ? await git.run('git', ['log', '--reverse', '--format=%s', `${base.sha}..HEAD`], opts).catch(() => '') : '';
       const subjects = log.split('\n').filter(Boolean);
