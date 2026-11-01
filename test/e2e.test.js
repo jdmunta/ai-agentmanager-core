@@ -24,11 +24,14 @@ process.env.CODEX_HOME = path.join(home, 'codex');
 process.env.FAKE_CODEX_LOG = path.join(home, 'fake-codex.log');
 process.env.ANTIGRAVITY_CLI_HOME = path.join(home, 'agy');
 process.env.FAKE_AGY_LOG = path.join(home, 'fake-agy.log');
+process.env.FAKE_ACP_DIR = path.join(home, 'fake-acp');
 fs.writeFileSync(
   path.join(home, 'config.json'),
   JSON.stringify({
     claudeBin: process.execPath,
     claudeArgs: [path.join(here, 'fake-claude.js')],
+    // An ACP agent (fake-acp.js) as the engine "acp-fake".
+    acp: { fake: { label: 'Fake ACP', command: [process.execPath, path.join(here, 'fake-acp.js')] } },
     gitRefreshSec: 1,
     conflictRefreshSec: 0,
     handoffIdleSec: 1,
@@ -1454,6 +1457,38 @@ test('isolation: container agents are checked at creation and marked; the status
   assert.equal(item.isolation, 'container');
   await call('DELETE', `/agents/${a.id}`);
   await call('DELETE', `/agents/${b.id}`);
+});
+
+test('ACP engines: an ACP agent runs in the terminal client, adopted, tracked, resumed, answered and explained', async () => {
+  const eng = (await call('GET', '/engines')).body;
+  const fake = eng.find((e) => e.id === 'acp-fake');
+  assert.deepEqual([fake.label, fake.installed], ['Fake ACP', true]);
+  assert.ok(eng.some((e) => e.id === 'acp-opencode'), 'presets offered (installed or not)');
+  const dir = fs.mkdtempSync(path.join(home, 'acp-work-'));
+  const [a] = (await call('POST', '/agents', { intent: 'Run the tests #perm', dir, engine: 'acp-fake' })).body;
+  // The client asks permission as a menu; the agent waits on it in the inbox, and the answer goes through.
+  const asking = await waitFor(async () => ((await agentNow(a.id)).runtime.attention ? agentNow(a.id) : null), 15000, 'permission prompt');
+  assert.equal(asking.runtime.attention, 'Permission prompt');
+  assert.deepEqual(asking.runtime.prompt.choices.map((c) => c.label), ['Allow once', 'Always allow', 'Reject']);
+  assert.equal((await call('POST', `/agents/${a.id}/prompt-key`, { key: '1' })).status, 200);
+  // The session ACP picked is adopted; its log gives the PR link, the prompt and stuck-detection events.
+  const done = await waitFor(async () => {
+    const x = await agentNow(a.id);
+    return x.sessionId.startsWith('fake-') && x.prs.some((p) => p.url.endsWith('/pull/7')) ? x : null;
+  }, 15000, 'adopted and scanned');
+  const log = path.join(home, 'acp', 'fake', `${done.sessionId}.jsonl`);
+  assert.ok(fs.readFileSync(log, 'utf8').includes('Your task:\\nRun the tests #perm'), 'the first message: instructions, then the task');
+  // Stop and resume: the same ACP session (session/load), with a message typed in.
+  await call('POST', `/agents/${a.id}/stop`);
+  await waitFor(async () => !(await agentNow(a.id)).runtime.running, 8000, 'stopped');
+  await call('POST', `/agents/${a.id}/tell`, { text: 'and again' });
+  await waitFor(() => fs.existsSync(log) && fs.readFileSync(log, 'utf8').includes('"text":"and again"'), 15000, 'resumed and told');
+  assert.equal((await agentNow(a.id)).sessionId, done.sessionId, 'same session');
+  // Explain reads the ACP log through the one-shot client.
+  const ex = await call('POST', `/agents/${a.id}/explain`);
+  assert.equal(ex.status, 200, JSON.stringify(ex.body));
+  await call('POST', `/agents/${a.id}/stop`);
+  await call('DELETE', `/agents/${a.id}`);
 });
 
 test('project shortcuts: auto-assigned, "@cc"-style use fills the repo, rename, register ahead, backlog', async () => {

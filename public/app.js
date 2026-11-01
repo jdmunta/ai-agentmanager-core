@@ -4181,7 +4181,10 @@ $('#new-form').engine?.addEventListener('change', syncContainerField);
 
 async function loadEngines() {
   try {
-    const list = (await api('GET', '/engines')).filter((e) => e.installed && e.id !== 'claude');
+    const all = await api('GET', '/engines');
+    // Engine names for tags and tabs, ACP agents included.
+    for (const e of all) ENGINE_LABEL[e.id] ??= e.label;
+    const list = all.filter((e) => e.installed && e.id !== 'claude');
     // Something to know before choosing an engine (Muse Code in contributor mode, say).
     const notices = Object.fromEntries(list.filter((e) => e.notice).map((e) => [e.id, e.notice]));
     for (const [field, notice] of [['#engine-field', '#engine-notice'], ['#ask-engine-field', '#ask-engine-notice']]) {

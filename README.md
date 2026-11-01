@@ -750,6 +750,16 @@ For isolation, an agent can run in its own Docker container: it sees only its ow
 
 Claude Code and Codex can run in containers; Antigravity and Muse Code ship macOS-only programs. Files are written as your user. Limits and extras go in config.json: `"isolation": { "cpus": 2, "memory": "4g", "network": "none", "mounts": [{ "host": "~/.npm", "readOnly": true }], "env": ["NPM_TOKEN"] }` (variables are passed by name, so their values stay out of command lines). `agentmgr sandbox status` shows what's ready.
 
+## ACP agents
+
+Any agent that speaks [ACP](https://agentclientprotocol.com) (the Agent Client Protocol) works as an engine. Gemini CLI, OpenCode, Goose and Qwen Code show in the Engine picker once installed (and signed in once in a terminal); add others in config.json:
+
+```json
+"acp": { "myagent": { "command": ["myagent", "acp"], "label": "My Agent" } }
+```
+
+That adds the engine `acp-myagent` (`agentmgr add --engine acp-myagent …`); `"opencode": false` hides a preset. ACP agents have no screen of their own, so AI Agent Manager runs a small terminal client in the agent's terminal: it shows the agent's messages, tool calls and plan, sends what you type as prompts (Ctrl+C cancels the turn), asks permission as a numbered menu that the inbox can answer (**Bypass** allows by itself), writes files only inside the agent's folder and brief, resumes sessions the agent can load, and keeps a log in `~/.agentmanager/acp/<name>/` that drives usage, PR links, stuck detection and Explain.
+
 ## Several machines: the hub
 
 With agents on more than one Mac, a **hub** shows all of them in one place: every machine's agents and one inbox of what needs you. Where a machine allows it, you can also act from the hub: answer, message, start and stop agents, start new ones, and open live terminals. Each Mac keeps running its own daemon. It connects out to the hub, so no ports need opening on it, and the hub's requests travel back over that same connection.

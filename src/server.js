@@ -25,7 +25,7 @@ import { Studio } from './studio.js';
 import { Memory } from './memory.js';
 import { doctor } from './doctor.js';
 import { Triggers, tokenMatches } from './triggers.js';
-import { listEngines, registerEngine } from './engines/index.js';
+import { listEngines, registerAcpEngines, registerEngine } from './engines/index.js';
 import { Plugins, pluginSpecs } from './plugins.js';
 import { HubLink, linkUrls } from './hublink.js';
 import { Notifier, isWorkflowUrl, loadNotify, publicNotify, saveNotify, sendSlack } from './notify.js';
@@ -74,6 +74,8 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
   const store = new Store(paths.state);
   const plugins = await new Plugins({ log: (m) => console.log(`[agentmgr] ${m}`) }).load(pluginSpecs(config), { config, base: paths.home });
   for (const { def } of plugins.engines) registerEngine(def);
+  // ACP agents (Gemini CLI, OpenCode, Goose, … and config's "acp") become engines.
+  registerAcpEngines(config);
   const manager = new AgentManager({ store, config, plugins });
   const backlog = new Backlog({ manager, store, config });
   const races = new Races({ manager, store });

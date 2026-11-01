@@ -6,6 +6,7 @@ import antigravity from './antigravity.js';
 import claude from './claude.js';
 import codex from './codex.js';
 import muse from './muse.js';
+import { acpEngines } from './acp.js';
 
 export const ENGINES = { claude, codex, antigravity, muse };
 export const DEFAULT_ENGINE = 'claude';
@@ -17,16 +18,23 @@ export function registerEngine(def) {
   ENGINES[def.id] = def;
 }
 
+/** ACP agents from config.json's "acp" and the presets (acp.js); call again when the config changes. */
+export function registerAcpEngines(config = {}) {
+  for (const id of Object.keys(ENGINES)) if (ENGINES[id].acp) delete ENGINES[id];
+  for (const e of acpEngines(config)) ENGINES[e.id] = e;
+}
+
 /** Whether an engine's command is on this machine (an absolute path, or found on PATH). */
 export function installed(engine, config) {
-  const bin = engine.bin(config);
+  // An ACP engine runs our client with Node; what has to be installed is the agent's own command.
+  const bin = engine.installedBin?.(config) ?? engine.bin(config);
   if (path.isAbsolute(bin)) return fs.existsSync(bin);
   return (process.env.PATH ?? '').split(path.delimiter).some((d) => d && fs.existsSync(path.join(d, bin)));
 }
 
 /** What to tell the person when an engine's command isn't on this machine. */
 export function notInstalled(engine, config) {
-  const bin = engine.bin(config);
+  const bin = engine.installedBin?.(config) ?? engine.bin(config);
   const how = engine.install ?? `Install ${engine.label}`;
   const where = path.isAbsolute(bin) ? `${bin} doesn't exist` : `\`${bin}\` isn't on the daemon's PATH`;
   return `${engine.label} not found: ${where}. ${how}, then run \`agentmgr restart\`. If it's installed somewhere else, set its path in config.json${engine.id === 'claude' ? ' ("claudeBin") or AGENTMGR_CLAUDE_BIN' : ` ("engines": {"${engine.id}": {"bin": "…"}})`}.`;

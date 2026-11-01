@@ -2853,7 +2853,8 @@ export class AgentManager extends EventEmitter {
     const keys = { esc: '\x1b', enter: '\r', up: '\x1b[A', down: '\x1b[B' };
     const data = keys[key] ?? (/^\d$/.test(key) ? key : null);
     if (!data) throw Object.assign(new Error('Unsupported key'), { status: 400 });
-    this.write(agent.id, data);
+    // Menus that read a line (the ACP client's) take Enter after the choice.
+    this.write(agent.id, engineOf(agent).promptKeyEnter && key !== 'enter' ? `${data}\r` : data);
     return { ok: true };
   }
 
