@@ -32,6 +32,7 @@ import { Notifier, isWorkflowUrl, loadNotify, publicNotify, saveNotify, sendSlac
 import { Previews, parseUrl } from './preview.js';
 import { LiveBrowser } from './livebrowser.js';
 import * as remote from './remote.js';
+import * as service from './service.js';
 import { Store } from './store.js';
 import { about, latestRelease } from './about.js';
 
@@ -59,7 +60,7 @@ function isAllowedOrigin(origin, port) {
 }
 
 const PUBLIC_REMOTE_API = new Set(['POST /api/login', 'GET /api/session']);
-const LOCAL_ONLY_API = /^\/api\/(remote(\/|$)|notify(\/|$)|hub(\/|$)|triggers(\/|$)|update(\/|$)|editors$|agents\/[\w-]+\/open-in$|shutdown$)/;
+const LOCAL_ONLY_API = /^\/api\/(remote(\/|$)|notify(\/|$)|hub(\/|$)|triggers(\/|$)|update(\/|$)|service$|editors$|agents\/[\w-]+\/open-in$|shutdown$)/;
 const HOOK_PATH = '/api/hooks/agents';
 const NO_REPO_KINDS = new Set(['general', 'assistant']);
 
@@ -73,6 +74,8 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
   const backlog = new Backlog({ manager, store, config });
   const races = new Races({ manager, store });
   const review = new Review({ manager });
+  // The walkthrough explains the same diff the review screen shows.
+  manager.changesSource = (id) => review.get(id);
   const studio = new Studio({ manager, review });
   const teams = new Teams({ manager, store, config });
   const cleanup = new Cleanup({ manager, store, config, teams });
@@ -259,6 +262,15 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
   api.post('/agents/:id/shell/close', wrap((req) => manager.closeShell(req.params.id, req.body?.n ? Number(req.body.n) : undefined)));
   api.post('/agents/:id/shell/new', wrap((req) => ({ n: manager.nextShellNumber(manager.mustGet(req.params.id).id) })));
   api.post('/agents/:id/shell/drop', wrap((req) => manager.dropShell(req.params.id, Number(req.body?.n) || 1)));
+  // A file attached before its agent exists (New agents, Ask). Raw body, name in the query.
+  api.post(
+    '/uploads',
+    express.raw({ type: () => true, limit: '50mb' }),
+    wrap((req) => {
+      if (!Buffer.isBuffer(req.body) || !req.body.length) throw fail(400, 'Empty file');
+      return manager.stageUpload(req.query.name, req.body);
+    }),
+  );
   // Raw file body; the name comes in the query. Returns the saved path to paste into a terminal.
   api.post(
     '/agents/:id/upload',
@@ -466,7 +478,9 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
   api.post('/agents/:id/fork', wrap((req) => manager.fork(req.params.id, req.body ?? {})));
 
   api.get('/races', wrap(() => races.list()));
-  api.post('/races', wrap((req) => races.create(req.body ?? {})));
+  // Attachments: copied once to a shared folder and listed in the request every attempt gets.
+  const withFiles = ({ attachments, ...body } = {}) => ({ ...body, intent: manager.withSharedAttachments(body.intent, attachments) });
+  api.post('/races', wrap((req) => races.create(withFiles(req.body ?? {}))));
   api.get('/races/:id', wrap((req) => races.view(req.params.id)));
   api.post('/races/:id/tests', wrap((req) => races.runTests(req.params.id, req.body ?? {})));
   api.get('/races/:id/diff/:agent', wrap((req) => races.diff(req.params.id, req.params.agent)));
@@ -494,6 +508,20 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
   api.get('/agents/:id/memory', wrap((req) => memory.read(req.params.id)));
   api.put('/agents/:id/memory', wrap((req) => memory.write(req.params.id, req.body?.text)));
   api.post('/agents/:id/learn', wrap((req) => memory.learn(req.params.id, req.body?.text, { by: req.headers['x-agentmgr-agent'] ? undefined : 'you' })));
+  // Start at login: the login service (launchd or systemd) that brings the daemon back after a reboot.
+  const serviceSupported = ['darwin', 'linux'].includes(process.platform);
+  const serviceView = async () => ({ supported: serviceSupported, ...(serviceSupported ? await service.status().catch(() => ({ installed: false, loaded: false })) : { installed: false, loaded: false }) });
+  api.get('/service', wrap(serviceView));
+  api.put(
+    '/service',
+    wrap(async (req) => {
+      if (!serviceSupported) throw fail(400, `Start at login isn't supported on ${process.platform}`);
+      // Installing loads it; its own copy finds this daemon running and exits cleanly (no restart),
+      // so it takes over at the next login.
+      const res = req.body?.enabled === true ? await service.install() : await service.uninstall();
+      return { ...(await serviceView()), note: res.note ?? null };
+    }),
+  );
   // The first-run checklist: what is set up, and what this machine is missing.
   api.get('/setup', wrap(async () => {
     const checks = (await doctor().catch(() => [])).filter((c) => c.status === 'fail' || c.status === 'warn').filter((c) => c.name !== 'Daemon');
@@ -506,6 +534,8 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
         assistant: agentsNow.some((a) => a.kind === 'assistant') || Boolean(config.triggers?.github?.enabled || config.triggers?.webhook?.enabled),
         remote: Boolean(remote.loadSettings().enabled),
         budget: Boolean(config.budgets?.perAgentUsd || config.budgets?.perDayUsd),
+        // Only where it can be set up (macOS, Linux); elsewhere there's nothing to do.
+        service: serviceSupported ? Boolean((await service.status().catch(() => ({}))).installed) : true,
       },
     };
   }));
@@ -544,7 +574,7 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
     return cleanup.run({ close: b.close !== false, delete: b.delete !== false, ids: Array.isArray(b.ids) ? b.ids : null });
   }));
   api.get('/teams', wrap(() => teams.list()));
-  api.post('/teams', wrap((req) => teams.create(req.body ?? {})));
+  api.post('/teams', wrap((req) => teams.create(withFiles(req.body ?? {}))));
   api.get('/teams/:id', wrap((req) => teams.view(req.params.id)));
   api.get('/teams/:id/files/:name', wrap((req) => teams.file(req.params.id, req.params.name)));
   api.post('/teams/:id/resume', wrap((req) => teams.resume(req.params.id, req.body ?? {})));

@@ -1,6 +1,7 @@
 // Review an agent's changes: the diff against where its branch started, line comments sent
 // back to the agent as one message, and commit / push / open a pull request from the UI.
 import * as git from './git.js';
+import { hash } from './judge.js';
 import { NO_REPO } from './manager.js';
 import { ghBin } from './tracker.js';
 
@@ -135,6 +136,8 @@ export class Review {
       prs: Object.values(agent.prs ?? {}),
       busy: Boolean(rt?.pty && rt.busy),
       diff,
+      // Matches a walkthrough's diffHash while the changes are the ones it explained.
+      diffHash: hash(diff),
       truncated: diff.endsWith('… (diff truncated)'),
     };
   }

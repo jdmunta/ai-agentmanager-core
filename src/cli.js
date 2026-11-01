@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
 import fs from 'node:fs';
+import path from 'node:path';
 import { Command, Option } from 'commander';
 import WebSocket from 'ws';
 import { HOST, PORT } from './config.js';
@@ -192,6 +193,20 @@ async function attach(ref, { resume = true, kind = 'claude' } = {}) {
   });
 }
 
+/** Upload local files for a request (a screenshot, a log); returns the staged paths the daemon gets. */
+async function uploadFiles(files = []) {
+  const out = [];
+  for (const f of files) {
+    const data = fs.readFileSync(f);
+    const res = await fetch(`${BASE}/api/uploads?name=${encodeURIComponent(path.basename(f))}`, { method: 'POST', headers: { 'content-type': 'application/octet-stream', 'x-agentmgr': '1' }, body: data });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(`Could not attach ${f}: ${body.error || `HTTP ${res.status}`}`);
+    out.push(body.path);
+  }
+  return out.length ? out : undefined;
+}
+const collect = (v, list = []) => [...list, v];
+
 function readIntentsFile(file) {
   const text = file === '-' ? fs.readFileSync(0, 'utf8') : fs.readFileSync(file, 'utf8');
   return text
@@ -295,6 +310,11 @@ export async function main(argv) {
       const st = await api('GET', '/remote').catch(() => null);
       const phone = st?.running ? st.urls.find((u) => !u.vpn) : null;
       if (phone) console.log(dim(`phone: ${phone.url}  (sign-in QR: agentmgr remote status)`));
+      // Without the login service, nothing starts the daemon after a reboot.
+      if (['darwin', 'linux'].includes(process.platform)) {
+        const svc = await import('./service.js');
+        if (!(await svc.status().catch(() => ({ installed: true }))).installed) console.log(dim('tip: it won\'t start by itself after a restart; turn on Settings → Start at login, or run: agentmgr service install'));
+      }
       execFile(process.platform === 'darwin' ? 'open' : 'xdg-open', [BASE], () => {});
     });
 
@@ -321,7 +341,8 @@ export async function main(argv) {
       ]),
     )
     .option('-m, --model <model>', 'model (for the chosen engine)')
-    .option('-e, --engine <engine>', 'agent engine: claude (default) or codex')
+    .option('-e, --engine <engine>', 'agent engine: claude (default), codex, antigravity or muse')
+    .option('--file-attach <path>', 'attach a file to the request (a screenshot, a log); repeat for more', collect)
     .option('--plan', 'while a repo URL clones, plan the task with Claude (moves into the repo when ready)')
     .option('--no-start', 'create without launching')
     .option('-a, --attach', 'attach to the agent after launch (single intent only)')
@@ -332,8 +353,10 @@ export async function main(argv) {
       await daemon();
       // commander sets worktree=true for --no-worktree's default; only send it when the user chose.
       const worktreeSource = cmd.getOptionValueSource('worktree');
+      const attachments = await uploadFiles(opts.fileAttach);
       const created = await api('POST', '/agents', {
         intents,
+        attachments,
         repo: opts.repo,
         dir: opts.dir,
         name: opts.name,
@@ -362,14 +385,17 @@ export async function main(argv) {
 
   program
     .command('ask')
-    .description('Open a general Claude session (no repo or folder) and attach to it')
+    .description('Open a general session (no repo or folder) on any engine and attach to it')
     .argument('[question...]', 'optional first question')
     .option('-n, --name <name>', 'display name')
-    .option('-m, --model <model>', 'claude model')
+    .option('-m, --model <model>', 'model (for the chosen engine)')
+    .option('-e, --engine <engine>', 'agent engine: claude (default), codex, antigravity or muse')
+    .option('--file-attach <path>', 'attach a file to the question (a screenshot, a log); repeat for more', collect)
     .option('--no-attach', 'start it in the background only')
     .action(async (words, opts) => {
       await daemon();
-      let a = await api('POST', '/general', { question: words.join(' '), name: opts.name, model: opts.model });
+      const attachments = await uploadFiles(opts.fileAttach);
+      let a = await api('POST', '/general', { question: words.join(' '), name: opts.name, model: opts.model, engine: opts.engine, attachments });
       console.log(`${green('+')} ${bold(a.name)} ${dim(a.id)}  session ${cyan(a.sessionId)}`);
       for (let i = 0; i < 100 && a.status === 'preparing'; i++) {
         await new Promise((r) => setTimeout(r, 100));
@@ -404,9 +430,9 @@ export async function main(argv) {
 
   program
     .command('doc')
-    .description('Write a stakeholder document from the agent work: analysis, design, flow, proposal, humanai (Human vs AI) or diagrams (diagrams only)')
+    .description('Write a stakeholder document from the agent work: analysis, design, flow, proposal, humanai (Human vs AI), diagrams (diagrams only) or walkthrough (its changes explained one by one)')
     .argument('<agent>')
-    .argument('<kind>', 'analysis, design, flow, proposal, humanai, diagrams, or all (background; diagrams not included)')
+    .argument('<kind>', 'analysis, design, flow, proposal, humanai, diagrams, walkthrough, or all (background; diagrams and walkthrough not included)')
     .option('-o, --output <file>', 'also save the Markdown to this file')
     .option('--cached', 'print the last version instead of writing a new one')
     .option('-b, --background', 'start writing and return at once (kind "all" writes all five)')

@@ -1260,6 +1260,65 @@ test('diagrams: only diagrams, drawn from the documents already written, not par
   assert.equal(d.pending, false);
 });
 
+test('attachments: staged before the agent exists, copied to each agent, listed in its request', async () => {
+  const upload = async (name, text) => {
+    const res = await fetch(`${base}/api/uploads?name=${encodeURIComponent(name)}`, { method: 'POST', headers: { 'x-agentmgr': '1', 'content-type': 'application/octet-stream' }, body: text });
+    return { status: res.status, body: await res.json() };
+  };
+  const log = await upload('error log.txt', 'TypeError: boom\n');
+  assert.equal(log.status, 200);
+  assert.match(log.body.path, /[/\\]uploads[/\\]staged[/\\].*-error_log\.txt$/);
+  // Two agents from one upload: each gets its own copy, in its own uploads folder.
+  const res = await call('POST', '/agents', { intents: ['Fix the crash', 'Write a test for it'], attachments: [log.body.path], start: false });
+  assert.equal(res.status, 200);
+  for (const a of res.body) {
+    const file = new RegExp(`- (\\S+[/\\\\]uploads[/\\\\]${a.id}[/\\\\]error_log\\.txt)$`, 'm').exec(a.intent)?.[1];
+    assert.ok(file, `listed in ${a.name}'s request: ${a.intent}`);
+    assert.equal(fs.readFileSync(file, 'utf8'), 'TypeError: boom\n');
+    assert.match(a.intent, /^(Fix the crash|Write a test for it)\n\nAttached files \(part of this request; read them\):/);
+    assert.ok(!/attached/i.test(a.name), 'named after the request, not the list');
+  }
+  // Ask with an attachment and no question.
+  const shot = await upload('screen.png', 'PNG');
+  const g = await call('POST', '/general', { attachments: [shot.body.path] });
+  assert.equal(g.status, 200);
+  assert.match(g.body.intent, new RegExp(`uploads[/\\\\]${g.body.id}[/\\\\]screen\\.png`));
+  // Only staged uploads: no reading arbitrary files into a request.
+  assert.equal((await call('POST', '/agents', { intents: ['x'], attachments: ['/etc/hosts'], start: false })).status, 400);
+  assert.equal((await call('POST', '/agents', { intents: ['x'], attachments: 'nope', start: false })).status, 400);
+  // The backlog keeps them until the item's agent starts.
+  const [item] = (await call('POST', '/backlog', { items: ['Later'], attachments: [log.body.path] })).body;
+  assert.deepEqual(item.attachments, [log.body.path]);
+});
+
+test('walkthrough: the changes explained one by one, in reading order, matched to their hunks', async () => {
+  const origin = makeOrigin('walk');
+  const [a] = (await call('POST', '/agents', { intent: 'Walk me through it', repo: `file://${origin}`, start: false })).body;
+  const ready = await waitFor(async () => ((await agentNow(a.id)).status === 'stopped' ? agentNow(a.id) : null), 20000, 'ready');
+  assert.equal((await call('POST', `/agents/${a.id}/docs/walkthrough`)).status, 400, 'nothing to explain yet');
+  fs.writeFileSync(path.join(ready.workdir, 'README.md'), 'hello\n');
+  fs.writeFileSync(path.join(ready.workdir, 'app.js'), 'export const x = 1;\n');
+  fs.writeFileSync(path.join(ready.workdir, 'notes.txt'), 'notes\n');
+  const res = await call('POST', `/agents/${a.id}/docs/walkthrough`);
+  assert.equal(res.status, 200);
+  const w = res.body.docs.walkthrough;
+  assert.equal(w.data.summary, 'Changes for: Walk me through it');
+  const files = w.data.changes.map((c) => c.file);
+  assert.equal(files.length, 3, 'every hunk once');
+  assert.deepEqual(new Set(files), new Set(['README.md', 'app.js', 'notes.txt']));
+  assert.deepEqual(w.data.changes.map((c) => c.title), ['Change H2', 'Change H1', ''], 'the model\'s order; the skipped hunk last, the unknown id dropped');
+  assert.equal(w.data.changes[2].unexplained, true);
+  assert.deepEqual(w.data.changes.map((c) => c.risk), ['medium', 'high', 'low'], 'unknown risk read as medium');
+  assert.ok(w.data.changes.every((c) => /^@@ /.test(c.head)), 'keyed by hunk header');
+  // Same diff as the review screen: the hash matches until the changes move.
+  const changes = (await call('GET', `/agents/${a.id}/changes`)).body;
+  assert.equal(changes.diffHash, w.diffHash);
+  assert.match(w.markdown, /^# Changes explained: /);
+  fs.appendFileSync(path.join(ready.workdir, 'app.js'), 'export const y = 2;\n');
+  assert.notEqual((await call('GET', `/agents/${a.id}/changes`)).body.diffHash, w.diffHash);
+  await call('DELETE', `/agents/${a.id}`);
+});
+
 test('project shortcuts: auto-assigned, "@cc"-style use fills the repo, rename, register ahead, backlog', async () => {
   const origin = makeOrigin('short-cut');
   const url = `file://${origin}`;
@@ -3322,7 +3381,12 @@ test('repo memory: agents learn into it, the next agent in the repo starts with 
 
 test('getting started: what is set up, and what this machine is missing', async () => {
   const r = (await call('GET', '/setup')).body;
-  assert.deepEqual(Object.keys(r.steps).sort(), ['agent', 'alerts', 'assistant', 'budget', 'remote']);
+  assert.deepEqual(Object.keys(r.steps).sort(), ['agent', 'alerts', 'assistant', 'budget', 'remote', 'service']);
+  assert.equal(typeof r.steps.service, 'boolean');
+  // Start at login: its state (read only here; installing would touch the real launchd / systemd).
+  const svc = (await call('GET', '/service')).body;
+  assert.equal(svc.supported, ['darwin', 'linux'].includes(process.platform));
+  assert.equal(typeof svc.installed, 'boolean');
   assert.equal(r.steps.agent, true);
   assert.equal(r.steps.remote, false);
   assert.ok(Array.isArray(r.checks));

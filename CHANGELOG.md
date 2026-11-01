@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.6.0 (2026-10-31)
+
+- **Changes explained one by one:** `agentmgr doc <agent> walkthrough` explains each hunk of an agent's changes (what, why, risk, what to check) in the order a reviewer should read them, from the same diff the review screen shows. The review screen and a split view for it come next.
+- **Start at login:** a switch in ☰ → Settings installs (or removes) the login service, so the daemon and running agents come back by themselves after a restart, without a terminal command. Getting started lists it until it's on, and `agentmgr ui` mentions it when it's off. Same service as `agentmgr service install` (launchd on macOS, systemd on Linux).
+- **Attachments:** **📎 Attach files** in New agents and Ask Agent: pick, drop or paste screenshots, logs and documents. Each agent gets its own copy, listed in its request, in a folder Claude Code and Codex can read without a prompt (a team or race shares one copy). Backlog items keep theirs until they start. CLI: `--file-attach <path>` on `agentmgr add` and `agentmgr ask`.
+- **Ask Agent:** **Ask Claude** is now **Ask Agent**, with an Engine choice (Claude Code, Codex, Antigravity, Muse Code) and the engine's notice, if any. `agentmgr ask --engine <engine>`.
+
 ## 1.5.0 (2026-10-31)
 
 - **Muse Code engine:** Meta's Muse Code CLI (`muse`) as a fourth engine: `--engine muse` or **Muse Code** in the Engine picker. Session adoption, resume (messages typed once idle), conversation and usage, trust and approval questions in the inbox, a clean stop, and Explain. The picker warns when Muse is in contributor mode. Stuck detection from commands and edits isn't there yet for Muse.

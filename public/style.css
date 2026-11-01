@@ -829,3 +829,11 @@ input.inline { display: inline-block; width: 80px; padding: 1px 4px; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .hint.warn { display: block; margin-top: 4px; color: var(--yellow); }
 .hint.warn[hidden] { display: none; }
+
+/* Attachments in New agents and Ask: a button, then a chip per file. */
+.attach-box { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: -4px 0 10px; }
+.attach-chips { display: contents; }
+.attach-chip { display: inline-flex; align-items: center; gap: 6px; padding: 2px 4px 2px 8px; border: 1px solid var(--border); border-radius: 999px; background: var(--panel-2); font-size: 12px; max-width: 100%; }
+.attach-chip.fail { border-color: var(--red); }
+.attach-chip .link { padding: 0 4px; }
+form.dropping { outline: 2px dashed var(--accent, #6b8cff); outline-offset: 4px; }

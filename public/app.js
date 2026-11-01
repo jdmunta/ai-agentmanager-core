@@ -4,6 +4,7 @@ import { marked } from '/vendor/marked/marked.esm.js';
 import DOMPurify from '/vendor/dompurify/purify.es.mjs';
 import { touchScroll } from '/touchscroll.js';
 import { openStream, post, REMOTE } from '/transport.js';
+import { attachBox } from '/attach.js';
 import { initReview } from '/review.js';
 import { initLand, prChips } from '/land.js';
 import { initTriggers } from '/triggers.js';
@@ -3147,6 +3148,7 @@ $('#recent-bar').addEventListener('click', (e) => {
 // ------------------------------------------------------------------ new agents dialog
 
 const dialog = $('#new-dialog');
+const newFiles = attachBox({ slot: $('#new-attach'), form: $('#new-form'), paste: $('#new-form').intents, esc, toast });
 function renderProjectOptions() {
   $('#project-options').innerHTML = projectsState
     .map((p) => `<option value="${esc(p.shortcut)}">${esc(p.name)}${p.repo ? ` · ${esc(p.repo)}` : p.dir ? ` · ${esc(p.dir)}` : ''}</option>`)
@@ -3224,6 +3226,12 @@ $('#new-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   const f = new FormData(e.target);
   const intents = formIntents(e.target);
+  if (newFiles.pending()) {
+    $('#new-error').textContent = 'Still uploading the attached files; try again in a moment';
+    $('#new-error').hidden = false;
+    return;
+  }
+  const attachments = newFiles.paths().length ? newFiles.paths() : undefined;
   if (f.get('when') === 'team') {
     // "analyst=opus reviewer=opus"
     const models = Object.fromEntries(
@@ -3234,6 +3242,7 @@ $('#new-form').addEventListener('submit', async (e) => {
     );
     try {
       const team = await api('POST', '/teams', {
+        attachments,
         intent: intents.join('\n'),
         critics: Number(f.get('critics')),
         mode: f.get('teamMode') || undefined,
@@ -3253,6 +3262,7 @@ $('#new-form').addEventListener('submit', async (e) => {
       teams.set(team.id, team);
       dialog.close();
       e.target.reset();
+      newFiles.clear();
       syncWhen();
       openTeam(team.id);
       toast(team.mode === 'lead' ? 'Team started: one lead session with sub-agents' : `Team started: ${team.members.length} agents`);
@@ -3274,6 +3284,7 @@ $('#new-form').addEventListener('submit', async (e) => {
       });
     try {
       const race = await api('POST', '/races', {
+        attachments,
         intent: intents.join('\n'),
         variants,
         testCommand: f.get('testCommand') || undefined,
@@ -3288,6 +3299,7 @@ $('#new-form').addEventListener('submit', async (e) => {
       races.set(race.id, race);
       dialog.close();
       e.target.reset();
+      newFiles.clear();
       syncWhen();
       openRace(race.id);
       toast(`Race started: ${race.rows.length} attempts`);
@@ -3300,6 +3312,7 @@ $('#new-form').addEventListener('submit', async (e) => {
   if (f.get('when') === 'backlog') {
     try {
       const added = await api('POST', '/backlog', {
+        attachments,
         items: intents,
         repo: f.get('repo') || undefined,
         dir: f.get('dir') || undefined,
@@ -3315,6 +3328,7 @@ $('#new-form').addEventListener('submit', async (e) => {
       });
       dialog.close();
       e.target.reset();
+      newFiles.clear();
       showTab('backlog');
       toast(`Queued ${added.length} item${added.length > 1 ? 's' : ''}`);
     } catch (err) {
@@ -3325,6 +3339,7 @@ $('#new-form').addEventListener('submit', async (e) => {
   }
   try {
     const created = await api('POST', '/agents', {
+        attachments,
       priority: Number(f.get('priority')),
       intents,
       repo: f.get('repo') || undefined,
@@ -3342,6 +3357,7 @@ $('#new-form').addEventListener('submit', async (e) => {
     created.forEach((a) => agents.set(a.id, a));
     dialog.close();
     e.target.reset();
+      newFiles.clear();
     select(created[0].id);
     toast(`Created ${created.length} agent${created.length > 1 ? 's' : ''}`);
     if (created.length === 1 && created[0].runtime.planning) term.open(created[0].id);
@@ -3418,17 +3434,29 @@ $('#ask-btn').onclick = () => {
   askDialog.querySelector('textarea').focus();
 };
 $('#ask-cancel').onclick = () => askDialog.close();
+const askFiles = attachBox({ slot: $('#ask-attach'), form: $('#ask-form'), paste: $('#ask-form textarea'), esc, toast });
 $('#ask-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   const f = new FormData(e.target);
+  if (askFiles.pending()) {
+    $('#ask-error').textContent = 'Still uploading the attached files; try again in a moment';
+    $('#ask-error').hidden = false;
+    return;
+  }
   try {
     const a = await api('POST', '/general', {
       question: String(f.get('question') || '').trim() || undefined,
       name: String(f.get('name') || '').trim() || undefined,
+      engine: f.get('engine') || undefined,
+      attachments: askFiles.paths().length ? askFiles.paths() : undefined,
     });
     agents.set(a.id, a);
     askDialog.close();
+    // Keep the engine for the next question; clear the rest.
+    const engine = e.target.engine.value;
     e.target.reset();
+    e.target.engine.value = engine;
+    askFiles.clear();
     select(a.id);
     // The shared general folder is ready almost immediately; open the terminal once it runs.
     const t0 = Date.now();
@@ -4011,18 +4039,19 @@ const ENGINE_LABEL = { claude: 'Claude', codex: 'Codex', antigravity: 'Antigravi
 async function loadEngines() {
   try {
     const list = (await api('GET', '/engines')).filter((e) => e.installed && e.id !== 'claude');
-    const sel = document.querySelector('#engine-field select');
-    for (const e of list) sel.append(Object.assign(document.createElement('option'), { value: e.id, textContent: e.label }));
-    $('#engine-field').hidden = !list.length;
     // Something to know before choosing an engine (Muse Code in contributor mode, say).
     const notices = Object.fromEntries(list.filter((e) => e.notice).map((e) => [e.id, e.notice]));
-    const show = () => {
-      const n = $('#engine-notice');
-      n.textContent = notices[sel.value] ?? '';
-      n.hidden = !notices[sel.value];
-    };
-    sel.addEventListener('change', show);
-    show();
+    for (const [field, notice] of [['#engine-field', '#engine-notice'], ['#ask-engine-field', '#ask-engine-notice']]) {
+      const sel = document.querySelector(`${field} select`);
+      for (const e of list) sel.append(Object.assign(document.createElement('option'), { value: e.id, textContent: e.label }));
+      $(field).hidden = !list.length;
+      const show = () => {
+        $(notice).textContent = notices[sel.value] ?? '';
+        $(notice).hidden = !notices[sel.value];
+      };
+      sel.addEventListener('change', show);
+      show();
+    }
   } catch {}
 }
 
