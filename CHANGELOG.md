@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **agentkit (phase 1): agents you build and run.** An agent is a folder with `agent.yaml` (goal, instructions, engine, MCP tools, allow/approve lists, triggers, loop, memory, interfaces); `agentkit run <agent>` runs it continuously. Each input is a run of plan → act → check (acting again on what's left, up to `maxSteps`) → reflect into memory, through an engine's CLI (Claude Code, Codex, Muse Code or an ACP agent), self-contained (only its own MCP servers; none of your personal Claude settings). Triggers: `every`, `cron`, `webhook`, `watch`. Interfaces: a chat page and HTTP API, A2A (agent card and `message/send` / `tasks/get`), ACP on stdio (`agentkit acp`), and an MCP tool (`agentkit mcp`, one tool `ask_<name>`). `agentkit init`, `check`, `run --once`. See [docs/agentkit.md](docs/agentkit.md). The builder, single-executable packaging and monitoring come next.
+
 ## 1.11.1 (2026-11-01)
 
 - **Copy and paste in terminals on phones:** **Copy** and **Paste** in the terminal's key bar (and in the Terminal's bar). A phone can't select the terminal's text or paste into it directly, so Copy opens its recent output as plain text you can select (or **Copy all**), and Paste reads the clipboard (the phone asks first) or offers a box to paste into, then inserts it as one paste without pressing Enter.

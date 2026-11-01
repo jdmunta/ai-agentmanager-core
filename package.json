@@ -23,7 +23,8 @@
   "license": "Apache-2.0",
   "type": "module",
   "bin": {
-    "agentmgr": "bin/agentmgr.js"
+    "agentmgr": "bin/agentmgr.js",
+    "agentkit": "bin/agentkit.js"
   },
   "files": [
     "bin",
@@ -56,6 +57,7 @@
     "mermaid": "^12.2.0",
     "node-pty": "^1.1.0",
     "qrcode": "^1.5.4",
-    "ws": "^8.22.0"
+    "ws": "^8.22.0",
+    "yaml": "^2.9.1"
   }
 }
