@@ -3462,7 +3462,8 @@ $('#about-check').onclick = async () => {
   out.hidden = false;
   out.textContent = 'Checking…';
   try {
-    // On this computer the daemon can install it; from a phone, just say what is out.
+    // The daemon checks and can install it (from this computer or a signed-in phone); an older
+    // daemon without /update gets the manual steps.
     const local = await updateUi.check().catch(() => null);
     if (local) return void (out.innerHTML = local);
     const r = await api('GET', '/about/latest');

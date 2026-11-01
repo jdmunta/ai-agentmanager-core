@@ -61,7 +61,9 @@ function isAllowedOrigin(origin, port) {
 }
 
 const PUBLIC_REMOTE_API = new Set(['POST /api/login', 'GET /api/session']);
-const LOCAL_ONLY_API = /^\/api\/(remote(\/|$)|notify(\/|$)|hub(\/|$)|triggers(\/|$)|update(\/|$)|service$|jira$|editors$|agents\/[\w-]+\/open-in$|shutdown$)/;
+// Updates are not here: a signed-in device (a phone) can install the newest release too. It only
+// ever installs an official release from where this copy came from (git tag or npm) and restarts.
+const LOCAL_ONLY_API = /^\/api\/(remote(\/|$)|notify(\/|$)|hub(\/|$)|triggers(\/|$)|service$|jira$|editors$|agents\/[\w-]+\/open-in$|shutdown$)/;
 const HOOK_PATH = '/api/hooks/agents';
 const NO_REPO_KINDS = new Set(['general', 'assistant']);
 

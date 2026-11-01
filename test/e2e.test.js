@@ -746,6 +746,11 @@ test('remote access: HTTPS, token sign-in, local-only management, SSE terminal, 
   assert.equal((await httpsReq(rport, 'POST', '/api/shutdown', { headers: { ...json, cookie } })).status, 403);
   // Writes still need the client header.
   assert.equal((await httpsReq(rport, 'POST', '/api/flush', { headers: { cookie } })).status, 403);
+  // Updates work from a signed-in phone too (installed and restarted on this computer).
+  const upd = await httpsReq(rport, 'GET', '/api/update', { headers: { cookie } });
+  assert.equal(upd.status, 200);
+  assert.equal(typeof upd.json.check, 'boolean');
+  assert.equal((await httpsReq(rport, 'GET', '/api/update')).status, 401, 'but not without signing in');
 
   // The phone's terminal: SSE out, POST in.
   const [a] = (await call('POST', '/agents', { intent: 'Remote terminal' })).body;

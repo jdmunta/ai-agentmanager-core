@@ -62,9 +62,9 @@ export function initMenu({ api, esc, toast, $ }) {
       form.maxRunning.value = c.maxRunning ?? '';
       $('#settings-running').textContent = `Open now: ${c.running}.`;
       service = null;
+      const u = await api('GET', '/update').catch(() => null);
+      form.updateCheck.checked = u?.check !== false;
       if (!remote()) {
-        const u = await api('GET', '/update').catch(() => null);
-        form.updateCheck.checked = u?.check !== false;
         jira = await api('GET', '/jira').catch(() => null);
         form.jiraSite.value = jira?.site ?? '';
         form.jiraEmail.value = jira?.email ?? '';
@@ -91,7 +91,7 @@ export function initMenu({ api, esc, toast, $ }) {
     e.preventDefault();
     try {
       const c = await api('PUT', '/cleanup', { maxRunning: form.maxRunning.value.trim() || null });
-      if (!remote()) await api('PUT', '/update', { check: form.updateCheck.checked }).catch(() => {});
+      await api('PUT', '/update', { check: form.updateCheck.checked }).catch(() => {});
       if (!remote() && jira && (form.jiraSite.value.trim() !== (jira.site ?? '') || form.jiraEmail.value.trim() !== (jira.email ?? '') || form.jiraToken.value.trim())) {
         await api('PUT', '/jira', { site: form.jiraSite.value.trim(), email: form.jiraEmail.value.trim(), token: form.jiraToken.value.trim() || undefined });
         toast('Jira saved; summaries for agents from Jira links are being fetched', 4000);

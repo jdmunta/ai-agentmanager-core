@@ -106,7 +106,7 @@ npm install
 npm link
 ```
 
-**Updating.** `agentmgr update` installs the newest release and restarts onto it; running agents pause briefly and resume. In the app, **Update to …** appears in the top bar when a release is out (checked twice a day; turn it off in **☰ → Settings** or with `agentmgr update --auto-check off`), and **About → Update and restart** does the same. A clone at a release tag (or one you `npm link`ed) moves to the newest tag; a clone on a branch or with uncommitted changes is left alone. By hand, use the command for how you installed, then `agentmgr restart`:
+**Updating.** `agentmgr update` installs the newest release and restarts onto it; running agents pause briefly and resume. In the app, **Update to …** appears in the top bar when a release is out (checked twice a day; turn it off in **☰ → Settings** or with `agentmgr update --auto-check off`), and **About → Update and restart** does the same. Both work from a signed-in phone too: the install and restart run on the computer, and the page reloads when it's back. A clone at a release tag (or one you `npm link`ed) moves to the newest tag; a clone on a branch or with uncommitted changes is left alone. By hand, use the command for how you installed, then `agentmgr restart`:
 
 | Installed with | Update |
 | --- | --- |

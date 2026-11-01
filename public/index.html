@@ -24,7 +24,7 @@
       <div class="brand">
         <a href="#" id="home-link" class="home-link" title="Home: all agents"><span class="logo" aria-hidden="true">◆</span><h1>AI Agent Manager</h1></a>
         <button id="about-btn" class="about-btn" type="button" title="About AI Agent Manager: version, release, links">About</button>
-        <button id="update-btn" class="update-btn local-only" type="button" hidden></button>
+        <button id="update-btn" class="update-btn" type="button" hidden></button>
         <span id="conn" class="conn" title="Daemon connection">connecting…</span>
       </div>
       <div class="top-actions">
@@ -700,9 +700,9 @@
       <dl id="about-list" class="about-list"></dl>
       <p id="about-update" class="hint" hidden></p>
       <div class="dialog-actions">
-        <label class="about-auto local-only" title="Twice a day, ask for the newest release (GitHub for a git checkout, npm otherwise)"><input type="checkbox" id="about-auto" /> Check automatically</label>
+        <label class="about-auto" title="Twice a day, ask for the newest release (GitHub for a git checkout, npm otherwise)"><input type="checkbox" id="about-auto" /> Check automatically</label>
         <button type="button" id="about-check" class="ghost" title="Asks for the newest release">Check for updates</button>
-        <button type="button" id="about-install" class="primary local-only" hidden>Update and restart</button>
+        <button type="button" id="about-install" class="primary" hidden>Update and restart</button>
         <button type="button" id="about-close" class="primary">Close</button>
       </div>
     </dialog>
@@ -729,7 +729,7 @@
             <label>API token <input name="jiraToken" type="password" autocomplete="new-password" /></label>
           </div>
         </fieldset>
-        <fieldset class="local-only">
+        <fieldset>
           <legend>Updates</legend>
           <label class="check"><input type="checkbox" name="updateCheck" /> Check for a new release twice a day</label>
           <p class="hint">Shows <b>Update to …</b> in the top bar; one click installs it and restarts, and running agents resume.</p>
