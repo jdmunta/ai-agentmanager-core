@@ -68,6 +68,14 @@ if (args.includes('-p')) {
       process.stdout.write('```json\n' + JSON.stringify(reply) + '\n```\n', () => process.exit(0));
       return;
     }
+    if (input.startsWith("You help a person review an AI coding agent's changes")) {
+      // Every hunk but the last, in reverse order (a reading order other than the diff's).
+      const ids = [...input.matchAll(/<hunk id="(H\d+)" file="([^"]+)">/g)].map((m) => [m[1], m[2]]);
+      return json({
+        summary: `Changes for: ${section('intent')}`,
+        changes: ids.slice(0, -1).reverse().map(([id, file]) => ({ id, title: `Change ${id}`, what: `Edits ${file}`, why: 'Asked for', risk: id === 'H1' ? 'high' : 'nonsense', check: 'Run it' })).concat([{ id: 'H99', title: 'ghost' }]),
+      });
+    }
     if (input.startsWith('Draw diagrams')) {
       // Prose around the diagrams (to be stripped), and what it was given to draw from.
       const docs = (input.match(/<document title="([^"]+)">/g) ?? []).map((m) => m.slice(17, -2));

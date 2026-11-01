@@ -74,6 +74,8 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
   const backlog = new Backlog({ manager, store, config });
   const races = new Races({ manager, store });
   const review = new Review({ manager });
+  // The walkthrough explains the same diff the review screen shows.
+  manager.changesSource = (id) => review.get(id);
   const studio = new Studio({ manager, review });
   const teams = new Teams({ manager, store, config });
   const cleanup = new Cleanup({ manager, store, config, teams });

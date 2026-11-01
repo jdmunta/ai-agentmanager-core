@@ -1291,6 +1291,34 @@ test('attachments: staged before the agent exists, copied to each agent, listed 
   assert.deepEqual(item.attachments, [log.body.path]);
 });
 
+test('walkthrough: the changes explained one by one, in reading order, matched to their hunks', async () => {
+  const origin = makeOrigin('walk');
+  const [a] = (await call('POST', '/agents', { intent: 'Walk me through it', repo: `file://${origin}`, start: false })).body;
+  const ready = await waitFor(async () => ((await agentNow(a.id)).status === 'stopped' ? agentNow(a.id) : null), 20000, 'ready');
+  assert.equal((await call('POST', `/agents/${a.id}/docs/walkthrough`)).status, 400, 'nothing to explain yet');
+  fs.writeFileSync(path.join(ready.workdir, 'README.md'), 'hello\n');
+  fs.writeFileSync(path.join(ready.workdir, 'app.js'), 'export const x = 1;\n');
+  fs.writeFileSync(path.join(ready.workdir, 'notes.txt'), 'notes\n');
+  const res = await call('POST', `/agents/${a.id}/docs/walkthrough`);
+  assert.equal(res.status, 200);
+  const w = res.body.docs.walkthrough;
+  assert.equal(w.data.summary, 'Changes for: Walk me through it');
+  const files = w.data.changes.map((c) => c.file);
+  assert.equal(files.length, 3, 'every hunk once');
+  assert.deepEqual(new Set(files), new Set(['README.md', 'app.js', 'notes.txt']));
+  assert.deepEqual(w.data.changes.map((c) => c.title), ['Change H2', 'Change H1', ''], 'the model\'s order; the skipped hunk last, the unknown id dropped');
+  assert.equal(w.data.changes[2].unexplained, true);
+  assert.deepEqual(w.data.changes.map((c) => c.risk), ['medium', 'high', 'low'], 'unknown risk read as medium');
+  assert.ok(w.data.changes.every((c) => /^@@ /.test(c.head)), 'keyed by hunk header');
+  // Same diff as the review screen: the hash matches until the changes move.
+  const changes = (await call('GET', `/agents/${a.id}/changes`)).body;
+  assert.equal(changes.diffHash, w.diffHash);
+  assert.match(w.markdown, /^# Changes explained: /);
+  fs.appendFileSync(path.join(ready.workdir, 'app.js'), 'export const y = 2;\n');
+  assert.notEqual((await call('GET', `/agents/${a.id}/changes`)).body.diffHash, w.diffHash);
+  await call('DELETE', `/agents/${a.id}`);
+});
+
 test('project shortcuts: auto-assigned, "@cc"-style use fills the repo, rename, register ahead, backlog', async () => {
   const origin = makeOrigin('short-cut');
   const url = `file://${origin}`;

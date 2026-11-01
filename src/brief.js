@@ -411,6 +411,81 @@ export function diagramsOnly(markdown) {
     .trim();
 }
 
+// ------------------------------------------------------------------ Change walkthrough
+
+/**
+ * The agent's changes explained one by one, for review: each hunk of its diff gets a title, what
+ * changed, why, a risk and what to check, in the order a reviewer should read them.
+ * `hunks`: [{ id, file, head, text }].
+ */
+export function walkthroughPrompt({ intent, status, digest, briefMarkdown, hunks }) {
+  return [
+    "You help a person review an AI coding agent's changes, one change at a time.",
+    'Below are its changes as numbered hunks (H1, H2, ...), with the request and its conversation for the reasons behind them.',
+    '',
+    'Reply with one JSON object only, no prose around it:',
+    '{"summary": "<two sentences: what the changes do overall>", "changes": [{"id": "H3", "title": "<under 10 words>", "what": "<what this hunk changes, concretely>", "why": "<why, from the request or conversation; \"Not stated\" if unknown>", "risk": "low|medium|high", "check": "<what the reviewer should verify here>"}]}',
+    '',
+    'Rules:',
+    '- One entry per hunk, every hunk exactly once. Order them the way a reviewer should read them: the core change first, then what depends on it, then tests, docs and small edits.',
+    '- Be specific: name the functions, values and behavior. Base it only on the hunks and the context; do not invent intent.',
+    '- risk is high for security, data loss, concurrency, money or public API changes; medium for behavior changes; low for refactors, tests, docs and formatting.',
+    '- Keep what, why and check to one or two sentences each.',
+    '',
+    ...contextBlock({ intent, status, digest, repo: '', briefMarkdown }),
+    '<hunks>',
+    ...hunks.map((h) => `<hunk id="${h.id}" file="${h.file}">\n${h.head}\n${h.text}\n</hunk>`),
+    '</hunks>',
+  ].join('\n');
+}
+
+/** The hunks a walkthrough explains, from a parsed diff: ids, and the text sent (capped). */
+export function walkthroughHunks(files, { maxLines = 80, maxChars = 60_000 } = {}) {
+  const out = [];
+  let used = 0;
+  for (const f of files) {
+    if (f.binary) continue;
+    for (const h of f.hunks) {
+      const lines = h.lines.map((l) => `${l.t === 'add' ? '+' : l.t === 'del' ? '-' : ' '}${l.text}`);
+      const text = lines.length > maxLines ? [...lines.slice(0, maxLines), `… (${lines.length - maxLines} more lines)`].join('\n') : lines.join('\n');
+      if (used + text.length > maxChars) return { hunks: out, cut: true };
+      used += text.length;
+      out.push({ id: `H${out.length + 1}`, file: f.path, head: h.head, text });
+    }
+  }
+  return { hunks: out, cut: false };
+}
+
+/** The model's reply mapped back to hunks (file + header), in its reading order; unknown ids dropped. */
+export function walkthroughFrom(reply, hunks) {
+  const byId = new Map(hunks.map((h) => [h.id, h]));
+  const seen = new Set();
+  const risk = (r) => (['low', 'medium', 'high'].includes(r) ? r : 'medium');
+  const changes = [];
+  for (const c of Array.isArray(reply?.changes) ? reply.changes : []) {
+    const h = byId.get(String(c?.id ?? '').trim());
+    if (!h || seen.has(h.id)) continue;
+    seen.add(h.id);
+    changes.push({ file: h.file, head: h.head, title: String(c.title ?? '').slice(0, 120), what: String(c.what ?? '').slice(0, 800), why: String(c.why ?? '').slice(0, 800), risk: risk(c.risk), check: String(c.check ?? '').slice(0, 600) });
+  }
+  // Hunks the model skipped still get a place (unexplained), so stepping through covers everything.
+  for (const h of hunks) if (!seen.has(h.id)) changes.push({ file: h.file, head: h.head, title: '', what: '', why: '', risk: 'low', check: '', unexplained: true });
+  return { summary: String(reply?.summary ?? '').slice(0, 600), changes };
+}
+
+/** Markdown version, for Copy / Download and the CLI. */
+export function walkthroughMarkdown({ summary, changes }, title = '') {
+  const out = [`# Changes explained${title ? `: ${title}` : ''}`, '', summary, ''];
+  changes.forEach((c, i) => {
+    out.push(`## ${i + 1}. ${c.title || '(not explained)'}`, '', `\`${c.file}\` · \`${c.head.replace(/^(@@[^@]*@@).*/, '$1')}\` · risk: ${c.risk}`, '');
+    if (c.what) out.push(`- **What:** ${c.what}`);
+    if (c.why) out.push(`- **Why:** ${c.why}`);
+    if (c.check) out.push(`- **Check:** ${c.check}`);
+    out.push('');
+  });
+  return out.join('\n').trim() + '\n';
+}
+
 // ------------------------------------------------------------------ Human vs AI
 
 export const contextBlock = ({ intent, status, digest, repo, briefMarkdown }) => [

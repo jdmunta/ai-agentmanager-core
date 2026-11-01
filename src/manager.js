@@ -10,6 +10,10 @@ import {
   DOC_KINDS,
   diagramsOnly,
   diagramsPrompt,
+  walkthroughFrom,
+  walkthroughHunks,
+  walkthroughMarkdown,
+  walkthroughPrompt,
   briefDir,
   briefPath,
   briefPrompt,
@@ -36,6 +40,7 @@ const SUMMARIES = {
   ...Object.fromEntries(Object.keys(DOC_KINDS).map((k) => [k, { doc: k, prompt: (ctx) => docPrompt(k, ctx) }])),
   humanai: { doc: 'humanai', run: 'runHumanAi' },
   diagrams: { doc: 'diagrams', run: 'runDiagrams' },
+  walkthrough: { doc: 'walkthrough', run: 'runWalkthrough' },
 };
 /** Read / write where a summary of `kind` is kept on the agent record. */
 const getSummary = (agent, kind) => (SUMMARIES[kind].doc ? agent.docs?.[kind] : agent[SUMMARIES[kind].field]);
@@ -87,6 +92,7 @@ async function repoLayout(dir) {
 }
 import { spawn } from 'node:child_process';
 import * as git from './git.js';
+import { parseDiff } from '../public/review.js';
 import { conflictMessage, findConflicts, related, repoKey, summarize as summarizeConflicts } from './conflicts.js';
 import { answerMessage, loadQuestions, questionsPath, questionsPrompt } from './inbox.js';
 import { STUCK_DEFAULTS, detectStuck } from './stuck.js';
@@ -2029,6 +2035,37 @@ export class AgentManager extends EventEmitter {
       });
       child.stdin.end(engine.oneShotStdin === false ? '' : text);
     });
+  }
+
+  /**
+   * The agent's changes explained one by one for review. `changesSource` (set by the server) gives
+   * the same diff the review screen shows; the result is keyed by file and hunk header.
+   */
+  async runWalkthrough(agent, ctx) {
+    if (!this.changesSource) throw new Error('Changes are not available here');
+    const data = await this.changesSource(agent.id);
+    const { hunks, cut } = walkthroughHunks(parseDiff(data.diff));
+    if (!hunks.length) throw Object.assign(new Error('No changes to explain yet'), { status: 400 });
+    const writer = this.writerFor(agent);
+    const result = walkthroughFrom(parseJsonReply(await this.oneShot(agent, walkthroughPrompt({ ...ctx, hunks }), writer)), hunks);
+    const cur = this.store.get(agent.id);
+    if (!cur) return null;
+    return this.view(
+      this.patch(
+        agent.id,
+        summaryPatch(cur, 'walkthrough', {
+          data: result,
+          cut,
+          diffHash: hash(data.diff),
+          markdown: walkthroughMarkdown(result, cur.name),
+          writer: `${writer.engine.label}${writer.model ? ` (${writer.model})` : ''}`,
+          at: now(),
+          briefUpdatedAt: cur.brief?.updatedAt ?? null,
+          pending: false,
+          error: null,
+        }),
+      ),
+    );
   }
 
   /** Diagrams only: the problem and its solution drawn from the documents already written and the live context. */
