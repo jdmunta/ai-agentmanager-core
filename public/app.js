@@ -709,7 +709,7 @@ function agentItem(a) {
   const idle = !isActive(a);
   return `<li data-id="${a.id}" ${a.kind === 'general' || a.kind === 'assistant' ? '' : 'draggable="true" '}class="agent pr${a.priority ?? 2} ${a.id === selectedId ? 'selected' : ''} ${idle ? 'idle' : ''}">
     <div class="line1">${prioChip(a.priority ?? 2)}${a.results?.outcome === 'blocked' ? '<span class="outcome-mark" title="Blocked">⛔</span>' : a.results?.outcome === 'done' ? '<span class="outcome-mark" title="Done">✅</span>' : ''}<span class="name">${esc(a.name)}</span>${flags(a)}<span class="pill ${st}">${pillText(st)}</span></div>
-    <div class="intent" title="${esc(describeTitle(a) ?? '')}">${a.kind === 'general' ? '<span class="tag">general</span> ' : a.kind === 'assistant' ? '<span class="tag assistant">assistant</span> ' : a.startedBy ? '<span class="tag assistant" title="Started by the assistant">🤖 by assistant</span> ' : a.trigger ? `<span class="tag assistant" title="Started from ${a.trigger.source === 'github' ? 'a labeled GitHub issue' : 'the webhook'}${a.trigger.url ? `: ${esc(a.trigger.url)}` : ''}">⚡ ${a.trigger.source === 'github' ? 'GitHub' : 'webhook'}</span> ` : a.playbook ? `<span class="tag assistant" title="Started by the playbook ${esc(a.playbook.name)}">▶ ${esc(a.playbook.name)}</span> ` : ''}${a.engine && a.engine !== 'claude' ? `<span class="tag engine">${esc(ENGINE_LABEL[a.engine] ?? a.engine)}</span> ` : ''}${esc(describe(a) || (a.kind === 'assistant' ? 'Finds new work and starts agents for it' : 'General session'))}</div>
+    <div class="intent" title="${esc(describeTitle(a) ?? '')}">${a.kind === 'general' ? '<span class="tag">general</span> ' : a.kind === 'assistant' ? '<span class="tag assistant">assistant</span> ' : a.startedBy ? '<span class="tag assistant" title="Started by the assistant">🤖 by assistant</span> ' : a.trigger ? `<span class="tag assistant" title="Started from ${a.trigger.source === 'github' ? 'a labeled GitHub issue' : 'the webhook'}${a.trigger.url ? `: ${esc(a.trigger.url)}` : ''}">⚡ ${a.trigger.source === 'github' ? 'GitHub' : 'webhook'}</span> ` : a.playbook ? `<span class="tag assistant" title="Started by the playbook ${esc(a.playbook.name)}">▶ ${esc(a.playbook.name)}</span> ` : ''}${a.engine && a.engine !== 'claude' ? `<span class="tag engine">${esc(ENGINE_LABEL[a.engine] ?? a.engine)}</span> ` : ''}${a.isolation === 'container' ? '<span class="tag engine" title="Runs in its own Docker container: it sees only its own folder">📦 container</span> ' : ''}${esc(describe(a) || (a.kind === 'assistant' ? 'Finds new work and starts agents for it' : 'General session'))}</div>
     ${a.status === 'preparing' && a.progress ? `<div class="progress-line">${esc(progressText(a.progress))}</div>` : ''}
     <div class="meta">
       <span class="mono">${a.id}</span>
@@ -3271,6 +3271,7 @@ function openNewDialog(mode = 'now') {
   $('#new-error').hidden = true;
   dialog.querySelector(`input[name="when"][value="${mode}"]`).checked = true;
   restoreIntentSplit();
+  loadIsolation();
   syncWhen();
   dialog.showModal();
   dialog.querySelector('textarea').focus();
@@ -3433,6 +3434,7 @@ $('#new-form').addEventListener('submit', async (e) => {
         model: f.get('model') || undefined,
         engine: f.get('engine') || undefined,
         worktree: f.get('worktree') ? true : undefined,
+        ...containerChoice(e.target),
         plan: Boolean(f.get('plan')),
         planReview: Boolean(f.get('planReview')),
         priority: Number(f.get('priority')),
@@ -3464,6 +3466,7 @@ $('#new-form').addEventListener('submit', async (e) => {
       plan: Boolean(f.get('plan')),
       planReview: Boolean(f.get('planReview')),
       start: Boolean(f.get('start')),
+      ...containerChoice(e.target),
     });
     created.forEach((a) => agents.set(a.id, a));
     dialog.close();
@@ -4152,6 +4155,30 @@ const describe = (a) => a.synopsis?.text || a.intent;
 const describeTitle = (a) => (a.synopsis?.text ? `${a.synopsis.source === 'jira' ? `${a.synopsis.key} in Jira` : `${a.synopsis.key} (summary not fetched; your words after the link)`}. Request: ${a.intent}` : a.intent);
 
 const ENGINE_LABEL = { claude: 'Claude', codex: 'Codex', antigravity: 'Antigravity', muse: 'Muse Code' };
+// Containers: offered when Docker runs here; Claude Code and Codex only.
+let isolationInfo = null;
+const containerChoice = (form) => (isolationInfo?.available && !$('#container-field').hidden ? { isolation: form.container.checked ? 'container' : '' } : {});
+function syncContainerField() {
+  const form = $('#new-form');
+  const engine = form.engine?.value || 'claude';
+  const ok = isolationInfo?.available && isolationInfo.engines.includes(engine);
+  $('#container-field').hidden = !isolationInfo?.available;
+  form.container.disabled = !ok || !isolationInfo.imageBuilt;
+  if (!ok) form.container.checked = false;
+  $('#container-hint').textContent = !ok ? '(Claude Code and Codex only)' : !isolationInfo.imageBuilt ? '(build the image first: ☰ → Settings → Containers)' : !isolationInfo.hasClaudeToken && engine === 'claude' ? '(add the Claude token in ☰ → Settings → Containers)' : '(Docker: it sees only its own folder)';
+}
+async function loadIsolation() {
+  try {
+    isolationInfo = await api('GET', '/isolation');
+  } catch {
+    isolationInfo = null;
+  }
+  const form = $('#new-form');
+  form.container.checked = isolationInfo?.default === 'container';
+  syncContainerField();
+}
+$('#new-form').engine?.addEventListener('change', syncContainerField);
+
 async function loadEngines() {
   try {
     const list = (await api('GET', '/engines')).filter((e) => e.installed && e.id !== 'claude');

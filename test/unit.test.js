@@ -1228,3 +1228,19 @@ test('scorecard: facts measured, scores capped by them, spec scored from the cri
   assert.match(md, /\| Tests \| 30 \| .*CI is failing/);
   assert.match(md, /- ❌ logs it/);
 });
+
+test('containers: docker run arguments, the worktree git folder, engine homes and sign-in', async () => {
+  const { runArgs, gitCommonDir, containerName } = await import('../src/container.js');
+  const args = runArgs({ agentId: 'a1', engineId: 'claude', cwd: '/w/repo', bin: 'claude', args: ['--resume', 'S'], config: { isolation: { cpus: 2, memory: '4g' } }, mounts: [{ host: '/w/repo' }, { host: '/g/.git' }, { host: '/u', readOnly: true }], env: ['TERM=xterm-256color', 'CLAUDE_CODE_OAUTH_TOKEN'], user: '501:20' });
+  assert.deepEqual(args, ['run', '--rm', '-i', '-t', '--init', '--name', 'agentmgr-a1', '--label', 'agentmgr.agent=a1', '-w', '/w/repo', '--user', '501:20', '--cpus', '2', '--memory', '4g', '-v', '/w/repo:/w/repo', '-v', '/g/.git:/g/.git', '-v', '/u:/u:ro', '-e', 'TERM=xterm-256color', '-e', 'CLAUDE_CODE_OAUTH_TOKEN', 'ai-agentmanager-agent:1', 'claude', '--resume', 'S']);
+  assert.ok(!args.some((x) => /sk-|token=/i.test(x)), 'secrets go by name, not value');
+  assert.equal(containerName('a1'), 'agentmgr-a1');
+  // A worktree's .git file points into the main repository; that folder is what to mount.
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'wt-'));
+  const repo = path.join(tmp, 'repo');
+  execFileSync('git', ['init', '-q', '-b', 'main', repo]);
+  execFileSync('git', ['-C', repo, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '--allow-empty', '-m', 'x']);
+  execFileSync('git', ['-C', repo, 'worktree', 'add', '-q', path.join(tmp, 'wt'), '-b', 'b']);
+  assert.equal(gitCommonDir(path.join(tmp, 'wt')), fs.realpathSync(path.join(repo, '.git')));
+  assert.equal(gitCommonDir(repo), null, 'a plain clone needs nothing more');
+});

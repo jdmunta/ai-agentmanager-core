@@ -1438,6 +1438,24 @@ test('scorecard: the changes scored, capped by what was measured, kept with the 
   await call('DELETE', `/agents/${a.id}`);
 });
 
+test('isolation: container agents are checked at creation and marked; the status says what is ready', async () => {
+  assert.equal((await call('POST', '/agents', { intent: 'x', isolation: 'vm', start: false })).status, 400);
+  assert.match((await call('POST', '/agents', { intent: 'x', isolation: 'container', engine: 'antigravity', start: false })).body.error, /can't run in a container yet/);
+  const [a] = (await call('POST', '/agents', { intent: 'Boxed', isolation: 'container', start: false })).body;
+  assert.equal(a.isolation, 'container');
+  const [b] = (await call('POST', '/agents', { intent: 'Not boxed', isolation: '', start: false })).body;
+  assert.equal(b.isolation, undefined);
+  const st = (await call('GET', '/isolation')).body;
+  assert.equal(typeof st.available, 'boolean');
+  assert.deepEqual(st.engines, ['claude', 'codex']);
+  assert.equal(st.hasClaudeToken, false);
+  // The backlog keeps the choice for when the item starts.
+  const [item] = (await call('POST', '/backlog', { items: ['Later, boxed'], isolation: 'container' })).body;
+  assert.equal(item.isolation, 'container');
+  await call('DELETE', `/agents/${a.id}`);
+  await call('DELETE', `/agents/${b.id}`);
+});
+
 test('project shortcuts: auto-assigned, "@cc"-style use fills the repo, rename, register ahead, backlog', async () => {
   const origin = makeOrigin('short-cut');
   const url = `file://${origin}`;

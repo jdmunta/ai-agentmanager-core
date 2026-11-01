@@ -343,6 +343,8 @@ export async function main(argv) {
     .option('-m, --model <model>', 'model (for the chosen engine)')
     .option('-e, --engine <engine>', 'agent engine: claude (default), codex, antigravity or muse')
     .option('--file-attach <path>', 'attach a file to the request (a screenshot, a log); repeat for more', collect)
+    .option('--container', 'run each agent in its own Docker container (see agentmgr sandbox)')
+    .option('--no-container', 'run on this computer even if containers are the default')
     .option('--plan', 'while a repo URL clones, plan the task with Claude (moves into the repo when ready)')
     .option('--no-start', 'create without launching')
     .option('-a, --attach', 'attach to the agent after launch (single intent only)')
@@ -357,6 +359,7 @@ export async function main(argv) {
       const created = await api('POST', '/agents', {
         intents,
         attachments,
+        isolation: cmd.getOptionValueSource('container') === 'cli' ? (opts.container ? 'container' : '') : undefined,
         repo: opts.repo,
         dir: opts.dir,
         name: opts.name,
@@ -381,6 +384,39 @@ export async function main(argv) {
         if (a.status === 'error') throw new Error(a.error);
         await attach(a.id);
       }
+    });
+
+  const sb = program.command('sandbox').description('Agents in Docker containers: status, building the agent image, the Claude token');
+  sb.command('status')
+    .description('Whether Docker runs, the agent image is built, and containers can sign in to Claude')
+    .action(async () => {
+      await daemon();
+      const s = await api('GET', '/isolation');
+      console.log(`Docker:       ${s.available ? green(`running (${s.version})`) : yellow(`not available${s.error ? `: ${s.error}` : ''}`)}`);
+      console.log(`Agent image:  ${s.image} ${s.imageBuilt ? green('built') : s.building ? yellow('building…') : yellow('not built (agentmgr sandbox build)')}`);
+      console.log(`Claude token: ${s.hasClaudeToken ? green('set') : yellow('not set (run `claude setup-token`, then agentmgr sandbox token <token>)')}`);
+      console.log(`Default:      ${s.default === 'container' ? 'new agents run in containers' : 'new agents run on this computer'}`);
+      if (s.buildError) console.log(yellow(`Last build failed: ${s.buildError}`));
+    });
+  sb.command('build')
+    .description('Build the image agents run in (Node, git, Claude Code, Codex); a few minutes the first time')
+    .action(async () => {
+      const { buildImage, isolationSettings } = await import('./container.js');
+      const { loadConfig } = await import('./config.js');
+      const cfg = loadConfig();
+      console.log(dim(`building ${isolationSettings(cfg).image}…`));
+      await buildImage(cfg, { log: (l) => process.stderr.write(dim(l)) });
+      console.log(`${green('✓')} built ${isolationSettings(cfg).image}`);
+    });
+  sb.command('token')
+    .description('Save the Claude Code token containers sign in with (from `claude setup-token`); --clear removes it')
+    .argument('[token]')
+    .option('--clear', 'remove the saved token')
+    .action(async (token, opts) => {
+      const { saveSecrets } = await import('./container.js');
+      if (!opts.clear && !token) throw new Error('Give the token from `claude setup-token`, or --clear');
+      saveSecrets({ claudeOauthToken: opts.clear ? null : token.trim() });
+      console.log(opts.clear ? 'Token removed' : `${green('✓')} token saved (in ~/.agentmanager/secrets.json, readable only by you)`);
     });
 
   program

@@ -934,3 +934,5 @@ form.dropping { outline: 2px dashed var(--accent, #6b8cff); outline-offset: 4px;
 .rv-hunk.flash td { animation: rvflash 1.6s; }
 @keyframes rvflash { 0%, 60% { background: var(--accent); color: var(--accent-text); } }
 @media (max-width: 640px) { .sc-row { grid-template-columns: 56px 1fr 28px; } .sc-why { grid-column: 1 / -1; } }
+
+.containers-actions { display: flex; align-items: flex-end; }
