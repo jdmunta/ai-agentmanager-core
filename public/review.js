@@ -1,5 +1,7 @@
 // Review screen: an agent's changes file by file, line comments sent back to the agent as one
 // message, and Commit / Push & open PR. Comments not sent yet are kept per agent in this browser.
+// With a walkthrough, each hunk shows its explanation and ◀ / ▶ step through them in reading order.
+import { cardHtml, explainButton, stepOf, walkthroughOf } from './walkthrough.js';
 
 /** Unified diff -> [{ path, status, binary, hunks: [{ head, lines: [{ t, old, new, text }] }] }] */
 export function parseDiff(text) {
@@ -56,7 +58,8 @@ const BIG = 600; // files with more changed lines start collapsed
 export function initReview({ api, esc, toast, agents, $ }) {
   const dlg = $('#review-dialog');
   const body = $('#review-body');
-  const st = { id: null, data: null, files: [], comments: [], collapsed: new Set(), editing: null, loading: false };
+  const st = { id: null, data: null, files: [], comments: [], collapsed: new Set(), editing: null, loading: false, step: null };
+  const walk = () => walkthroughOf(agents.get(st.id), st.data?.diffHash);
 
   const key = (id) => `agentmgr.review.${id}`;
   const loadDrafts = (id) => {
@@ -80,6 +83,7 @@ export function initReview({ api, esc, toast, agents, $ }) {
     st.collapsed = new Set();
     st.editing = null;
     st.data = null;
+    st.step = null;
     $('#review-title').textContent = `Review: ${agents.get(id)?.name ?? ''}`;
     body.innerHTML = '<p class="hint">Loading changes…</p>';
     if (!dlg.open) dlg.showModal();
@@ -129,7 +133,10 @@ export function initReview({ api, esc, toast, agents, $ }) {
     if (collapsed) return `<div class="rv-file" id="rv-${encodeURIComponent(f.path)}">${head}</div>`;
     if (f.binary) return `<div class="rv-file" id="rv-${encodeURIComponent(f.path)}">${head}<p class="hint rv-pad">Binary file</p></div>`;
     const rows = [];
+    const w = walk();
     for (const h of f.hunks) {
+      const i = w.doc ? stepOf(w.doc, f.path, h.head) : -1;
+      if (i >= 0) rows.push(`<tr class="rv-explain ${st.step === i ? 'current' : ''}" id="rv-step-${i}"><td colspan="3">${cardHtml(w.doc.data.changes[i], i, w.doc.data.changes.length, esc)}</td></tr>`);
       rows.push(`<tr class="rv-hunk"><td colspan="3">${esc(h.head)}</td></tr>`);
       for (const l of h.lines) {
         const side = l.t === 'del' ? 'old' : 'new';
@@ -147,6 +154,48 @@ export function initReview({ api, esc, toast, agents, $ }) {
       }
     }
     return `<div class="rv-file" id="rv-${encodeURIComponent(f.path)}">${head}<table class="rv-table">${rows.join('')}</table></div>`;
+  }
+
+  /** Explain changes, then ◀ n of N ▶ once there is a walkthrough. */
+  function walkNav() {
+    const w = walk();
+    const n = w.doc?.data.changes.length ?? 0;
+    const nav = n
+      ? `<span class="rv-walk"><button type="button" class="small ghost" data-rv-step="-1" title="Previous change ([)">◀</button><span class="hint">${st.step == null ? `${n} changes` : `${st.step + 1} of ${n}`}</span><button type="button" class="small ghost" data-rv-step="1" title="Next change (])">▶</button></span>`
+      : '';
+    return `${nav}${explainButton(w, 'data-rv-explain')}`;
+  }
+
+  function walkNote() {
+    const w = walk();
+    if (w.error && !w.pending) return `<p class="error rv-pad">Couldn't explain the changes: ${esc(w.error)}</p>`;
+    if (!w.doc) return '';
+    const notes = [esc(w.doc.data.summary)];
+    if (w.stale) notes.push('<b>The changes moved since this was written</b>; explanations for hunks that changed are missing. Explain again for the latest.');
+    if (w.doc.cut) notes.push('The diff was too long to explain all of it; the rest has no explanation.');
+    return `<p class="hint rv-walk-note">${notes.join(' ')}</p>`;
+  }
+
+  /** Explanations whose hunk is still in the diff (after more edits, some may be gone). */
+  const present = (w) => (w.doc?.data.changes ?? []).map((c, i) => (st.files.some((f) => f.path === c.file && f.hunks.some((h) => h.head === c.head)) ? i : -1)).filter((i) => i >= 0);
+
+  /** Step `dir` (+1 / -1) from the current explanation: open its file, mark it and scroll to it. */
+  function step(dir) {
+    const w = walk();
+    const ok = present(w);
+    if (!ok.length) return toast('These explanations no longer match the changes; Explain again');
+    const at = st.step == null ? -1 : ok.indexOf(st.step);
+    const next = at < 0 ? (dir > 0 ? ok[0] : ok.at(-1)) : ok[(at + dir + ok.length) % ok.length];
+    gotoStep(next);
+  }
+
+  function gotoStep(i) {
+    const w = walk();
+    st.step = i;
+    st.collapsed.delete(w.doc.data.changes[st.step].file);
+    keepInputs();
+    render();
+    body.querySelector(`#rv-step-${st.step}`)?.scrollIntoView({ block: 'center', behavior: 'smooth' });
   }
 
   function render() {
@@ -168,8 +217,10 @@ export function initReview({ api, esc, toast, agents, $ }) {
         ${d.unpushed ? `<span class="tag">${d.unpushed} not pushed</span>` : ''}
         ${openPr ? `<a href="${esc(openPr.url)}" target="_blank" rel="noopener">PR #${esc(openPr.number ?? '')}</a>` : ''}
         <span class="spacer"></span>
+        ${d.files.length ? walkNav() : ''}
         <button type="button" class="small ghost" data-rv-reload>${st.loading ? 'Loading…' : 'Reload'}</button>
       </div>
+      ${walkNote()}
       ${d.busy ? '<p class="hint rv-warn">The agent is working, so the changes may still move. Reload when it is idle.</p>' : ''}
       ${d.truncated ? '<p class="hint rv-warn">The diff is large and was cut short; open a shell for the rest.</p>' : ''}
       <div class="rv-main">
@@ -235,6 +286,20 @@ export function initReview({ api, esc, toast, agents, $ }) {
   body.addEventListener('click', async (e) => {
     const t = e.target;
     if (t.closest('[data-rv-reload]')) return keepInputs(), reload();
+    const stepBtn = t.closest('[data-rv-step]');
+    if (stepBtn) return step(Number(stepBtn.dataset.rvStep));
+    if (t.closest('[data-rv-explain]')) {
+      keepInputs();
+      try {
+        // In the background: the agent's record says when it's done (agentChanged re-renders).
+        agents.set(st.id, await api('POST', `/agents/${st.id}/docs/walkthrough?background=1`));
+        st.step = null;
+        render();
+      } catch (err) {
+        toast(`Error: ${err.message}`, 5000);
+      }
+      return;
+    }
     const go = t.closest('[data-rv-goto]');
     if (go) {
       e.preventDefault();
@@ -339,6 +404,13 @@ export function initReview({ api, esc, toast, agents, $ }) {
     }
   });
 
+  // [ and ] step through the explained changes (not while typing).
+  dlg.addEventListener('keydown', (e) => {
+    if ((e.key !== '[' && e.key !== ']') || e.target.closest?.('textarea, input') || !walk().doc) return;
+    e.preventDefault();
+    step(e.key === ']' ? 1 : -1);
+  });
+
   body.addEventListener('keydown', (e) => {
     const form = e.target.closest?.('.rv-form');
     if (form && e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
@@ -364,5 +436,16 @@ export function initReview({ api, esc, toast, agents, $ }) {
     st.note = st.msg = st.prTitle = '';
   });
 
-  return { open, get openId() { return dlg.open ? st.id : null; } };
+  /** The agent changed (its walkthrough finished, say): redraw if it's the one under review. */
+  function agentChanged(a) {
+    if (!dlg.open || a.id !== st.id || !st.data) return;
+    const w = a.docs?.walkthrough;
+    const sig = `${w?.at}|${w?.pending}|${w?.error}`;
+    if (sig === st.walkSig) return;
+    st.walkSig = sig;
+    keepInputs();
+    render();
+  }
+
+  return { open, agentChanged, get openId() { return dlg.open ? st.id : null; } };
 }

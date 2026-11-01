@@ -5,6 +5,7 @@ import DOMPurify from '/vendor/dompurify/purify.es.mjs';
 import { touchScroll } from '/touchscroll.js';
 import { openStream, post, REMOTE } from '/transport.js';
 import { attachBox } from '/attach.js';
+import { initSide } from '/side.js';
 import { initReview } from '/review.js';
 import { initLand, prChips } from '/land.js';
 import { initTriggers } from '/triggers.js';
@@ -111,7 +112,8 @@ initSetup({ api, esc, $ });
 const updateUi = initUpdate({ api, esc, toast, $ });
 initMenu({ api, esc, toast, $ });
 initMachine({ api, esc, toast, $, Terminal, FitAddon });
-const codeUi = initCode({ api, esc, toast, $, agents, isOpen: () => term.kind === 'code' });
+let sidePane = null; // the split view's right pane (set up once the terminal is)
+const codeUi = initCode({ api, esc, toast, $, agents, isOpen: () => term.kind === 'code' || Boolean(sidePane?.showing('code')) });
 const playbooksUi = initPlaybooks({ api, esc, toast, $, select: (id) => (showTab('agents'), select(id)) });
 $('#new-playbook').onclick = () => {
   const f = $('#new-form');
@@ -1899,6 +1901,7 @@ const term = {
     const a = this.agentId && agents.get(this.agentId);
     // The agent's own session tab is named after its engine (Codex, Muse Code, …).
     $('.term-tab[data-kind="claude"]').textContent = ENGINE_LABEL[a?.engine] ?? 'Claude';
+    sidePane?.follow(this.agentId);
     const nums = new Set(a?.runtime.shells ?? []);
     if (isShell(this.kind)) nums.add(shellNum(this.kind));
     $('#shell-tabs').innerHTML = [...nums]
@@ -1930,6 +1933,7 @@ const term = {
     $('#term-wrap').hidden = false;
     $('#detail').classList.add('with-term');
     $('#term-wrap').classList.remove('browsing');
+    sidePane?.mainShowsCode();
     $('#term-wrap').classList.add('coding');
     this.ensure();
     this.disconnect();
@@ -2095,6 +2099,20 @@ $('#term-fit').onclick = () => term.refit();
 
 // ------------------------------------------------------------------ resizing, expanding, full screen
 
+sidePane = initSide({
+  api,
+  esc,
+  toast,
+  $,
+  agents,
+  codeUi,
+  docHtml,
+  renderDiagrams,
+  mainKind: () => term.kind,
+  setMain: (kind) => term.agentId && term.open(term.agentId, kind),
+  refit: () => requestAnimationFrame(() => term.refit()),
+});
+
 const layoutPref = {
   get(key) {
     try {
@@ -2114,6 +2132,8 @@ function applyLayout() {
   const side = layoutPref.get('sideWidth');
   const brief = layoutPref.get('briefHeight');
   document.documentElement.style.setProperty('--side-w', side ? `${side}px` : '340px');
+  const pane = layoutPref.get('paneWidth');
+  document.documentElement.style.setProperty('--pane-w', pane ? `${pane}%` : '45%');
   if (brief) document.documentElement.style.setProperty('--brief-h', `${brief}px`);
   else document.documentElement.style.removeProperty('--brief-h');
   $('#detail').classList.toggle('brief-sized', Boolean(brief));
@@ -2155,6 +2175,14 @@ dragHandle($('#split-side'), 'cols', (ev) => {
   layoutPref.set('sideWidth', Math.round(w));
   return w;
 }, 'sideWidth');
+
+// The split view's divider: the right pane's share of the panel, in percent.
+dragHandle($('#split-pane'), 'cols', (ev) => {
+  const r = $('#term-split').getBoundingClientRect();
+  const pct = Math.min(Math.max(((r.right - ev.clientX) / r.width) * 100, 20), 75);
+  layoutPref.set('paneWidth', Math.round(pct));
+  return pct;
+}, 'paneWidth');
 
 dragHandle($('#split-term'), 'rows', (ev) => {
   const top = $('#detail').getBoundingClientRect().top;
@@ -2863,7 +2891,14 @@ $('#term-file').onchange = (e) => {
 function upsert(a) {
   agents.set(a.id, a);
   render();
+  agentChanged(a);
+}
+
+/** Views that show one agent's details outside the main render: keep them current. */
+function agentChanged(a) {
   if (a.id === term.agentId) term.renderTabs();
+  reviewUi.agentChanged(a);
+  sidePane?.agentChanged(a);
 }
 
 $('#counts').addEventListener('click', (e) => {
@@ -3498,7 +3533,7 @@ function handleEvent(msg) {
   } else if (msg.t === 'agent') {
     agents.set(msg.agent.id, msg.agent);
     watchDocs(msg.agent);
-    if (msg.agent.id === term.agentId) term.renderTabs();
+    agentChanged(msg.agent);
   } else if (msg.t === 'removed') {
     agents.delete(msg.id);
     if (selectedId === msg.id) select(null);

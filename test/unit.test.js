@@ -1122,3 +1122,16 @@ test('engines: Muse Code adapter reads real Muse Code 1.4.14 output (fixtures)',
   for (const flag of flags(muse.oneShotArgs({}, { model: 'm', prompt: 'p' }))) assert.match(execHelp, new RegExp(`^\\s+${flag}\\b`, 'm'), `${flag} is a muse exec flag`);
   assert.match(fs.readFileSync(fx('resume-help-1.4.14.txt'), 'utf8'), /muse resume <session-ref>/);
 });
+
+test('walkthrough: hunks numbered and capped, the reply mapped back in its order, skipped hunks kept', async () => {
+  const { walkthroughHunks, walkthroughFrom, walkthroughMarkdown } = await import('../src/brief.js');
+  const files = parseDiff(['diff --git a/a.js b/a.js', '--- a/a.js', '+++ b/a.js', '@@ -1,2 +1,2 @@', '-one', '+ONE', ' two', '@@ -9,1 +9,2 @@', ' nine', '+ten', 'diff --git a/b.png b/b.png', 'Binary files a/b.png and b/b.png differ'].join('\n'));
+  const { hunks, cut } = walkthroughHunks(files);
+  assert.equal(cut, false);
+  assert.deepEqual(hunks.map((h) => [h.id, h.file, h.head]), [['H1', 'a.js', '@@ -1,2 +1,2 @@'], ['H2', 'a.js', '@@ -9,1 +9,2 @@']], 'binary files skipped');
+  assert.equal(hunks[0].text, '-one\n+ONE\n two');
+  assert.equal(walkthroughHunks(files, { maxChars: 12 }).cut, true, 'stops at the size cap');
+  const w = walkthroughFrom({ summary: 'S', changes: [{ id: 'H2', title: 'Second', risk: 'high' }, { id: 'H2', title: 'dup' }, { id: 'H7' }] }, hunks);
+  assert.deepEqual(w.changes.map((c) => [c.head, c.title, c.risk, Boolean(c.unexplained)]), [['@@ -9,1 +9,2 @@', 'Second', 'high', false], ['@@ -1,2 +1,2 @@', '', 'low', true]]);
+  assert.match(walkthroughMarkdown(w, 'x'), /^# Changes explained: x\n\nS\n\n## 1\. Second\n\n`a\.js` · `@@ -9,1 \+9,2 @@` · risk: high/);
+});
