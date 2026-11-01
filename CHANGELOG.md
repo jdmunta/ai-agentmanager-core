@@ -3,6 +3,7 @@
 ## Unreleased
 
 - **agentkit (phase 1): agents you build and run.** An agent is a folder with `agent.yaml` (goal, instructions, engine, MCP tools, allow/approve lists, triggers, loop, memory, interfaces); `agentkit run <agent>` runs it continuously. Each input is a run of plan → act → check (acting again on what's left, up to `maxSteps`) → reflect into memory, through an engine's CLI (Claude Code, Codex, Muse Code or an ACP agent), self-contained (only its own MCP servers; none of your personal Claude settings). Triggers: `every`, `cron`, `webhook`, `watch`. Interfaces: a chat page and HTTP API, A2A (agent card and `message/send` / `tasks/get`), ACP on stdio (`agentkit acp`), and an MCP tool (`agentkit mcp`, one tool `ask_<name>`). `agentkit init`, `check`, `run --once`. See [docs/agentkit.md](docs/agentkit.md). The builder, single-executable packaging and monitoring come next.
+- **Agent builder:** a **Built** tab with **+ Build an agent**: describe a task or workflow (attachments welcome) and pick an engine; one call designs the agent: an analysis (problem, inputs, outputs, risks), its `agent.yaml` and instructions, suggested MCP tools and 3–5 test cases. Review and edit the spec (checked on save), **Run tests** (each through the real runtime, judged against its expectation), **Start** it on this computer (its chat page and API), **Download** its folder. Built agents live in `~/.agentmanager/built/<name>/`; `/api/builder` for scripts.
 
 ## 1.11.1 (2026-11-01)
 

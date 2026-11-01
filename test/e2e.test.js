@@ -1491,6 +1491,55 @@ test('ACP engines: an ACP agent runs in the terminal client, adopted, tracked, r
   await call('DELETE', `/agents/${a.id}`);
 });
 
+test('builder: a task becomes an agent (analysis, spec, tests), edited, tested, run here, downloaded', async () => {
+  process.env.AGENTKIT_CLAUDE_BIN = `${process.execPath} ${path.join(here, 'fake-agentkit-claude.js')}`;
+  process.env.FAKE_AGENTKIT_STATE = path.join(home, 'fake-agentkit-state.json');
+  try {
+    assert.equal((await call('POST', '/builder', { task: ' ' })).status, 400);
+    const b = (await call('POST', '/builder', { task: 'Label incoming support tickets by product area' })).body;
+    assert.equal(b.name, 'ticket-labeler');
+    assert.equal(b.status, 'designed');
+    assert.match(b.analysis.problem, /^Handle: Label incoming support tickets/);
+    assert.match(b.yaml, /goal: Every ticket gets one product-area label\./);
+    assert.match(b.yaml, /webhook: \/hooks\/ticket/);
+    assert.equal(b.instructionsText, '1. Read the ticket.\n2. Pick a label.\n');
+    assert.equal(b.tests.length, 2);
+    assert.deepEqual(b.triggers, ['webhook /hooks/ticket']);
+    // A second design with the same name gets its own folder.
+    assert.equal((await call('POST', '/builder', { task: 'again' })).body.name, 'ticket-labeler-2');
+    // Edits are checked: the name stays, the YAML must be valid.
+    assert.equal((await call('PUT', '/builder/ticket-labeler', { yaml: b.yaml.replace('name: ticket-labeler', 'name: other') })).status, 400);
+    assert.match((await call('PUT', '/builder/ticket-labeler', { yaml: 'name: ticket-labeler\ngoal: [' })).body.error, /agent\.yaml/);
+    const edited = (await call('PUT', '/builder/ticket-labeler', { yaml: b.yaml.replace('memory: true', 'memory: false') })).body;
+    assert.match(edited.yaml, /memory: false/);
+    // Tests run through the runtime and are judged; one fails here on purpose.
+    assert.equal((await call('POST', '/builder/ticket-labeler/test')).body.pending, 'testing');
+    const tested = await waitFor(async () => {
+      const x = (await call('GET', '/builder/ticket-labeler')).body;
+      return x.pending ? null : x;
+    }, 20000, 'tests done');
+    assert.equal(tested.status, 'failing');
+    assert.deepEqual([tested.results.passed, tested.results.total], [1, 2]);
+    assert.match(tested.results.list[0].result, /Did it for: Login page crashes/);
+    // Run it here: its chat and API come up; stop it.
+    const started = (await call('POST', '/builder/ticket-labeler/start')).body;
+    assert.ok(started.running.pid);
+    const url = await waitFor(async () => (await call('GET', '/builder/ticket-labeler')).body.running?.url, 15000, 'its address');
+    assert.equal((await (await fetch(`${url}/api/health`)).json()).agent, 'ticket-labeler');
+    assert.equal((await call('POST', '/builder/ticket-labeler/stop')).body.running, null);
+    // Download: its folder as .tar.gz.
+    const dl = await fetch(`${base}/api/builder/ticket-labeler/download`, { headers: { 'x-agentmgr': '1' } });
+    assert.equal(dl.headers.get('content-type'), 'application/gzip');
+    assert.ok((await dl.arrayBuffer()).byteLength > 100);
+    assert.deepEqual((await call('GET', '/builder')).body.map((x) => x.name).sort(), ['ticket-labeler', 'ticket-labeler-2']);
+    for (const n of ['ticket-labeler', 'ticket-labeler-2']) await call('DELETE', `/builder/${n}`);
+    assert.deepEqual((await call('GET', '/builder')).body, []);
+  } finally {
+    delete process.env.AGENTKIT_CLAUDE_BIN;
+    delete process.env.FAKE_AGENTKIT_STATE;
+  }
+});
+
 test('project shortcuts: auto-assigned, "@cc"-style use fills the repo, rename, register ahead, backlog', async () => {
   const origin = makeOrigin('short-cut');
   const url = `file://${origin}`;

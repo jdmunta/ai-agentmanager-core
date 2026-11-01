@@ -949,3 +949,19 @@ body.remote .settings-links .local-only { display: none; }
 .clip-box { margin: 10px 12px; width: calc(100% - 24px); font: 13px var(--mono, ui-monospace, monospace); }
 .clip-foot { display: flex; align-items: center; gap: 8px; padding: 0 12px 12px; }
 .clip-foot .hint { flex: 1; }
+
+/* Built agents. */
+.built-head { display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; }
+.built-list { list-style: none; margin: 0; padding: 0; }
+.built-list li { padding: 9px 12px; border-bottom: 1px solid var(--border); cursor: pointer; }
+.built-list li:hover { background: var(--panel-2); }
+.built-list .line1 { display: flex; align-items: center; gap: 6px; }
+.built-empty { padding: 0 12px; }
+.dot-run { color: var(--green); font-size: 10px; }
+.built-body { padding: 0 4px 12px; display: flex; flex-direction: column; gap: 10px; }
+.built-body details > summary { cursor: pointer; padding: 4px 0; }
+.built-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.built-tests li { margin-bottom: 8px; } .built-tests li.pass b { color: var(--green); } .built-tests li.fail b { color: var(--red); }
+.built-tests pre, .built-runs div { white-space: pre-wrap; font-size: 12.5px; }
+.code-area { width: 100%; font: 12.5px/1.45 var(--mono); margin-top: 6px; }
+.built-runs { list-style: none; padding: 0; } .built-runs li { padding: 6px 0; border-bottom: 1px solid var(--border); }

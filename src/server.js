@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
+import { spawn } from 'node:child_process';
 import express from 'express';
 import { WebSocketServer } from 'ws';
 import { ensureHome, HOST, loadConfig, paths, PORT, saveConfig } from './config.js';
@@ -35,6 +36,7 @@ import * as remote from './remote.js';
 import * as service from './service.js';
 import { jiraView, saveJira } from './jira.js';
 import { CONTAINER_ENGINES, buildImage, claudeToken, dockerStatus, isBuilding, saveSecrets } from './container.js';
+import { Builder } from './builder.js';
 import { Store } from './store.js';
 import { about, latestRelease } from './about.js';
 
@@ -516,6 +518,33 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
   api.get('/agents/:id/memory', wrap((req) => memory.read(req.params.id)));
   api.put('/agents/:id/memory', wrap((req) => memory.write(req.params.id, req.body?.text)));
   api.post('/agents/:id/learn', wrap((req) => memory.learn(req.params.id, req.body?.text, { by: req.headers['x-agentmgr-agent'] ? undefined : 'you' })));
+  // The agent builder (agentkit agents designed from a task): design, edit, test, run, download.
+  const builder = new Builder({ oneShot: (prompt) => manager.oneShot(null, prompt, { ...manager.writerFor({}), timeoutMs: 300_000 }) });
+  api.get('/builder', wrap(() => builder.list()));
+  api.post('/builder', wrap((req) => builder.design({ task: req.body?.task, engine: req.body?.engine || 'claude', attachments: req.body?.attachments?.length ? manager.stagedText(req.body.attachments) : [] })));
+  api.get('/builder/:name', wrap((req) => builder.view(req.params.name)));
+  api.put('/builder/:name', wrap((req) => builder.update(req.params.name, req.body ?? {})));
+  api.post('/builder/:name/test', wrap((req) => {
+    builder.test(req.params.name).catch(() => {}); // in the background; the view says when it's done
+    return new Promise((r) => setTimeout(() => r(builder.view(req.params.name)), 50));
+  }));
+  api.post('/builder/:name/start', wrap((req) => builder.start(req.params.name)));
+  api.post('/builder/:name/stop', wrap((req) => builder.stop(req.params.name)));
+  api.delete('/builder/:name', wrap((req) => builder.remove(req.params.name)));
+  // The agent's folder as a .tar.gz (its own files; not its runs, memory or log).
+  api.get('/builder/:name/download', (req, res) => {
+    let dir;
+    try {
+      dir = builder.view(req.params.name).dir;
+    } catch (e) {
+      return res.status(e.status ?? 500).json({ error: e.message });
+    }
+    res.setHeader('content-type', 'application/gzip');
+    res.setHeader('content-disposition', `attachment; filename="${req.params.name}.tar.gz"`);
+    const tar = spawn('tar', ['-czf', '-', '--exclude', '.agentkit', '--exclude', 'agent.log', '--exclude', 'build.json', '--exclude', 'work', '-C', path.dirname(dir), path.basename(dir)]);
+    tar.stdout.pipe(res);
+    tar.on('error', () => res.end());
+  });
   // Isolation: Docker, the agent image, the Claude token for containers, and the default for new agents.
   let buildError = null;
   const isolationView = async () => ({ ...(await dockerStatus(config)), building: isBuilding(), buildError, hasClaudeToken: Boolean(claudeToken()), engines: [...CONTAINER_ENGINES], default: config.isolation?.default ?? null });
@@ -967,6 +996,7 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
     updates.close();
     assistant.close();
     console.log(`[agentmgr] shutting down (${reason}); closing agents so their sessions are saved`);
+    builder.stopAll();
     await manager.stopAll({ final: true });
     await manager.flush().catch((err) => console.error(`[agentmgr] final flush failed: ${err.message}`));
     try {

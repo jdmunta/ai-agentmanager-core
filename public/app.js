@@ -7,6 +7,7 @@ import { openStream, post, REMOTE } from '/transport.js';
 import { attachBox } from '/attach.js';
 import { initSide } from '/side.js';
 import { openCopy, pasteInto } from '/termclip.js';
+import { initBuilt } from '/built.js';
 import { addTools, download, htmlFile, initExport } from '/export.js';
 import { badgeHtml as scoreBadge, scorecardHtml, scorecardSpeech } from '/scorecard.js';
 import { bindListen, listenHtml, play, speakable, now as speaking, stop as stopSpeaking } from '/speak.js';
@@ -125,6 +126,7 @@ $('#new-playbook').onclick = () => {
   playbooksUi.open({ intent: f.intents.value.trim(), projects: f.project.value.trim() ? [f.project.value.trim()] : [], model: f.model.value.trim(), permissionMode: f.permissionMode.value });
 };
 $('#triggers-open').onclick = () => triggersUi.open();
+const builtUi = initBuilt({ api, esc, toast, $, isOpen: () => sideTab === 'built', setCount: (n) => ($('#built-count').textContent = n) });
 const landUi = initLand({ api, esc, toast, agents, $, scoreBadge, select: (id) => (showTab('agents'), select(id)), openReview: (id) => reviewUi.open(id), isOpen: () => sideTab === 'land' });
 
 function statusOf(a) {
@@ -922,6 +924,8 @@ function showTab(tab) {
   $('#backlog-view').hidden = tab !== 'backlog';
   $('#inbox-view').hidden = tab !== 'inbox';
   $('#land-view').hidden = tab !== 'land';
+  $('#built-view').hidden = tab !== 'built';
+  if (tab === 'built') builtUi.load();
   if (tab === 'inbox') loadJudge();
   if (tab === 'land') landUi.load();
   renderBacklog();
