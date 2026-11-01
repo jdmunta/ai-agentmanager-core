@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.7.0 (2026-10-31)
 
 - **Split view:** **◫ Split** in the terminal bar: the terminal (or a shell, or a browser tab) on the left, and Code, Docs (Diagrams by default, or any other document) or Changes on the right. Resizable and remembered.
 - **Review: changes explained one by one:** **Explain changes** in Review changes puts an explanation above each hunk (what, why, risk, what to check) and **◀ / ▶** or **[ / ]** step through them in reading order, skipping hunks that moved since. A notice and **Explain again** when the code changed after.
