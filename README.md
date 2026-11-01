@@ -7,6 +7,7 @@ Run one background [Claude Code](https://claude.com/claude-code) agent per inten
 ![The conflict radar: two agents changed the same lines of README.md; the AI judge rates it a collision and suggests which lands first](docs/images/conflict-radar.jpg)
 
 - **Intents in, agents out.** Give a list, one per line (say, a ticket each), and each becomes its own `claude` process. Or pick **One agent for all of it** and a long description goes to a single agent as written.
+- **Issue links.** A request that starts with a Jira link is named after the issue (`ABC-123`) and described by its summary, fetched from Jira Cloud (public issues as they are; your company's site after **Settings → Jira**: site, email and API token, kept on this computer and sent only to that site). Without access, the words after the link describe it.
 - **Repo or folder.** Give a git URL (cloned once, then each agent gets its own worktree and branch) or a local folder.
   - **Fast clones.** URLs are cloned as partial clones (`--filter=blob:none`): history now, file contents only for what's checked out.
   - **Progress.** Clone and checkout progress shows in the UI and `agentmgr ls`.
@@ -84,13 +85,13 @@ Runs on macOS and Linux; on Windows, use WSL2. Requires Node 20+, `git`, and the
 
 ```sh
 npm install -g ai-agentmanager          # the latest release
-npm install -g ai-agentmanager@1.7.0    # or a specific one
+npm install -g ai-agentmanager@1.8.0    # or a specific one
 ```
 
 Or from the repository, at a release tag:
 
 ```sh
-git clone --branch v1.7.0 --depth 1 https://github.com/jdmunta/ai-agentmanager-core.git
+git clone --branch v1.8.0 --depth 1 https://github.com/jdmunta/ai-agentmanager-core.git
 cd ai-agentmanager-core
 npm install
 npm link            # optional: puts `agentmgr` on your PATH
@@ -105,12 +106,12 @@ npm install
 npm link
 ```
 
-**Updating.** `agentmgr update` installs the newest release and restarts onto it; running agents pause briefly and resume. In the app, **Update to …** appears in the top bar when a release is out (checked twice a day; turn it off in **☰ → Settings** or with `agentmgr update --auto-check off`), and **About → Update and restart** does the same. A clone at a release tag (or one you `npm link`ed) moves to the newest tag; a clone on a branch or with uncommitted changes is left alone. By hand, use the command for how you installed, then `agentmgr restart`:
+**Updating.** `agentmgr update` installs the newest release and restarts onto it; running agents pause briefly and resume. In the app, **Update to …** appears in the top bar when a release is out (checked twice a day; turn it off in **☰ → Settings** or with `agentmgr update --auto-check off`), and **About → Update and restart** does the same. Both work from a signed-in phone too: the install and restart run on the computer, and the page reloads when it's back. A clone at a release tag (or one you `npm link`ed) moves to the newest tag; a clone on a branch or with uncommitted changes is left alone. By hand, use the command for how you installed, then `agentmgr restart`:
 
 | Installed with | Update |
 | --- | --- |
 | npm | `npm install -g ai-agentmanager@latest` |
-| A clone at a release tag | `git fetch --tags && git checkout v1.7.0 && npm install` (the tag you want) |
+| A clone at a release tag | `git fetch --tags && git checkout v1.8.0 && npm install` (the tag you want) |
 | A clone of `main` | `git pull && npm install` |
 
 **Check your setup.** `agentmgr doctor` checks Node.js, Claude Code and its sign-in, git, `gh`, the data folder, the daemon's port and Chrome, and says how to fix anything missing.

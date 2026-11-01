@@ -5,6 +5,13 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <title>AI Agent Manager</title>
+    <script>
+      // The theme chosen in the menu (Auto / Light / Dark), applied before anything draws.
+      try {
+        const t = localStorage.getItem('agentmgr.theme');
+        if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t;
+      } catch {}
+    </script>
     <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22%3E%3Cpath d=%22M8 1l7 7-7 7-7-7z%22 fill=%22%233b5bdb%22/%3E%3C/svg%3E" />
     <link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials" />
     <meta name="theme-color" content="#151821" />
@@ -17,7 +24,7 @@
       <div class="brand">
         <a href="#" id="home-link" class="home-link" title="Home: all agents"><span class="logo" aria-hidden="true">◆</span><h1>AI Agent Manager</h1></a>
         <button id="about-btn" class="about-btn" type="button" title="About AI Agent Manager: version, release, links">About</button>
-        <button id="update-btn" class="update-btn local-only" type="button" hidden></button>
+        <button id="update-btn" class="update-btn" type="button" hidden></button>
         <span id="conn" class="conn" title="Daemon connection">connecting…</span>
       </div>
       <div class="top-actions">
@@ -41,6 +48,8 @@
             <button role="menuitem" id="cleanup-btn" title="Close agents idle for a while, and delete old closed ones">Clean up…</button>
             <button role="menuitem" id="alerts-btn" class="local-only" title="Slack alerts when an agent needs you">Alerts…</button>
             <button role="menuitem" id="remote-btn" class="local-only" title="Open AI Agent Manager from your phone">Remote access…</button>
+            <div class="menu-sep"></div>
+            <div class="menu-theme"><span>Theme</span><span class="seg" role="radiogroup" aria-label="Theme"><button type="button" data-theme-set="auto" title="Follow this device's setting">Auto</button><button type="button" data-theme-set="light">Light</button><button type="button" data-theme-set="dark">Dark</button></span></div>
             <div class="menu-sep"></div>
             <button role="menuitem" id="menu-about">About and updates…</button>
           </div>
@@ -691,9 +700,9 @@
       <dl id="about-list" class="about-list"></dl>
       <p id="about-update" class="hint" hidden></p>
       <div class="dialog-actions">
-        <label class="about-auto local-only" title="Twice a day, ask for the newest release (GitHub for a git checkout, npm otherwise)"><input type="checkbox" id="about-auto" /> Check automatically</label>
+        <label class="about-auto" title="Twice a day, ask for the newest release (GitHub for a git checkout, npm otherwise)"><input type="checkbox" id="about-auto" /> Check automatically</label>
         <button type="button" id="about-check" class="ghost" title="Asks for the newest release">Check for updates</button>
-        <button type="button" id="about-install" class="primary local-only" hidden>Update and restart</button>
+        <button type="button" id="about-install" class="primary" hidden>Update and restart</button>
         <button type="button" id="about-close" class="primary">Close</button>
       </div>
     </dialog>
@@ -712,6 +721,15 @@
           <p class="hint">After a restart or a crash, the daemon comes back by itself and running agents resume; without it, it starts only when you run <code>agentmgr</code>. <span id="settings-service-state"></span></p>
         </fieldset>
         <fieldset class="local-only">
+          <legend>Jira</legend>
+          <p class="hint">For an agent created from a Jira link, its description shows the issue's summary. Public issues on Atlassian Cloud need nothing here; for your company's site, add it with your email and an <a href="https://id.atlassian.com/manage-profile/security/api-tokens" target="_blank" rel="noopener">API token</a>. The token is kept on this computer and sent only to that site.</p>
+          <div class="row three">
+            <label>Site <input name="jiraSite" placeholder="https://yourcompany.atlassian.net" autocomplete="off" /></label>
+            <label>Email <input name="jiraEmail" type="email" autocomplete="off" /></label>
+            <label>API token <input name="jiraToken" type="password" autocomplete="new-password" /></label>
+          </div>
+        </fieldset>
+        <fieldset>
           <legend>Updates</legend>
           <label class="check"><input type="checkbox" name="updateCheck" /> Check for a new release twice a day</label>
           <p class="hint">Shows <b>Update to …</b> in the top bar; one click installs it and restarts, and running agents resume.</p>

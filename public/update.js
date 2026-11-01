@@ -1,9 +1,9 @@
 // Updating from the app: a button in the top bar when a newer release is out, and "Update and
 // restart" in About. The daemon installs it (git checkout of the release tag, or npm install -g)
-// and restarts onto it; this page then waits for it to come back and reloads.
+// and restarts onto it; this page then waits for it to come back and reloads. It works the same
+// from a phone over remote access: the install runs on the computer.
 
 export function initUpdate({ api, esc, toast, $ }) {
-  const remote = () => document.body.classList.contains('remote');
   let state = null;
 
   function show(s) {
@@ -20,7 +20,6 @@ export function initUpdate({ api, esc, toast, $ }) {
   }
 
   async function load() {
-    if (remote()) return;
     try {
       show(await api('GET', '/update'));
     } catch {
@@ -62,9 +61,8 @@ export function initUpdate({ api, esc, toast, $ }) {
     }
   }
 
-  /** "Check for updates" in About: the daemon's check where it can update itself. */
+  /** "Check for updates" in About: the daemon's check, and whether it can update itself. */
   async function check() {
-    if (remote()) return null;
     const s = await api('POST', '/update/check');
     show(s);
     if (!s.newer) return `You have the newest release (${esc(s.current)}).`;

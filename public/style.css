@@ -15,8 +15,9 @@
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   color-scheme: light;
 }
+/* Dark: the system's setting unless the page is set to Light, or always when set to Dark (☰ menu). */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --bg: #0d0f14;
     --panel: #151821;
     --panel-2: #1c202b;
@@ -30,6 +31,20 @@
     --red: #ff6b6b;
     color-scheme: dark;
   }
+}
+:root[data-theme="dark"] {
+  --bg: #0d0f14;
+  --panel: #151821;
+  --panel-2: #1c202b;
+  --border: #2a2f3c;
+  --text: #e5e8ef;
+  --muted: #8b93a7;
+  --accent: #6d8bff;
+  --accent-text: #0d0f14;
+  --green: #3ecf8e;
+  --yellow: #e6b450;
+  --red: #ff6b6b;
+  color-scheme: dark;
 }
 
 * { box-sizing: border-box; }
@@ -873,3 +888,9 @@ form.dropping { outline: 2px dashed var(--accent, #6b8cff); outline-offset: 4px;
 .sd-add { background: rgba(46, 160, 67, .15); }
 .sd-del { background: rgba(248, 81, 73, .15); }
 #term-split-btn.on { background: #262c38; }
+
+/* Theme switch in the menu: Auto / Light / Dark. */
+.menu-theme { display: flex; align-items: center; gap: 6px; padding: 6px 12px; }
+.menu-theme .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; margin-left: auto; }
+.menu-theme .seg button { border: 0; border-radius: 0; padding: 3px 9px; font-size: 12px; background: transparent; }
+.menu-theme .seg button.on { background: var(--accent); color: var(--accent-text); }

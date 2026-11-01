@@ -1135,3 +1135,29 @@ test('walkthrough: hunks numbered and capped, the reply mapped back in its order
   assert.deepEqual(w.changes.map((c) => [c.head, c.title, c.risk, Boolean(c.unexplained)]), [['@@ -9,1 +9,2 @@', 'Second', 'high', false], ['@@ -1,2 +1,2 @@', '', 'low', true]]);
   assert.match(walkthroughMarkdown(w, 'x'), /^# Changes explained: x\n\nS\n\n## 1\. Second\n\n`a\.js` · `@@ -9,1 \+9,2 @@` · risk: high/);
 });
+
+test('jira: the issue a request starts with, the words after the link, and where its summary is fetched', async () => {
+  const { leadingIssue, wordsAfterLink, issueSummary } = await import('../src/jira.js');
+  assert.deepEqual(leadingIssue('https://acme.atlassian.net/browse/ABC-12 fix the login timeout'), { key: 'ABC-12', site: 'https://acme.atlassian.net' });
+  assert.equal(leadingIssue('fix https://acme.atlassian.net/browse/ABC-12'), null, 'only when the request starts with it');
+  assert.equal(wordsAfterLink('https://acme.atlassian.net/browse/ABC-12 - fix the login timeout\nmore'), 'fix the login timeout');
+  assert.equal(wordsAfterLink('https://acme.atlassian.net/browse/ABC-12'), null);
+  const calls = [];
+  const ok = (summary) => async (url, opts) => (calls.push({ url, auth: opts.headers.authorization ?? null }), { ok: true, json: async () => ({ fields: { summary } }) });
+  const jira = { site: 'https://jira.acme.com', email: 'me@acme.com', token: 'T' };
+  // Atlassian Cloud: fetched, without the token (it belongs to another site).
+  assert.equal(await issueSummary({ key: 'ABC-1', site: 'https://other.atlassian.net' }, { jira, fetchImpl: ok('Cloud issue') }), 'Cloud issue');
+  assert.equal(calls.at(-1).auth, null);
+  assert.equal(calls.at(-1).url, 'https://other.atlassian.net/rest/api/3/issue/ABC-1?fields=summary');
+  // The configured site: with the email and token.
+  assert.equal(await issueSummary({ key: 'ABC-2', site: 'https://jira.acme.com' }, { jira, fetchImpl: ok('Own site') }), 'Own site');
+  assert.equal(calls.at(-1).auth, `Basic ${Buffer.from('me@acme.com:T').toString('base64')}`);
+  // Anywhere else: not contacted at all.
+  const n = calls.length;
+  assert.equal(await issueSummary({ key: 'ABC-3', site: 'http://169.254.169.254' }, { jira, fetchImpl: ok('x') }), null);
+  assert.equal(calls.length, n);
+  // No access, bad JSON, offline: no summary.
+  assert.equal(await issueSummary({ key: 'A-1', site: 'https://x.atlassian.net' }, { jira, fetchImpl: async () => ({ ok: false }) }), null);
+  assert.equal(await issueSummary({ key: 'A-1', site: 'https://x.atlassian.net' }, { jira, fetchImpl: async () => ({ ok: true, json: async () => ({}) }) }), null);
+  assert.equal(await issueSummary({ key: 'A-1', site: 'https://x.atlassian.net' }, { jira, fetchImpl: async () => { throw new Error('offline'); } }), null);
+});

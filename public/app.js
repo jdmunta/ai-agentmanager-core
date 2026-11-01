@@ -164,6 +164,18 @@ function checksSummary(b) {
 }
 
 const diagrams = new Map(); // mermaid source -> rendered SVG (or an error)
+/** Whether the page is dark: the menu's choice, else this device's setting. */
+const isDark = () => {
+  const t = document.documentElement.dataset.theme;
+  return t ? t === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
+};
+// Diagrams are drawn in the theme's colors: redraw them when it changes.
+window.addEventListener('agentmgr-theme', () => {
+  diagrams.clear();
+  mermaidLib?.initialize({ startOnLoad: false, securityLevel: 'strict', theme: isDark() ? 'dark' : 'default' });
+  for (const el of document.querySelectorAll('[data-mermaid][data-filled]')) delete el.dataset.filled;
+  renderDiagrams(document);
+});
 const expanded = new Set(); // "<agent id>:<section>" the user opened with Show more
 
 /** Long sections are clamped; Show more toggles them. */
@@ -189,7 +201,7 @@ async function renderDiagrams(root) {
       try {
         if (!mermaidLib) {
           mermaidLib = (await import('/vendor/mermaid/mermaid.esm.min.mjs')).default;
-          const dark = matchMedia('(prefers-color-scheme: dark)').matches;
+          const dark = isDark();
           mermaidLib.initialize({ startOnLoad: false, securityLevel: 'strict', theme: dark ? 'dark' : 'default' });
         }
         const { svg } = await mermaidLib.render(`mmd-${diagrams.size}-${Date.now()}`, src);
@@ -638,7 +650,7 @@ function agentItem(a) {
   const idle = !isActive(a);
   return `<li data-id="${a.id}" ${a.kind === 'general' || a.kind === 'assistant' ? '' : 'draggable="true" '}class="agent pr${a.priority ?? 2} ${a.id === selectedId ? 'selected' : ''} ${idle ? 'idle' : ''}">
     <div class="line1">${prioChip(a.priority ?? 2)}${a.results?.outcome === 'blocked' ? '<span class="outcome-mark" title="Blocked">⛔</span>' : a.results?.outcome === 'done' ? '<span class="outcome-mark" title="Done">✅</span>' : ''}<span class="name">${esc(a.name)}</span>${flags(a)}<span class="pill ${st}">${pillText(st)}</span></div>
-    <div class="intent">${a.kind === 'general' ? '<span class="tag">general</span> ' : a.kind === 'assistant' ? '<span class="tag assistant">assistant</span> ' : a.startedBy ? '<span class="tag assistant" title="Started by the assistant">🤖 by assistant</span> ' : a.trigger ? `<span class="tag assistant" title="Started from ${a.trigger.source === 'github' ? 'a labeled GitHub issue' : 'the webhook'}${a.trigger.url ? `: ${esc(a.trigger.url)}` : ''}">⚡ ${a.trigger.source === 'github' ? 'GitHub' : 'webhook'}</span> ` : a.playbook ? `<span class="tag assistant" title="Started by the playbook ${esc(a.playbook.name)}">▶ ${esc(a.playbook.name)}</span> ` : ''}${a.engine && a.engine !== 'claude' ? `<span class="tag engine">${esc(ENGINE_LABEL[a.engine] ?? a.engine)}</span> ` : ''}${esc(a.intent || (a.kind === 'assistant' ? 'Finds new work and starts agents for it' : 'General session'))}</div>
+    <div class="intent" title="${esc(describeTitle(a) ?? '')}">${a.kind === 'general' ? '<span class="tag">general</span> ' : a.kind === 'assistant' ? '<span class="tag assistant">assistant</span> ' : a.startedBy ? '<span class="tag assistant" title="Started by the assistant">🤖 by assistant</span> ' : a.trigger ? `<span class="tag assistant" title="Started from ${a.trigger.source === 'github' ? 'a labeled GitHub issue' : 'the webhook'}${a.trigger.url ? `: ${esc(a.trigger.url)}` : ''}">⚡ ${a.trigger.source === 'github' ? 'GitHub' : 'webhook'}</span> ` : a.playbook ? `<span class="tag assistant" title="Started by the playbook ${esc(a.playbook.name)}">▶ ${esc(a.playbook.name)}</span> ` : ''}${a.engine && a.engine !== 'claude' ? `<span class="tag engine">${esc(ENGINE_LABEL[a.engine] ?? a.engine)}</span> ` : ''}${esc(describe(a) || (a.kind === 'assistant' ? 'Finds new work and starts agents for it' : 'General session'))}</div>
     ${a.status === 'preparing' && a.progress ? `<div class="progress-line">${esc(progressText(a.progress))}</div>` : ''}
     <div class="meta">
       <span class="mono">${a.id}</span>
@@ -1594,7 +1606,7 @@ function renderDetail() {
             ${[0, 1, 2, 3].map((p) => `<option value="${p}" ${p === (a.priority ?? 2) ? 'selected' : ''}>P${p}</option>`).join('')}
           </select>
           <span class="d-name">${esc(a.name)}</span> <span class="pill ${st}">${pillText(st)}</span>${a.kind === 'general' ? ' <span class="tag">general</span>' : ''}</h2>
-        <p class="intent">${esc(a.intent || (a.kind === 'general' ? 'General session: ask Claude anything in the terminal.' : a.kind === 'assistant' ? 'Your assistant: it checks for new work every few minutes and starts agents for it. Settings and activity: Assistant in the top bar.' : ''))}</p>
+        <p class="intent">${a.synopsis?.text ? `<b>${esc(a.synopsis.text)}</b>${a.synopsis.source === 'jira' ? ` <span class="hint">· ${esc(a.synopsis.key)}</span>` : ''}<br><span class="hint">${esc(a.intent)}</span>` : esc(a.intent || (a.kind === 'general' ? 'General session: ask Claude anything in the terminal.' : a.kind === 'assistant' ? 'Your assistant: it checks for new work every few minutes and starts agents for it. Settings and activity: Assistant in the top bar.' : ''))}</p>
       </div>
       <div class="d-actions">
         ${a.status === 'error' && !a.workdir
@@ -3450,7 +3462,8 @@ $('#about-check').onclick = async () => {
   out.hidden = false;
   out.textContent = 'Checking…';
   try {
-    // On this computer the daemon can install it; from a phone, just say what is out.
+    // The daemon checks and can install it (from this computer or a signed-in phone); an older
+    // daemon without /update gets the manual steps.
     const local = await updateUi.check().catch(() => null);
     if (local) return void (out.innerHTML = local);
     const r = await api('GET', '/about/latest');
@@ -4070,6 +4083,10 @@ $('#login-form').addEventListener('submit', async (e) => {
 });
 
 // Engines this machine can run; the New agent form offers a choice once there's more than Claude.
+/** What an agent is about: the issue's summary when its request starts with an issue link, else the request. */
+const describe = (a) => a.synopsis?.text || a.intent;
+const describeTitle = (a) => (a.synopsis?.text ? `${a.synopsis.source === 'jira' ? `${a.synopsis.key} in Jira` : `${a.synopsis.key} (summary not fetched; your words after the link)`}. Request: ${a.intent}` : a.intent);
+
 const ENGINE_LABEL = { claude: 'Claude', codex: 'Codex', antigravity: 'Antigravity', muse: 'Muse Code' };
 async function loadEngines() {
   try {

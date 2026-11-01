@@ -93,6 +93,7 @@ async function repoLayout(dir) {
 import { spawn } from 'node:child_process';
 import * as git from './git.js';
 import { parseDiff } from '../public/review.js';
+import { issueSummary, leadingIssue, wordsAfterLink } from './jira.js';
 import { conflictMessage, findConflicts, related, repoKey, summarize as summarizeConflicts } from './conflicts.js';
 import { answerMessage, loadQuestions, questionsPath, questionsPrompt } from './inbox.js';
 import { STUCK_DEFAULTS, detectStuck } from './stuck.js';
@@ -667,9 +668,14 @@ export class AgentManager extends EventEmitter {
     };
     for (const pr of refs.prs) agent.prs[pr.url] = { ...pr, source: 'intent' };
     for (const bug of refs.bugs) agent.bugs[bug.key] = { ...bug, source: 'intent' };
+    // A request that starts with an issue link: describe it by the issue's summary (fetched below),
+    // and until then by the words after the link.
+    const issue = leadingIssue(intent);
+    if (issue) agent.synopsis = { text: wordsAfterLink(intent), source: 'request', key: issue.key };
     this.store.put(agent);
     this.registerProject(agent);
     this.changed(agent);
+    if (issue) this.fetchSynopsis(agent.id).catch(() => {});
 
     this.plugins.emit('agent.created', { agent: this.auditView(agent) });
     this.prepare(agent, { start, workspace }).catch(() => {});
@@ -680,6 +686,32 @@ export class AgentManager extends EventEmitter {
       } catch {}
     }
     return this.view(agent);
+  }
+
+  /** Fetch the summary of the issue an agent's request starts with; it becomes its description. */
+  async fetchSynopsis(ref) {
+    const agent = this.store.get(this.store.resolve(ref)?.id ?? ref);
+    const issue = agent && leadingIssue(agent.intent);
+    if (!issue) return null;
+    const summary = await issueSummary(issue, this.jiraOptions ?? {});
+    const cur = this.store.get(agent.id);
+    if (!summary || !cur) return null;
+    const bug = cur.bugs?.[issue.key];
+    this.patch(cur.id, {
+      synopsis: { text: summary, source: 'jira', key: issue.key },
+      ...(bug && !bug.title ? { bugs: { ...cur.bugs, [issue.key]: { ...bug, title: summary } } } : {}),
+    });
+    return summary;
+  }
+
+  /** Fill in summaries still missing (after Jira settings change); returns how many it found. */
+  async refreshSynopses() {
+    let found = 0;
+    for (const a of this.store.list()) {
+      if (a.synopsis?.source === 'jira' || !leadingIssue(a.intent)) continue;
+      if (await this.fetchSynopsis(a.id).catch(() => null)) found++;
+    }
+    return found;
   }
 
   prepare(agent, { start, workspace }) {

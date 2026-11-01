@@ -33,6 +33,7 @@ import { Previews, parseUrl } from './preview.js';
 import { LiveBrowser } from './livebrowser.js';
 import * as remote from './remote.js';
 import * as service from './service.js';
+import { jiraView, saveJira } from './jira.js';
 import { Store } from './store.js';
 import { about, latestRelease } from './about.js';
 
@@ -60,7 +61,9 @@ function isAllowedOrigin(origin, port) {
 }
 
 const PUBLIC_REMOTE_API = new Set(['POST /api/login', 'GET /api/session']);
-const LOCAL_ONLY_API = /^\/api\/(remote(\/|$)|notify(\/|$)|hub(\/|$)|triggers(\/|$)|update(\/|$)|service$|editors$|agents\/[\w-]+\/open-in$|shutdown$)/;
+// Updates are not here: a signed-in device (a phone) can install the newest release too. It only
+// ever installs an official release from where this copy came from (git tag or npm) and restarts.
+const LOCAL_ONLY_API = /^\/api\/(remote(\/|$)|notify(\/|$)|hub(\/|$)|triggers(\/|$)|service$|jira$|editors$|agents\/[\w-]+\/open-in$|shutdown$)/;
 const HOOK_PATH = '/api/hooks/agents';
 const NO_REPO_KINDS = new Set(['general', 'assistant']);
 
@@ -508,6 +511,17 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
   api.get('/agents/:id/memory', wrap((req) => memory.read(req.params.id)));
   api.put('/agents/:id/memory', wrap((req) => memory.write(req.params.id, req.body?.text)));
   api.post('/agents/:id/learn', wrap((req) => memory.learn(req.params.id, req.body?.text, { by: req.headers['x-agentmgr-agent'] ? undefined : 'you' })));
+  // Jira: the site and API token used to show an issue's summary for agents created from its link.
+  api.get('/jira', wrap(() => jiraView()));
+  api.put(
+    '/jira',
+    wrap(async (req) => {
+      const view = saveJira(req.body ?? {});
+      // Agents already created from links get their summaries now (in the background).
+      manager.refreshSynopses().catch(() => {});
+      return view;
+    }),
+  );
   // Start at login: the login service (launchd or systemd) that brings the daemon back after a reboot.
   const serviceSupported = ['darwin', 'linux'].includes(process.platform);
   const serviceView = async () => ({ supported: serviceSupported, ...(serviceSupported ? await service.status().catch(() => ({ installed: false, loaded: false })) : { installed: false, loaded: false }) });
