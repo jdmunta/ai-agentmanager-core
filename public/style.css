@@ -936,3 +936,7 @@ form.dropping { outline: 2px dashed var(--accent, #6b8cff); outline-offset: 4px;
 @media (max-width: 640px) { .sc-row { grid-template-columns: 56px 1fr 28px; } .sc-why { grid-column: 1 / -1; } }
 
 .containers-actions { display: flex; align-items: flex-end; }
+
+/* Settings → More: separators belong to the links, so hidden (local-only) ones leave none behind. */
+.settings-links button + button::before { content: '·'; display: inline-block; margin: 0 8px; color: var(--muted); }
+body.remote .settings-links .local-only { display: none; }
