@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.11.0 (2026-11-01)
 
 - **Inbox:** permission menus that newer Claude Code draws as one run of text ("Do you want to proceed? ❯ 1. Yes 2. … 3. No") get their choices again, so they can be answered from the inbox.
 - **Cloud runners:** run AI Agent Manager headless on a server so agents keep working with the laptop closed: `docker/runner.Dockerfile` (AI Agent Manager, Claude Code, Codex, git, gh; data on a `/data` volume), `docker/compose.runner.yml`, and a Railway recipe in [docs/cloud-runner.md](docs/cloud-runner.md). It joins the hub by itself from `AGENTMGR_HUB_URL` and `AGENTMGR_HUB_CODE`, with the hub's new reusable **runner token** (`AGENTMGR_HUB_RUNNER_TOKEN`, at least 24 characters, compared in constant time) or an invite, and keeps its link across restarts; `AGENTMGR_HUB_ALLOW` sets what the hub may do. Move agents to it from the hub. `AGENTMGR_HUB_ALLOW_HTTP=1` allows a plain-http hub on a private network.
