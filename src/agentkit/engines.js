@@ -6,11 +6,19 @@ import { spawn } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import sea from 'node:sea';
+import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 
 import { allowedOutright } from './approvals.js';
 
+// Inside a packaged agent? (node:sea only exists from Node 20.12; the daemon supports older 20s.)
+const isSea = () => {
+  try {
+    return createRequire(import.meta.url)('node:sea').isSea();
+  } catch {
+    return false;
+  }
+};
 const AGENTKIT_BIN = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'bin', 'agentkit.js');
 const ACP_CLIENT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'bin', 'acp-client.js');
 // Overrides for tests and odd installs: AGENTKIT_CLAUDE_BIN, AGENTKIT_CODEX_BIN, AGENTKIT_MUSE_BIN
@@ -47,7 +55,7 @@ export function writeMcpConfig(agent, file, extra = {}) {
 /** The approver as an MCP server: this program (`<agent> approver` when packaged) asking `url`. */
 export const APPROVER = 'agentkit_approval';
 export function approverServer({ url, token }) {
-  return { command: process.execPath, args: sea.isSea() ? ['approver'] : [AGENTKIT_BIN, 'approver'], env: { AGENTKIT_APPROVAL_URL: url, AGENTKIT_APPROVAL_TOKEN: token } };
+  return { command: process.execPath, args: isSea() ? ['approver'] : [AGENTKIT_BIN, 'approver'], env: { AGENTKIT_APPROVAL_URL: url, AGENTKIT_APPROVAL_TOKEN: token } };
 }
 
 /**
