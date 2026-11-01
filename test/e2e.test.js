@@ -1319,6 +1319,45 @@ test('walkthrough: the changes explained one by one, in reading order, matched t
   await call('DELETE', `/agents/${a.id}`);
 });
 
+test('jira: an agent from an issue link is described by the issue summary, or the words after the link', async () => {
+  const http = await import('node:http');
+  const seen = [];
+  const srv = http.createServer((req, res) => {
+    seen.push({ url: req.url, auth: req.headers.authorization ?? null });
+    if (req.url.startsWith('/rest/api/3/issue/ABC-7')) return res.end(JSON.stringify({ fields: { summary: 'Login times out after 30 seconds' } }));
+    res.statusCode = 404;
+    res.end('{}');
+  });
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+  const site = `http://127.0.0.1:${srv.address().port}`;
+  manager.jiraOptions = { allow: (s) => s === site };
+  try {
+    const [a] = (await call('POST', '/agents', { intent: `${site}/browse/ABC-7 fix the login timeout`, start: false })).body;
+    assert.equal(a.name, 'ABC-7');
+    assert.deepEqual(a.synopsis, { text: 'fix the login timeout', source: 'request', key: 'ABC-7' }, 'the words after the link at first');
+    const done = await waitFor(async () => ((await agentNow(a.id)).synopsis?.source === 'jira' ? agentNow(a.id) : null), 5000, 'summary fetched');
+    assert.equal(done.synopsis.text, 'Login times out after 30 seconds');
+    assert.equal(done.bugs.find((x) => x.key === 'ABC-7').title, 'Login times out after 30 seconds', 'the issue under Bugs gets its title');
+    assert.equal(done.intent.startsWith(site), true, 'the request itself is unchanged');
+    assert.equal(seen.at(-1).auth, null, 'no token for a site that is not the configured one');
+    // Not fetchable: the words after the link stay.
+    const [b] = (await call('POST', '/agents', { intent: `${site}/browse/ABC-8 make it faster`, start: false })).body;
+    await new Promise((r) => setTimeout(r, 300));
+    assert.deepEqual((await agentNow(b.id)).synopsis, { text: 'make it faster', source: 'request', key: 'ABC-8' });
+    // Settings: the token is saved but never shown.
+    const put = await call('PUT', '/jira', { site: 'acme.atlassian.net', email: 'me@acme.com', token: 'SECRET' });
+    assert.deepEqual(put.body, { site: 'https://acme.atlassian.net', email: 'me@acme.com', hasToken: true });
+    assert.ok(!JSON.stringify((await call('GET', '/jira')).body).includes('SECRET'));
+    assert.equal((await call('PUT', '/jira', { site: 'ftp://nope' })).status, 400);
+    await call('PUT', '/jira', { site: '', email: '', clearToken: true });
+    await call('DELETE', `/agents/${a.id}`);
+    await call('DELETE', `/agents/${b.id}`);
+  } finally {
+    manager.jiraOptions = null;
+    srv.close();
+  }
+});
+
 test('project shortcuts: auto-assigned, "@cc"-style use fills the repo, rename, register ahead, backlog', async () => {
   const origin = makeOrigin('short-cut');
   const url = `file://${origin}`;

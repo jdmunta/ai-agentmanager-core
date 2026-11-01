@@ -22,7 +22,8 @@ export function initMenu({ api, esc, toast, $ }) {
   });
   // Any item closes the menu; its own handler does the rest.
   menu.addEventListener('click', (e) => {
-    if (e.target.closest('button')) open(false);
+    // The theme buttons keep it open, to compare.
+    if (e.target.closest('button') && !e.target.closest('[data-theme-set]')) open(false);
   });
   $('#menu-about').onclick = () => $('#about-btn').click();
 
@@ -53,6 +54,7 @@ export function initMenu({ api, esc, toast, $ }) {
   const dialog = $('#settings-dialog');
   const form = $('#settings-form');
   let service = null; // the login service as the dialog opened
+  let jira = null; // the Jira settings as the dialog opened
   $('#settings-btn').onclick = async () => {
     $('#settings-error').hidden = true;
     try {
@@ -63,6 +65,11 @@ export function initMenu({ api, esc, toast, $ }) {
       if (!remote()) {
         const u = await api('GET', '/update').catch(() => null);
         form.updateCheck.checked = u?.check !== false;
+        jira = await api('GET', '/jira').catch(() => null);
+        form.jiraSite.value = jira?.site ?? '';
+        form.jiraEmail.value = jira?.email ?? '';
+        form.jiraToken.value = '';
+        form.jiraToken.placeholder = jira?.hasToken ? 'saved (type to replace)' : '';
         service = await api('GET', '/service').catch(() => null);
         $('#settings-service').hidden = !service?.supported;
         form.startAtLogin.checked = Boolean(service?.installed);
@@ -85,6 +92,10 @@ export function initMenu({ api, esc, toast, $ }) {
     try {
       const c = await api('PUT', '/cleanup', { maxRunning: form.maxRunning.value.trim() || null });
       if (!remote()) await api('PUT', '/update', { check: form.updateCheck.checked }).catch(() => {});
+      if (!remote() && jira && (form.jiraSite.value.trim() !== (jira.site ?? '') || form.jiraEmail.value.trim() !== (jira.email ?? '') || form.jiraToken.value.trim())) {
+        await api('PUT', '/jira', { site: form.jiraSite.value.trim(), email: form.jiraEmail.value.trim(), token: form.jiraToken.value.trim() || undefined });
+        toast('Jira saved; summaries for agents from Jira links are being fetched', 4000);
+      }
       // Only when it changed: installing touches launchd / systemd.
       if (!remote() && service?.supported && form.startAtLogin.checked !== Boolean(service.installed)) {
         const s = await api('PUT', '/service', { enabled: form.startAtLogin.checked });
@@ -97,6 +108,31 @@ export function initMenu({ api, esc, toast, $ }) {
       $('#settings-error').hidden = false;
     }
   });
+
+  // ------------------------------------------------------------ Theme
+  const THEME_KEY = 'agentmgr.theme';
+  const theme = () => {
+    try {
+      return localStorage.getItem(THEME_KEY) || 'auto';
+    } catch {
+      return 'auto';
+    }
+  };
+  function applyTheme(t) {
+    if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t;
+    else delete document.documentElement.dataset.theme;
+    for (const b of menu.querySelectorAll('[data-theme-set]')) b.classList.toggle('on', b.dataset.themeSet === t);
+    window.dispatchEvent(new CustomEvent('agentmgr-theme'));
+  }
+  menu.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-theme-set]');
+    if (!b) return;
+    try {
+      localStorage.setItem(THEME_KEY, b.dataset.themeSet);
+    } catch {}
+    applyTheme(b.dataset.themeSet);
+  });
+  applyTheme(theme());
 
   loadMe();
   return { loadMe };

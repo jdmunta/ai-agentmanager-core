@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- **Jira summaries:** an agent created from a Jira link shows the issue's summary as its description (in the list and its header, and as the issue's title under Bugs), fetched in the background from Jira Cloud. Until then, or when it can't be fetched, the words after the link. **Settings → Jira** takes your site, email and API token for private issues (also `JIRA_SITE` / `JIRA_EMAIL` / `JIRA_API_TOKEN`); only `*.atlassian.net` and that site are contacted, and the token goes only to that site. Saving fills in agents already created.
+- **Theme:** Auto / Light / Dark in the ☰ menu, remembered in the browser; diagrams redraw in the theme's colors.
+
 ## 1.7.0 (2026-10-31)
 
 - **Split view:** **◫ Split** in the terminal bar: the terminal (or a shell, or a browser tab) on the left, and Code, Docs (Diagrams by default, or any other document) or Changes on the right. Resizable and remembered.

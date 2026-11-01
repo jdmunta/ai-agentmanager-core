@@ -7,6 +7,7 @@ Run one background [Claude Code](https://claude.com/claude-code) agent per inten
 ![The conflict radar: two agents changed the same lines of README.md; the AI judge rates it a collision and suggests which lands first](docs/images/conflict-radar.jpg)
 
 - **Intents in, agents out.** Give a list, one per line (say, a ticket each), and each becomes its own `claude` process. Or pick **One agent for all of it** and a long description goes to a single agent as written.
+- **Issue links.** A request that starts with a Jira link is named after the issue (`ABC-123`) and described by its summary, fetched from Jira Cloud (public issues as they are; your company's site after **Settings → Jira**: site, email and API token, kept on this computer and sent only to that site). Without access, the words after the link describe it.
 - **Repo or folder.** Give a git URL (cloned once, then each agent gets its own worktree and branch) or a local folder.
   - **Fast clones.** URLs are cloned as partial clones (`--filter=blob:none`): history now, file contents only for what's checked out.
   - **Progress.** Clone and checkout progress shows in the UI and `agentmgr ls`.
