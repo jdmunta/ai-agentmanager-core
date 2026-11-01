@@ -1260,6 +1260,37 @@ test('diagrams: only diagrams, drawn from the documents already written, not par
   assert.equal(d.pending, false);
 });
 
+test('attachments: staged before the agent exists, copied to each agent, listed in its request', async () => {
+  const upload = async (name, text) => {
+    const res = await fetch(`${base}/api/uploads?name=${encodeURIComponent(name)}`, { method: 'POST', headers: { 'x-agentmgr': '1', 'content-type': 'application/octet-stream' }, body: text });
+    return { status: res.status, body: await res.json() };
+  };
+  const log = await upload('error log.txt', 'TypeError: boom\n');
+  assert.equal(log.status, 200);
+  assert.match(log.body.path, /[/\\]uploads[/\\]staged[/\\].*-error_log\.txt$/);
+  // Two agents from one upload: each gets its own copy, in its own uploads folder.
+  const res = await call('POST', '/agents', { intents: ['Fix the crash', 'Write a test for it'], attachments: [log.body.path], start: false });
+  assert.equal(res.status, 200);
+  for (const a of res.body) {
+    const file = new RegExp(`- (\\S+[/\\\\]uploads[/\\\\]${a.id}[/\\\\]error_log\\.txt)$`, 'm').exec(a.intent)?.[1];
+    assert.ok(file, `listed in ${a.name}'s request: ${a.intent}`);
+    assert.equal(fs.readFileSync(file, 'utf8'), 'TypeError: boom\n');
+    assert.match(a.intent, /^(Fix the crash|Write a test for it)\n\nAttached files \(part of this request; read them\):/);
+    assert.ok(!/attached/i.test(a.name), 'named after the request, not the list');
+  }
+  // Ask with an attachment and no question.
+  const shot = await upload('screen.png', 'PNG');
+  const g = await call('POST', '/general', { attachments: [shot.body.path] });
+  assert.equal(g.status, 200);
+  assert.match(g.body.intent, new RegExp(`uploads[/\\\\]${g.body.id}[/\\\\]screen\\.png`));
+  // Only staged uploads: no reading arbitrary files into a request.
+  assert.equal((await call('POST', '/agents', { intents: ['x'], attachments: ['/etc/hosts'], start: false })).status, 400);
+  assert.equal((await call('POST', '/agents', { intents: ['x'], attachments: 'nope', start: false })).status, 400);
+  // The backlog keeps them until the item's agent starts.
+  const [item] = (await call('POST', '/backlog', { items: ['Later'], attachments: [log.body.path] })).body;
+  assert.deepEqual(item.attachments, [log.body.path]);
+});
+
 test('project shortcuts: auto-assigned, "@cc"-style use fills the repo, rename, register ahead, backlog', async () => {
   const origin = makeOrigin('short-cut');
   const url = `file://${origin}`;

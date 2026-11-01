@@ -259,6 +259,15 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
   api.post('/agents/:id/shell/close', wrap((req) => manager.closeShell(req.params.id, req.body?.n ? Number(req.body.n) : undefined)));
   api.post('/agents/:id/shell/new', wrap((req) => ({ n: manager.nextShellNumber(manager.mustGet(req.params.id).id) })));
   api.post('/agents/:id/shell/drop', wrap((req) => manager.dropShell(req.params.id, Number(req.body?.n) || 1)));
+  // A file attached before its agent exists (New agents, Ask). Raw body, name in the query.
+  api.post(
+    '/uploads',
+    express.raw({ type: () => true, limit: '50mb' }),
+    wrap((req) => {
+      if (!Buffer.isBuffer(req.body) || !req.body.length) throw fail(400, 'Empty file');
+      return manager.stageUpload(req.query.name, req.body);
+    }),
+  );
   // Raw file body; the name comes in the query. Returns the saved path to paste into a terminal.
   api.post(
     '/agents/:id/upload',
@@ -466,7 +475,9 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
   api.post('/agents/:id/fork', wrap((req) => manager.fork(req.params.id, req.body ?? {})));
 
   api.get('/races', wrap(() => races.list()));
-  api.post('/races', wrap((req) => races.create(req.body ?? {})));
+  // Attachments: copied once to a shared folder and listed in the request every attempt gets.
+  const withFiles = ({ attachments, ...body } = {}) => ({ ...body, intent: manager.withSharedAttachments(body.intent, attachments) });
+  api.post('/races', wrap((req) => races.create(withFiles(req.body ?? {}))));
   api.get('/races/:id', wrap((req) => races.view(req.params.id)));
   api.post('/races/:id/tests', wrap((req) => races.runTests(req.params.id, req.body ?? {})));
   api.get('/races/:id/diff/:agent', wrap((req) => races.diff(req.params.id, req.params.agent)));
@@ -544,7 +555,7 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
     return cleanup.run({ close: b.close !== false, delete: b.delete !== false, ids: Array.isArray(b.ids) ? b.ids : null });
   }));
   api.get('/teams', wrap(() => teams.list()));
-  api.post('/teams', wrap((req) => teams.create(req.body ?? {})));
+  api.post('/teams', wrap((req) => teams.create(withFiles(req.body ?? {}))));
   api.get('/teams/:id', wrap((req) => teams.view(req.params.id)));
   api.get('/teams/:id/files/:name', wrap((req) => teams.file(req.params.id, req.params.name)));
   api.post('/teams/:id/resume', wrap((req) => teams.resume(req.params.id, req.body ?? {})));

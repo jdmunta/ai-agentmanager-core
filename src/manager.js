@@ -42,6 +42,38 @@ const getSummary = (agent, kind) => (SUMMARIES[kind].doc ? agent.docs?.[kind] : 
 const summaryPatch = (agent, kind, value) =>
   SUMMARIES[kind].doc ? { docs: { ...agent.docs, [kind]: value } } : { [SUMMARIES[kind].field]: value };
 
+const stagedDir = () => path.join(paths.uploads, 'staged');
+const safeName = (name) => path.basename(String(name || 'file')).replace(/[^\w.@+-]+/g, '_').slice(-120) || 'file';
+
+/** Staged uploads named in a request, checked to be files in the staging folder. */
+function stagedFiles(list) {
+  if (list == null) return [];
+  if (!Array.isArray(list)) throw Object.assign(new Error('attachments must be a list of uploaded files'), { status: 400 });
+  const root = path.resolve(stagedDir()) + path.sep;
+  return list.slice(0, 20).map((p) => {
+    const file = path.resolve(String(p ?? ''));
+    if (!file.startsWith(root) || !fs.existsSync(file) || !fs.statSync(file).isFile()) {
+      throw Object.assign(new Error(`Not an uploaded file: ${path.basename(file)} (attach it again)`), { status: 400 });
+    }
+    return file;
+  });
+}
+
+/** Copy staged files into an agent's uploads folder (a copy each: one upload can serve several agents). */
+function copyAttachments(files, agentId) {
+  const dir = path.join(paths.uploads, agentId);
+  fs.mkdirSync(dir, { recursive: true });
+  return files.map((f) => {
+    // Drop the staging prefix (time and a random tag) to get the name it was attached with.
+    const dest = path.join(dir, path.basename(f).replace(/^\d{4}-\d\d-\d\dT[\d-]+Z-[0-9a-f]{6}-/, ''));
+    fs.copyFileSync(f, dest);
+    return dest;
+  });
+}
+
+/** The part of the request that lists attached files. */
+export const attachmentNote = (files) => `Attached files (part of this request; read them):\n${files.map((f) => `- ${f}`).join('\n')}`;
+
 /** The folders of a repo with how many files each holds, two levels deep: a map for drawing it. */
 async function repoLayout(dir) {
   const files = (await git.run('git', ['ls-files'], { cwd: dir, timeout: 20_000 })).split('\n').filter(Boolean);
@@ -516,9 +548,9 @@ export class AgentManager extends EventEmitter {
     );
   }
 
-  /** A general Claude session with no repo or folder; the question (if any) is its first prompt. */
-  createGeneral({ question, name, permissionMode, model } = {}) {
-    return this.create({ kind: 'general', intent: question, name, permissionMode, model });
+  /** A general session with no repo or folder, on any engine; the question (if any) is its first prompt. */
+  createGeneral({ question, name, permissionMode, model, engine, attachments } = {}) {
+    return this.create({ kind: 'general', intent: question, name, permissionMode, model, engine, attachments });
   }
 
   create({
@@ -544,8 +576,10 @@ export class AgentManager extends EventEmitter {
     imported,
     startedBy,
     trigger,
+    attachments,
   }) {
     intent = (intent ?? '').trim();
+    const staged = stagedFiles(attachments);
     const engineDef = engineOf(engine || this.config.engine || DEFAULT_ENGINE);
     const engineId = engineDef.id;
     this.plugins.check('agent.create', {
@@ -569,7 +603,7 @@ export class AgentManager extends EventEmitter {
       base ??= entry.base ?? undefined;
       project = entry.key.startsWith('custom:') ? entry.name : null;
     }
-    if (!intent && !general) throw Object.assign(new Error('Intent is required'), { status: 400 });
+    if (!intent && !general && !staged.length) throw Object.assign(new Error('Intent is required'), { status: 400 });
     const id = crypto.randomBytes(3).toString('hex');
     // An imported session keeps its ID, so the first start resumes it.
     const sessionId = adopt || crypto.randomUUID();
@@ -577,6 +611,8 @@ export class AgentManager extends EventEmitter {
     const jiraKey = !name?.trim() && intent ? leadingJiraKey(intent) : null;
     const slug = name || intent ? slugify(name || jiraKey || intent) : `general-${id}`;
     const refs = extractRefs(intent, this.config.bugPatterns);
+    // Attached files (a screenshot, a log) go in the agent's own uploads folder, listed in its request.
+    if (staged.length) intent = [intent, attachmentNote(copyAttachments(staged, id))].filter(Boolean).join('\n\n');
 
     const agent = {
       id,
@@ -942,6 +978,12 @@ export class AgentManager extends EventEmitter {
       }
     }
     // Appended system prompts last only for the process they're passed to, so they go on every launch.
+    // Files attached for it (at creation or in its terminal): readable without a permission prompt.
+    const uploads = path.join(paths.uploads, agent.id);
+    if (fs.existsSync(uploads)) {
+      const dir = fs.realpathSync(uploads);
+      writableDir = writableDir ? [writableDir, dir].flat() : dir;
+    }
     return { extra: engine.extraArgs(this.config), permissionMode: agent.permissionMode, model: agent.model, writableDir, instructions: prompts.join('\n\n') || null, agents, allowedTools };
   }
 
@@ -1629,9 +1671,35 @@ export class AgentManager extends EventEmitter {
   }
 
   /** Save a file the user attached in the UI, so its path can be handed to Claude. */
+  /**
+   * A request with its attachments listed, for work that starts several agents from one request
+   * (a team, a race): the files are copied once to a shared folder they all read.
+   */
+  withSharedAttachments(intent, attachments) {
+    const staged = stagedFiles(attachments);
+    if (!staged.length) return intent;
+    const files = copyAttachments(staged, path.join('shared', crypto.randomBytes(4).toString('hex')));
+    return [String(intent ?? '').trim(), attachmentNote(files)].filter(Boolean).join('\n\n');
+  }
+
+  /** A file attached before its agent exists (New agents, Ask); create() copies it to the agent. */
+  stageUpload(name, data) {
+    fs.mkdirSync(stagedDir(), { recursive: true });
+    // Staged files nobody used are dropped after 30 days (a backlog item may wait that long).
+    const old = Date.now() - 30 * 86_400_000;
+    for (const f of fs.readdirSync(stagedDir())) {
+      try {
+        if (fs.statSync(path.join(stagedDir(), f)).mtimeMs < old) fs.rmSync(path.join(stagedDir(), f), { force: true });
+      } catch {}
+    }
+    const file = path.join(stagedDir(), `${new Date().toISOString().replace(/[:.]/g, '-')}-${crypto.randomBytes(3).toString('hex')}-${safeName(name)}`);
+    fs.writeFileSync(file, data);
+    return { path: file, name: safeName(name), size: data.length };
+  }
+
   saveUpload(ref, name, data) {
     const agent = this.mustGet(ref);
-    const safe = path.basename(String(name || 'file')).replace(/[^\w.@+-]+/g, '_').slice(-120) || 'file';
+    const safe = safeName(name);
     const dir = path.join(paths.uploads, agent.id);
     fs.mkdirSync(dir, { recursive: true });
     const file = path.join(dir, `${new Date().toISOString().replace(/[:.]/g, '-')}-${safe}`);

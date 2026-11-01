@@ -25,7 +25,7 @@
         <button id="assistant-btn" title="An always-on session that finds new work and starts agents for it">Assistant <span id="assistant-dot" class="assistant-dot" hidden></span></button>
         <button id="spend-btn" title="Results across agents (merge rate, time to PR, cost per merged PR), what they cost, and spending limits">Results <span id="spend-today" class="spend-today"></span></button>
         <button id="machine-btn" title="A terminal on this computer (your home folder), from any device you're signed in on">Terminal</button>
-        <button id="ask-btn" title="A general Claude session with no repo or folder">Ask Claude</button>
+        <button id="ask-btn" title="A general session with no repo or folder, on Claude Code or another engine you have (Codex, Muse Code, …)">Ask Agent</button>
         <button id="new-btn" class="primary">+ New agents</button>
         <div class="menu-wrap">
           <button id="menu-btn" class="menu-btn" type="button" aria-haspopup="menu" aria-expanded="false" title="Settings and preferences">
@@ -173,6 +173,7 @@
           <span class="sr-only">Intents</span>
           <textarea name="intents" rows="6" required placeholder="Add a dark mode toggle that remembers the user's choice&#10;Make search results show up as you type&#10;Find out why the dashboard takes 5 seconds to load and speed it up&#10;Add a one-click CSV export to the reports page"></textarea>
         </label>
+        <div id="new-attach"></div>
         <div class="row">
           <label>
             Git repository URL
@@ -307,16 +308,24 @@
 
     <dialog id="ask-dialog">
       <form id="ask-form" method="dialog">
-        <h2>Ask Claude</h2>
+        <h2>Ask an agent</h2>
         <p class="hint">A general session with no repo or folder. It is tracked and resumable like any other agent.</p>
         <label>
           Question <span class="hint">optional; you can also just type in the terminal</span>
           <textarea name="question" rows="4" placeholder="How do I tune GC for a JVM with a 32 GB heap?"></textarea>
         </label>
-        <label>
-          Name <span class="hint">optional</span>
-          <input name="name" placeholder="jvm-gc-questions" />
-        </label>
+        <div id="ask-attach"></div>
+        <div class="row">
+          <label>
+            Name <span class="hint">optional</span>
+            <input name="name" placeholder="jvm-gc-questions" />
+          </label>
+          <label id="ask-engine-field">
+            Engine
+            <select name="engine"><option value="">Claude Code</option></select>
+            <span class="hint warn" id="ask-engine-notice" hidden></span>
+          </label>
+        </div>
         <p id="ask-error" class="error" hidden></p>
         <div class="dialog-actions">
           <button type="button" id="ask-cancel" class="ghost">Cancel</button>

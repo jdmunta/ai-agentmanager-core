@@ -51,7 +51,8 @@ Run one background [Claude Code](https://claude.com/claude-code) agent per inten
 - **Your layout.** Drag the edge of the agent list, or the line between the brief and the terminal, to resize them; double-click a line to reset it. **Expand** (Ctrl+Shift+E) fills the window with the terminal, shell or browser tab; **Full screen** fills the screen. Agents active in the last day sort to the top; idle ones are dimmed.
 - **As an app.** In Chrome or Edge, click the install icon in the address bar (or ⋮ → Cast, save and share → Install page as app). AI Agent Manager then opens in its own window with its own Dock or taskbar icon, and the daemon keeps running as before.
 - **About.** The version next to the title opens the About box: release date, author, license, links, and how this daemon runs (data folder, port, Node.js, which `claude`). **Check for updates** asks npm for the newest version. In a terminal: `agentmgr about` (`--check` for updates).
-- **General sessions.** **Ask Claude** starts a session with no repo, folder or intent, for questions. It is tracked and resumable like any other agent.
+- **General sessions.** **Ask Agent** starts a session with no repo, folder or intent, for questions, on Claude Code or any other engine you have (Codex, Antigravity, Muse Code). It is tracked and resumable like any other agent.
+- **Attachments.** **📎 Attach files** in New agents and Ask Agent (or drop files on the dialog, or paste a screenshot into the text box) adds a screenshot, a log or a document to the request. Each agent gets its own copy in `~/.agentmanager/uploads/<agent>/`, listed in its request, and Claude Code and Codex can read that folder without asking. From the CLI: `agentmgr add … --file-attach error.log` and `agentmgr ask … --file-attach shot.png`.
 
 New in 0.2, for running many agents at once:
 
@@ -920,7 +921,7 @@ Usage comes from the session transcripts and is refreshed every few seconds whil
   - **From another device** (remote access), AI Agent Manager gives each site its own HTTPS port. That port relays to the site as the machine sees it, so you can check from your phone what the agent built or what the machine can reach. Absolute links, redirects and hot-reload WebSockets on the same site keep working, and the site's "don't show me in a frame" headers are dropped. A link or redirect to a different site leaves the relay.
   - **Safety:** the relay serves only signed-in devices. It never relays to AI Agent Manager's own ports on any of the machine's addresses, and it removes AI Agent Manager's sign-in cookie before forwarding. Sites other than localhost must present a valid certificate. The relays close when remote access is turned off.
   - If a tab stays blank on a device, open it once with **↗** and accept the certificate there.
-- **Ask Claude** (or `agentmgr ask`) creates a `general` agent. All general sessions share `~/.agentmanager/general`, so Claude's folder-trust prompt only appears the first time.
+- **Ask Agent** (or `agentmgr ask`, with `--engine` for another engine) creates a `general` agent. All general sessions share `~/.agentmanager/general`, so Claude's folder-trust prompt only appears the first time.
 
 ## Configuration
 
