@@ -1179,3 +1179,13 @@ test('listen: markdown turned into speech, split into short pieces; the walkthro
   parts[2].onStart();
   assert.deepEqual(followed, [1]);
 });
+
+test('pr description: the intent in full, the spec and plan folded, their own headings demoted', async () => {
+  const { prSections } = await import('../src/brief.js');
+  assert.equal(prSections('x', () => null), '', 'nothing written: nothing added');
+  const files = { intent: '# Intent: x\n\n## Request\n\nDo it\n', spec: '# Spec: x\n## Requirements\n- a\n' };
+  const out = prSections('x', (n) => files[n]);
+  assert.match(out, /^## Intent\n\n### Request\n\nDo it/);
+  assert.match(out, /<details><summary><b>Spec<\/b><\/summary>\n\n### Requirements\n- a\n\n<\/details>/);
+  assert.doesNotMatch(out, /Plan/, 'no plan written');
+});

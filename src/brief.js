@@ -654,3 +654,82 @@ export function loadPlanFile(agentId, prev) {
   if (prev && prev.mtimeMs === st.mtimeMs) return null;
   return { markdown: fs.readFileSync(planPath(agentId), 'utf8').slice(0, 200_000), mtimeMs: st.mtimeMs, updatedAt: st.mtime.toISOString() };
 }
+
+// ------------------------------------------------------------------ intent, spec and plan
+
+// Three files per agent, next to the brief, for reviewers (people, other agents, AI review):
+//   INTENT.md - what was asked, written by AI Agent Manager when the agent is created
+//   SPEC.md   - what done means (requirements, acceptance criteria), written by the agent first
+//   PLAN.md   - how it gets there, step by step, kept by the agent (the plan review uses it too)
+// Push & open PR puts them in the pull request's description.
+export const INTENT_FILE = 'INTENT.md';
+export const SPEC_FILE = 'SPEC.md';
+export const intentPath = (agentId) => path.join(briefDir(agentId), INTENT_FILE);
+export const specPath = (agentId) => path.join(briefDir(agentId), SPEC_FILE);
+export const SPEC_DOCS = { intent: intentPath, spec: specPath, plan: planPath };
+
+/** INTENT.md: the request as given, and where it came from. */
+export function intentMarkdown(agent) {
+  const by = agent.startedBy ? 'the assistant' : agent.trigger ? (agent.trigger.source === 'github' ? 'a labeled GitHub issue' : 'a webhook') : agent.playbook ? `the playbook ${agent.playbook.name}` : agent.team ? `team ${agent.team.id} (${agent.team.role})` : agent.raceId ? `race ${agent.raceId}` : 'you';
+  const out = [`# Intent: ${agent.name}`, ''];
+  if (agent.synopsis?.text) out.push(`**${agent.synopsis.source === 'jira' ? `${agent.synopsis.key}: ` : ''}${agent.synopsis.text}**`, '');
+  out.push('## Request', '', agent.intent || '(none)', '');
+  const ctx = [
+    `- Started by: ${by}${agent.trigger?.url ? ` (${agent.trigger.url})` : ''}`,
+    agent.repo || agent.requestedDir ? `- Where: ${agent.repo || agent.requestedDir}${agent.base ? ` (from ${agent.base})` : ''}` : null,
+    agent.engine ? `- Engine: ${agent.engine}${agent.model ? ` (${agent.model})` : ''}` : null,
+    `- Created: ${agent.createdAt}`,
+  ].filter(Boolean);
+  out.push('## Context', '', ...ctx, '');
+  return out.join('\n');
+}
+
+/** The agent's instructions for SPEC.md and PLAN.md (the plan only when the plan review isn't on). */
+export const specPrompt = (specFile, planFile, { withPlan = true } = {}) =>
+  `Before you change any code, write a short spec of the task to ${specFile} (Markdown), so reviewers (people and other agents) ` +
+  'can check the work against it:\n# Spec: <short name>\n## Requirements\nWhat must be true when it is done, as a list.\n' +
+  '## Acceptance criteria\nHow each requirement is checked: a command, a test or an observable behavior.\n## Out of scope\n## Open questions\n' +
+  (withPlan
+    ? `Then write your plan to ${planFile}: "# Plan: <short name>", then "## Steps" as a task list ("- [ ]" to do, "- [x]" done), ` +
+      'small enough to check, and "## Files to change". Keep both current: tick steps as you finish them, and update the spec ' +
+      'if the requirements change (say why). Do not stop to wait for approval; carry on with the work. '
+    : 'Keep it current if the requirements change (say why). ') +
+  'Both files are outside the repository: never copy them into the repo or commit them.';
+
+/** One of the three (intent, spec, plan): its Markdown and when it changed, or null. */
+export function readSpecDoc(agentId, name) {
+  const file = SPEC_DOCS[name]?.(agentId);
+  if (!file) return null;
+  try {
+    const st = fs.statSync(file);
+    return { name, path: file, markdown: fs.readFileSync(file, 'utf8').slice(0, 200_000), updatedAt: st.mtime.toISOString() };
+  } catch {
+    return null;
+  }
+}
+
+/** Which of the three exist, and when they changed (for the page's buttons). */
+export function specDocsInfo(agentId) {
+  const out = {};
+  for (const [name, fn] of Object.entries(SPEC_DOCS)) {
+    try {
+      out[name] = fs.statSync(fn(agentId)).mtime.toISOString();
+    } catch {}
+  }
+  return out;
+}
+
+/** The pull request description's sections: the intent in full, the spec and plan folded. */
+export function prSections(agentId, read = (n) => readSpecDoc(agentId, n)?.markdown) {
+  const doc = (n) => read(n)?.trim();
+  // Demote the files' own headings under the description's.
+  const demote = (md) => md.replace(/^(#{1,4}) /gm, '#$1 ').replace(/^## (Intent|Spec|Plan): .*\n+/m, '');
+  const parts = [];
+  const intent = doc('intent');
+  if (intent) parts.push('## Intent', '', demote(intent), '');
+  for (const [name, label] of [['spec', 'Spec'], ['plan', 'Plan']]) {
+    const md = doc(name);
+    if (md) parts.push(`<details><summary><b>${label}</b></summary>`, '', demote(md), '', '</details>', '');
+  }
+  return parts.length ? [...parts, '<sub>Intent, spec and plan kept by AI Agent Manager.</sub>'].join('\n') : '';
+}

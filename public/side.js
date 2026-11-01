@@ -6,6 +6,9 @@ import { cardHtml, explainButton, listenParts as walkParts, walkthroughOf } from
 
 const DOCS = [
   ['diagrams', 'Diagrams'],
+  ['intent', 'Intent'],
+  ['spec', 'Spec'],
+  ['plan', 'Plan'],
   ['design', 'Design'],
   ['flow', 'Flow'],
   ['analysis', 'Analysis'],
@@ -34,7 +37,16 @@ export function initSide({ api, esc, toast, $, agents, codeUi, docHtml, renderDi
   const codeHome = $('#term-main');
   const st = { on: pref.get('on', '0') === '1', tab: pref.get('tab', 'docs'), doc: pref.get('doc', 'diagrams'), agentId: null, changes: null, sig: '', loading: false };
 
-  const docOf = (a, kind) => (kind === 'explain' ? a?.explanation : a?.docs?.[kind]);
+  // Intent, spec and plan are files the daemon reads on request; the rest live on the agent.
+  const FILES = new Set(['intent', 'spec', 'plan']);
+  const files = new Map(); // "<agent>:<kind>" -> { markdown, at }
+  const docOf = (a, kind) => (FILES.has(kind) ? files.get(`${a?.id}:${kind}`) : kind === 'explain' ? a?.explanation : a?.docs?.[kind]);
+  async function loadFile(kind) {
+    const id = st.agentId;
+    const r = await api('GET', `/agents/${id}/specs/${kind}`).catch(() => null);
+    files.set(`${id}:${kind}`, { markdown: r?.markdown ?? null, at: r?.updatedAt ?? null, loaded: true });
+    if (st.agentId === id && st.doc === kind) renderDocs(true);
+  }
 
   function show() {
     const on = st.on && Boolean(st.agentId);
@@ -56,21 +68,35 @@ export function initSide({ api, esc, toast, $, agents, codeUi, docHtml, renderDi
   // ------------------------------------------------------------ Docs
   function renderDocs(force) {
     const a = agents.get(st.agentId);
-    const d = docOf(a, st.doc);
+    let d = docOf(a, st.doc);
+    // A file that changed on disk (or was never read): read it, then draw.
+    if (FILES.has(st.doc) && (!d || (d.at ?? null) !== (a?.specDocs?.[st.doc] ?? null))) {
+      if (!d?.loading) {
+        files.set(`${st.agentId}:${st.doc}`, { ...d, loading: true });
+        loadFile(st.doc);
+      }
+      d = d?.loaded ? d : null;
+      if (!d) {
+        body.innerHTML = '<p class="hint side-pad">Loading…</p>';
+        return;
+      }
+    }
     const sig = `docs|${st.agentId}|${st.doc}|${d?.at}|${d?.pending}|${d?.error}`;
     if (!force && sig === st.sig) return;
     st.sig = sig;
     const label = DOCS.find(([k]) => k === st.doc)?.[1] ?? st.doc;
     const picker = `<select data-side-doc>${DOCS.map(([k, l]) => `<option value="${k}" ${k === st.doc ? 'selected' : ''}>${l}${docOf(a, k)?.markdown ? ' ✓' : ''}</option>`).join('')}</select>`;
     const stale = d?.markdown && a?.brief?.updatedAt && d.briefUpdatedAt !== a.brief.updatedAt;
-    const action = d?.pending
+    const action = FILES.has(st.doc)
+      ? ''
+      : d?.pending
       ? `<span class="hint">Writing…</span>`
       : `<button type="button" class="small ${d?.markdown ? 'ghost' : 'primary'}" data-side-write>${d?.markdown ? 'Again' : st.doc === 'diagrams' ? 'Draw' : 'Write'}</button>`;
     let content;
     if (d?.pending && !d?.markdown) content = `<p class="hint">Writing the ${esc(label.toLowerCase())} from the agent's work so far…</p>`;
     else if (d?.error && !d?.markdown) content = `<p class="error">Couldn't write it: ${esc(d.error)}</p>`;
     else if (d?.markdown) content = `<div class="md ${st.doc === 'diagrams' ? 'diagrams-view' : ''}">${docHtml(d.markdown)}</div>`;
-    else content = `<p class="hint">No ${esc(label.toLowerCase())} for this agent yet.</p>`;
+    else content = `<p class="hint">No ${esc(label.toLowerCase())} for this agent yet.${FILES.has(st.doc) && st.doc !== 'intent' ? ' The agent writes it as it works.' : ''}</p>`;
     const listen = d?.markdown && st.doc !== 'diagrams' ? listenHtml(`doc:${st.agentId}:${st.doc}`, { title: 'Read it aloud' }) : '';
     body.innerHTML = `<div class="side-tools">${picker}<span class="spacer"></span>${stale ? '<span class="hint">brief changed since</span>' : ''}${listen}${action}</div><div class="side-scroll">${content}</div>`;
     renderDiagrams(body);

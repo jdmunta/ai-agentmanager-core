@@ -2,6 +2,7 @@
 // back to the agent as one message, and commit / push / open a pull request from the UI.
 import * as git from './git.js';
 import { hash } from './judge.js';
+import { prSections } from './brief.js';
 import { NO_REPO } from './manager.js';
 import { ghBin } from './tracker.js';
 
@@ -193,8 +194,15 @@ export class Review {
     }
     const args = ['pr', 'create', '--head', branch];
     if (target) args.push('--base', target);
-    if (String(title).trim()) args.push('--title', String(title).trim(), '--body', String(body ?? ''));
-    else args.push('--fill');
+    // The description: your text (else the commits), then the intent, spec and plan.
+    const sections = prSections(agent.id);
+    if (String(title).trim() || sections) {
+      const log = base ? await git.run('git', ['log', '--reverse', '--format=%s', `${base.sha}..HEAD`], opts).catch(() => '') : '';
+      const subjects = log.split('\n').filter(Boolean);
+      const t = String(title).trim() || subjects[0] || agent.name;
+      const lead = String(body ?? '').trim() || (subjects.length > 1 ? subjects.map((x) => `- ${x}`).join('\n') : '');
+      args.push('--title', t, '--body', [lead, sections].filter(Boolean).join('\n\n'));
+    } else args.push('--fill');
     if (draft) args.push('--draft');
     let out;
     try {

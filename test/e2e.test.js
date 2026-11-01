@@ -1363,6 +1363,28 @@ test('jira: an agent from an issue link is described by the issue summary, or th
   }
 });
 
+test('intent, spec and plan: INTENT.md on create, the agent told to keep SPEC.md and PLAN.md, all readable', async () => {
+  const [a] = (await call('POST', '/agents', { intent: 'Add a dark mode toggle' })).body;
+  const dir = fs.realpathSync(path.join(home, 'briefs', a.id));
+  const intent = fs.readFileSync(path.join(dir, 'INTENT.md'), 'utf8');
+  assert.match(intent, /^# Intent: add-a-dark-mode-toggle\n\n## Request\n\nAdd a dark mode toggle\n\n## Context\n\n- Started by: you\n/);
+  const launch = await waitFor(() => launches().find((l) => l.args.includes(a.sessionId) && l.args.includes('--append-system-prompt')), 8000, 'launch');
+  const sys = launch.args[launch.args.indexOf('--append-system-prompt') + 1];
+  assert.ok(sys.includes(`write a short spec of the task to ${path.join(dir, 'SPEC.md')}`) && sys.includes(`write your plan to ${path.join(dir, 'PLAN.md')}`), sys);
+  assert.deepEqual(Object.keys((await agentNow(a.id)).specDocs), ['intent']);
+  // The agent writes them; the page sees and reads them.
+  fs.writeFileSync(path.join(dir, 'SPEC.md'), '# Spec: toggle\n## Requirements\n- remembers the choice\n');
+  fs.writeFileSync(path.join(dir, 'PLAN.md'), '# Plan: toggle\n## Steps\n- [x] add the switch\n');
+  assert.deepEqual(Object.keys((await agentNow(a.id)).specDocs).sort(), ['intent', 'plan', 'spec']);
+  assert.match((await call('GET', `/agents/${a.id}/specs/spec`)).body.markdown, /remembers the choice/);
+  assert.equal((await call('GET', `/agents/${a.id}/specs/nope`)).status, 400);
+  // General sessions keep none of this.
+  const g = (await call('POST', '/general', {})).body;
+  assert.equal(g.specDocs, undefined);
+  await call('DELETE', `/agents/${a.id}`);
+  await call('DELETE', `/agents/${g.id}`);
+});
+
 test('project shortcuts: auto-assigned, "@cc"-style use fills the repo, rename, register ahead, backlog', async () => {
   const origin = makeOrigin('short-cut');
   const url = `file://${origin}`;
@@ -3144,6 +3166,9 @@ test('landing: open a PR, failing checks and requested changes go back to the ag
     assert.equal(opened.body.url, 'https://github.com/acme/demo/pull/1');
     const create = ghCalls().find((c) => c[1] === 'create');
     assert.deepEqual(create.slice(0, 6), ['pr', 'create', '--head', ready.git.branch, '--base', 'main']);
+    // The description carries the intent (and the spec and plan, when the agent wrote them).
+    const prBody = create[create.indexOf('--body') + 1];
+    assert.match(prBody, /^## Intent\n\n[\s\S]*### Request\n/m, prBody);
     assert.ok(execFileSync('git', ['branch', '--list'], { cwd: origin }).toString().includes(ready.git.branch), 'pushed');
 
     // CI fails on this commit: the agent is told once, however often the PR is looked at.
