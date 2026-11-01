@@ -25,7 +25,7 @@ export function prChips(pr, esc) {
   return out.join(' ');
 }
 
-export function initLand({ api, esc, toast, agents, $, select, openReview, isOpen }) {
+export function initLand({ api, esc, toast, agents, $, scoreBadge = () => '', select, openReview, isOpen }) {
   const view = $('#land-view');
   let settings = null;
 
@@ -46,7 +46,7 @@ export function initLand({ api, esc, toast, agents, $, select, openReview, isOpe
       <div class="line1"><span class="prio p${a.priority ?? 2}">P${a.priority ?? 2}</span>
         <a class="name" href="${esc(pr.url)}" target="_blank" rel="noopener" title="${esc(pr.title ?? pr.url)}">#${esc(pr.number ?? '')} ${esc(pr.title ?? pr.url)}</a></div>
       <div class="line2"><button class="link" data-land="goto">${esc(a.name)}</button>${a.runtime?.busy ? ' <span class="hint">working</span>' : ''}</div>
-      <div class="land-chips">${prChips(pr, esc)}</div>
+      <div class="land-chips">${scoreBadge(a.docs?.scorecard, esc)} ${prChips(pr, esc)}</div>
       <div class="bl-actions">
         <button class="small" data-land="review" title="Its diff, line comments for the agent, commit and push">Review</button>
         ${land === 'behind' || pr.mergeable === 'CONFLICTING' ? '<button class="small" data-land="update" title="Merge the base branch in here (when the agent is idle and its work is committed) and push; otherwise, or on conflicts, ask the agent">Update</button>' : ''}

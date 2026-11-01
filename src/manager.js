@@ -47,6 +47,7 @@ const SUMMARIES = {
   humanai: { doc: 'humanai', run: 'runHumanAi' },
   diagrams: { doc: 'diagrams', run: 'runDiagrams' },
   walkthrough: { doc: 'walkthrough', run: 'runWalkthrough' },
+  scorecard: { doc: 'scorecard', run: 'runScorecard' },
 };
 /** Read / write where a summary of `kind` is kept on the agent record. */
 const getSummary = (agent, kind) => (SUMMARIES[kind].doc ? agent.docs?.[kind] : agent[SUMMARIES[kind].field]);
@@ -100,6 +101,7 @@ import { spawn } from 'node:child_process';
 import * as git from './git.js';
 import { parseDiff } from '../public/review.js';
 import { issueSummary, leadingIssue, wordsAfterLink } from './jira.js';
+import { combine, facts as scoreFacts, scorecardMarkdown, scorecardPrompt } from './scorecard.js';
 import { conflictMessage, findConflicts, related, repoKey, summarize as summarizeConflicts } from './conflicts.js';
 import { answerMessage, loadQuestions, questionsPath, questionsPrompt } from './inbox.js';
 import { STUCK_DEFAULTS, detectStuck } from './stuck.js';
@@ -1887,6 +1889,8 @@ export class AgentManager extends EventEmitter {
       this.patch(id, { brief });
       // The agent says it is done: have the judge check the work before the person looks.
       if (brief.status === 'done' && agent.brief?.status !== 'done' && this.judge.enabled) this.requestReview(id, { trigger: 'brief' }).catch(() => {});
+      // ...and score it for the reviewer ("scorecard": { "auto": false } in config.json turns this off).
+      if (brief.status === 'done' && agent.brief?.status !== 'done' && this.config.scorecard?.auto !== false && !NO_REPO.has(agent.kind) && this.changesSource) this.summarize(id, 'scorecard').catch(() => {});
     }
     if (agent.planReview) {
       const file = loadPlanFile(id, agent.planReview);
@@ -2127,6 +2131,42 @@ export class AgentManager extends EventEmitter {
           diffHash: hash(data.diff),
           markdown: walkthroughMarkdown(result, cur.name),
           writer: `${writer.engine.label}${writer.model ? ` (${writer.model})` : ''}`,
+          at: now(),
+          briefUpdatedAt: cur.brief?.updatedAt ?? null,
+          pending: false,
+          error: null,
+        }),
+      ),
+    );
+  }
+
+  /**
+   * The review scorecard (see scorecard.js): the same diff the review screen shows, scored against
+   * the intent, spec and plan, with the facts the app measures capping what the model says.
+   */
+  async runScorecard(agent, ctx) {
+    if (!this.changesSource) throw new Error('Changes are not available here');
+    const data = await this.changesSource(agent.id);
+    const { hunks, cut } = walkthroughHunks(parseDiff(data.diff), { maxChars: 50_000 });
+    if (!hunks.length) throw Object.assign(new Error('No changes to score yet'), { status: 400 });
+    const cur0 = this.store.get(agent.id) ?? agent;
+    const doc = (n) => readSpecDoc(agent.id, n)?.markdown ?? '';
+    const f = scoreFacts({ files: data.files, prs: Object.values(cur0.prs ?? {}), brief: cur0.brief, plan: doc('plan'), spec: doc('spec') });
+    const writer = this.writerFor(agent);
+    const prompt = scorecardPrompt({ ...ctx, briefMarkdown: this.briefFile(agent.id).markdown ?? '', intentDoc: doc('intent'), specDoc: doc('spec'), planDoc: doc('plan'), hunks, facts: f });
+    const sc = combine(parseJsonReply(await this.oneShot(agent, prompt, writer)), f, hunks);
+    const cur = this.store.get(agent.id);
+    if (!cur) return null;
+    return this.view(
+      this.patch(
+        agent.id,
+        summaryPatch(cur, 'scorecard', {
+          data: sc,
+          cut,
+          diffHash: hash(data.diff),
+          markdown: scorecardMarkdown(sc, cur.name),
+          writer: `${writer.engine.label}${writer.model ? ` (${writer.model})` : ''}`,
+          postedTo: cur.docs?.scorecard?.postedTo ?? null,
           at: now(),
           briefUpdatedAt: cur.brief?.updatedAt ?? null,
           pending: false,

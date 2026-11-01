@@ -1385,6 +1385,59 @@ test('intent, spec and plan: INTENT.md on create, the agent told to keep SPEC.md
   await call('DELETE', `/agents/${g.id}`);
 });
 
+test('scorecard: the changes scored, capped by what was measured, kept with the diff, in the PR and posted on it', async () => {
+  const origin = makeOrigin('score');
+  const [a] = (await call('POST', '/agents', { intent: 'Add the score feature', repo: `file://${origin}`, start: false })).body;
+  const ready = await waitFor(async () => ((await agentNow(a.id)).status === 'stopped' ? agentNow(a.id) : null), 20000, 'ready');
+  assert.equal((await call('POST', `/agents/${a.id}/docs/scorecard`)).status, 400, 'nothing to score yet');
+  fs.writeFileSync(path.join(ready.workdir, 'score.js'), 'export const score = () => 1;\n');
+  const res = await call('POST', `/agents/${a.id}/docs/scorecard`);
+  assert.equal(res.status, 200, JSON.stringify(res.body));
+  const sc = res.body.docs.scorecard;
+  assert.match(sc.data.summary, /^Scored: # Intent: add-the-score-feature/, 'the model got INTENT.md');
+  assert.equal(sc.data.scores.tests.score, 45, 'code with no tests and no passing checks: capped');
+  assert.equal(sc.data.recommendation, 'look');
+  assert.equal(sc.data.look[0].file, 'score.js');
+  assert.equal(sc.diffHash, (await call('GET', `/agents/${a.id}/changes`)).body.diffHash);
+  assert.match(sc.markdown, /^### Review scorecard: /);
+  // Into the PR description, and posted (then updated) as a comment.
+  const g = (...args) => execFileSync('git', ['-c', 'commit.gpgsign=false', '-c', 'user.email=t@t', '-c', 'user.name=t', ...args], { cwd: ready.workdir });
+  g('add', '.');
+  g('commit', '-q', '-m', 'Add score');
+  const ghState = path.join(home, 'fake-gh-score.json');
+  const ghLog = path.join(home, 'fake-gh-score.log');
+  const saved = { bin: process.env.AGENTMGR_GH_BIN, noGh: process.env.AGENTMGR_NO_GH, st: process.env.FAKE_GH_STATE, log: process.env.FAKE_GH_LOG };
+  Object.assign(process.env, { AGENTMGR_GH_BIN: path.join(here, 'fake-gh.js'), FAKE_GH_STATE: ghState, FAKE_GH_LOG: ghLog });
+  delete process.env.AGENTMGR_NO_GH;
+  try {
+    fs.writeFileSync(ghState, JSON.stringify({ prs: [] }));
+    assert.equal((await call('POST', `/agents/${a.id}/scorecard/post`)).status, 409, 'no pull request yet');
+    const opened = await call('POST', `/agents/${a.id}/changes/pr`, {});
+    assert.equal(opened.status, 200, JSON.stringify(opened.body));
+    const calls = () => fs.readFileSync(ghLog, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+    const create = calls().find((c) => c[1] === 'create');
+    const body = create[create.indexOf('--body') + 1];
+    assert.match(body, /### Review scorecard: [\s\S]*<sub>Scored before the latest changes\.<\/sub>[\s\S]*## Intent/, 'scored before the commit: marked as such');
+    assert.equal(create[create.indexOf('--title') + 1], 'Add score', 'title from the commit');
+    await call('POST', `/agents/${a.id}/refresh`, { withPrs: true });
+    await waitFor(async () => (await agentNow(a.id)).prs.some((p) => p.state === 'OPEN'), 8000, 'pr linked');
+    const p1 = await call('POST', `/agents/${a.id}/scorecard/post`);
+    assert.equal(p1.status, 200, JSON.stringify(p1.body));
+    assert.equal(p1.body.edited, false);
+    const p2 = await call('POST', `/agents/${a.id}/scorecard/post`);
+    assert.equal(p2.body.edited, true, 'posting again edits the comment');
+    const comments = calls().filter((c) => c[1] === 'comment');
+    assert.equal(comments.length, 2);
+    assert.ok(comments[1].includes('--edit-last'));
+  } finally {
+    for (const [k, v] of [['AGENTMGR_GH_BIN', saved.bin], ['AGENTMGR_NO_GH', saved.noGh], ['FAKE_GH_STATE', saved.st], ['FAKE_GH_LOG', saved.log]]) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  }
+  await call('DELETE', `/agents/${a.id}`);
+});
+
 test('project shortcuts: auto-assigned, "@cc"-style use fills the repo, rename, register ahead, backlog', async () => {
   const origin = makeOrigin('short-cut');
   const url = `file://${origin}`;

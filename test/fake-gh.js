@@ -49,6 +49,8 @@ if (group === 'pr' && cmd === 'list') {
   state.prs.push(pr);
   save();
   console.log(pr.url);
+} else if (group === 'pr' && cmd === 'comment') {
+  console.log(`${args[2]}#issuecomment-1`);
 } else {
   console.error(`fake gh: unsupported ${args.join(' ')}`);
   process.exit(1);

@@ -1189,3 +1189,42 @@ test('pr description: the intent in full, the spec and plan folded, their own he
   assert.match(out, /<details><summary><b>Spec<\/b><\/summary>\n\n### Requirements\n- a\n\n<\/details>/);
   assert.doesNotMatch(out, /Plan/, 'no plan written');
 });
+
+test('scorecard: facts measured, scores capped by them, spec scored from the criteria, recommendation by rule', async () => {
+  const { facts, combine, scorecardMarkdown } = await import('../src/scorecard.js');
+  const f = facts({
+    files: [{ path: 'src/a.js', added: 10, removed: 2 }, { path: 'README.md', added: 1, removed: 0 }],
+    prs: [{ state: 'OPEN', checks: { state: 'failed', failed: ['unit'] } }],
+    brief: { checks: [{ state: 'passed' }, { state: 'failed' }] },
+    plan: '## Steps\n- [x] one\n- [ ] two\n',
+    spec: '# Spec\n## Requirements\n- r\n## Acceptance criteria\n- returns 200\n- logs it\n## Out of scope\n- x\n',
+  });
+  assert.deepEqual({ files: f.files, code: f.codeFiles, tests: f.testFiles, ci: f.ci, plan: f.plan, criteria: f.criteria }, { files: 2, code: 1, tests: 0, ci: 'failed', plan: { steps: 2, done: 1 }, criteria: 2 });
+  const hunks = [{ id: 'H1', file: 'src/a.js', head: '@@ -1 +1 @@' }];
+  const reply = { summary: 'S', scores: { intent: { score: 90, why: 'does it' }, scope: { score: 95 }, plan: { score: 95 }, tests: { score: 90 }, safety: { score: 85 } }, criteria: [{ criterion: 'returns 200', status: 'met' }, { criterion: 'logs it', status: 'not_met' }], look: [{ id: 'H1', reason: 'auth' }, { id: 'H9' }] };
+  const sc = combine(reply, f, hunks);
+  assert.equal(sc.scores.tests.score, 30, 'failing CI caps tests');
+  assert.match(sc.scores.tests.notes[0], /CI is failing \(unit\)/);
+  assert.equal(sc.scores.plan.score, 70, 'plan bounded by ticks: 40 + 60 × 1/2');
+  assert.equal(sc.scores.spec.score, 50, 'met 1 + not met 0 of 2');
+  assert.equal(sc.recommendation, 'not_ready');
+  assert.deepEqual(sc.reasons, ['CI is failing', '1 acceptance criterion not met']);
+  assert.deepEqual(sc.look, [{ file: 'src/a.js', head: '@@ -1 +1 @@', reason: 'auth' }], 'unknown hunk dropped');
+  // All green: ready. Code without tests or passing checks: capped, so not ready to approve.
+  const green = facts({ files: [{ path: 'src/a.js' }, { path: 'test/a.test.js' }], prs: [{ state: 'OPEN', checks: { state: 'passed' } }] });
+  assert.equal(combine({ scores: { intent: { score: 90 }, scope: { score: 90 }, tests: { score: 85 }, safety: { score: 90 }, plan: { score: 85 } } }, green, []).recommendation, 'ready');
+  const bare = facts({ files: [{ path: 'src/a.js' }] });
+  const capped = combine({ scores: { intent: { score: 90 }, scope: { score: 90 }, tests: { score: 90 }, safety: { score: 90 } } }, bare, []);
+  assert.equal(capped.scores.tests.score, 45);
+  assert.equal(capped.recommendation, 'look');
+  assert.equal(capped.scores.spec, null, 'no spec, no spec score');
+  // A spec whose criteria weren't assessed: unverified, and so not "ready".
+  const specced = facts({ files: [{ path: 'src/a.js' }, { path: 'test/a.test.js' }], prs: [{ state: 'OPEN', checks: { state: 'passed' } }], spec: '## Acceptance criteria\n- a\n- b\n' });
+  const unassessed = combine({ scores: { intent: { score: 95 }, scope: { score: 95 }, tests: { score: 95 }, safety: { score: 95 } } }, specced, []);
+  assert.equal(unassessed.scores.spec.score, 50);
+  assert.equal(unassessed.recommendation, 'look');
+  const md = scorecardMarkdown(sc, 'x');
+  assert.match(md, /^### Review scorecard: x\n\n\*\*\d+\/100 · Not ready\*\* \(CI is failing; 1 acceptance criterion not met\)/);
+  assert.match(md, /\| Tests \| 30 \| .*CI is failing/);
+  assert.match(md, /- ❌ logs it/);
+});
