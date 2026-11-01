@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
+import { spawn } from 'node:child_process';
 import express from 'express';
 import { WebSocketServer } from 'ws';
 import { ensureHome, HOST, loadConfig, paths, PORT, saveConfig } from './config.js';
@@ -35,6 +36,8 @@ import * as remote from './remote.js';
 import * as service from './service.js';
 import { jiraView, saveJira } from './jira.js';
 import { CONTAINER_ENGINES, buildImage, claudeToken, dockerStatus, isBuilding, saveSecrets } from './container.js';
+import { AgentkitReports } from './agentkit-reports.js';
+import { Builder } from './builder.js';
 import { Store } from './store.js';
 import { about, latestRelease } from './about.js';
 
@@ -64,8 +67,9 @@ function isAllowedOrigin(origin, port) {
 const PUBLIC_REMOTE_API = new Set(['POST /api/login', 'GET /api/session']);
 // Updates are not here: a signed-in device (a phone) can install the newest release too. It only
 // ever installs an official release from where this copy came from (git tag or npm) and restarts.
-const LOCAL_ONLY_API = /^\/api\/(remote(\/|$)|notify(\/|$)|hub(\/|$)|triggers(\/|$)|service$|jira$|isolation\/|editors$|agents\/[\w-]+\/open-in$|shutdown$)/;
+const LOCAL_ONLY_API = /^\/api\/(remote(\/|$)|notify(\/|$)|hub(\/|$)|triggers(\/|$)|service$|jira$|isolation\/|editors$|agentkit\/connect$|agents\/[\w-]+\/open-in$|shutdown$)/;
 const HOOK_PATH = '/api/hooks/agents';
+const REPORT_PATH = '/api/agentkit/report';
 const NO_REPO_KINDS = new Set(['general', 'assistant']);
 
 export async function startServer({ port = PORT, host = HOST } = {}) {
@@ -162,6 +166,7 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
     return req.device ? null : 'Sign in required';
   }
 
+  const reports = new AgentkitReports();
   const app = express();
   app.disable('x-powered-by');
   app.use((req, res, next) => {
@@ -171,10 +176,14 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
     // The webhook signs in with its token instead of a device session or the client header.
     const bearer = /^Bearer (.+)$/i.exec(req.headers.authorization ?? '')?.[1];
     const hook = req.method === 'POST' && req.url.split('?')[0] === HOOK_PATH && tokenMatches(req.headers['x-agentmgr-token'] ?? bearer, config.triggers?.webhook?.enabled ? config.triggers.webhook.token : null);
+    // So do agents built with agentkit reporting in (from this computer or another one).
+    const reportPath = req.method === 'POST' && req.url.split('?')[0] === REPORT_PATH;
+    const reporting = reportPath && tokenMatches(bearer, reports.token);
     const why = denied(req);
-    if (why && !(hook && why === 'Sign in required')) return res.status(why === 'Sign in required' ? 401 : 403).json({ error: why });
+    if (why && !((hook || reporting) && why === 'Sign in required')) return res.status(why === 'Sign in required' ? 401 : 403).json({ error: why });
     if (req.url.split('?')[0] === HOOK_PATH && !hook) return res.status(401).json({ error: 'Bad or missing token' });
-    if (!hook && !['GET', 'HEAD'].includes(req.method) && req.headers[CLIENT_HEADER] !== '1') {
+    if (reportPath && !reporting) return res.status(401).json({ error: 'Bad or missing report token' });
+    if (!hook && !reporting && !['GET', 'HEAD'].includes(req.method) && req.headers[CLIENT_HEADER] !== '1') {
       return res.status(403).json({ error: `Missing ${CLIENT_HEADER} header` });
     }
     next();
@@ -516,6 +525,53 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
   api.get('/agents/:id/memory', wrap((req) => memory.read(req.params.id)));
   api.put('/agents/:id/memory', wrap((req) => memory.write(req.params.id, req.body?.text)));
   api.post('/agents/:id/learn', wrap((req) => memory.learn(req.params.id, req.body?.text, { by: req.headers['x-agentmgr-agent'] ? undefined : 'you' })));
+  // The agent builder (agentkit agents designed from a task): design, edit, test, run, download.
+  // Agents started here report to this daemon (runs, cost, approvals).
+  const builder = new Builder({ oneShot: (prompt) => manager.oneShot(null, prompt, { ...manager.writerFor({}), timeoutMs: 300_000 }), reportEnv: () => ({ AGENTKIT_REPORT_URL: `http://127.0.0.1:${port}`, AGENTKIT_REPORT_TOKEN: reports.reportToken() }) });
+  api.post('/agentkit/report', wrap((req) => reports.report(req.body ?? {})));
+  api.get('/agentkit/agents', wrap(() => reports.list()));
+  api.post('/agentkit/agents/:key/approvals/:id', wrap((req) => reports.decide(req.params.key, req.params.id, req.body?.allow === true, req.device ? `${req.device.name ?? 'a signed-in device'}` : 'you')));
+  api.delete('/agentkit/agents/:key', wrap((req) => reports.forget(req.params.key)));
+  // What an agent elsewhere needs to report here (this computer only: it shows the token).
+  api.get('/agentkit/connect', wrap(() => ({ token: reports.reportToken(), local: `http://127.0.0.1:${port}`, remote: remoteServer ? remote.remoteUrls(remotePort).map((u) => u.url) : [], cert: remoteServer ? remote.certificateFingerprint() : null })));
+  api.get('/builder', wrap(() => builder.list()));
+  api.post('/builder', wrap((req) => builder.design({ task: req.body?.task, engine: req.body?.engine || 'claude', attachments: req.body?.attachments?.length ? manager.stagedText(req.body.attachments) : [] })));
+  api.get('/builder/:name', wrap((req) => builder.view(req.params.name)));
+  api.put('/builder/:name', wrap((req) => builder.update(req.params.name, req.body ?? {})));
+  api.post('/builder/:name/test', wrap((req) => {
+    builder.test(req.params.name).catch(() => {}); // in the background; the view says when it's done
+    return new Promise((r) => setTimeout(() => r(builder.view(req.params.name)), 50));
+  }));
+  api.post('/builder/:name/package', wrap((req) => {
+    builder.package(req.params.name, req.body?.platform || undefined).catch(() => {}); // checks first, then builds in the background
+    return new Promise((r) => setTimeout(() => r(builder.view(req.params.name)), 50));
+  }));
+  api.get('/builder/:name/executable/:platform', (req, res) => {
+    let file;
+    try {
+      file = builder.executable(req.params.name, req.params.platform);
+    } catch (e) {
+      return res.status(e.status ?? 500).json({ error: e.message });
+    }
+    res.download(file, path.basename(file));
+  });
+  api.post('/builder/:name/start', wrap((req) => builder.start(req.params.name)));
+  api.post('/builder/:name/stop', wrap((req) => builder.stop(req.params.name)));
+  api.delete('/builder/:name', wrap((req) => builder.remove(req.params.name)));
+  // The agent's folder as a .tar.gz (its own files; not its runs, memory or log).
+  api.get('/builder/:name/download', (req, res) => {
+    let dir;
+    try {
+      dir = builder.view(req.params.name).dir;
+    } catch (e) {
+      return res.status(e.status ?? 500).json({ error: e.message });
+    }
+    res.setHeader('content-type', 'application/gzip');
+    res.setHeader('content-disposition', `attachment; filename="${req.params.name}.tar.gz"`);
+    const tar = spawn('tar', ['-czf', '-', '--exclude', '.agentkit', '--exclude', 'agent.log', '--exclude', 'build.json', '--exclude', 'work', '--exclude', 'dist', '-C', path.dirname(dir), path.basename(dir)]);
+    tar.stdout.pipe(res);
+    tar.on('error', () => res.end());
+  });
   // Isolation: Docker, the agent image, the Claude token for containers, and the default for new agents.
   let buildError = null;
   const isolationView = async () => ({ ...(await dockerStatus(config)), building: isBuilding(), buildError, hasClaudeToken: Boolean(claudeToken()), engines: [...CONTAINER_ENGINES], default: config.isolation?.default ?? null });
@@ -751,7 +807,7 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
   const eventSinks = new Set();
   api.get('/events/stream', (req, res) => {
     const send = sse(req, res);
-    send({ t: 'snapshot', agents: manager.list(), backlog: backlog.view(), projects: manager.listProjects(), races: races.list(), teams: teams.list() });
+    send({ t: 'snapshot', agents: manager.list(), backlog: backlog.view(), projects: manager.listProjects(), races: races.list(), teams: teams.list(), built: reports.list() });
     eventSinks.add(send);
     req.on('close', () => eventSinks.delete(send));
   });
@@ -844,6 +900,7 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
     for (const send of eventSinks) send(msg);
   };
   manager.on('change', (agent) => broadcast({ t: 'agent', agent }));
+  reports.on('change', () => broadcast({ t: 'built', reports: reports.list() }));
   manager.on('removed', (id) => {
     broadcast({ t: 'removed', id });
     live.closeAgent(id).catch(() => {});
@@ -880,7 +937,7 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
     const url = new URL(req.url, 'http://x');
     if (url.pathname === '/ws/events') {
       eventClients.add(ws);
-      ws.send(JSON.stringify({ t: 'snapshot', agents: manager.list(), backlog: backlog.view(), projects: manager.listProjects(), races: races.list(), teams: teams.list() }));
+      ws.send(JSON.stringify({ t: 'snapshot', agents: manager.list(), backlog: backlog.view(), projects: manager.listProjects(), races: races.list(), teams: teams.list(), built: reports.list() }));
       ws.on('close', () => eventClients.delete(ws));
       return;
     }
@@ -967,6 +1024,7 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
     updates.close();
     assistant.close();
     console.log(`[agentmgr] shutting down (${reason}); closing agents so their sessions are saved`);
+    builder.stopAll();
     await manager.stopAll({ final: true });
     await manager.flush().catch((err) => console.error(`[agentmgr] final flush failed: ${err.message}`));
     try {

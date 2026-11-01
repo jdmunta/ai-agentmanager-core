@@ -68,6 +68,17 @@ if (args.includes('-p')) {
       process.stdout.write('```json\n' + JSON.stringify(reply) + '\n```\n', () => process.exit(0));
       return;
     }
+    if (input.startsWith('You design an autonomous agent')) {
+      return json({
+        analysis: { problem: `Handle: ${section('task').slice(0, 40)}`, inputs: ['a ticket'], outputs: ['a label'], risks: ['wrong label'] },
+        name: 'Ticket Labeler', title: 'Ticket labeler', description: 'Labels tickets.',
+        goal: 'Every ticket gets one product-area label.',
+        instructions: '1. Read the ticket.\n2. Pick a label.',
+        tools: [], allow: ['Read'], approve: [], triggers: [{ webhook: '/hooks/ticket' }],
+        tests: [{ input: 'Login page crashes', expect: 'labelled auth' }, { input: 'Invoice total wrong', expect: 'labelled billing' }],
+      });
+    }
+    if (input.startsWith('You check one test of an autonomous agent')) return json({ pass: !section('input').includes('Invoice'), why: 'checked' });
     if (input.startsWith("You score an AI coding agent's changes")) {
       const ids = [...input.matchAll(/<hunk id="(H\d+)"/g)].map((m) => m[1]);
       return json({

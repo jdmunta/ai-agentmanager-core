@@ -1797,6 +1797,11 @@ export class AgentManager extends EventEmitter {
     return [String(intent ?? '').trim(), attachmentNote(files)].filter(Boolean).join('\n\n');
   }
 
+  /** Staged uploads as text, for a model to read (the builder's attachments): name and up to 100 KB each. */
+  stagedText(attachments) {
+    return stagedFiles(attachments).map((f) => ({ name: path.basename(f).replace(/^\d{4}-\d\d-\d\dT[\d-]+Z-[0-9a-f]{6}-/, ''), text: fs.readFileSync(f, 'utf8').slice(0, 100_000) }));
+  }
+
   /** A file attached before its agent exists (New agents, Ask); create() copies it to the agent. */
   stageUpload(name, data) {
     fs.mkdirSync(stagedDir(), { recursive: true });

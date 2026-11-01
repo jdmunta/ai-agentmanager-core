@@ -64,6 +64,7 @@
           <button class="side-tab" data-tab="inbox" role="tab" title="Everything waiting on you: prompts, questions, stuck agents, overlaps">Inbox <span id="inbox-count" class="badge"></span></button>
           <button class="side-tab" data-tab="backlog" role="tab">Backlog <span id="backlog-count" class="badge"></span></button>
           <button class="side-tab" data-tab="land" role="tab" title="Agents' open pull requests: what each needs to get merged">Land <span id="land-count" class="badge"></span></button>
+          <button class="side-tab" data-tab="built" role="tab" title="Agents you build for a task or workflow: they plan, act, check themselves and run in the background">Built <span id="built-count" class="badge"></span></button>
         </div>
         <div id="agents-view">
           <div class="counts" id="counts"></div>
@@ -79,6 +80,7 @@
         <div id="backlog-view" hidden></div>
         <div id="inbox-view" hidden></div>
         <div id="land-view" hidden></div>
+        <div id="built-view" hidden></div>
         <div id="empty" class="empty" hidden>
           <p>No agents yet.</p>
           <p>Add one or more intents and a repo or folder to get started.</p>
@@ -375,6 +377,25 @@
         <p id="login-error" class="error" hidden></p>
         <div class="dialog-actions"><button class="primary">Sign in</button></div>
       </form>
+    </dialog>
+
+    <dialog id="build-dialog">
+      <form id="build-form" method="dialog">
+        <h2>Build an agent</h2>
+        <p class="hint">Describe the task or workflow it takes over: what comes in, what it should do, what it must never do. It's designed for you to review (analysis, spec, test cases) before it runs.</p>
+        <label>Task or workflow
+          <textarea name="task" rows="8" required placeholder="Every morning, look at new support tickets in Jira, label each by product area, route it to the right team, and draft a first reply for a person to send. Never close or reply to tickets on its own."></textarea>
+        </label>
+        <div id="build-attach"></div>
+        <label>Engine <select name="engine"><option value="claude">Claude Code</option></select></label>
+        <p id="build-error" class="error" hidden></p>
+        <div class="dialog-actions"><button type="button" id="build-cancel" class="ghost">Cancel</button><button type="submit" class="primary">Design the agent</button></div>
+      </form>
+    </dialog>
+
+    <dialog id="built-dialog" class="doc-dialog">
+      <div class="doc-head"><h2 id="built-title"></h2><span class="spacer"></span><button type="button" id="built-close" class="small ghost">Close</button></div>
+      <div id="built-body" class="built-body"></div>
     </dialog>
 
     <dialog id="doc-dialog" class="doc-dialog">
