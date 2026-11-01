@@ -55,6 +55,36 @@ export function initMenu({ api, esc, toast, $ }) {
   const form = $('#settings-form');
   let service = null; // the login service as the dialog opened
   let jira = null; // the Jira settings as the dialog opened
+  let containers = null; // Docker and the agent image as the dialog opened
+  function showContainers() {
+    const c = containers;
+    $('#settings-containers').hidden = !c;
+    if (!c) return;
+    $('#settings-containers-state').textContent = !c.available
+      ? `Docker isn't running here${c.error ? ` (${c.error})` : ''}.`
+      : `Docker ${c.version} · image ${c.image}: ${c.building ? 'building…' : c.imageBuilt ? 'built' : 'not built yet'}${c.buildError ? ` (last build failed: ${c.buildError})` : ''} · Claude token ${c.hasClaudeToken ? 'set' : 'not set'}.`;
+    $('#containers-build').disabled = !c.available || c.building;
+    $('#containers-build').textContent = c.building ? 'Building…' : c.imageBuilt ? 'Rebuild image' : 'Build image';
+    form.containerDefault.disabled = !c.available;
+  }
+  $('#containers-build').onclick = async () => {
+    try {
+      containers = await api('POST', '/isolation/build');
+      showContainers();
+      toast('Building the agent image; it takes a few minutes the first time', 6000);
+      // Watch it finish.
+      const t = setInterval(async () => {
+        containers = await api('GET', '/isolation').catch(() => containers);
+        if (dialog.open) showContainers();
+        if (!containers?.building) {
+          clearInterval(t);
+          toast(containers?.imageBuilt && !containers.buildError ? 'Agent image built: agents can run in containers' : `Image build failed: ${containers?.buildError ?? 'see the daemon log'}`, 8000);
+        }
+      }, 5000);
+    } catch (err) {
+      toast(`Error: ${err.message}`, 6000);
+    }
+  };
   $('#settings-btn').onclick = async () => {
     $('#settings-error').hidden = true;
     try {
@@ -70,6 +100,11 @@ export function initMenu({ api, esc, toast, $ }) {
         form.jiraEmail.value = jira?.email ?? '';
         form.jiraToken.value = '';
         form.jiraToken.placeholder = jira?.hasToken ? 'saved (type to replace)' : '';
+        containers = await api('GET', '/isolation').catch(() => null);
+        showContainers();
+        form.claudeToken.value = '';
+        form.claudeToken.placeholder = containers?.hasClaudeToken ? 'saved (type to replace)' : 'from claude setup-token';
+        form.containerDefault.checked = containers?.default === 'container';
         service = await api('GET', '/service').catch(() => null);
         $('#settings-service').hidden = !service?.supported;
         form.startAtLogin.checked = Boolean(service?.installed);
@@ -95,6 +130,10 @@ export function initMenu({ api, esc, toast, $ }) {
       if (!remote() && jira && (form.jiraSite.value.trim() !== (jira.site ?? '') || form.jiraEmail.value.trim() !== (jira.email ?? '') || form.jiraToken.value.trim())) {
         await api('PUT', '/jira', { site: form.jiraSite.value.trim(), email: form.jiraEmail.value.trim(), token: form.jiraToken.value.trim() || undefined });
         toast('Jira saved; summaries for agents from Jira links are being fetched', 4000);
+      }
+      if (!remote() && containers?.available) {
+        if (form.claudeToken.value.trim()) await api('PUT', '/isolation/token', { token: form.claudeToken.value.trim() });
+        if (form.containerDefault.checked !== (containers.default === 'container')) await api('PUT', '/isolation/default', { container: form.containerDefault.checked });
       }
       // Only when it changed: installing touches launchd / systemd.
       if (!remote() && service?.supported && form.startAtLogin.checked !== Boolean(service.installed)) {

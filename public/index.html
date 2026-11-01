@@ -245,6 +245,10 @@
           <input type="checkbox" name="worktree" checked />
           Give each agent its own git worktree and branch <span class="hint">(for a git folder; always on when cloning a repo URL)</span>
         </label>
+        <label class="check" id="container-field" hidden title="The agent sees only its own folder, its git data, brief and uploads, not the rest of this computer. Claude Code and Codex">
+          <input type="checkbox" name="container" />
+          Run each agent in its own container <span class="hint" id="container-hint">(Docker: it sees only its own folder)</span>
+        </label>
         <label class="check">
           <input type="checkbox" name="plan" checked />
           Plan with Claude while the repo clones <span class="hint">(repo URLs only; the session moves into the repo when it's ready)</span>
@@ -722,6 +726,15 @@
           <label class="check"><input type="checkbox" name="startAtLogin" /> Start AI Agent Manager when I log in</label>
           <p class="hint">After a restart or a crash, the daemon comes back by itself and running agents resume; without it, it starts only when you run <code>agentmgr</code>. <span id="settings-service-state"></span></p>
         </fieldset>
+        <fieldset class="local-only" id="settings-containers">
+          <legend>Containers</legend>
+          <p class="hint">Agents in a container (Docker) see only their own folder, its git data, brief and uploads: not the rest of this computer. <span id="settings-containers-state"></span></p>
+          <div class="row">
+            <label>Claude token for containers <span class="hint">run <code>claude setup-token</code> in a terminal and paste it</span><input name="claudeToken" type="password" autocomplete="new-password" /></label>
+            <div class="containers-actions"><button type="button" class="small" id="containers-build">Build image</button></div>
+          </div>
+          <label class="check"><input type="checkbox" name="containerDefault" /> Run new agents in containers by default</label>
+        </fieldset>
         <fieldset class="local-only">
           <legend>Jira</legend>
           <p class="hint">For an agent created from a Jira link, its description shows the issue's summary. Public issues on Atlassian Cloud need nothing here; for your company's site, add it with your email and an <a href="https://id.atlassian.com/manage-profile/security/api-tokens" target="_blank" rel="noopener">API token</a>. The token is kept on this computer and sent only to that site.</p>
@@ -738,7 +751,7 @@
         </fieldset>
         <fieldset>
           <legend>More</legend>
-          <p class="hint settings-links"><button type="button" class="link" data-open="cleanup-btn">Clean up old agents</button> · <button type="button" class="link" data-open="spend-btn">Spend and budgets</button> · <button type="button" class="link local-only" data-open="alerts-btn">Slack alerts</button> · <button type="button" class="link local-only" data-open="remote-btn">Remote access</button></p>
+          <p class="hint settings-links"><button type="button" class="link" data-open="cleanup-btn">Clean up old agents</button><button type="button" class="link" data-open="spend-btn">Spend and budgets</button><button type="button" class="link local-only" data-open="alerts-btn">Slack alerts</button><button type="button" class="link local-only" data-open="remote-btn">Remote access</button></p>
         </fieldset>
         <p id="settings-error" class="error" hidden></p>
         <div class="dialog-actions">

@@ -102,6 +102,7 @@ import * as git from './git.js';
 import { parseDiff } from '../public/review.js';
 import { issueSummary, leadingIssue, wordsAfterLink } from './jira.js';
 import { combine, facts as scoreFacts, scorecardMarkdown, scorecardPrompt } from './scorecard.js';
+import { CONTAINER_ENGINES, claudeToken, containerName, containerRunning, engineMounts, gitCommonDir, removeContainer, runArgs, stopContainer } from './container.js';
 import { conflictMessage, findConflicts, related, repoKey, summarize as summarizeConflicts } from './conflicts.js';
 import { answerMessage, loadQuestions, questionsPath, questionsPrompt } from './inbox.js';
 import { STUCK_DEFAULTS, detectStuck } from './stuck.js';
@@ -594,6 +595,7 @@ export class AgentManager extends EventEmitter {
     startedBy,
     trigger,
     attachments,
+    isolation,
   }) {
     intent = (intent ?? '').trim();
     const staged = stagedFiles(attachments);
@@ -607,6 +609,12 @@ export class AgentManager extends EventEmitter {
     }
     // Planning while cloning moves the session between folders, which needs the engine's support.
     if (!engineDef.supports.planHandoff) plan = false;
+    // Isolation: "container" runs it in Docker (config "isolation": { "default": "container" } for all).
+    isolation = isolation === undefined ? this.config.isolation?.default ?? null : isolation || null;
+    if (isolation && isolation !== 'container') throw Object.assign(new Error('isolation is "container" or nothing'), { status: 400 });
+    if (isolation && !CONTAINER_ENGINES.has(engineId)) throw Object.assign(new Error(`${engineDef.label} can't run in a container yet (Claude Code and Codex can)`), { status: 400 });
+    // The session moves between folders mid-plan; a container is bound to one folder.
+    if (isolation) plan = false;
     const general = NO_REPO.has(kind);
     // A project shortcut (or name) fills in the repo / folder / base branch.
     const entry = !general && project ? this.resolveProject(project) : null;
@@ -639,6 +647,7 @@ export class AgentManager extends EventEmitter {
       priority: parsePriority(priority),
       ...(startedBy ? { startedBy } : {}),
       ...(trigger ? { trigger } : {}),
+      ...(isolation ? { isolation } : {}),
       name: name?.trim() || jiraKey || slug,
       slug,
       intent,
@@ -995,6 +1004,26 @@ export class AgentManager extends EventEmitter {
     return this.view(this.store.get(agent.id));
   }
 
+  /**
+   * `docker run` for an agent in a container (see container.js): its folder, its repository's git
+   * data, its brief and uploads, the engine's homes and sign-in; nothing else of this computer.
+   */
+  containerSpec(agent, engine, cwd, args) {
+    const name = containerName(agent.id);
+    removeContainer(name); // a leftover from a crash or a restart would block the name
+    const em = engineMounts(engine.id, cwd);
+    const real = (p) => (fs.existsSync(p) ? fs.realpathSync(p) : null);
+    const git = gitCommonDir(cwd);
+    // Plus any folders config.json adds ("isolation": { "mounts": [{ "host": "~/.npm", "readOnly": true }] }).
+    const extra = (this.config.isolation?.mounts ?? []).map((m) => ({ ...m, host: real(expandHome(m.host)) }));
+    const mounts = [...em.mounts, ...(git ? [{ host: git }] : []), { host: real(briefDir(agent.id)) }, { host: real(path.join(paths.uploads, agent.id)), readOnly: true }, ...extra].filter((m) => m.host);
+    const bin = this.config.isolation?.bin?.[engine.id] ?? em.bin;
+    const env = { ...this.childEnv(agent), ...(claudeToken() ? { CLAUDE_CODE_OAUTH_TOKEN: claudeToken() } : {}) };
+    // Variables passed in by name (values stay out of the command line): the engine's, plus config's "isolation.env".
+    const inner = ['TERM=xterm-256color', 'COLORTERM=truecolor', `AGENTMGR_AGENT_ID=${agent.id}`, 'AGENTMGR_TERMINAL=1', ...em.env, ...(this.config.isolation?.env ?? [])];
+    return { name, cmd: 'docker', env, args: runArgs({ agentId: agent.id, engineId: engine.id, cwd: fs.realpathSync(cwd), bin, args, config: this.config, mounts, env: inner }) };
+  }
+
   /** What every launch of this agent passes its engine: options, its brief folder, instructions. */
   launchOptions(agent, { planning = false } = {}) {
     const engine = engineOf(agent);
@@ -1098,19 +1127,23 @@ export class AgentManager extends EventEmitter {
       }
     }
 
-    if (!installed(engine, this.config)) {
+    // In a container the engine is inside the image, not on this computer.
+    const container = agent.isolation === 'container' && !NO_REPO.has(agent.kind);
+    if (!container && !installed(engine, this.config)) {
       const error = notInstalled(engine, this.config);
       this.patch(agent.id, { status: 'error', error });
       throw Object.assign(new Error(error), { status: 400 });
     }
     let proc;
     try {
-      proc = pty.spawn(engine.bin(this.config), args, {
+      const spec = container ? this.containerSpec(agent, engine, cwd, args) : { cmd: engine.bin(this.config), args, env: this.childEnv(agent) };
+      rt.container = spec.name ?? null;
+      proc = pty.spawn(spec.cmd, spec.args, {
         name: 'xterm-256color',
         cols: rt.cols,
         rows: rt.rows,
         cwd,
-        env: this.childEnv(agent),
+        env: spec.env,
       });
     } catch (err) {
       this.patch(agent.id, { status: 'error', error: `Failed to launch ${engine.bin(this.config)}: ${err.message}` });
@@ -1233,9 +1266,14 @@ export class AgentManager extends EventEmitter {
         done.dispose();
         resolve(this.view(this.store.get(agent.id) ?? agent));
       });
-      // A hangup, as when a terminal closes, unless the engine shuts down cleanly on another signal.
-      rt.pty.kill(engineOf(agent).stopSignal ?? 'SIGHUP');
-      rt.killTimer = setTimeout(() => rt.pty?.kill('SIGKILL'), timeoutMs);
+      // A container: docker stop (the engine gets SIGTERM inside; the docker command then ends).
+      // Otherwise a hangup, as when a terminal closes, unless the engine ends cleanly on another signal.
+      if (rt.container) stopContainer(rt.container, 10);
+      else rt.pty.kill(engineOf(agent).stopSignal ?? 'SIGHUP');
+      rt.killTimer = setTimeout(() => {
+        if (rt.container) removeContainer(rt.container);
+        rt.pty?.kill('SIGKILL');
+      }, timeoutMs);
     });
   }
 
@@ -1509,7 +1547,10 @@ export class AgentManager extends EventEmitter {
       rows: prev?.rows ?? 34,
     };
     if (rt.size) this.appendOutput(rt, '\r\n\x1b[2m── new shell ──\x1b[0m\r\n');
-    const proc = pty.spawn(this.config.shell, ['-l'], {
+    // An agent in a running container: the shell opens inside it, with what the agent sees.
+    const inside = agent.isolation === 'container' && containerRunning(containerName(agent.id));
+    const [cmd, cmdArgs] = inside ? ['docker', ['exec', '-it', '-w', fs.realpathSync(agent.workdir), containerName(agent.id), 'bash', '-l']] : [this.config.shell, ['-l']];
+    const proc = pty.spawn(cmd, cmdArgs, {
       name: 'xterm-256color',
       cols: rt.cols,
       rows: rt.rows,
@@ -2812,7 +2853,8 @@ export class AgentManager extends EventEmitter {
     const keys = { esc: '\x1b', enter: '\r', up: '\x1b[A', down: '\x1b[B' };
     const data = keys[key] ?? (/^\d$/.test(key) ? key : null);
     if (!data) throw Object.assign(new Error('Unsupported key'), { status: 400 });
-    this.write(agent.id, data);
+    // Menus that read a line (the ACP client's) take Enter after the choice.
+    this.write(agent.id, engineOf(agent).promptKeyEnter && key !== 'enter' ? `${data}\r` : data);
     return { ok: true };
   }
 

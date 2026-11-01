@@ -1,0 +1,22 @@
+# A cloud runner on any server with Docker: `docker compose -f docker/compose.runner.yml up -d`
+# from the repository root, with the variables below in a .env file next to it (see docs/cloud-runner.md).
+services:
+  runner:
+    build:
+      context: ..
+      dockerfile: docker/runner.Dockerfile
+    restart: unless-stopped
+    volumes:
+      - runner-data:/data
+    environment:
+      AGENTMGR_HUB_URL: ${AGENTMGR_HUB_URL}            # https://your-hub.example.com
+      AGENTMGR_HUB_CODE: ${AGENTMGR_HUB_CODE}          # the hub's runner token (or a one-time invite)
+      AGENTMGR_RUNNER_NAME: ${AGENTMGR_RUNNER_NAME:-cloud}
+      AGENTMGR_HUB_ALLOW: ${AGENTMGR_HUB_ALLOW:-view,control,move}
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN} # from `claude setup-token`
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}               # for Codex, if you use it
+      GH_TOKEN: ${GH_TOKEN}                              # clones, pushes and pull requests
+      GIT_USER_NAME: ${GIT_USER_NAME:-}
+      GIT_USER_EMAIL: ${GIT_USER_EMAIL:-}
+volumes:
+  runner-data:

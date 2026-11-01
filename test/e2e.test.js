@@ -24,11 +24,14 @@ process.env.CODEX_HOME = path.join(home, 'codex');
 process.env.FAKE_CODEX_LOG = path.join(home, 'fake-codex.log');
 process.env.ANTIGRAVITY_CLI_HOME = path.join(home, 'agy');
 process.env.FAKE_AGY_LOG = path.join(home, 'fake-agy.log');
+process.env.FAKE_ACP_DIR = path.join(home, 'fake-acp');
 fs.writeFileSync(
   path.join(home, 'config.json'),
   JSON.stringify({
     claudeBin: process.execPath,
     claudeArgs: [path.join(here, 'fake-claude.js')],
+    // An ACP agent (fake-acp.js) as the engine "acp-fake".
+    acp: { fake: { label: 'Fake ACP', command: [process.execPath, path.join(here, 'fake-acp.js')] } },
     gitRefreshSec: 1,
     conflictRefreshSec: 0,
     handoffIdleSec: 1,
@@ -1438,6 +1441,56 @@ test('scorecard: the changes scored, capped by what was measured, kept with the 
   await call('DELETE', `/agents/${a.id}`);
 });
 
+test('isolation: container agents are checked at creation and marked; the status says what is ready', async () => {
+  assert.equal((await call('POST', '/agents', { intent: 'x', isolation: 'vm', start: false })).status, 400);
+  assert.match((await call('POST', '/agents', { intent: 'x', isolation: 'container', engine: 'antigravity', start: false })).body.error, /can't run in a container yet/);
+  const [a] = (await call('POST', '/agents', { intent: 'Boxed', isolation: 'container', start: false })).body;
+  assert.equal(a.isolation, 'container');
+  const [b] = (await call('POST', '/agents', { intent: 'Not boxed', isolation: '', start: false })).body;
+  assert.equal(b.isolation, undefined);
+  const st = (await call('GET', '/isolation')).body;
+  assert.equal(typeof st.available, 'boolean');
+  assert.deepEqual(st.engines, ['claude', 'codex']);
+  assert.equal(st.hasClaudeToken, false);
+  // The backlog keeps the choice for when the item starts.
+  const [item] = (await call('POST', '/backlog', { items: ['Later, boxed'], isolation: 'container' })).body;
+  assert.equal(item.isolation, 'container');
+  await call('DELETE', `/agents/${a.id}`);
+  await call('DELETE', `/agents/${b.id}`);
+});
+
+test('ACP engines: an ACP agent runs in the terminal client, adopted, tracked, resumed, answered and explained', async () => {
+  const eng = (await call('GET', '/engines')).body;
+  const fake = eng.find((e) => e.id === 'acp-fake');
+  assert.deepEqual([fake.label, fake.installed], ['Fake ACP', true]);
+  assert.ok(eng.some((e) => e.id === 'acp-opencode'), 'presets offered (installed or not)');
+  const dir = fs.mkdtempSync(path.join(home, 'acp-work-'));
+  const [a] = (await call('POST', '/agents', { intent: 'Run the tests #perm', dir, engine: 'acp-fake' })).body;
+  // The client asks permission as a menu; the agent waits on it in the inbox, and the answer goes through.
+  const asking = await waitFor(async () => ((await agentNow(a.id)).runtime.attention ? agentNow(a.id) : null), 15000, 'permission prompt');
+  assert.equal(asking.runtime.attention, 'Permission prompt');
+  assert.deepEqual(asking.runtime.prompt.choices.map((c) => c.label), ['Allow once', 'Always allow', 'Reject']);
+  assert.equal((await call('POST', `/agents/${a.id}/prompt-key`, { key: '1' })).status, 200);
+  // The session ACP picked is adopted; its log gives the PR link, the prompt and stuck-detection events.
+  const done = await waitFor(async () => {
+    const x = await agentNow(a.id);
+    return x.sessionId.startsWith('fake-') && x.prs.some((p) => p.url.endsWith('/pull/7')) ? x : null;
+  }, 15000, 'adopted and scanned');
+  const log = path.join(home, 'acp', 'fake', `${done.sessionId}.jsonl`);
+  assert.ok(fs.readFileSync(log, 'utf8').includes('Your task:\\nRun the tests #perm'), 'the first message: instructions, then the task');
+  // Stop and resume: the same ACP session (session/load), with a message typed in.
+  await call('POST', `/agents/${a.id}/stop`);
+  await waitFor(async () => !(await agentNow(a.id)).runtime.running, 8000, 'stopped');
+  await call('POST', `/agents/${a.id}/tell`, { text: 'and again' });
+  await waitFor(() => fs.existsSync(log) && fs.readFileSync(log, 'utf8').includes('"text":"and again"'), 15000, 'resumed and told');
+  assert.equal((await agentNow(a.id)).sessionId, done.sessionId, 'same session');
+  // Explain reads the ACP log through the one-shot client.
+  const ex = await call('POST', `/agents/${a.id}/explain`);
+  assert.equal(ex.status, 200, JSON.stringify(ex.body));
+  await call('POST', `/agents/${a.id}/stop`);
+  await call('DELETE', `/agents/${a.id}`);
+});
+
 test('project shortcuts: auto-assigned, "@cc"-style use fills the repo, rename, register ahead, backlog', async () => {
   const origin = makeOrigin('short-cut');
   const url = `file://${origin}`;
@@ -2401,6 +2454,18 @@ test('hub: invite, join, fleet view, signed reconnects, forged runners refused, 
 
   // Codes work once.
   assert.equal((await hubCall('POST', '/join', { code: inv.code, name: 'x', publicKey: 'x' })).status, 401);
+  // The runner token (cloud runners joining by themselves) is reusable; a short or wrong one is not a code.
+  const { publicKey: pk } = (await import('node:crypto')).generateKeyPairSync('ed25519', { publicKeyEncoding: { type: 'spki', format: 'pem' } });
+  process.env.AGENTMGR_HUB_RUNNER_TOKEN = 'r'.repeat(32);
+  try {
+    for (const n of ['cloud-a', 'cloud-b']) assert.equal((await hubCall('POST', '/join', { code: 'r'.repeat(32), name: n, publicKey: pk })).status, 200, `${n} joins with the token`);
+    assert.equal((await hubCall('POST', '/join', { code: 'r'.repeat(31), name: 'x', publicKey: pk })).status, 401);
+    process.env.AGENTMGR_HUB_RUNNER_TOKEN = 'short';
+    assert.equal((await hubCall('POST', '/join', { code: 'short', name: 'x', publicKey: pk })).status, 401, 'too short to count as a token');
+  } finally {
+    delete process.env.AGENTMGR_HUB_RUNNER_TOKEN;
+  }
+  for (const r of Object.values(hub.store.data.runners).filter((x) => x.name.startsWith('cloud-'))) delete hub.store.data.runners[r.id];
 
   // Someone who knows a runner ID but not its key is refused.
   const forged = await new Promise((resolve) => {

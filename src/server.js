@@ -25,7 +25,7 @@ import { Studio } from './studio.js';
 import { Memory } from './memory.js';
 import { doctor } from './doctor.js';
 import { Triggers, tokenMatches } from './triggers.js';
-import { listEngines, registerEngine } from './engines/index.js';
+import { listEngines, registerAcpEngines, registerEngine } from './engines/index.js';
 import { Plugins, pluginSpecs } from './plugins.js';
 import { HubLink, linkUrls } from './hublink.js';
 import { Notifier, isWorkflowUrl, loadNotify, publicNotify, saveNotify, sendSlack } from './notify.js';
@@ -34,6 +34,7 @@ import { LiveBrowser } from './livebrowser.js';
 import * as remote from './remote.js';
 import * as service from './service.js';
 import { jiraView, saveJira } from './jira.js';
+import { CONTAINER_ENGINES, buildImage, claudeToken, dockerStatus, isBuilding, saveSecrets } from './container.js';
 import { Store } from './store.js';
 import { about, latestRelease } from './about.js';
 
@@ -63,7 +64,7 @@ function isAllowedOrigin(origin, port) {
 const PUBLIC_REMOTE_API = new Set(['POST /api/login', 'GET /api/session']);
 // Updates are not here: a signed-in device (a phone) can install the newest release too. It only
 // ever installs an official release from where this copy came from (git tag or npm) and restarts.
-const LOCAL_ONLY_API = /^\/api\/(remote(\/|$)|notify(\/|$)|hub(\/|$)|triggers(\/|$)|service$|jira$|editors$|agents\/[\w-]+\/open-in$|shutdown$)/;
+const LOCAL_ONLY_API = /^\/api\/(remote(\/|$)|notify(\/|$)|hub(\/|$)|triggers(\/|$)|service$|jira$|isolation\/|editors$|agents\/[\w-]+\/open-in$|shutdown$)/;
 const HOOK_PATH = '/api/hooks/agents';
 const NO_REPO_KINDS = new Set(['general', 'assistant']);
 
@@ -73,6 +74,8 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
   const store = new Store(paths.state);
   const plugins = await new Plugins({ log: (m) => console.log(`[agentmgr] ${m}`) }).load(pluginSpecs(config), { config, base: paths.home });
   for (const { def } of plugins.engines) registerEngine(def);
+  // ACP agents (Gemini CLI, OpenCode, Goose, … and config's "acp") become engines.
+  registerAcpEngines(config);
   const manager = new AgentManager({ store, config, plugins });
   const backlog = new Backlog({ manager, store, config });
   const races = new Races({ manager, store });
@@ -513,6 +516,28 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
   api.get('/agents/:id/memory', wrap((req) => memory.read(req.params.id)));
   api.put('/agents/:id/memory', wrap((req) => memory.write(req.params.id, req.body?.text)));
   api.post('/agents/:id/learn', wrap((req) => memory.learn(req.params.id, req.body?.text, { by: req.headers['x-agentmgr-agent'] ? undefined : 'you' })));
+  // Isolation: Docker, the agent image, the Claude token for containers, and the default for new agents.
+  let buildError = null;
+  const isolationView = async () => ({ ...(await dockerStatus(config)), building: isBuilding(), buildError, hasClaudeToken: Boolean(claudeToken()), engines: [...CONTAINER_ENGINES], default: config.isolation?.default ?? null });
+  api.get('/isolation', wrap(isolationView));
+  api.post(
+    '/isolation/build',
+    wrap(async () => {
+      buildError = null;
+      buildImage(config).catch((err) => (buildError = err.message));
+      return isolationView();
+    }),
+  );
+  api.put('/isolation/token', wrap(async (req) => (saveSecrets({ claudeOauthToken: String(req.body?.token ?? '').trim() || null }), isolationView())));
+  api.put(
+    '/isolation/default',
+    wrap(async (req) => {
+      const value = req.body?.container ? 'container' : null;
+      config.isolation = { ...config.isolation, default: value };
+      saveConfig({ isolation: config.isolation });
+      return isolationView();
+    }),
+  );
   // Jira: the site and API token used to show an issue's summary for agents created from its link.
   api.get('/jira', wrap(() => jiraView()));
   api.put(
@@ -971,6 +996,14 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
   }
   manager.refreshAll().catch(() => {});
   hubLink.start();
+  // A cloud runner joins its hub by itself on first start (AGENTMGR_HUB_URL and AGENTMGR_HUB_CODE: an
+  // invite, or the hub's runner token), and stays joined across restarts (the link is kept on disk).
+  if (process.env.AGENTMGR_HUB_URL && process.env.AGENTMGR_HUB_CODE && !hubLink.status().joined) {
+    hubLink
+      .join(process.env.AGENTMGR_HUB_URL, process.env.AGENTMGR_HUB_CODE, process.env.AGENTMGR_RUNNER_NAME || undefined)
+      .then((st) => console.log(`[agentmgr] joined the hub ${st.url} as ${st.name}`))
+      .catch((err) => console.error(`[agentmgr] could not join the hub ${process.env.AGENTMGR_HUB_URL}: ${err.message}`));
+  }
   return {
     hubLink,
     server,

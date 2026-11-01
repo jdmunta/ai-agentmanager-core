@@ -16,9 +16,8 @@ export function claudeConfigFile() {
  * before writing, only written when something changes, and replaced atomically.
  * Returns true if it changed anything.
  */
-export function trustFolder(dir) {
+export function trustFolder(dir, file = claudeConfigFile()) {
   const real = fs.realpathSync(dir);
-  const file = claudeConfigFile();
   let raw = '{}';
   try {
     raw = fs.readFileSync(file, 'utf8');

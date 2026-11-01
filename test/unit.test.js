@@ -1228,3 +1228,41 @@ test('scorecard: facts measured, scores capped by them, spec scored from the cri
   assert.match(md, /\| Tests \| 30 \| .*CI is failing/);
   assert.match(md, /- ❌ logs it/);
 });
+
+test('containers: docker run arguments, the worktree git folder, engine homes and sign-in', async () => {
+  const { runArgs, gitCommonDir, containerName } = await import('../src/container.js');
+  const args = runArgs({ agentId: 'a1', engineId: 'claude', cwd: '/w/repo', bin: 'claude', args: ['--resume', 'S'], config: { isolation: { cpus: 2, memory: '4g' } }, mounts: [{ host: '/w/repo' }, { host: '/g/.git' }, { host: '/u', readOnly: true }], env: ['TERM=xterm-256color', 'CLAUDE_CODE_OAUTH_TOKEN'], user: '501:20' });
+  assert.deepEqual(args, ['run', '--rm', '-i', '-t', '--init', '--name', 'agentmgr-a1', '--label', 'agentmgr.agent=a1', '-w', '/w/repo', '--user', '501:20', '--cpus', '2', '--memory', '4g', '-v', '/w/repo:/w/repo', '-v', '/g/.git:/g/.git', '-v', '/u:/u:ro', '-e', 'TERM=xterm-256color', '-e', 'CLAUDE_CODE_OAUTH_TOKEN', 'ai-agentmanager-agent:1', 'claude', '--resume', 'S']);
+  assert.ok(!args.some((x) => /sk-|token=/i.test(x)), 'secrets go by name, not value');
+  assert.equal(containerName('a1'), 'agentmgr-a1');
+  // A worktree's .git file points into the main repository; that folder is what to mount.
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'wt-'));
+  const repo = path.join(tmp, 'repo');
+  execFileSync('git', ['init', '-q', '-b', 'main', repo]);
+  execFileSync('git', ['-C', repo, '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '--allow-empty', '-m', 'x']);
+  execFileSync('git', ['-C', repo, 'worktree', 'add', '-q', path.join(tmp, 'wt'), '-b', 'b']);
+  assert.equal(gitCommonDir(path.join(tmp, 'wt')), fs.realpathSync(path.join(repo, '.git')));
+  assert.equal(gitCommonDir(repo), null, 'a plain clone needs nothing more');
+});
+
+test('cloud runners: plain http to a hub only where it is safe or vouched for; permissions from the environment', async () => {
+  const { checkHubUrl } = await import('../src/fleet.js');
+  const { hubPolicy } = await import('../src/hublink.js');
+  assert.equal(checkHubUrl('https://hub.example.com/x', {}), 'https://hub.example.com');
+  assert.equal(checkHubUrl('http://127.0.0.1:4720', {}), 'http://127.0.0.1:4720');
+  assert.throws(() => checkHubUrl('http://hub:4720', {}), /AGENTMGR_HUB_ALLOW_HTTP/);
+  assert.equal(checkHubUrl('http://hub:4720', { AGENTMGR_HUB_ALLOW_HTTP: '1' }), 'http://hub:4720', 'a private network you vouch for');
+  assert.deepEqual(hubPolicy({ hub: { allow: ['view'] } }, { AGENTMGR_HUB_ALLOW: 'view, control,move' }).allow, ['view', 'control', 'move']);
+  assert.deepEqual(hubPolicy({ hub: { allow: ['view'] } }, {}).allow, ['view']);
+});
+
+test('prompt choices: a menu drawn as one run of text (newer Claude Code) is still read', async () => {
+  const { promptChoices } = await import('../src/inbox.js');
+  const squished = "E╌╌╌╌ Avariableinthiscommandcan'tbecheckedbeforeitruns Doyouwanttoproceed? ❯ 1. Yes 2. Yes,andswitchtoautomode · auto mode handles these prompts for you 3. No Esc to cancel · Tab to amend───── add-a-subtract";
+  assert.deepEqual(promptChoices(squished), {
+    question: "Avariableinthiscommandcan'tbecheckedbeforeitruns Doyouwanttoproceed?",
+    choices: [{ key: '1', label: 'Yes' }, { key: '2', label: 'Yes,andswitchtoautomode' }, { key: '3', label: 'No' }],
+  });
+  // The usual one-per-line menu is read as before.
+  assert.deepEqual(promptChoices('Do you want to make this edit?\n❯ 1. Yes\n  2. Yes, allow all edits\n  3. No\n').choices.length, 3);
+});

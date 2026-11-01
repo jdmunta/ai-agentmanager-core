@@ -85,13 +85,13 @@ Runs on macOS and Linux; on Windows, use WSL2. Requires Node 20+, `git`, and the
 
 ```sh
 npm install -g ai-agentmanager          # the latest release
-npm install -g ai-agentmanager@1.10.0    # or a specific one
+npm install -g ai-agentmanager@1.11.0    # or a specific one
 ```
 
 Or from the repository, at a release tag:
 
 ```sh
-git clone --branch v1.10.0 --depth 1 https://github.com/jdmunta/ai-agentmanager-core.git
+git clone --branch v1.11.0 --depth 1 https://github.com/jdmunta/ai-agentmanager-core.git
 cd ai-agentmanager-core
 npm install
 npm link            # optional: puts `agentmgr` on your PATH
@@ -111,7 +111,7 @@ npm link
 | Installed with | Update |
 | --- | --- |
 | npm | `npm install -g ai-agentmanager@latest` |
-| A clone at a release tag | `git fetch --tags && git checkout v1.10.0 && npm install` (the tag you want) |
+| A clone at a release tag | `git fetch --tags && git checkout v1.11.0 && npm install` (the tag you want) |
 | A clone of `main` | `git pull && npm install` |
 
 **Check your setup.** `agentmgr doctor` checks Node.js, Claude Code and its sign-in, git, `gh`, the data folder, the daemon's port and Chrome, and says how to fix anything missing.
@@ -739,6 +739,27 @@ Google's **Antigravity CLI** (`agy`, signed in with your Google account) works t
 
 Meta's **Muse Code** (`muse`, installed with `curl -fsSL https://dev.meta.ai/install.sh | bash` and signed in with `muse login`) works the same way: `--engine muse`. AI Agent Manager adopts the session Muse starts, resumes it with `muse resume` (a message for a resumed session is typed once Muse is idle), trusts the agent's folder for each run with `--trust-workspace` instead of saving it, reads the conversation and token usage from Muse's session log, shows its trust and approval questions in the inbox, stops it cleanly with SIGTERM, and runs Explain with `muse exec` in the read-only profile. Commands and edits aren't read from its log yet, so stuck detection has less to go on for Muse agents. When Muse runs in contributor mode (an account without a plan), the engine picker says so: Meta may use your code and conversations to improve its products. `engines.muse.bin` points at another binary, and `engines.muse.args` adds arguments to every run.
 
+## Agents in containers
+
+For isolation, an agent can run in its own Docker container: it sees only its own folder (mounted at the same path), its repository's git data, its brief and its uploads, and nothing else on the computer. Everything else works as usual: sessions, resume, tracking and usage, the inbox, **Open shell** (which opens inside the container), stop and restart.
+
+1. Start Docker (Docker Desktop, OrbStack or Colima).
+2. **☰ → Settings → Containers → Build image** (or `agentmgr sandbox build`): Node, git, ripgrep, Claude Code and Codex, from `docker/agent.Dockerfile`. About a minute.
+3. For Claude Code, run `claude setup-token` in a terminal and paste the token in **Settings → Containers** (or `agentmgr sandbox token <token>`); it's kept in `~/.agentmanager/secrets.json`, readable only by you. Codex uses its own `auth.json`, read-only.
+4. Tick **Run each agent in its own container** in New agents (`agentmgr add --container`), or make it the default in Settings.
+
+Claude Code and Codex can run in containers; Antigravity and Muse Code ship macOS-only programs. Files are written as your user. Limits and extras go in config.json: `"isolation": { "cpus": 2, "memory": "4g", "network": "none", "mounts": [{ "host": "~/.npm", "readOnly": true }], "env": ["NPM_TOKEN"] }` (variables are passed by name, so their values stay out of command lines). `agentmgr sandbox status` shows what's ready.
+
+## ACP agents
+
+Any agent that speaks [ACP](https://agentclientprotocol.com) (the Agent Client Protocol) works as an engine. Gemini CLI, OpenCode, Goose and Qwen Code show in the Engine picker once installed (and signed in once in a terminal); add others in config.json:
+
+```json
+"acp": { "myagent": { "command": ["myagent", "acp"], "label": "My Agent" } }
+```
+
+That adds the engine `acp-myagent` (`agentmgr add --engine acp-myagent …`); `"opencode": false` hides a preset. ACP agents have no screen of their own, so AI Agent Manager runs a small terminal client in the agent's terminal: it shows the agent's messages, tool calls and plan, sends what you type as prompts (Ctrl+C cancels the turn), asks permission as a numbered menu that the inbox can answer (**Bypass** allows by itself), writes files only inside the agent's folder and brief, resumes sessions the agent can load, and keeps a log in `~/.agentmanager/acp/<name>/` that drives usage, PR links, stuck detection and Explain.
+
 ## Several machines: the hub
 
 With agents on more than one Mac, a **hub** shows all of them in one place: every machine's agents and one inbox of what needs you. Where a machine allows it, you can also act from the hub: answer, message, start and stop agents, start new ones, and open live terminals. Each Mac keeps running its own daemon. It connects out to the hub, so no ports need opening on it, and the hub's requests travel back over that same connection.
@@ -808,6 +829,8 @@ The conversation passes through the hub in pieces, in memory only for the move, 
 **Signing in to the hub.** The hub has one access token: `AGENTMGR_HUB_TOKEN`, or one it generates and prints as a sign-in link (`agentmgr hub token` shows it again). Browsers get a 30-day session cookie. The CLI sends the token: on the hub's own Mac it is read from the hub's state, elsewhere set `AGENTMGR_HUB_TOKEN` and `AGENTMGR_HUB_URL`, or rely on the hub this Mac joined.
 
 **On Railway.** `hub/Dockerfile` builds the hub alone, with no node-pty and no Claude. Set `RAILWAY_DOCKERFILE_PATH=hub/Dockerfile`, `AGENTMGR_HUB_TOKEN`, `AGENTMGR_HUB_URL` (its https address) and, for Google sign-in, the three variables above; add a volume at `/data` so enrollments survive redeploys, and join with the `https://…up.railway.app` address.
+
+**Cloud runners.** For agents that keep working with your laptop closed, run AI Agent Manager on a server (Railway, any VM with Docker) as a runner joined to your hub, and Move agents to it: see [docs/cloud-runner.md](docs/cloud-runner.md).
 
 ## Assistant
 
