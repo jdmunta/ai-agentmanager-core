@@ -1266,3 +1266,11 @@ test('prompt choices: a menu drawn as one run of text (newer Claude Code) is sti
   // The usual one-per-line menu is read as before.
   assert.deepEqual(promptChoices('Do you want to make this edit?\n❯ 1. Yes\n  2. Yes, allow all edits\n  3. No\n').choices.length, 3);
 });
+
+test('terminal copy on phones: the buffer as plain text, wrapped lines joined, trailing blanks dropped', async () => {
+  const { terminalText } = await import('../public/termclip.js');
+  const rows = [['$ npm test', false], ['PASS a very long line that wr', false], ['apped here', true], ['', false], ['', false]];
+  const xterm = { buffer: { active: { length: rows.length, getLine: (i) => ({ isWrapped: rows[i][1], translateToString: () => rows[i][0] }) } } };
+  assert.equal(terminalText(xterm), '$ npm test\nPASS a very long line that wrapped here');
+  assert.equal(terminalText(xterm, 4), 'PASS a very long line that wrapped here', 'only the last lines');
+});

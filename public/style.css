@@ -940,3 +940,12 @@ form.dropping { outline: 2px dashed var(--accent, #6b8cff); outline-offset: 4px;
 /* Settings → More: separators belong to the links, so hidden (local-only) ones leave none behind. */
 .settings-links button + button::before { content: '·'; display: inline-block; margin: 0 8px; color: var(--muted); }
 body.remote .settings-links .local-only { display: none; }
+
+/* Copy / Paste sheets for terminals on touch screens. */
+.clip-sheet { width: min(760px, calc(100vw - 16px)); max-height: calc(100vh - 32px); padding: 0; display: flex; flex-direction: column; }
+.clip-sheet:not([open]) { display: none; }
+.clip-head { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+.clip-text { margin: 0; padding: 10px 12px; overflow: auto; flex: 1; min-height: 200px; max-height: 70vh; font: 12px/1.45 var(--mono, ui-monospace, monospace); white-space: pre-wrap; word-break: break-word; -webkit-user-select: text; user-select: text; background: var(--term-bg); color: #e6edf3; }
+.clip-box { margin: 10px 12px; width: calc(100% - 24px); font: 13px var(--mono, ui-monospace, monospace); }
+.clip-foot { display: flex; align-items: center; gap: 8px; padding: 0 12px 12px; }
+.clip-foot .hint { flex: 1; }
