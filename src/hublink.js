@@ -47,10 +47,12 @@ export function audit(line) {
   } catch {}
 }
 
-export function hubPolicy(config) {
+export function hubPolicy(config, env = process.env) {
   const h = config.hub ?? {};
+  // A cloud runner sets it in its environment (AGENTMGR_HUB_ALLOW=view,control,move): no config file to edit.
+  const fromEnv = env.AGENTMGR_HUB_ALLOW ? env.AGENTMGR_HUB_ALLOW.split(/[\s,]+/).filter(Boolean) : null;
   return {
-    allow: Array.isArray(h.allow) ? h.allow.map(String) : DEFAULT_HUB_POLICY.allow,
+    allow: fromEnv ?? (Array.isArray(h.allow) ? h.allow.map(String) : DEFAULT_HUB_POLICY.allow),
     projects: Array.isArray(h.projects) && h.projects.length ? h.projects.map(String) : DEFAULT_HUB_POLICY.projects,
   };
 }

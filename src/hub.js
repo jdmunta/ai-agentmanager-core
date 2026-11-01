@@ -61,6 +61,12 @@ function newCode() {
   const chars = [...bytes].map((b) => CODE_ALPHABET[b % CODE_ALPHABET.length]).join('');
   return chars.match(/.{4}/g).join('-');
 }
+/** Constant-time comparison of two strings (different lengths are simply unequal). */
+const safeEqual = (a, b) => {
+  const x = Buffer.from(String(a));
+  const y = Buffer.from(String(b));
+  return x.length === y.length && crypto.timingSafeEqual(x, y);
+};
 const normalizeCode = (c) => String(c ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 
 /** Google sign-in settings from the environment, or null when not configured. */
@@ -459,7 +465,11 @@ export async function startHub({
       if (!loginAllowed(req.ip)) throw fail(429, 'Too many attempts; try again in 15 minutes');
       const key = sha256(normalizeCode(req.body?.code));
       const invite = store.data.invites[key];
-      if (!invite || Date.parse(invite.expiresAt) < Date.now()) {
+      // The runner token (AGENTMGR_HUB_RUNNER_TOKEN): a reusable secret for machines that join by
+      // themselves, such as cloud runners; compared in constant time, and failures count like any.
+      const token = process.env.AGENTMGR_HUB_RUNNER_TOKEN;
+      const viaToken = Boolean(token && token.length >= 24 && safeEqual(String(req.body?.code ?? ''), token));
+      if (!viaToken && (!invite || Date.parse(invite.expiresAt) < Date.now())) {
         loginFailed(req.ip);
         throw fail(401, 'Invite code is wrong, used or expired; create a new one on the hub');
       }
@@ -471,7 +481,7 @@ export async function startHub({
       } catch {
         throw fail(400, 'publicKey must be an Ed25519 public key (PEM)');
       }
-      delete store.data.invites[key]; // single use
+      if (!viaToken) delete store.data.invites[key]; // single use
       const base = String(req.body?.name ?? '').toLowerCase().replace(/[^\w.-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 32) || 'machine';
       const taken = new Set(Object.values(store.data.runners).map((r) => r.name));
       let runnerName = base;
@@ -479,7 +489,7 @@ export async function startHub({
       const id = crypto.randomBytes(4).toString('hex');
       store.data.runners[id] = { id, name: runnerName, publicKey, enrolledAt: now(), lastSeen: null, version: String(req.body?.version ?? '').slice(0, 20) || null };
       store.save();
-      log(`runner ${runnerName} (${id}) joined from ${req.ip}`);
+      log(`runner ${runnerName} (${id}) joined from ${req.ip}${viaToken ? ' with the runner token' : ''}`);
       changed();
       return { runnerId: id, name: runnerName, hubName: name };
     }),

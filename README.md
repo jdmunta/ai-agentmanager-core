@@ -830,6 +830,8 @@ The conversation passes through the hub in pieces, in memory only for the move, 
 
 **On Railway.** `hub/Dockerfile` builds the hub alone, with no node-pty and no Claude. Set `RAILWAY_DOCKERFILE_PATH=hub/Dockerfile`, `AGENTMGR_HUB_TOKEN`, `AGENTMGR_HUB_URL` (its https address) and, for Google sign-in, the three variables above; add a volume at `/data` so enrollments survive redeploys, and join with the `https://…up.railway.app` address.
 
+**Cloud runners.** For agents that keep working with your laptop closed, run AI Agent Manager on a server (Railway, any VM with Docker) as a runner joined to your hub, and Move agents to it: see [docs/cloud-runner.md](docs/cloud-runner.md).
+
 ## Assistant
 
 An always-on Claude session that works on your behalf. **Assistant** in the top bar (or `agentmgr assistant start`) sets it up. Every 15 minutes the daemon asks it to check for new work, and it starts an agent for each new item, or passes the news to the agent already on it. You don't approve each one; it tells you in its activity log and, with Slack alerts on, in Slack.

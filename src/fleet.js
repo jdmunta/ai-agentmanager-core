@@ -158,19 +158,20 @@ export const isLoopback = (h) => ['127.0.0.1', 'localhost', '[::1]', '::1'].incl
 
 /**
  * Hub URLs a runner accepts: https anywhere; plain http only on this machine or over
- * Tailscale, which already encrypts the traffic.
+ * Tailscale, which already encrypts the traffic, or on a private network you vouch for
+ * (AGENTMGR_HUB_ALLOW_HTTP=1: a hub and runners in one docker-compose or VPC).
  */
-export function checkHubUrl(raw) {
+export function checkHubUrl(raw, env = process.env) {
   let u;
   try {
     u = new URL(String(raw ?? '').trim());
   } catch {
     throw Object.assign(new Error('Hub URL must look like https://hub.example.com'), { status: 400 });
   }
-  if (u.protocol === 'https:' || (u.protocol === 'http:' && (isLoopback(u.hostname) || isTailscaleHost(u.hostname)))) {
+  if (u.protocol === 'https:' || (u.protocol === 'http:' && (isLoopback(u.hostname) || isTailscaleHost(u.hostname) || env.AGENTMGR_HUB_ALLOW_HTTP === '1'))) {
     return u.origin;
   }
-  throw Object.assign(new Error('Use https:// for the hub (plain http only for localhost or a Tailscale address)'), { status: 400 });
+  throw Object.assign(new Error('Use https:// for the hub (plain http only for localhost, a Tailscale address, or a private network with AGENTMGR_HUB_ALLOW_HTTP=1)'), { status: 400 });
 }
 
 /** Signed by the runner's key on every connection, so the hub knows which runner it is. */

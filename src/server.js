@@ -996,6 +996,14 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
   }
   manager.refreshAll().catch(() => {});
   hubLink.start();
+  // A cloud runner joins its hub by itself on first start (AGENTMGR_HUB_URL and AGENTMGR_HUB_CODE: an
+  // invite, or the hub's runner token), and stays joined across restarts (the link is kept on disk).
+  if (process.env.AGENTMGR_HUB_URL && process.env.AGENTMGR_HUB_CODE && !hubLink.status().joined) {
+    hubLink
+      .join(process.env.AGENTMGR_HUB_URL, process.env.AGENTMGR_HUB_CODE, process.env.AGENTMGR_RUNNER_NAME || undefined)
+      .then((st) => console.log(`[agentmgr] joined the hub ${st.url} as ${st.name}`))
+      .catch((err) => console.error(`[agentmgr] could not join the hub ${process.env.AGENTMGR_HUB_URL}: ${err.message}`));
+  }
   return {
     hubLink,
     server,

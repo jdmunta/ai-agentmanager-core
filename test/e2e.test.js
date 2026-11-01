@@ -2454,6 +2454,18 @@ test('hub: invite, join, fleet view, signed reconnects, forged runners refused, 
 
   // Codes work once.
   assert.equal((await hubCall('POST', '/join', { code: inv.code, name: 'x', publicKey: 'x' })).status, 401);
+  // The runner token (cloud runners joining by themselves) is reusable; a short or wrong one is not a code.
+  const { publicKey: pk } = (await import('node:crypto')).generateKeyPairSync('ed25519', { publicKeyEncoding: { type: 'spki', format: 'pem' } });
+  process.env.AGENTMGR_HUB_RUNNER_TOKEN = 'r'.repeat(32);
+  try {
+    for (const n of ['cloud-a', 'cloud-b']) assert.equal((await hubCall('POST', '/join', { code: 'r'.repeat(32), name: n, publicKey: pk })).status, 200, `${n} joins with the token`);
+    assert.equal((await hubCall('POST', '/join', { code: 'r'.repeat(31), name: 'x', publicKey: pk })).status, 401);
+    process.env.AGENTMGR_HUB_RUNNER_TOKEN = 'short';
+    assert.equal((await hubCall('POST', '/join', { code: 'short', name: 'x', publicKey: pk })).status, 401, 'too short to count as a token');
+  } finally {
+    delete process.env.AGENTMGR_HUB_RUNNER_TOKEN;
+  }
+  for (const r of Object.values(hub.store.data.runners).filter((x) => x.name.startsWith('cloud-'))) delete hub.store.data.runners[r.id];
 
   // Someone who knows a runner ID but not its key is refused.
   const forged = await new Promise((resolve) => {

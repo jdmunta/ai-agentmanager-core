@@ -1244,3 +1244,14 @@ test('containers: docker run arguments, the worktree git folder, engine homes an
   assert.equal(gitCommonDir(path.join(tmp, 'wt')), fs.realpathSync(path.join(repo, '.git')));
   assert.equal(gitCommonDir(repo), null, 'a plain clone needs nothing more');
 });
+
+test('cloud runners: plain http to a hub only where it is safe or vouched for; permissions from the environment', async () => {
+  const { checkHubUrl } = await import('../src/fleet.js');
+  const { hubPolicy } = await import('../src/hublink.js');
+  assert.equal(checkHubUrl('https://hub.example.com/x', {}), 'https://hub.example.com');
+  assert.equal(checkHubUrl('http://127.0.0.1:4720', {}), 'http://127.0.0.1:4720');
+  assert.throws(() => checkHubUrl('http://hub:4720', {}), /AGENTMGR_HUB_ALLOW_HTTP/);
+  assert.equal(checkHubUrl('http://hub:4720', { AGENTMGR_HUB_ALLOW_HTTP: '1' }), 'http://hub:4720', 'a private network you vouch for');
+  assert.deepEqual(hubPolicy({ hub: { allow: ['view'] } }, { AGENTMGR_HUB_ALLOW: 'view, control,move' }).allow, ['view', 'control', 'move']);
+  assert.deepEqual(hubPolicy({ hub: { allow: ['view'] } }, {}).allow, ['view']);
+});
