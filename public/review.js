@@ -1,7 +1,8 @@
 // Review screen: an agent's changes file by file, line comments sent back to the agent as one
 // message, and Commit / Push & open PR. Comments not sent yet are kept per agent in this browser.
 // With a walkthrough, each hunk shows its explanation and ◀ / ▶ step through them in reading order.
-import { cardHtml, explainButton, stepOf, walkthroughOf } from './walkthrough.js';
+import { cardHtml, explainButton, listenParts as walkParts, stepOf, walkthroughOf } from './walkthrough.js';
+import { listenHtml, now as speaking, stop as stopSpeaking } from './speak.js';
 
 /** Unified diff -> [{ path, status, binary, hunks: [{ head, lines: [{ t, old, new, text }] }] }] */
 export function parseDiff(text) {
@@ -163,7 +164,7 @@ export function initReview({ api, esc, toast, agents, $ }) {
     const nav = n
       ? `<span class="rv-walk"><button type="button" class="small ghost" data-rv-step="-1" title="Previous change ([)">◀</button><span class="hint">${st.step == null ? `${n} changes` : `${st.step + 1} of ${n}`}</span><button type="button" class="small ghost" data-rv-step="1" title="Next change (])">▶</button></span>`
       : '';
-    return `${nav}${explainButton(w, 'data-rv-explain')}`;
+    return `${nav}${n ? listenHtml(`walk:${st.id}`, { title: 'Hear the changes one by one; each is shown as it is read' }) : ''}${explainButton(w, 'data-rv-explain')}`;
   }
 
   function walkNote() {
@@ -432,6 +433,7 @@ export function initReview({ api, esc, toast, agents, $ }) {
 
   $('#review-close').onclick = () => dlg.close();
   dlg.addEventListener('close', () => {
+    if (speaking()?.id.startsWith('walk:')) stopSpeaking();
     st.id = null;
     st.note = st.msg = st.prTitle = '';
   });
@@ -447,5 +449,13 @@ export function initReview({ api, esc, toast, agents, $ }) {
     render();
   }
 
-  return { open, agentChanged, get openId() { return dlg.open ? st.id : null; } };
+  /** What Listen reads: the summary, then each change still in the diff, shown as it is read. */
+  function listenParts() {
+    const w = walk();
+    if (!w.doc) return [];
+    const ok = new Set(present(w));
+    return walkParts(w.doc.data, (i) => (ok.has(i) ? () => gotoStep(i) : null)).filter((p) => typeof p === 'string' || ok.has(p.i));
+  }
+
+  return { open, agentChanged, listenParts, get openId() { return dlg.open ? st.id : null; } };
 }

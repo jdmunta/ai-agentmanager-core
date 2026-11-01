@@ -34,3 +34,19 @@ export function explainButton(w, attrs = 'data-wt-explain') {
   return `<button type="button" class="small ${w.doc && !w.stale ? 'ghost' : 'primary'}" ${attrs} ${w.pending ? 'disabled' : ''}
     title="Explain each change one by one: what, why, the risk and what to check, in the order to read them (a separate one-off call; the agent isn't interrupted)">${label}</button>`;
 }
+
+/** What Listen reads for a walkthrough: the summary, then each change; `follow(i)` runs as change i starts. */
+export function listenParts(data, follow = () => null) {
+  const n = data.changes.length;
+  return [
+    data.summary ? `${data.summary} ${n} change${n === 1 ? '' : 's'} to go through.` : `${n} changes to go through.`,
+    ...data.changes.map((c, i) => ({
+      i,
+      text: c.unexplained ? `Change ${i + 1} of ${n}, in ${spokenFile(c.file)}, has no explanation.` : `Change ${i + 1} of ${n}: ${c.title}. In ${spokenFile(c.file)}. ${c.what} ${c.why && c.why !== 'Not stated' ? `Why: ${c.why}` : ''} Risk: ${c.risk}. ${c.check ? `Check: ${c.check}` : ''}`,
+      onStart: follow(i),
+    })),
+  ];
+}
+
+/** "src/server/auth.js" read as "auth.js". */
+const spokenFile = (f) => String(f).split('/').pop();

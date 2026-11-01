@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.9.0 (2026-10-31)
+
+- **Intent, spec and plan:** each task agent now has INTENT.md (the request as given, its Jira summary, attachments and who started it; written by AI Agent Manager), SPEC.md (requirements, acceptance criteria, out of scope; the agent writes it before changing code) and PLAN.md (steps it ticks off), next to its brief. **Intent · Spec · Plan** buttons and the split view's Docs menu show them; Explain, the documents and AI review read the spec and plan; **Push & open PR** puts them in the pull request's description (intent in full, spec and plan folded). `"specs": false` in config.json turns the spec and plan instructions off.
+- **Export diagrams:** every drawn diagram has **Copy image** (paste into Slack, a PR comment or a doc), **PNG** and **SVG**; a document with diagrams also downloads as one self-contained **.html**. Diagrams now use SVG text labels so they export as images.
+- **Listen:** **🔊 Listen** reads Explain, the documents and the change walkthrough aloud with the browser's own voices (nothing leaves the device; works on phones). The walkthrough is read change by change, showing each as it's read. Pause, stop and speed (0.85× to 1.75×).
+
 ## 1.8.0 (2026-10-31)
 
 - **Update from your phone:** **Update to …** and **About → Update and restart** now show over remote access too; the install and restart run on the computer and the page reloads when it's back. It installs only the official release, from where this copy came from.

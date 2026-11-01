@@ -85,13 +85,13 @@ Runs on macOS and Linux; on Windows, use WSL2. Requires Node 20+, `git`, and the
 
 ```sh
 npm install -g ai-agentmanager          # the latest release
-npm install -g ai-agentmanager@1.8.0    # or a specific one
+npm install -g ai-agentmanager@1.9.0    # or a specific one
 ```
 
 Or from the repository, at a release tag:
 
 ```sh
-git clone --branch v1.8.0 --depth 1 https://github.com/jdmunta/ai-agentmanager-core.git
+git clone --branch v1.9.0 --depth 1 https://github.com/jdmunta/ai-agentmanager-core.git
 cd ai-agentmanager-core
 npm install
 npm link            # optional: puts `agentmgr` on your PATH
@@ -111,7 +111,7 @@ npm link
 | Installed with | Update |
 | --- | --- |
 | npm | `npm install -g ai-agentmanager@latest` |
-| A clone at a release tag | `git fetch --tags && git checkout v1.8.0 && npm install` (the tag you want) |
+| A clone at a release tag | `git fetch --tags && git checkout v1.9.0 && npm install` (the tag you want) |
 | A clone of `main` | `git pull && npm install` |
 
 **Check your setup.** `agentmgr doctor` checks Node.js, Claude Code and its sign-in, git, `gh`, the data folder, the daemon's port and Chrome, and says how to fix anything missing.
@@ -331,6 +331,8 @@ The Brief panel's **Share for review** buttons, or `agentmgr doc <agent> <kind>`
 | **Human vs AI** | Your top 5 decisions, each with why it needs you, the stakes, options and what the work suggests, plus a box for your answer. Up to 5 questions the AI answers, each with its confidence, evidence and how to check it. A second model's verdict on each. |
 | **Diagrams** | Diagrams only, for a quick grasp: the problem, the architecture (with what changes highlighted), the design, the data flow (animated) and the key interaction, plus the plan. Drawn from the documents already written and the agent's work. Optional: **Write all** leaves it out. |
 
+Each drawn diagram has **Copy image** (paste it into Slack, a PR comment or a doc), **PNG** and **SVG**, and a document with diagrams also downloads as one **.html** file. **🔊 Listen** reads Explain, documents and the change walkthrough aloud with the browser's own voices; the walkthrough is read change by change, showing each as it goes.
+
 **Human vs AI.** This review takes two separate read-only calls.
 1. **The split.** The agent's engine splits the open questions. *For you to decide* covers judgment calls such as intent, priorities, risk appetite and trade-offs. *Answered by AI* covers reasoning and evaluation: correctness, edge cases, test coverage and what's left.
 2. **The second opinion.** Another model reviews that split against the same context. It marks each AI answer *agrees*, *partly* or *disagrees*, with a correction where needed. It marks each of your questions *keep*, *AI could answer* or *reword*, and lists questions both lists missed.
@@ -387,7 +389,8 @@ Each card has at most **three points of about 12 words each**, so they're easy t
 - **Line comments.** Click **+** next to a line (or its line number) to comment on it, and add an overall comment if you like. **Send to agent** types them into the agent as one message, each with its file, line and the code it is about, and asks it to address them. Comments not sent yet are kept in this browser.
 - **Explain changes** explains each change one by one: a title, what it changes, why (from the request and the conversation), the risk and what to check, in the order a reviewer should read them. Each explanation sits above its hunk, and **◀ / ▶** (or **[** and **]**) step through them, opening folded files on the way. When the agent changes the code afterwards, the page says so and **Explain again** brings it up to date. From the CLI: `agentmgr doc <agent> walkthrough`.
 - **Commit all** commits everything in the worktree, new files included, with your git name and email.
-- **Push & open PR** pushes the branch and opens a pull request with `gh`, against the branch the agent started from (title from your text, or from the commits; **Draft** if you like). With a pull request already open, it pushes to it. The pull request is linked to the agent.
+- **Intent, spec and plan.** Each agent keeps INTENT.md (what was asked, written by AI Agent Manager), SPEC.md (requirements and acceptance criteria, written by the agent before it changes code) and PLAN.md (steps, ticked off as it goes) next to its brief. Open them with **Intent · Spec · Plan** or in the split view's Docs; Explain, the documents and AI review read them too. `"specs": false` in config.json stops asking agents for the spec and plan.
+- **Push & open PR** pushes the branch and opens a pull request with `gh`, against the branch the agent started from (title from your text, or from the commits; **Draft** if you like). Its description carries the intent, and the spec and plan in folded sections. With a pull request already open, it pushes to it. The pull request is linked to the agent.
 
 The same from the API: `GET /api/agents/:id/changes`, `POST …/changes/comments`, `…/changes/commit`, `…/changes/pr`. Plugins can refuse a commit or a pull request (`agent.commit`, `agent.pr`).
 

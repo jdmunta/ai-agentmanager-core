@@ -29,6 +29,12 @@ import {
   parseJsonReply,
   loadPlanFile,
   planApprovedPrompt,
+  intentMarkdown,
+  intentPath,
+  readSpecDoc,
+  specDocsInfo,
+  specPath,
+  specPrompt,
   planPath,
   planReviewPrompt,
 } from './brief.js';
@@ -336,6 +342,8 @@ export class AgentManager extends EventEmitter {
     const prs = Object.values(agent.prs ?? {});
     return {
       ...agent,
+      // Intent, spec and plan files that exist, with when each changed (task agents).
+      ...(NO_REPO.has(agent.kind) ? {} : { specDocs: specDocsInfo(agent.id) }),
       results: this.results(agent, rt, prs),
       priority: agent.priority ?? 2,
       activeAt: this.activeAt(agent, rt),
@@ -675,6 +683,7 @@ export class AgentManager extends EventEmitter {
     this.store.put(agent);
     this.registerProject(agent);
     this.changed(agent);
+    this.writeIntent(agent.id);
     if (issue) this.fetchSynopsis(agent.id).catch(() => {});
 
     this.plugins.emit('agent.created', { agent: this.auditView(agent) });
@@ -701,7 +710,25 @@ export class AgentManager extends EventEmitter {
       synopsis: { text: summary, source: 'jira', key: issue.key },
       ...(bug && !bug.title ? { bugs: { ...cur.bugs, [issue.key]: { ...bug, title: summary } } } : {}),
     });
+    this.writeIntent(cur.id);
     return summary;
+  }
+
+  /** INTENT.md for a task agent: the request as given and where it came from (see brief.js). */
+  writeIntent(id) {
+    const agent = this.store.get(id);
+    if (!agent || NO_REPO.has(agent.kind)) return;
+    try {
+      fs.mkdirSync(briefDir(id), { recursive: true });
+      fs.writeFileSync(intentPath(id), intentMarkdown(agent));
+    } catch {}
+  }
+
+  /** One of an agent's intent, spec and plan files. */
+  specDoc(ref, name) {
+    const agent = this.mustGet(ref);
+    if (!['intent', 'spec', 'plan'].includes(name)) throw Object.assign(new Error('Unknown file (intent, spec or plan)'), { status: 400 });
+    return readSpecDoc(agent.id, name) ?? { name, markdown: null };
   }
 
   /** Fill in summaries still missing (after Jira settings change); returns how many it found. */
@@ -982,6 +1009,13 @@ export class AgentManager extends EventEmitter {
       writableDir = dir;
       prompts.push(briefPrompt(path.join(dir, path.basename(briefPath(agent.id)))));
       if (this.config.inbox !== false) prompts.push(questionsPrompt(path.join(dir, path.basename(questionsPath(agent.id)))));
+    }
+    // SPEC.md before changing code, and PLAN.md kept as it goes (unless the plan review asks for the plan).
+    if (task && this.config.specs !== false) {
+      fs.mkdirSync(briefDir(agent.id), { recursive: true });
+      const dir = fs.realpathSync(briefDir(agent.id));
+      writableDir ??= dir;
+      prompts.push(specPrompt(path.join(dir, path.basename(specPath(agent.id))), path.join(dir, path.basename(planPath(agent.id))), { withPlan: !agent.planReview }));
     }
     if (agent.planReview && task) {
       fs.mkdirSync(briefDir(agent.id), { recursive: true });
@@ -2008,7 +2042,9 @@ export class AgentManager extends EventEmitter {
           .join('\n\n');
       }
     }
-    return { intent: agent.intent, status, digest, repo, briefMarkdown };
+    // The spec and plan go along with the brief: what done means, and how it gets there.
+    const extra = ['spec', 'plan'].map((n) => readSpecDoc(agent.id, n)?.markdown.trim()).filter(Boolean);
+    return { intent: agent.intent, status, digest, repo, briefMarkdown: [briefMarkdown, ...extra].filter(Boolean).join('\n\n') };
   }
 
   /** The engine (and model) that writes an agent's summaries: its own when it can make a one-shot call, else Claude Code. */

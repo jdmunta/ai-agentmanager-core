@@ -1161,3 +1161,31 @@ test('jira: the issue a request starts with, the words after the link, and where
   assert.equal(await issueSummary({ key: 'A-1', site: 'https://x.atlassian.net' }, { jira, fetchImpl: async () => ({ ok: true, json: async () => ({}) }) }), null);
   assert.equal(await issueSummary({ key: 'A-1', site: 'https://x.atlassian.net' }, { jira, fetchImpl: async () => { throw new Error('offline'); } }), null);
 });
+
+test('listen: markdown turned into speech, split into short pieces; the walkthrough read change by change', async () => {
+  const { speakable, pieces } = await import('../public/speak.js');
+  const { listenParts } = await import('../public/walkthrough.js');
+  assert.equal(speakable('## Where it stands\n- Fixed `auth.js` (see [the PR](https://x/1))\n```mermaid\ngraph LR\n```\n**Done**'), 'Where it stands.\nFixed auth.js (see the PR)\n \nDone');
+  assert.equal(speakable('Open https://example.com/a now'), 'Open a link now');
+  const long = 'One sentence here. '.repeat(30);
+  const ps = pieces(long, 100);
+  assert.ok(ps.length > 4 && ps.every((p) => p.length <= 100), 'short pieces on sentence breaks');
+  assert.deepEqual(pieces('Para one.\n\nPara two.'), ['Para one.', 'Para two.']);
+  const followed = [];
+  const parts = listenParts({ summary: 'Adds sub().', changes: [{ file: 'src/math.js', title: 'Add sub', what: 'Adds sub.', why: 'Asked', risk: 'low', check: 'Run tests' }, { file: 'b.md', unexplained: true }] }, (i) => () => followed.push(i));
+  assert.equal(parts[0], 'Adds sub(). 2 changes to go through.');
+  assert.equal(parts[1].text, 'Change 1 of 2: Add sub. In math.js. Adds sub. Why: Asked Risk: low. Check: Run tests');
+  assert.equal(parts[2].text, 'Change 2 of 2, in b.md, has no explanation.');
+  parts[2].onStart();
+  assert.deepEqual(followed, [1]);
+});
+
+test('pr description: the intent in full, the spec and plan folded, their own headings demoted', async () => {
+  const { prSections } = await import('../src/brief.js');
+  assert.equal(prSections('x', () => null), '', 'nothing written: nothing added');
+  const files = { intent: '# Intent: x\n\n## Request\n\nDo it\n', spec: '# Spec: x\n## Requirements\n- a\n' };
+  const out = prSections('x', (n) => files[n]);
+  assert.match(out, /^## Intent\n\n### Request\n\nDo it/);
+  assert.match(out, /<details><summary><b>Spec<\/b><\/summary>\n\n### Requirements\n- a\n\n<\/details>/);
+  assert.doesNotMatch(out, /Plan/, 'no plan written');
+});

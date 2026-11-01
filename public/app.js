@@ -6,6 +6,8 @@ import { touchScroll } from '/touchscroll.js';
 import { openStream, post, REMOTE } from '/transport.js';
 import { attachBox } from '/attach.js';
 import { initSide } from '/side.js';
+import { addTools, download, htmlFile, initExport } from '/export.js';
+import { bindListen, listenHtml, play, speakable, now as speaking, stop as stopSpeaking } from '/speak.js';
 import { initReview } from '/review.js';
 import { initLand, prChips } from '/land.js';
 import { initTriggers } from '/triggers.js';
@@ -169,10 +171,13 @@ const isDark = () => {
   const t = document.documentElement.dataset.theme;
   return t ? t === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
 };
+// SVG text labels rather than HTML ones: a diagram then exports to PNG (the browser won't turn
+// HTML-in-SVG into an image).
+const mermaidConfig = () => ({ startOnLoad: false, securityLevel: 'strict', theme: isDark() ? 'dark' : 'default', htmlLabels: false, flowchart: { htmlLabels: false } });
 // Diagrams are drawn in the theme's colors: redraw them when it changes.
 window.addEventListener('agentmgr-theme', () => {
   diagrams.clear();
-  mermaidLib?.initialize({ startOnLoad: false, securityLevel: 'strict', theme: isDark() ? 'dark' : 'default' });
+  mermaidLib?.initialize(mermaidConfig());
   for (const el of document.querySelectorAll('[data-mermaid][data-filled]')) delete el.dataset.filled;
   renderDiagrams(document);
 });
@@ -201,8 +206,7 @@ async function renderDiagrams(root) {
       try {
         if (!mermaidLib) {
           mermaidLib = (await import('/vendor/mermaid/mermaid.esm.min.mjs')).default;
-          const dark = isDark();
-          mermaidLib.initialize({ startOnLoad: false, securityLevel: 'strict', theme: dark ? 'dark' : 'default' });
+          mermaidLib.initialize(mermaidConfig());
         }
         const { svg } = await mermaidLib.render(`mmd-${diagrams.size}-${Date.now()}`, src);
         diagrams.set(src, { svg });
@@ -215,7 +219,10 @@ async function renderDiagrams(root) {
     for (const el of document.querySelectorAll('[data-mermaid]')) {
       if (el.dataset.mermaid !== src || el.dataset.filled) continue;
       el.dataset.filled = '1';
-      if (out.svg) el.innerHTML = out.svg;
+      if (out.svg) {
+        el.innerHTML = out.svg;
+        addTools(el);
+      }
       else el.innerHTML = `<div class="hint">Diagram could not be drawn (${esc(out.error)}). Source:</div><pre>${esc(src)}</pre>`;
     }
   }
@@ -233,7 +240,7 @@ function explainBox(a) {
       ${ex.markdown
         ? `${stale ? '<p class="hint">The brief has changed since this explanation; use <b>Explain again</b> to refresh it.</p>' : ''}
            ${clamp(a, 'explain', md(ex.markdown))}
-           <p class="hint">Explained ${ago(ex.at)}.</p>`
+           <p class="hint explain-foot">Explained ${ago(ex.at)}. ${listenHtml(`explain:${a.id}`, { title: 'Read the explanation aloud' })}</p>`
         : ''}
     </div>`;
   return { button, box };
@@ -263,9 +270,18 @@ const INSIGHT_ICONS = { why: '🎯', what: '📦', how: '🛠', now: '📍' };
 const DOCS = { analysis: 'Analysis', design: 'Design', flow: 'Flow', proposal: 'Proposal', humanai: 'Human vs AI', diagrams: 'Diagrams' };
 // Optional extras that "Write all" leaves out.
 const DOC_EXTRAS = new Set(['diagrams']);
-const DOC_TITLES = { ...DOCS, plan: 'Implementation plan' };
+const DOC_TITLES = { ...DOCS, plan: 'Plan', intent: 'Intent', spec: 'Spec' };
+// The agent's intent, spec and plan files (read from the daemon when opened; kept here by agent and kind).
+const SPEC_KINDS = { intent: 'Intent', spec: 'Spec', plan: 'Plan' };
+const specCache = new Map(); // "<agent>:<kind>" -> { markdown, at }
+const isSpecKind = (a, kind) => Boolean(SPEC_KINDS[kind]) && !(kind === 'plan' && a?.planReview);
+async function loadSpec(agentId, kind) {
+  const r = await api('GET', `/agents/${agentId}/specs/${kind}`).catch(() => null);
+  specCache.set(`${agentId}:${kind}`, { markdown: r?.markdown ?? null, at: r?.updatedAt ?? null, loaded: true });
+}
 /** What the document dialog shows: a stakeholder document, or the agent's plan under review. */
-const docOf = (a, kind) => (kind === 'plan' ? a?.planReview && { markdown: a.planReview.markdown, at: a.planReview.updatedAt } : a?.docs?.[kind]);
+const docOf = (a, kind) =>
+  isSpecKind(a, kind) ? specCache.get(`${a?.id}:${kind}`) : kind === 'plan' ? a?.planReview && { markdown: a.planReview.markdown, at: a.planReview.updatedAt } : a?.docs?.[kind];
 
 const VERDICT = { agree: '✓ Agrees', partly: '≈ Partly agrees', disagree: '✗ Disagrees', keep: '✓ Keep', ai: '🤖 AI could answer', reword: '✎ Reword' };
 const CONFIDENCE = { high: 'High confidence', medium: 'Medium confidence', low: 'Low confidence' };
@@ -336,6 +352,17 @@ function docButtons(a) {
       return `<button class="small doc-btn ${d?.markdown ? 'has' : ''}" data-doc="${k}" ${d?.pending ? 'disabled' : ''}
         title="${k === 'diagrams' ? (d?.markdown ? `Open the diagrams${stale ? ' (the brief changed since)' : ''}` : 'Draw the problem and its solution for a quick grasp: architecture, design, data flow (animated) and the key interaction, diagrams only. Built from the documents already written and the agent\'s work') : d?.markdown ? `Open the ${label.toLowerCase()} document${stale ? ' (the brief changed since)' : ''}` : `Write a ${label.toLowerCase()} document for stakeholders`}">${d?.pending ? `${label}…` : label}${d?.markdown ? (stale ? ' •' : ' ✓') : ''}</button>`;
     })
+    .join('')}</span>${specButtons(a)}`;
+}
+
+/** Intent · Spec · Plan: the files kept for reviewers (and put in the pull request's description). */
+function specButtons(a) {
+  if (!a.specDocs) return '';
+  return `<span class="doc-buttons spec-buttons" title="For reviewers, people and agents: what was asked, what done means, and the plan. Push & open PR puts them in the description">${Object.entries(SPEC_KINDS)
+    .map(([k, label]) => {
+      const at = a.specDocs[k] ?? (k === 'plan' ? a.planReview?.updatedAt : null);
+      return `<button class="small doc-btn ${at ? 'has' : ''}" data-doc="${k}" title="${at ? `Open ${label} (updated ${ago(at)})` : k === 'intent' ? 'Written when the agent is created' : `The agent writes it ${k === 'spec' ? 'before changing code' : 'and keeps it current'}`}">${label}${at ? ' ✓' : ''}</button>`;
+    })
     .join('')}</span>`;
 }
 
@@ -346,7 +373,9 @@ function renderDocDialog() {
   const a = agents.get(docView.agentId);
   const d = docOf(a, docView.kind);
   const label = DOC_TITLES[docView.kind];
-  const plan = docView.kind === 'plan';
+  // The plan under review (approve / send back); otherwise a plain file to read.
+  const plan = docView.kind === 'plan' && Boolean(a?.planReview);
+  const specKind = isSpecKind(a, docView.kind);
   $('#doc-title').textContent = `${label} · ${a?.name ?? ''}`;
   const body = $('#doc-body');
   body.classList.toggle('diagrams-view', docView.kind === 'diagrams');
@@ -355,6 +384,8 @@ function renderDocDialog() {
     body.dataset.rendered = '';
   } else if (d?.error) body.innerHTML = `<p class="error">Couldn't write it: ${esc(d.error)}</p>`;
   else if (plan && !d?.markdown) body.innerHTML = '<p class="hint">The agent is investigating and hasn\'t written its plan yet. You\'ll see it here (and in the inbox) when it has.</p>';
+  else if (specKind && !d?.loaded) body.innerHTML = '<p class="hint">Loading…</p>';
+  else if (specKind && !d?.markdown) body.innerHTML = `<p class="hint">${docView.kind === 'intent' ? 'No intent file for this agent (agents created before 1.9 have none).' : `The agent hasn't written its ${label.toLowerCase()} yet. It writes ${docView.kind === 'spec' ? 'the spec before changing code' : 'the plan and keeps it current'}.`}</p>`;
   else if (d?.markdown) {
     if (body.dataset.rendered !== d.at) {
       body.innerHTML = d.data ? humanAiHtml(d) : docHtml(d.markdown);
@@ -364,10 +395,13 @@ function renderDocDialog() {
   }
   const stale = !plan && d?.markdown && a.brief?.updatedAt && d.briefUpdatedAt !== a.brief.updatedAt;
   const by = d?.writer ? ` by ${d.writer}${d.critique ? `, checked by ${d.critique.label}` : ''}${d.from ? ` from ${d.from.length ? d.from.join(', ') : "the agent's work"}` : ''}` : '';
-  $('#doc-meta').textContent = d?.markdown ? `${plan ? `Plan · ${PLAN_LABEL[a.planReview.status]} · updated` : docView.kind === 'diagrams' ? 'Drawn' : 'Written'} ${ago(d.at)}${by}${stale ? ' · the brief has changed since; Regenerate for the latest' : ''}` : '';
+  $('#doc-meta').textContent = d?.markdown ? `${plan ? `Plan · ${PLAN_LABEL[a.planReview.status]} · updated` : specKind ? 'Updated' : docView.kind === 'diagrams' ? 'Drawn' : 'Written'} ${ago(d.at)}${by}${stale && !specKind ? ' · the brief has changed since; Regenerate for the latest' : ''}${specKind ? ' · goes into the pull request description' : ''}` : '';
   for (const id of ['doc-copy', 'doc-download', 'doc-print']) $(`#${id}`).disabled = !d?.markdown;
-  $('#doc-print').hidden = plan;
-  $('#doc-regen').hidden = plan;
+  // Diagrams: the whole document as one HTML file with every diagram (each also has Copy / PNG / SVG).
+  $('#doc-html').hidden = !/```mermaid/.test(d?.markdown ?? '');
+  $('#doc-listen').innerHTML = d?.markdown && docView.kind !== 'diagrams' ? listenHtml(`doc:${docView.agentId}:${docView.kind}`, { title: 'Read the document aloud' }) : '';
+  $('#doc-print').hidden = plan || specKind;
+  $('#doc-regen').hidden = plan || specKind;
   $('#doc-regen').disabled = Boolean(d?.pending);
   $('#doc-bg').hidden = !d?.pending;
   // Footer: send your answers (Human vs AI), or approve / send back the plan.
@@ -388,7 +422,10 @@ function openDoc(agentId, kind) {
   $('#doc-body').dataset.rendered = '';
   $('#doc-dialog').showModal();
   const a = agents.get(agentId);
-  if (kind !== 'plan' && !a.docs?.[kind]?.markdown && !a.docs?.[kind]?.pending) generateDoc();
+  if (isSpecKind(a, kind)) {
+    specCache.delete(`${agentId}:${kind}`);
+    loadSpec(agentId, kind).then(() => docView?.agentId === agentId && docView.kind === kind && renderDocDialog());
+  } else if (kind !== 'plan' && !a.docs?.[kind]?.markdown && !a.docs?.[kind]?.pending) generateDoc();
   renderDocDialog();
 }
 
@@ -398,6 +435,7 @@ function generateDoc() {
 }
 
 $('#doc-close').onclick = () => {
+  if (speaking()?.id.startsWith('doc:')) stopSpeaking();
   docView = null;
   $('#doc-dialog').close();
 };
@@ -484,6 +522,25 @@ function planRow(a) {
     ${p.status !== 'approved' ? '<button class="small ghost" data-act="plan-skip" title="Stop waiting for review; the agent goes ahead">Skip review</button>' : ''}</div>`;
 }
 $('#doc-print').onclick = () => window.open(`/share.html#${docView.agentId}/${docView.kind}`, '_blank', 'noopener');
+$('#doc-html').onclick = () => {
+  const a = agents.get(docView.agentId);
+  download(htmlFile($('#doc-body'), `${DOC_TITLES[docView.kind]}: ${a?.name ?? ''}`), `${a?.slug ?? 'agent'}-${docView.kind}.html`);
+};
+
+// Diagram export: files named after the agent they belong to.
+initExport({ toast, base: (slot) => (slot.closest('#doc-body') && docView ? agents.get(docView.agentId)?.slug : agents.get(term.agentId)?.slug ?? agents.get(selectedId)?.slug) ?? '' });
+
+// Listening: what each Listen control reads.
+bindListen((id) => {
+  const [what, agentId, kind] = id.split(':');
+  const a = agents.get(agentId);
+  let parts = null;
+  if (what === 'explain') parts = [speakable(a?.explanation?.markdown)];
+  else if (what === 'doc') parts = [speakable(kind === 'explain' ? a?.explanation?.markdown : docOf(a, kind)?.markdown)];
+  else if (what === 'walk') parts = reviewUi.listenParts();
+  else if (what === 'sidewalk') parts = sidePane?.listenParts();
+  if (!parts?.length || !play(id, parts)) toast('Nothing to read aloud here (or this browser has no speech)');
+});
 
 /** Why / What / How / Now as four cards. */
 function insightsBox(a) {
@@ -2120,6 +2177,7 @@ sidePane = initSide({
   codeUi,
   docHtml,
   renderDiagrams,
+  listenHtml,
   mainKind: () => term.kind,
   setMain: (kind) => term.agentId && term.open(term.agentId, kind),
   refit: () => requestAnimationFrame(() => term.refit()),
@@ -2909,6 +2967,10 @@ function upsert(a) {
 /** Views that show one agent's details outside the main render: keep them current. */
 function agentChanged(a) {
   if (a.id === term.agentId) term.renderTabs();
+  // An open intent / spec / plan that the agent just updated: read it again.
+  if (docView?.agentId === a.id && isSpecKind(a, docView.kind) && specCache.get(`${a.id}:${docView.kind}`)?.at !== (a.specDocs?.[docView.kind] ?? null)) {
+    loadSpec(a.id, docView.kind).then(renderDocDialog);
+  }
   reviewUi.agentChanged(a);
   sidePane?.agentChanged(a);
 }
