@@ -87,6 +87,20 @@ export function promptChoices(screen) {
       break;
     }
   }
+  // Newer Claude Code can draw a menu as one run of text ("Do you want to proceed? ❯ 1. Yes 2. Yes,
+  // and switch to auto mode 3. No Esc to cancel"): read the flattened screen after the last question.
+  if (!choices.size) {
+    const flat = lines.join(' ').replace(/\s+/g, ' ');
+    const at = flat.search(/\?\s*(?:[❯>›]\s*)?1[.)]\s*\S[^?]*$/);
+    if (at >= 0) {
+      const head = flat.slice(0, at + 1);
+      // Drop what's left of the box around it (╌ ─ │ and stray letters before them).
+      question = (/([^.?!│]*\?)$/.exec(head)?.[1] ?? '').replace(/^.*[╌─│━]+\s*/, '').trim().slice(-200);
+      for (const m of flat.slice(at + 1).matchAll(/(?:[❯>›]\s*)?\b(\d)[.)]\s*(.+?)(?=\s+(?:[❯>›]\s*)?\d[.)]\s|\s+Esc to cancel|\s+Enter to|$)/g)) {
+        if (!choices.has(m[1])) choices.set(m[1], m[2].replace(/\s*·.*$/, '').trim().slice(0, 80));
+      }
+    }
+  }
   return {
     question,
     choices: [...choices.entries()].sort(([a], [b]) => a - b).map(([key, label]) => ({ key, label })),

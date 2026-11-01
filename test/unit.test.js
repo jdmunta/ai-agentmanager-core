@@ -1255,3 +1255,14 @@ test('cloud runners: plain http to a hub only where it is safe or vouched for; p
   assert.deepEqual(hubPolicy({ hub: { allow: ['view'] } }, { AGENTMGR_HUB_ALLOW: 'view, control,move' }).allow, ['view', 'control', 'move']);
   assert.deepEqual(hubPolicy({ hub: { allow: ['view'] } }, {}).allow, ['view']);
 });
+
+test('prompt choices: a menu drawn as one run of text (newer Claude Code) is still read', async () => {
+  const { promptChoices } = await import('../src/inbox.js');
+  const squished = "E╌╌╌╌ Avariableinthiscommandcan'tbecheckedbeforeitruns Doyouwanttoproceed? ❯ 1. Yes 2. Yes,andswitchtoautomode · auto mode handles these prompts for you 3. No Esc to cancel · Tab to amend───── add-a-subtract";
+  assert.deepEqual(promptChoices(squished), {
+    question: "Avariableinthiscommandcan'tbecheckedbeforeitruns Doyouwanttoproceed?",
+    choices: [{ key: '1', label: 'Yes' }, { key: '2', label: 'Yes,andswitchtoautomode' }, { key: '3', label: 'No' }],
+  });
+  // The usual one-per-line menu is read as before.
+  assert.deepEqual(promptChoices('Do you want to make this edit?\n❯ 1. Yes\n  2. Yes, allow all edits\n  3. No\n').choices.length, 3);
+});
