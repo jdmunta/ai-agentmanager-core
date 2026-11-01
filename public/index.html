@@ -688,6 +688,11 @@
           <label class="check">Keep at most <input type="number" name="maxRunning" min="1" max="500" placeholder="no limit" class="num" /> agents open at once</label>
           <p class="hint">Above it, the agents idle longest are closed (they resume when you open them), so the machine stays responsive. Never closed: agents working, waiting for your answer, active in the last 5 minutes, marked Keep, or in a team that is still going. <span id="settings-running"></span></p>
         </fieldset>
+        <fieldset class="local-only" id="settings-service">
+          <legend>Start at login</legend>
+          <label class="check"><input type="checkbox" name="startAtLogin" /> Start AI Agent Manager when I log in</label>
+          <p class="hint">After a restart or a crash, the daemon comes back by itself and running agents resume; without it, it starts only when you run <code>agentmgr</code>. <span id="settings-service-state"></span></p>
+        </fieldset>
         <fieldset class="local-only">
           <legend>Updates</legend>
           <label class="check"><input type="checkbox" name="updateCheck" /> Check for a new release twice a day</label>

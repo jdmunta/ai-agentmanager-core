@@ -3,6 +3,7 @@
 
 const STEPS = [
   ['agent', 'Start your first agent', 'Give it a request and a repo or folder; it works in its own branch.', '#new-btn', 'New agents'],
+  ['service', 'Start at login', 'So AI Agent Manager and your agents come back by themselves after a restart.', '#settings-btn', 'Settings'],
   ['alerts', 'Get Slack alerts', 'Hear when an agent needs you, is stuck or finished.', '#alerts-btn', 'Alerts'],
   ['assistant', 'Let work come to you', 'The assistant, or triggers (a GitHub label, a webhook), start agents for new work.', '#assistant-btn', 'Assistant'],
   ['remote', 'Use it from your phone', 'Answer agents from anywhere on your network.', '#remote-btn', 'Remote access'],

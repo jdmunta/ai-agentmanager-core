@@ -3353,7 +3353,12 @@ test('repo memory: agents learn into it, the next agent in the repo starts with 
 
 test('getting started: what is set up, and what this machine is missing', async () => {
   const r = (await call('GET', '/setup')).body;
-  assert.deepEqual(Object.keys(r.steps).sort(), ['agent', 'alerts', 'assistant', 'budget', 'remote']);
+  assert.deepEqual(Object.keys(r.steps).sort(), ['agent', 'alerts', 'assistant', 'budget', 'remote', 'service']);
+  assert.equal(typeof r.steps.service, 'boolean');
+  // Start at login: its state (read only here; installing would touch the real launchd / systemd).
+  const svc = (await call('GET', '/service')).body;
+  assert.equal(svc.supported, ['darwin', 'linux'].includes(process.platform));
+  assert.equal(typeof svc.installed, 'boolean');
   assert.equal(r.steps.agent, true);
   assert.equal(r.steps.remote, false);
   assert.ok(Array.isArray(r.checks));

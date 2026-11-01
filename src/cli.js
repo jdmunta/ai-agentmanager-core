@@ -310,6 +310,11 @@ export async function main(argv) {
       const st = await api('GET', '/remote').catch(() => null);
       const phone = st?.running ? st.urls.find((u) => !u.vpn) : null;
       if (phone) console.log(dim(`phone: ${phone.url}  (sign-in QR: agentmgr remote status)`));
+      // Without the login service, nothing starts the daemon after a reboot.
+      if (['darwin', 'linux'].includes(process.platform)) {
+        const svc = await import('./service.js');
+        if (!(await svc.status().catch(() => ({ installed: true }))).installed) console.log(dim('tip: it won\'t start by itself after a restart; turn on Settings → Start at login, or run: agentmgr service install'));
+      }
       execFile(process.platform === 'darwin' ? 'open' : 'xdg-open', [BASE], () => {});
     });
 

@@ -32,6 +32,7 @@ import { Notifier, isWorkflowUrl, loadNotify, publicNotify, saveNotify, sendSlac
 import { Previews, parseUrl } from './preview.js';
 import { LiveBrowser } from './livebrowser.js';
 import * as remote from './remote.js';
+import * as service from './service.js';
 import { Store } from './store.js';
 import { about, latestRelease } from './about.js';
 
@@ -59,7 +60,7 @@ function isAllowedOrigin(origin, port) {
 }
 
 const PUBLIC_REMOTE_API = new Set(['POST /api/login', 'GET /api/session']);
-const LOCAL_ONLY_API = /^\/api\/(remote(\/|$)|notify(\/|$)|hub(\/|$)|triggers(\/|$)|update(\/|$)|editors$|agents\/[\w-]+\/open-in$|shutdown$)/;
+const LOCAL_ONLY_API = /^\/api\/(remote(\/|$)|notify(\/|$)|hub(\/|$)|triggers(\/|$)|update(\/|$)|service$|editors$|agents\/[\w-]+\/open-in$|shutdown$)/;
 const HOOK_PATH = '/api/hooks/agents';
 const NO_REPO_KINDS = new Set(['general', 'assistant']);
 
@@ -505,6 +506,20 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
   api.get('/agents/:id/memory', wrap((req) => memory.read(req.params.id)));
   api.put('/agents/:id/memory', wrap((req) => memory.write(req.params.id, req.body?.text)));
   api.post('/agents/:id/learn', wrap((req) => memory.learn(req.params.id, req.body?.text, { by: req.headers['x-agentmgr-agent'] ? undefined : 'you' })));
+  // Start at login: the login service (launchd or systemd) that brings the daemon back after a reboot.
+  const serviceSupported = ['darwin', 'linux'].includes(process.platform);
+  const serviceView = async () => ({ supported: serviceSupported, ...(serviceSupported ? await service.status().catch(() => ({ installed: false, loaded: false })) : { installed: false, loaded: false }) });
+  api.get('/service', wrap(serviceView));
+  api.put(
+    '/service',
+    wrap(async (req) => {
+      if (!serviceSupported) throw fail(400, `Start at login isn't supported on ${process.platform}`);
+      // Installing loads it; its own copy finds this daemon running and exits cleanly (no restart),
+      // so it takes over at the next login.
+      const res = req.body?.enabled === true ? await service.install() : await service.uninstall();
+      return { ...(await serviceView()), note: res.note ?? null };
+    }),
+  );
   // The first-run checklist: what is set up, and what this machine is missing.
   api.get('/setup', wrap(async () => {
     const checks = (await doctor().catch(() => [])).filter((c) => c.status === 'fail' || c.status === 'warn').filter((c) => c.name !== 'Daemon');
@@ -517,6 +532,8 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
         assistant: agentsNow.some((a) => a.kind === 'assistant') || Boolean(config.triggers?.github?.enabled || config.triggers?.webhook?.enabled),
         remote: Boolean(remote.loadSettings().enabled),
         budget: Boolean(config.budgets?.perAgentUsd || config.budgets?.perDayUsd),
+        // Only where it can be set up (macOS, Linux); elsewhere there's nothing to do.
+        service: serviceSupported ? Boolean((await service.status().catch(() => ({}))).installed) : true,
       },
     };
   }));

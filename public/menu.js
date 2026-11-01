@@ -52,15 +52,21 @@ export function initMenu({ api, esc, toast, $ }) {
   // ------------------------------------------------------------ Settings dialog
   const dialog = $('#settings-dialog');
   const form = $('#settings-form');
+  let service = null; // the login service as the dialog opened
   $('#settings-btn').onclick = async () => {
     $('#settings-error').hidden = true;
     try {
       const c = await api('GET', '/cleanup');
       form.maxRunning.value = c.maxRunning ?? '';
       $('#settings-running').textContent = `Open now: ${c.running}.`;
+      service = null;
       if (!remote()) {
         const u = await api('GET', '/update').catch(() => null);
         form.updateCheck.checked = u?.check !== false;
+        service = await api('GET', '/service').catch(() => null);
+        $('#settings-service').hidden = !service?.supported;
+        form.startAtLogin.checked = Boolean(service?.installed);
+        $('#settings-service-state').textContent = service?.installed ? (service.loaded ? 'On: the login service is loaded.' : 'On; loads at the next login.') : 'Off now.';
       }
       dialog.showModal();
     } catch (err) {
@@ -79,6 +85,11 @@ export function initMenu({ api, esc, toast, $ }) {
     try {
       const c = await api('PUT', '/cleanup', { maxRunning: form.maxRunning.value.trim() || null });
       if (!remote()) await api('PUT', '/update', { check: form.updateCheck.checked }).catch(() => {});
+      // Only when it changed: installing touches launchd / systemd.
+      if (!remote() && service?.supported && form.startAtLogin.checked !== Boolean(service.installed)) {
+        const s = await api('PUT', '/service', { enabled: form.startAtLogin.checked });
+        toast(s.installed ? `Starts at login from now on${s.note ? `. ${s.note}` : ''}` : 'No longer starts at login', 6000);
+      }
       dialog.close();
       toast(c.maxRunning ? `At most ${c.maxRunning} agents open; the ones idle longest close above that` : 'No limit on open agents');
     } catch (err) {
