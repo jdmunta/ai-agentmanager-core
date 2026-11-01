@@ -837,3 +837,39 @@ input.inline { display: inline-block; width: 80px; padding: 1px 4px; }
 .attach-chip.fail { border-color: var(--red); }
 .attach-chip .link { padding: 0 4px; }
 form.dropping { outline: 2px dashed var(--accent, #6b8cff); outline-offset: 4px; }
+
+/* Walkthrough: an explanation card above each hunk; the current one is marked. */
+.wt-card { display: flex; flex-direction: column; gap: 3px; padding: 8px 10px; font: 13px/1.45 var(--sans, system-ui); white-space: normal; color: var(--text); }
+.wt-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.wt-n { font: 11px var(--mono, ui-monospace); color: var(--muted); }
+.wt-k { display: inline-block; min-width: 44px; font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.rv-explain td { background: var(--panel); border-top: 1px solid var(--border); }
+.rv-explain.current td { box-shadow: inset 3px 0 0 var(--accent, #6b8cff); background: var(--panel-2); }
+.rv-walk { display: inline-flex; align-items: center; gap: 4px; }
+.rv-walk-note { margin: 4px 12px 8px; }
+
+/* Split view: the terminal (or a browser tab, or Code) on the left, a pane on the right. */
+.term-split { flex: 1; display: flex; min-height: 0; min-width: 0; }
+.term-main { flex: 1; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.split-pane { flex: none; width: 0; }
+.split-pane::after { top: 0; bottom: 0; left: -4px; width: 8px; cursor: col-resize; }
+.split-pane[hidden], .side-pane[hidden] { display: none !important; }
+.side-pane { flex: none; width: var(--pane-w, 45%); display: flex; flex-direction: column; min-height: 0; border-left: 1px solid #30363d; background: var(--bg); color: var(--text); }
+.side-bar { display: flex; align-items: center; gap: 6px; padding: 4px 8px; background: #161a22; color: #c9d1d9; font-size: 12.5px; }
+.side-bar button { color: #c9d1d9; border-color: #30363d; }
+.side-body { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+.side-pane .code { display: flex; flex: 1; }
+.side-tools { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--border); }
+.side-tools select { width: auto; }
+.side-scroll { flex: 1; overflow: auto; padding: 10px 12px; }
+.side-pad { padding: 10px 12px; }
+.side-scroll .diagrams-view .diagram, .side-scroll .diagram { display: flex; justify-content: center; overflow-x: auto; }
+.side-scroll .diagram svg { max-width: 100%; height: auto; }
+.sd-step { margin-bottom: 14px; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.sd-file { padding: 4px 10px; background: var(--panel-2); font-size: 12px; }
+.sd-hunk { font: 12px/1.45 var(--mono, ui-monospace, monospace); white-space: pre; overflow-x: auto; border-top: 1px solid var(--border); }
+.sd-hunk > div { padding: 0 10px; }
+.sd-head { color: var(--muted); background: var(--panel); }
+.sd-add { background: rgba(46, 160, 67, .15); }
+.sd-del { background: rgba(248, 81, 73, .15); }
+#term-split-btn.on { background: #262c38; }
