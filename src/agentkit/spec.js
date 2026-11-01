@@ -62,6 +62,12 @@ export function checkAgent(raw, { dir, env = process.env, file = 'agent.yaml' } 
     errors.push(`triggers[${i}]: every, cron, webhook or watch`);
     return null;
   }).filter(Boolean);
+  const approveTimeoutMs = a.approveTimeout != null ? toMs(a.approveTimeout) : 30 * 60_000;
+  if (!approveTimeoutMs) errors.push('approveTimeout: a duration, like 30m or 2h');
+  // Where it reports its runs and asks for approvals: AI Agent Manager (the environment wins).
+  // cert: the SHA-256 fingerprint of its remote-access certificate (self-signed), when over https.
+  const report = { url: env.AGENTKIT_REPORT_URL || a.report?.url || null, token: env.AGENTKIT_REPORT_TOKEN || a.report?.token || null, cert: env.AGENTKIT_REPORT_CERT || a.report?.cert || null };
+  if (report.url && !/^https?:\/\//.test(report.url)) errors.push('report.url: an http(s) address of AI Agent Manager');
   const loop = { plan: true, check: true, maxSteps: 4, budgetUsd: null, ...(a.loop ?? {}) };
   loop.maxSteps = Math.max(1, Math.min(20, Number(loop.maxSteps) || 4));
   const iface = a.interfaces ?? {};
@@ -79,6 +85,8 @@ export function checkAgent(raw, { dir, env = process.env, file = 'agent.yaml' } 
     tools: a.tools && typeof a.tools === 'object' ? a.tools : {},
     allow: [a.allow ?? []].flat().map(String),
     approve: [a.approve ?? []].flat().map(String),
+    approveTimeoutMs,
+    report: report.url ? report : null,
     triggers,
     loop,
     memory: a.memory !== false,

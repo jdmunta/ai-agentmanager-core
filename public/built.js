@@ -4,7 +4,12 @@ import { attachBox } from '/attach.js';
 
 const STATUS = { designed: 'designed', 'needs-fixing': 'needs fixing', testing: 'testing…', tested: 'tests pass', failing: 'tests fail', running: 'running' };
 
-export function initBuilt({ api, esc, toast, $, isOpen, setCount }) {
+const ago = (iso) => {
+  const s = Math.max(0, (Date.now() - Date.parse(iso)) / 1000);
+  return s < 60 ? 'just now' : s < 3600 ? `${Math.round(s / 60)} min ago` : s < 86400 ? `${Math.round(s / 3600)} h ago` : `${Math.round(s / 86400)} d ago`;
+};
+
+export function initBuilt({ api, esc, toast, $, isOpen, setCount, reports = () => [] }) {
   const view = $('#built-view');
   const dlg = $('#built-dialog');
   const body = $('#built-body');
@@ -25,7 +30,40 @@ export function initBuilt({ api, esc, toast, $, isOpen, setCount }) {
   function render() {
     view.innerHTML = `<div class="built-head"><button class="small primary" data-bt="new">+ Build an agent</button><span class="hint">An agent for a task or workflow: it plans, acts, checks itself and keeps working in the background.</span></div>
       ${list.length ? `<ul class="built-list">${list.map((b) => `<li data-bt-open="${esc(b.name)}"><div class="line1"><b>${esc(b.title ?? b.name)}</b>${b.running ? ' <span class="dot-run" title="Running">●</span>' : ''}<span class="spacer"></span><span class="tag ${b.status === 'tested' ? 'open' : b.status === 'failing' || b.status === 'needs-fixing' ? 'fail' : ''}">${esc(b.pending ?? STATUS[b.status] ?? b.status)}</span></div>
-        <div class="hint">${esc(b.name)} · ${esc(b.engine ?? '')}${b.results?.total ? ` · tests ${b.results.passed}/${b.results.total}` : ''}${b.triggers.length ? ` · ${esc(b.triggers.join(', '))}` : ''}</div></li>`).join('')}</ul>` : '<p class="hint built-empty">No agents built yet.</p>'}`;
+        <div class="hint">${esc(b.name)} · ${esc(b.engine ?? '')}${b.results?.total ? ` · tests ${b.results.passed}/${b.results.total}` : ''}${b.triggers.length ? ` · ${esc(b.triggers.join(', '))}` : ''}</div></li>`).join('')}</ul>` : '<p class="hint built-empty">No agents built yet.</p>'}
+      ${reporting()}`;
+  }
+
+  // ------------------------------------------------------------ agents reporting in (here or elsewhere)
+  function reporting() {
+    const rs = reports();
+    const head = `<div class="built-head reporting-head"><b>Reporting in</b><span class="hint">Agents running here or on other computers: their runs, cost and the tools they wait to have approved.</span><span class="spacer"></span><button class="small ghost" data-bt="connect">Connect one from elsewhere</button></div><div id="built-connect" ${connectHtml ? '' : 'hidden'}>${connectHtml ?? ''}</div>`;
+    if (!rs.length) return `${head}<p class="hint built-empty">None yet. Agents you start here report automatically.</p>`;
+    return `${head}<ul class="built-list reports">${rs.map((r) => `<li data-report="${esc(r.key)}">
+      <div class="line1"><span class="dot-run ${r.online ? '' : 'off'}" title="${r.online ? 'Online' : 'Not heard from'}">●</span> <b>${esc(r.title)}</b> <span class="hint">${esc(r.host)}</span><span class="spacer"></span>
+        ${r.chat && r.online ? `<a class="button small ghost" href="${esc(r.chat)}" target="_blank" rel="noopener">Chat ↗</a>` : ''}
+        <button class="small ghost" data-rp="forget" title="Remove it from this list (it shows up again when it reports)">Forget</button></div>
+      <div class="hint">${esc(r.engine)} · ${r.online ? (r.current ? `working on a run (${esc(r.current.source)})` : 'idle') : `last seen ${ago(r.lastSeen)}`} · ${r.totals.runs} run${r.totals.runs === 1 ? '' : 's'}${r.totals.failed ? `, ${r.totals.failed} failed` : ''}${r.totals.costUsd ? ` · $${r.totals.costUsd.toFixed(2)}` : ''}${r.triggers.length ? ` · ${esc(r.triggers.join(', '))}` : ''}</div>
+      ${r.pending.map((p) => `<div class="report-approval" data-ap="${esc(p.id)}"><b>Wants to run <code>${esc(p.tool)}</code></b> <span class="hint">${ago(p.at)}</span><pre>${esc(JSON.stringify(p.input, null, 2).slice(0, 1500))}</pre><button class="small primary" data-rp="approve">Approve</button> <button class="small" data-rp="deny">Deny</button></div>`).join('')}
+      ${r.runs.length ? `<details><summary class="hint">Recent runs</summary><ul class="built-runs">${r.runs.map((x) => `<li><span class="tag ${x.status === 'failed' ? 'fail' : x.status === 'done' ? 'open' : ''}">${esc(x.status)}</span> <span class="hint">${esc(x.source)} · ${x.at ? ago(x.at) : ''}${x.costUsd ? ` · $${x.costUsd.toFixed(3)}` : ''}${x.ms ? ` · ${Math.round(x.ms / 1000)}s` : ''}</span><div>${esc(x.result.slice(0, 400))}</div></li>`).join('')}</ul></details>` : ''}
+    </li>`).join('')}</ul>`;
+  }
+
+  let connectHtml = null; // the connection details, kept open across live re-renders
+  async function connect() {
+    const box = $('#built-connect');
+    if (connectHtml) return (connectHtml = null), (box.hidden = true);
+    try {
+      const c = await api('GET', '/agentkit/connect');
+      const lines = (url, cert) => [`AGENTKIT_REPORT_URL=${url}`, `AGENTKIT_REPORT_TOKEN=${c.token}`, ...(cert ? [`AGENTKIT_REPORT_CERT=${cert}`] : [])].join('\n');
+      box.innerHTML = `<p class="hint">Set these where the agent runs (in its environment, or in its service), then start it. It reports here and asks here for approvals.</p>
+        ${c.remote.length ? c.remote.map((u) => `<p><b>From another computer</b> <span class="hint">(over remote access)</span></p><pre class="code-area">${esc(lines(u.replace(/\/$/, ''), c.cert))}</pre>`).join('') : '<p class="hint">Turn on remote access (Settings) to connect agents on other computers.</p>'}
+        <p><b>On this computer</b></p><pre class="code-area">${esc(lines(c.local))}</pre>`;
+    } catch (err) {
+      box.innerHTML = `<p class="hint">${esc(err.message)}. Open AI Agent Manager on this computer to see the connection details.</p>`;
+    }
+    connectHtml = box.innerHTML;
+    box.hidden = false;
   }
 
   // ------------------------------------------------------------ build
@@ -79,9 +117,14 @@ export function initBuilt({ api, esc, toast, $, isOpen, setCount }) {
         <span class="spacer"></span>
         <button class="small" data-bt="test" ${b.pending ? 'disabled' : ''} title="Run each test through the real engine and judge the results">${b.pending === 'testing' ? 'Testing…' : 'Run tests'}</button>
         <button class="small ${b.running ? '' : 'primary'}" data-bt="${b.running ? 'stop' : 'start'}" ${b.specError ? 'disabled' : ''} title="${b.running ? 'Stop it' : 'Run it continuously on this computer: its triggers, chat page and API'}">${b.running ? 'Stop' : 'Start'}</button>
-        <a class="button small ghost" href="/api/builder/${esc(b.name)}/download" title="Its folder (agent.yaml, instructions, tests) to run anywhere with agentkit">Download</a>
+        <a class="button small ghost" href="/api/builder/${esc(b.name)}/download" title="Its folder (agent.yaml, instructions, tests) to run anywhere with agentkit">Download folder</a>
         <button class="small ghost" data-bt="delete">Delete</button>
       </div>
+      <div class="built-exe"><b>Single executable</b> <span class="hint">one file that runs this agent anywhere, no Node or agentkit needed (its engine's CLI must be installed and signed in)</span>
+        <div class="built-exe-row"><select id="built-platform">${(b.platforms ?? []).map((p) => `<option value="${esc(p)}" ${p === b.host ? 'selected' : ''}>${esc(p)}${p === b.host ? ' (this computer)' : ''}</option>`).join('')}</select>
+        <button class="small" data-bt="package" ${b.pending || b.specError ? 'disabled' : ''}>${b.pending?.startsWith('packaging') ? 'Building… (a minute or two)' : 'Build executable'}</button>
+        ${Object.entries(b.executables ?? {}).map(([p, x]) => `<a class="button small ghost" href="/api/builder/${esc(b.name)}/executable/${esc(p)}" title="Built ${esc(new Date(x.at).toLocaleString())}">⬇ ${esc(p)} · ${Math.round(x.size / 1e6)} MB</a>`).join('')}</div>
+        ${b.packageError ? `<p class="error">${esc(b.packageError)}</p>` : ''}</div>
       ${b.specError ? `<p class="error">${esc(b.specError)}</p>` : ''}
       ${b.missingEnv.length ? `<p class="hint warn">Set these in the environment before running it: ${esc(b.missingEnv.join(', '))}</p>` : ''}
       <details open><summary><b>Analysis</b></summary><p>${esc(a.problem ?? '')}</p><div class="row three"><div><b>Inputs</b>${li(a.inputs)}</div><div><b>Outputs</b>${li(a.outputs)}</div><div><b>Risks</b>${li(a.risks)}</div></div>
@@ -113,6 +156,7 @@ export function initBuilt({ api, esc, toast, $, isOpen, setCount }) {
     const name = open?.name;
     try {
       if (what === 'test') show(await api('POST', `/builder/${name}/test`));
+      else if (what === 'package') show(await api('POST', `/builder/${name}/package`, { platform: $('#built-platform').value }));
       else if (what === 'start') {
         show(await api('POST', `/builder/${name}/start`));
         setTimeout(refresh, 1500);
@@ -133,6 +177,22 @@ export function initBuilt({ api, esc, toast, $, isOpen, setCount }) {
 
   view.addEventListener('click', async (e) => {
     if (e.target.closest('[data-bt="new"]')) return openBuild();
+    if (e.target.closest('[data-bt="connect"]')) return connect();
+    const rp = e.target.closest('[data-rp]');
+    if (rp) {
+      const key = rp.closest('[data-report]').dataset.report;
+      try {
+        if (rp.dataset.rp === 'forget') await api('DELETE', `/agentkit/agents/${encodeURIComponent(key)}`);
+        else {
+          rp.disabled = true;
+          await api('POST', `/agentkit/agents/${encodeURIComponent(key)}/approvals/${encodeURIComponent(rp.closest('[data-ap]').dataset.ap)}`, { allow: rp.dataset.rp === 'approve' });
+          toast(rp.dataset.rp === 'approve' ? 'Approved; the agent goes on' : 'Declined');
+        }
+      } catch (err) {
+        toast(`Error: ${err.message}`, 6000);
+      }
+      return;
+    }
     const li = e.target.closest('[data-bt-open]');
     if (li) show(await api('GET', `/builder/${li.dataset.btOpen}`));
   });

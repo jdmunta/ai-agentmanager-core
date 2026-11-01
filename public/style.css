@@ -497,6 +497,7 @@ dialog::backdrop { background: rgba(0, 0, 0, .45); }
 .need-head { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 4px; }
 .need-kind { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
 .need.prompt .need-kind { color: var(--red); }
+.need.approval .need-kind { color: var(--red); }
 .need.question .need-kind { color: var(--accent); }
 .need.stuck .need-kind { color: var(--yellow); }
 .need.conflict .need-kind { color: #8e59ff; }
@@ -958,9 +959,16 @@ body.remote .settings-links .local-only { display: none; }
 .built-list .line1 { display: flex; align-items: center; gap: 6px; }
 .built-empty { padding: 0 12px; }
 .dot-run { color: var(--green); font-size: 10px; }
+.dot-run.off { color: var(--muted); }
+.reporting-head { margin-top: 18px; }
+.report-approval { margin: 8px 0; padding: 8px 10px; border: 1px solid var(--yellow); border-radius: 8px; }
+.report-approval pre, .need-input { font-size: 12px; white-space: pre-wrap; max-height: 160px; overflow: auto; margin: 6px 0; }
+#built-connect { padding: 0 12px; } #built-connect pre { white-space: pre-wrap; word-break: break-all; padding: 8px; border: 1px solid var(--border); border-radius: 6px; }
 .built-body { padding: 0 4px 12px; display: flex; flex-direction: column; gap: 10px; }
 .built-body details > summary { cursor: pointer; padding: 4px 0; }
 .built-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.built-exe { margin: 10px 0; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; }
+.built-exe-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
 .built-tests li { margin-bottom: 8px; } .built-tests li.pass b { color: var(--green); } .built-tests li.fail b { color: var(--red); }
 .built-tests pre, .built-runs div { white-space: pre-wrap; font-size: 12.5px; }
 .code-area { width: 100%; font: 12.5px/1.45 var(--mono); margin-top: 6px; }

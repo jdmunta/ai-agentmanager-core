@@ -1526,8 +1526,31 @@ test('builder: a task becomes an agent (analysis, spec, tests), edited, tested, 
     assert.ok(started.running.pid);
     const url = await waitFor(async () => (await call('GET', '/builder/ticket-labeler')).body.running?.url, 15000, 'its address');
     assert.equal((await (await fetch(`${url}/api/health`)).json()).agent, 'ticket-labeler');
+    // Started here, it reports here: listed with its chat address.
+    const rep = await waitFor(async () => (await call('GET', '/agentkit/agents')).body.find((r) => r.name === 'ticket-labeler' && r.chat), 15000, 'its report');
+    assert.ok(rep.online);
+    assert.equal(rep.chat, url);
     assert.equal((await call('POST', '/builder/ticket-labeler/stop')).body.running, null);
+    // Reports need the token; a person's decision goes back with the reply to the next check-in.
+    const report = (body, token) => fetch(`${base}/api/agentkit/report`, { method: 'POST', headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) }, body: JSON.stringify(body) });
+    assert.equal((await report({ agent: { name: 'far' } })).status, 401);
+    assert.equal((await report({ agent: { name: 'far' } }, 'wrong')).status, 401);
+    const { token } = (await call('GET', '/agentkit/connect')).body;
+    const far = { agent: { name: 'far-agent', title: 'Far agent', host: 'studio', engine: 'claude' }, runs: [{ id: 'r1', status: 'done', costUsd: 0.5, result: 'ok' }], pending: [{ id: 'ap-1', tool: 'mcp__jira__transition', input: { key: 'T-1' }, at: new Date().toISOString() }] };
+    assert.deepEqual((await (await report(far, token)).json()).decisions, []);
+    const listed = (await call('GET', '/agentkit/agents')).body.find((r) => r.key === 'far-agent@studio');
+    assert.deepEqual([listed.totals.runs, listed.pending[0].tool], [1, 'mcp__jira__transition']);
+    assert.equal((await call('POST', '/agentkit/agents/far-agent%40studio/approvals/ap-1', { allow: true })).status, 200);
+    assert.equal((await call('POST', '/agentkit/agents/far-agent%40studio/approvals/ap-1', { allow: true })).status, 409);
+    assert.deepEqual((await (await report(far, token)).json()).decisions, [{ id: 'ap-1', allow: true, by: 'you' }]);
+    assert.equal((await call('GET', '/agentkit/agents')).body.find((r) => r.key === 'far-agent@studio').totals.runs, 1, 'a run is counted once');
+    await call('DELETE', '/agentkit/agents/far-agent%40studio');
+    assert.ok(!(await call('GET', '/agentkit/agents')).body.some((r) => r.key === 'far-agent@studio'));
     // Download: its folder as .tar.gz.
+    // Executables: the platform is checked up front; nothing to download before one is built.
+    assert.equal((await call('POST', '/builder/ticket-labeler/package', { platform: 'windows-x64' })).status, 400);
+    assert.equal((await call('GET', '/builder/ticket-labeler/executable/linux-x64')).status, 404);
+    assert.ok((await call('GET', '/builder/ticket-labeler')).body.platforms.includes('linux-x64'));
     const dl = await fetch(`${base}/api/builder/ticket-labeler/download`, { headers: { 'x-agentmgr': '1' } });
     assert.equal(dl.headers.get('content-type'), 'application/gzip');
     assert.ok((await dl.arrayBuffer()).byteLength > 100);
@@ -1535,6 +1558,7 @@ test('builder: a task becomes an agent (analysis, spec, tests), edited, tested, 
     for (const n of ['ticket-labeler', 'ticket-labeler-2']) await call('DELETE', `/builder/${n}`);
     assert.deepEqual((await call('GET', '/builder')).body, []);
   } finally {
+    await call('POST', '/builder/ticket-labeler/stop').catch(() => {}); // never leave it running
     delete process.env.AGENTKIT_CLAUDE_BIN;
     delete process.env.FAKE_AGENTKIT_STATE;
   }

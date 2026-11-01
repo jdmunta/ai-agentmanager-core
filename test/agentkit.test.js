@@ -49,8 +49,12 @@ test('loop: plan, act, check (and act again on what is left), reflect into memor
   const args = c[0].args;
   assert.ok(args.includes('--mcp-config') && args.includes('--strict-mcp-config'));
   assert.equal(args[args.indexOf('--setting-sources') + 1], 'project', "the person's own Claude settings stay out");
-  assert.deepEqual(args.slice(args.indexOf('--allowedTools') + 1, args.indexOf('--allowedTools') + 3), ['Read', 'mcp__jira__*']);
-  assert.equal(args[args.indexOf('--disallowedTools') + 1], 'mcp__jira__transition', 'approval tools kept out of reach');
+  // mcp__jira__* also covers the approval tool, so it goes through the approver instead.
+  assert.equal(args[args.indexOf('--allowedTools') + 1], 'Read');
+  assert.ok(!args.includes('mcp__jira__*'));
+  assert.equal(args[args.indexOf('--permission-prompt-tool') + 1], 'mcp__agentkit_approval__decide', 'approval tools ask a person');
+  assert.ok(!args.includes('--disallowedTools'));
+  assert.deepEqual(Object.keys(JSON.parse(fs.readFileSync(args[args.indexOf('--mcp-config') + 1], 'utf8')).mcpServers), ['jira', 'agentkit_approval']);
   assert.equal(c[0].cwd, fs.realpathSync(path.join(tmp, 'loop', 'work')));
   assert.match(fs.readFileSync(path.join(tmp, 'loop', '.agentkit', 'memory.md'), 'utf8'), /- inputs so far/);
   // Memory goes into the next run's system prompt; the run is in the log.
@@ -142,4 +146,148 @@ test('triggers: cron fields (lists, ranges, steps)', () => {
   assert.ok(!cronMatches('0 9 * * *', d));
   assert.ok(cronMatches('0,30 8-10 2 11 1', d));
   assert.ok(!cronMatches('30 9 * * 0,6', d));
+});
+
+// Builds a real executable only when this Node's official binary is already cached (no download in
+// tests); the packaged agent then runs one input through the fake engine from its own home.
+const cachedNode = path.join(os.homedir(), '.agentmanager', 'node-dist', `node-${process.version}-${process.platform}-${process.arch}`, 'node');
+test('package: one executable that checks and runs the agent', { skip: !['darwin', 'linux'].includes(process.platform) || !fs.existsSync(cachedNode) ? 'no cached Node binary' : false, timeout: 300_000 }, async () => {
+  const { packageAgent, HOST } = await import('../src/agentkit/package.js');
+  const dir = makeAgent('packed', '');
+  const r = await packageAgent(dir, { outDir: path.join(tmp, 'dist'), platform: HOST, cacheDir: path.dirname(path.dirname(cachedNode)) });
+  assert.equal(path.basename(r.file), `packed-${HOST}`);
+  const home = path.join(tmp, 'packed-home');
+  const run = (args) =>
+    new Promise((resolve) => {
+      const p = spawn(r.file, args, { env: { ...env, AGENTKIT_HOME: home, AK_TEST_TOKEN: 't' } });
+      let out = '';
+      p.stdout.on('data', (d) => (out += d));
+      p.on('close', (code) => resolve({ code, out }));
+    });
+  const checked = await run(['check']);
+  assert.equal(checked.code, 0);
+  assert.match(checked.out, /Ticket triage \(packed\)/);
+  assert.ok(fs.existsSync(path.join(home, 'agent.yaml')) && fs.existsSync(path.join(home, 'instructions.md')));
+  const once = await run(['--once', 'ticket 1']);
+  assert.equal(once.code, 0);
+  assert.ok(once.out.trim().length > 0);
+  await assert.rejects(packageAgent(dir, { outDir: tmp, platform: 'windows-x64' }), /platform/);
+});
+
+test('service: a launchd agent and a systemd unit that run it through the login shell', async () => {
+  const { serviceSpec, plist, unit, servicePaths } = await import('../src/agentkit/service.js');
+  const s = serviceSpec({ name: 'packed', dir: '/srv/packed', argv: ["/opt/it's/packed", 'run'], env: { AGENTKIT_HOME: '/srv/packed', HOME: '/x', AGENTKIT_CLAUDE_BIN: '' }, shell: '/bin/zsh' });
+  assert.deepEqual(s.env, { AGENTKIT_HOME: '/srv/packed' });
+  assert.deepEqual(s.command, ['/bin/zsh', '-l', '-c', `exec '/opt/it'\\''s/packed' 'run'`]);
+  const p = plist(s);
+  assert.match(p, /<string>dev\.agentkit\.packed<\/string>/);
+  assert.match(p, /<key>AGENTKIT_HOME<\/key><string>\/srv\/packed<\/string>/);
+  assert.match(p, /<key>StandardOutPath<\/key><string>\/srv\/packed\/agent\.log<\/string>/);
+  const u = unit(s);
+  assert.match(u, /^ExecStart="\/bin\/zsh" "-l" "-c" "exec /m);
+  assert.match(u, /Restart=on-failure/);
+  assert.equal(servicePaths('packed', '/h').unit, '/h/.config/systemd/user/agentkit-packed.service');
+});
+
+test('approvals: a tool on the approve list waits for a person (chat page or AI Agent Manager); others are refused', async () => {
+  const { toolMatches } = await import('../src/agentkit/approvals.js');
+  assert.ok(toolMatches('mcp__jira__*', 'mcp__jira__transition') && toolMatches('Bash(git push:*)', 'Bash') && !toolMatches('mcp__jira__get', 'mcp__jira__transition'));
+  const agent = new Agent(loadAgent(makeAgent('appr'), { env }), { env });
+  // No one to ask yet: refused at once.
+  let r = await agent.run('do #tool:mcp__jira__transition', { source: 'cli' });
+  assert.match(r.result, /refused: .*no one can be asked/);
+  // Off the approve list: refused without asking.
+  const web = await startHttp(agent, { port: 0 });
+  r = await agent.run('do #tool:mcp__slack__post', { source: 'cli' });
+  assert.match(r.result, /refused: mcp__slack__post is not in this agent's allow list/);
+  // On it: the chat page shows it, and a person's answer decides.
+  const asked = new Promise((res) => agent.approvals.once('request', res));
+  const running = agent.run('do #tool:mcp__jira__transition', { source: 'cli' });
+  const a = await asked;
+  const list = await (await fetch(`${web.url}/api/approvals`)).json();
+  assert.deepEqual(list.map((x) => [x.tool, x.input]), [['mcp__jira__transition', { ticket: 7 }]]);
+  assert.equal((await fetch(`${web.url}/api/approvals/${a.id}`, { method: 'POST', body: 'allow=true' })).status, 400, 'JSON only');
+  assert.equal((await fetch(`${web.url}/api/approvals/${a.id}`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{"allow":true}' })).status, 200);
+  assert.match((await running).result, /The tool ran/);
+  // Declined, and the decision is kept for the views.
+  const asked2 = new Promise((res) => agent.approvals.once('request', res));
+  const running2 = agent.run('again #tool:mcp__jira__transition', { source: 'cli' });
+  agent.approvals.decide((await asked2).id, false, { by: 'Sam', note: 'not on Fridays' });
+  assert.match((await running2).result, /refused: Declined by Sam: not on Fridays/);
+  assert.deepEqual(agent.approvals.decided.map((d) => d.allow), [false, true]);
+  await web.close();
+  agent.close();
+});
+
+test('report: runs and approvals go to AI Agent Manager, and its decisions come back', async () => {
+  const { startReporting } = await import('../src/agentkit/report.js');
+  const { AgentkitReports } = await import('../src/agentkit-reports.js');
+  const { paths } = await import('../src/config.js');
+  const before = paths.home;
+  paths.home = path.join(tmp, 'mgr-home');
+  try {
+    const reports = new AgentkitReports();
+    const token = reports.reportToken();
+    // The manager's endpoint, called in-process.
+    const fetchImpl = async (url, o) => {
+      assert.equal(o.headers.authorization, `Bearer ${token}`);
+      const reply = reports.report(JSON.parse(o.body));
+      return { ok: true, status: 200, json: async () => reply };
+    };
+    const agent = new Agent(loadAgent(makeAgent('reported'), { env }), { env });
+    const { stop } = startReporting(agent, { url: 'http://mgr', token, fetchImpl, chat: () => 'http://127.0.0.1:7700', everyMs: 50, fastMs: 20 });
+    await new Promise((res) => setTimeout(res, 100));
+    assert.ok(agent.approvals.channels.has('manager'));
+    await agent.run('Ticket 9', { source: 'cli' });
+    const asked = new Promise((res) => agent.approvals.once('request', res));
+    const running = agent.run('do #tool:mcp__jira__transition', { source: 'cli' });
+    const a = await asked;
+    let view;
+    for (let i = 0; i < 50 && !view?.pending.length; i++) (await new Promise((res) => setTimeout(res, 20))), (view = reports.list()[0]);
+    assert.equal(view.name, 'reported');
+    assert.equal(view.chat, 'http://127.0.0.1:7700');
+    assert.ok(view.online);
+    assert.equal(view.pending[0].id, a.id);
+    assert.equal(view.totals.runs, 1);
+    reports.decide(view.key, a.id, true, 'Ana');
+    assert.throws(() => reports.decide(view.key, a.id, true), /Already decided/);
+    assert.match((await running).result, /The tool ran/);
+    assert.equal(agent.approvals.decided[0].by, 'Ana');
+    for (let i = 0; i < 50 && reports.list()[0].totals.runs < 2; i++) await new Promise((res) => setTimeout(res, 20));
+    assert.equal(reports.list()[0].totals.runs, 2);
+    assert.equal(reports.list()[0].totals.costUsd, 0.08);
+    stop();
+    agent.close();
+    reports.save(true);
+    assert.equal(new AgentkitReports().list()[0].name, 'reported', 'kept across restarts');
+  } finally {
+    paths.home = before;
+  }
+});
+
+test('report: over https to a self-signed certificate, only the pinned one is trusted', async () => {
+  const { pinnedPost } = await import('../src/agentkit/report.js');
+  const { execFileSync } = await import('node:child_process');
+  const crypto = await import('node:crypto');
+  const https = await import('node:https');
+  const key = path.join(tmp, 'k.pem');
+  const cert = path.join(tmp, 'c.pem');
+  execFileSync('openssl', ['req', '-x509', '-newkey', 'ec', '-pkeyopt', 'ec_paramgen_curve:prime256v1', '-nodes', '-keyout', key, '-out', cert, '-days', '1', '-subj', '/CN=127.0.0.1'], { stdio: 'ignore' });
+  let got = null;
+  const server = https.createServer({ key: fs.readFileSync(key), cert: fs.readFileSync(cert) }, (req, res) => {
+    let b = '';
+    req.on('data', (d) => (b += d));
+    req.on('end', () => ((got = b), res.end('{"decisions":[]}')));
+  });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  const url = `https://127.0.0.1:${server.address().port}/api/agentkit/report`;
+  const pin = new crypto.X509Certificate(fs.readFileSync(cert)).fingerprint256;
+  const res = await pinnedPost(url, { headers: { 'content-type': 'application/json' }, body: '{"hi":1}', pin });
+  assert.ok(res.ok);
+  assert.deepEqual(await res.json(), { decisions: [] });
+  assert.equal(got, '{"hi":1}');
+  got = null;
+  await assert.rejects(pinnedPost(url, { headers: {}, body: '{"secret":1}', pin: 'AA:BB' }), /does not match/);
+  assert.equal(got, null, 'nothing sent to the wrong certificate');
+  server.close();
 });

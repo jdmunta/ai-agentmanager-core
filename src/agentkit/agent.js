@@ -5,8 +5,9 @@ import crypto from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
 import path from 'node:path';
+import { Approvals } from './approvals.js';
 import { agentPaths } from './spec.js';
-import { turn, writeMcpConfig } from './engines.js';
+import { APPROVER, approverServer, turn, writeMcpConfig } from './engines.js';
 
 const now = () => new Date().toISOString();
 const readJson = (f, d) => {
@@ -30,7 +31,8 @@ export function verdictOf(text) {
 }
 
 export class Agent extends EventEmitter {
-  constructor(spec, { env = process.env, engineTurn = turn } = {}) {
+  /** `approvals`: 'ask' (a person decides approval tools, where the engine can ask) or 'deny'. */
+  constructor(spec, { env = process.env, engineTurn = turn, approvals = 'ask' } = {}) {
     super();
     this.spec = spec;
     this.env = env;
@@ -38,6 +40,11 @@ export class Agent extends EventEmitter {
     this.paths = agentPaths(spec);
     fs.mkdirSync(this.paths.runs, { recursive: true });
     this.mcpFile = writeMcpConfig(spec, this.paths.mcp);
+    this.approvals = new Approvals(spec, { timeoutMs: spec.approveTimeoutMs ?? 30 * 60_000 });
+    this.approvals.on('change', () => this.emit('approvals', this.approvals.pending()));
+    // Only Claude can ask mid-run (the others get approval tools taken away instead).
+    this.asks = approvals === 'ask' && spec.engine === 'claude' && spec.approve.length > 0;
+    this.approverReady = false;
     this.sessions = readJson(this.paths.sessions, {});
     this.queue = Promise.resolve();
     this.current = null;
@@ -84,8 +91,14 @@ export class Agent extends EventEmitter {
     this.current = { id, source, startedAt: now() };
     log({ type: 'start', input, source, conversation });
     let session = conversation ? this.sessions[conversation] ?? null : null;
+    if (this.asks && !this.approverReady) {
+      const url = await this.approvals.address();
+      this.mcpFile = writeMcpConfig(this.spec, this.paths.mcp, { [APPROVER]: approverServer({ url, token: this.approvals.token }) });
+      this.approverReady = true;
+    }
+    this.approvals.run = id;
     const ask = async (step, prompt) => {
-      const res = await this.engineTurn(this.spec, { prompt, system: this.system(), session, mcpFile: this.mcpFile, env: this.env });
+      const res = await this.engineTurn(this.spec, { prompt, system: this.system(), session, mcpFile: this.mcpFile, approver: this.asks, env: this.env });
       session = res.session ?? session;
       if (res.costUsd) cost += res.costUsd;
       log({ type: step, text: res.text });
@@ -125,8 +138,13 @@ export class Agent extends EventEmitter {
     const summary = { id, status, result, source, conversation, costUsd: cost ? Math.round(cost * 1e6) / 1e6 : null, ms: Date.now() - t0 };
     log({ type: 'end', ...summary });
     this.current = null;
+    this.approvals.run = null;
     this.emit('run', summary);
     return summary;
+  }
+
+  close() {
+    this.approvals.close();
   }
 
   /** Recent runs, newest first: id, status, source, start time, result (from each log). */

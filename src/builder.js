@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import YAML from 'yaml';
 import { Agent } from './agentkit/agent.js';
 import { turn as engineTurn } from './agentkit/engines.js';
+import { HOST, PLATFORMS, packageAgent } from './agentkit/package.js';
 import { checkAgent, loadAgent } from './agentkit/spec.js';
 import { parseJsonReply } from './brief.js';
 import { paths } from './config.js';
@@ -82,10 +83,13 @@ export function yamlOf(d, engine) {
 
 export class Builder {
   /** `oneShot(prompt)` answers a design or judge prompt (the daemon's writer engine). */
-  constructor({ oneShot, env = process.env, runTurn = engineTurn }) {
+  /** `reportEnv()`: settings that make an agent started here report to this daemon. */
+  constructor({ oneShot, env = process.env, runTurn = engineTurn, pack = packageAgent, reportEnv = () => ({}) }) {
+    this.reportEnv = reportEnv;
     this.oneShot = oneShot;
     this.env = env;
     this.runTurn = runTurn;
+    this.pack = pack;
     this.procs = new Map(); // name -> child process of `agentkit run`
     this.pending = new Map(); // name -> what's in progress (designing, testing)
   }
@@ -147,6 +151,10 @@ export class Builder {
       pending: this.pending.get(name) ?? null,
       running: p ? { pid: p.child.pid, url: p.url, since: p.since } : null,
       runs,
+      platforms: PLATFORMS.filter((x) => process.platform === 'darwin' || !x.startsWith('macos-')),
+      host: HOST,
+      // Executables built since the last edit that are still there.
+      executables: Object.fromEntries(Object.entries(m.executables ?? {}).filter(([, x]) => fs.existsSync(path.join(dir, 'dist', x.file)))),
     };
   }
 
@@ -201,6 +209,11 @@ export class Builder {
       fs.writeFileSync(path.join(dir, 'tests.yaml'), YAML.stringify(list));
       this.saveMeta(name, { tests: list });
     }
+    // Executables built before carry the old files; build them again after an edit.
+    if (yaml != null || instructions != null || tests != null) {
+      fs.rmSync(path.join(dir, 'dist'), { recursive: true, force: true });
+      this.saveMeta(name, { executables: {} });
+    }
     return this.view(name);
   }
 
@@ -214,7 +227,8 @@ export class Builder {
     this.pending.set(name, 'testing');
     this.saveMeta(name, { status: 'testing' });
     try {
-      const agent = new Agent({ ...spec, triggers: [] }, { env: this.env, engineTurn: this.runTurn });
+      // Tests don't wait for people: approval tools are simply not available in them.
+      const agent = new Agent({ ...spec, triggers: [], report: null }, { env: this.env, engineTurn: this.runTurn, approvals: 'deny' });
       const results = [];
       for (const t of tests) {
         const r = await agent.run(t.input, { source: 'test' });
@@ -239,13 +253,46 @@ export class Builder {
     return this.view(name);
   }
 
+  /** Build its single executable for a platform into dist/ (in the background; the view says when). */
+  package(name, platform = HOST) {
+    const dir = this.dir(name);
+    if (!this.meta(name)) throw err(404, `No built agent "${name}"`);
+    if (this.pending.get(name)) throw err(409, `Already ${this.pending.get(name)}`);
+    if (!PLATFORMS.includes(platform)) throw err(400, `platform: one of ${PLATFORMS.join(', ')}`);
+    if (platform.startsWith('macos-') && process.platform !== 'darwin') throw err(400, 'macOS executables are built on a Mac');
+    loadAgent(dir, { env: this.env });
+    this.pending.set(name, `packaging for ${platform}`);
+    this.saveMeta(name, { packageError: null });
+    return this.#pack(name, dir, platform);
+  }
+
+  async #pack(name, dir, platform) {
+    try {
+      const r = await this.pack(dir, { outDir: path.join(dir, 'dist'), platform });
+      const executables = { ...this.meta(name).executables, [platform]: { file: path.basename(r.file), size: r.size, at: now() } };
+      this.saveMeta(name, { executables });
+    } catch (e) {
+      this.saveMeta(name, { packageError: `${platform}: ${e.message}` });
+    } finally {
+      this.pending.delete(name);
+    }
+    return this.view(name);
+  }
+
+  /** The path of a built executable, for download. */
+  executable(name, platform) {
+    const x = this.view(name).executables[platform];
+    if (!x) throw err(404, `No ${platform} executable built yet`);
+    return path.join(this.dir(name), 'dist', x.file);
+  }
+
   /** Run it continuously on this computer (`agentkit run`); its output goes to agent.log. */
   start(name) {
     const dir = this.dir(name);
     if (this.procs.has(name)) return this.view(name);
     loadAgent(dir, { env: this.env });
     const log = fs.openSync(path.join(dir, 'agent.log'), 'a');
-    const child = spawn(process.execPath, [AGENTKIT, 'run', dir], { env: this.env, stdio: ['ignore', log, log], detached: false });
+    const child = spawn(process.execPath, [AGENTKIT, 'run', dir], { env: { ...this.env, ...this.reportEnv() }, stdio: ['ignore', log, log], detached: false });
     const entry = { child, url: null, since: now() };
     this.procs.set(name, entry);
     // Its chat address, from the log line it prints when listening.

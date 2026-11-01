@@ -126,7 +126,8 @@ $('#new-playbook').onclick = () => {
   playbooksUi.open({ intent: f.intents.value.trim(), projects: f.project.value.trim() ? [f.project.value.trim()] : [], model: f.model.value.trim(), permissionMode: f.permissionMode.value });
 };
 $('#triggers-open').onclick = () => triggersUi.open();
-const builtUi = initBuilt({ api, esc, toast, $, isOpen: () => sideTab === 'built', setCount: (n) => ($('#built-count').textContent = n) });
+let builtReports = []; // agents built with agentkit that report here (runs, approvals)
+const builtUi = initBuilt({ api, esc, toast, $, isOpen: () => sideTab === 'built', setCount: (n) => ($('#built-count').textContent = n), reports: () => builtReports });
 const landUi = initLand({ api, esc, toast, agents, $, scoreBadge, select: (id) => (showTab('agents'), select(id)), openReview: (id) => reviewUi.open(id), isOpen: () => sideTab === 'land' });
 
 function statusOf(a) {
@@ -1005,7 +1006,7 @@ function flags(a) {
 }
 
 const TRIAGED = { now: 'sent (AI: urgent)', digest: 'held for the digest', skip: 'dropped by the AI judge' };
-const NEED_ORDER = { prompt: 0, waiting: 1, plan: 1, question: 1, team: 1, review: 2, stuck: 3, conflict: 4 };
+const NEED_ORDER = { approval: 0, prompt: 0, waiting: 1, plan: 1, question: 1, team: 1, review: 2, stuck: 3, conflict: 4 };
 /** What an agent needs from the user. `both`: overlaps on both agents (detail), else only the one that should rebase (inbox). */
 function needsFor(a, { both = false } = {}) {
   const items = [];
@@ -1025,23 +1026,34 @@ function teamNeeds() {
     .filter((t) => ['ready', 'blocked'].includes(t.stage) && agents.has(teamOwner(t)))
     .map((t) => ({ a: agents.get(teamOwner(t)), kind: 'team', key: `team:${t.id}`, t }));
 }
+/** Tools that built agents (agentkit) wait to run until someone approves. */
+function approvalNeeds() {
+  return builtReports.flatMap((r) => r.pending.map((p) => ({ a: { id: r.key, name: r.title, priority: 1 }, kind: 'approval', key: `approval:${r.key}:${p.id}`, r, p })));
+}
 function inboxItems() {
-  return [...[...agents.values()].flatMap((a) => needsFor(a)), ...teamNeeds()]
+  return [...approvalNeeds(), ...[...agents.values()].flatMap((a) => needsFor(a)), ...teamNeeds()]
     .sort((x, y) => NEED_ORDER[x.kind] - NEED_ORDER[y.kind] || (x.a.priority ?? 2) - (y.a.priority ?? 2));
 }
 
-const NEED_LABEL = { team: 'Team', prompt: 'Needs input', waiting: 'Waiting on you', plan: 'Plan review', question: 'Question', review: 'AI review', stuck: 'Stuck?', conflict: 'Overlap' };
+const NEED_LABEL = { approval: 'Approval', team: 'Team', prompt: 'Needs input', waiting: 'Waiting on you', plan: 'Plan review', question: 'Question', review: 'AI review', stuck: 'Stuck?', conflict: 'Overlap' };
 /** Why the AI judge thinks so, as a small tag. */
 const aiTag = (confidence, what = 'AI') => `<span class="tag ai" title="Judged by a model from the agent's activity; your reactions tune later calls">🤖 ${what}${confidence != null ? ` ${Math.round(confidence * 100)}%` : ''}</span>`;
 function needCard(it, { inDetail = false } = {}) {
   const { a } = it;
   const who = inDetail
     ? ''
+    : it.kind === 'approval'
+    ? `<a href="#" class="need-agent" data-ib="built-open">⚙ ${esc(a.name)}</a> <span class="hint">${esc(it.r.host)}</span>`
     : `<a href="#${a.id}" class="need-agent" data-goto="${a.id}">${prioChip(a.priority ?? 2)}${esc(a.name)}</a>${a.projectInfo?.name ? ` <span class="hint">${esc(a.projectInfo.name)}</span>` : ''}`;
   const head = `<div class="need-head"><span class="need-kind ${it.kind}">${NEED_LABEL[it.kind]}</span>${who}</div>`;
   const draft = (k, fallback = '') => esc(needDrafts.get(`${it.key}:${k}`) ?? fallback);
   let body = '';
-  if (it.kind === 'prompt') {
+  if (it.kind === 'approval') {
+    const p = it.p;
+    body = `<p class="need-title">Wants to run <code>${esc(p.tool)}</code> <span class="hint">asked ${ago(p.at)}</span></p>
+      <pre class="need-input">${esc(JSON.stringify(p.input, null, 2).slice(0, 1500))}</pre>
+      <div class="need-actions"><button class="small primary" data-ib="approve" data-allow="1">Approve</button><button class="small" data-ib="approve">Deny</button>${it.r.chat ? `<a class="button small ghost" href="${esc(it.r.chat)}" target="_blank" rel="noopener">Its chat ↗</a>` : ''}</div>`;
+  } else if (it.kind === 'prompt') {
     const p = a.runtime.prompt;
     body = `<p class="need-title">${esc(p?.question || a.runtime.attention)}</p>
       <div class="need-actions">
@@ -1145,7 +1157,7 @@ function judgeLine() {
 
 function renderInbox() {
   const items = inboxItems();
-  const urgent = items.filter((i) => i.kind === 'prompt' || i.kind === 'question' || i.kind === 'waiting').length;
+  const urgent = items.filter((i) => i.kind === 'approval' || i.kind === 'prompt' || i.kind === 'question' || i.kind === 'waiting').length;
   $('#inbox-count').textContent = items.length ? String(items.length) : '';
   $('#inbox-count').className = `badge ${urgent ? 'attention' : ''}`;
   if (sideTab !== 'inbox') return;
@@ -1179,6 +1191,14 @@ async function onNeed(e) {
   const id = card.dataset.agent;
   const key = card.dataset.need;
   switch (el.dataset.ib) {
+    case 'built-open':
+      return showTab('built');
+    case 'approve': {
+      const [, , pid] = key.match(/^approval:(.+):([^:]+)$/);
+      return act(async () => {
+        await api('POST', `/agentkit/agents/${encodeURIComponent(id)}/approvals/${encodeURIComponent(pid)}`, { allow: el.dataset.allow === '1' });
+      }, el.dataset.allow === '1' ? 'Approved; the agent goes on' : 'Declined');
+    }
     case 'key':
       return act(() => api('POST', `/agents/${id}/prompt-key`, { key: el.dataset.key }), 'Sent');
     case 'terminal':
@@ -3608,6 +3628,8 @@ function handleEvent(msg) {
     for (const r of msg.races ?? []) races.set(r.id, r);
     teams.clear();
     for (const t of msg.teams ?? []) teams.set(t.id, t);
+    builtReports = msg.built ?? [];
+    builtUi.render();
     msg.agents.forEach(watchDocs);
     if (selectedId && !agents.has(selectedId)) selectedId = null;
     if (openTermOnLoad && selectedId) {
@@ -3630,6 +3652,9 @@ function handleEvent(msg) {
     teams.set(msg.team.id, msg.team);
   } else if (msg.t === 'team-removed') {
     teams.delete(msg.id);
+  } else if (msg.t === 'built') {
+    builtReports = msg.reports;
+    builtUi.render();
   } else if (msg.t === 'backlog') {
     backlogState = msg.backlog;
   } else if (msg.t === 'projects') {

@@ -67,3 +67,29 @@ export function serveMcp(agent, io) {
     throw Object.assign(new Error(`Method not found: ${method}`), { code: -32601 });
   }, io);
 }
+
+/**
+ * The approver (`<agent> approver`): the MCP tool Claude asks (--permission-prompt-tool) before a
+ * tool that isn't allowed outright. It hands the request to the running agent (AGENTKIT_APPROVAL_URL,
+ * with AGENTKIT_APPROVAL_TOKEN), which asks a person, and answers with their decision.
+ */
+export function serveApprover({ url, token, fetchImpl = fetch } = {}, io) {
+  serve(async (method, p) => {
+    if (method === 'initialize') return { protocolVersion: p.protocolVersion ?? '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'agentkit-approver', version: '1.0.0' } };
+    if (method === 'notifications/initialized' || method === 'ping') return {};
+    if (method === 'tools/list') {
+      return { tools: [{ name: 'decide', description: 'Asks a person whether a tool may run', inputSchema: { type: 'object', properties: { tool_name: { type: 'string' }, input: { type: 'object' }, tool_use_id: { type: 'string' } }, required: ['tool_name'] } }] };
+    }
+    if (method === 'tools/call') {
+      const a = p.arguments ?? {};
+      let d = { allow: false, message: 'No one could be asked (the agent is not reachable)' };
+      try {
+        const res = await fetchImpl(url, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` }, body: JSON.stringify({ tool: a.tool_name, input: a.input ?? {} }) });
+        if (res.ok) d = await res.json();
+      } catch {}
+      const text = d.allow ? JSON.stringify({ behavior: 'allow', updatedInput: a.input ?? {} }) : JSON.stringify({ behavior: 'deny', message: d.message || 'A person declined this' });
+      return { content: [{ type: 'text', text }] };
+    }
+    throw Object.assign(new Error(`Method not found: ${method}`), { code: -32601 });
+  }, io);
+}

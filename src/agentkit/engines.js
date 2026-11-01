@@ -1,13 +1,17 @@
 // One headless turn of an engine's CLI: a prompt in, the answer (and session, cost) out. The agent
 // keeps one engine session per conversation, so a follow-up continues it. Tools come from the
-// agent's MCP servers; the allow list says what runs without asking, and "approve" tools are kept
-// out of reach (a person's approval for them comes in a later phase).
+// agent's MCP servers; the allow list says what runs without asking. "approve" tools ask a person
+// through the approver (Claude), or are kept out of reach (engines with no way to ask).
 import { spawn } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import sea from 'node:sea';
 import { fileURLToPath } from 'node:url';
 
+import { allowedOutright } from './approvals.js';
+
+const AGENTKIT_BIN = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'bin', 'agentkit.js');
 const ACP_CLIENT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'bin', 'acp-client.js');
 // Overrides for tests and odd installs: AGENTKIT_CLAUDE_BIN, AGENTKIT_CODEX_BIN, AGENTKIT_MUSE_BIN
 // (a command, optionally with arguments: "node /path/fake.js").
@@ -31,12 +35,19 @@ function run(cmd, args, { input, cwd, env, timeoutMs }) {
   });
 }
 
-/** The MCP config file the engine loads (Claude's format: { mcpServers: {...} }). */
-export function writeMcpConfig(agent, file) {
-  if (!Object.keys(agent.tools).length) return null;
+/** The MCP config file the engine loads (Claude's format: { mcpServers: {...} }), plus `extra` servers. */
+export function writeMcpConfig(agent, file, extra = {}) {
+  const servers = { ...agent.tools, ...extra };
+  if (!Object.keys(servers).length) return null;
   fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, JSON.stringify({ mcpServers: agent.tools }, null, 2), { mode: 0o600 });
+  fs.writeFileSync(file, JSON.stringify({ mcpServers: servers }, null, 2), { mode: 0o600 });
   return file;
+}
+
+/** The approver as an MCP server: this program (`<agent> approver` when packaged) asking `url`. */
+export const APPROVER = 'agentkit_approval';
+export function approverServer({ url, token }) {
+  return { command: process.execPath, args: sea.isSea() ? ['approver'] : [AGENTKIT_BIN, 'approver'], env: { AGENTKIT_APPROVAL_URL: url, AGENTKIT_APPROVAL_TOKEN: token } };
 }
 
 /**
@@ -44,7 +55,7 @@ export function writeMcpConfig(agent, file) {
  * { text, session, costUsd }. `system` goes in as an extra system prompt where the engine has one,
  * else ahead of the prompt.
  */
-export async function turn(agent, { prompt, system = '', session = null, mcpFile = null, env = process.env, timeoutMs = 15 * 60_000 }) {
+export async function turn(agent, { prompt, system = '', session = null, mcpFile = null, approver = false, env = process.env, timeoutMs = 15 * 60_000 }) {
   fs.mkdirSync(agent.workdir, { recursive: true });
   const cwd = agent.workdir;
   if (agent.engine === 'claude') {
@@ -57,8 +68,13 @@ export async function turn(agent, { prompt, system = '', session = null, mcpFile
     // person's own Claude settings (their MCP servers, hooks, permissions) leak in.
     args.push('--setting-sources', 'project', '--strict-mcp-config');
     if (mcpFile) args.push('--mcp-config', mcpFile);
-    if (agent.allow.length) args.push('--allowedTools', ...agent.allow);
-    if (agent.approve.length) args.push('--disallowedTools', ...agent.approve);
+    // The approve list wins: an allow pattern that also covers an approval tool goes to the approver.
+    const allow = approver ? allowedOutright(agent) : agent.allow;
+    if (allow.length) args.push('--allowedTools', ...allow);
+    // With an approver, Claude asks it before anything not allowed outright (it says no to tools
+    // off the approve list); without one, approval tools are simply not available.
+    if (approver) args.push('--permission-prompt-tool', `mcp__${APPROVER}__decide`);
+    else if (agent.approve.length) args.push('--disallowedTools', ...agent.approve);
     const out = await run(cmd, args, { input: prompt, cwd, env, timeoutMs });
     try {
       const j = JSON.parse(out);

@@ -39,16 +39,21 @@ body{margin:0;font:15px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-ser
 header{padding:12px 16px;border-bottom:1px solid var(--border);background:var(--panel)}header b{font-size:16px}header p{margin:2px 0 0;color:var(--muted);font-size:13px}
 #log{flex:1;overflow:auto;padding:16px;display:flex;flex-direction:column;gap:10px}
 .m{max-width:760px;padding:10px 12px;border-radius:10px;white-space:pre-wrap;word-break:break-word}.you{align-self:flex-end;background:var(--accent);color:#fff}.agent{background:var(--panel);border:1px solid var(--border)}
+#ap{display:flex;flex-direction:column;gap:8px;padding:0 16px}#ap:not(:empty){padding:12px 16px;border-bottom:1px solid var(--border)}.ap{padding:10px 12px;border-radius:10px;border:1px solid #e8a33d;background:var(--panel)}.ap pre{margin:6px 0;font-size:12px;white-space:pre-wrap;max-height:160px;overflow:auto}.ap .no{background:transparent;color:var(--text);border:1px solid var(--border)}
 .step{font-size:12px;color:var(--muted)}form{display:flex;gap:8px;padding:12px 16px;border-top:1px solid var(--border);background:var(--panel)}
 textarea{flex:1;resize:none;font:inherit;padding:8px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:inherit}button{font:inherit;padding:8px 14px;border-radius:8px;border:0;background:var(--accent);color:#fff}
 </style></head><body><header><b>${esc(agent.spec.title)}</b><p>${esc(agent.spec.description || agent.spec.goal)}</p></header>
-<div id="log"></div><form id="f"><textarea id="t" rows="2" placeholder="Ask or tell the agent…"></textarea><button>Send</button></form>
+<div id="ap"></div><div id="log"></div><form id="f"><textarea id="t" rows="2" placeholder="Ask or tell the agent…"></textarea><button>Send</button></form>
 <script>
 const log=document.getElementById('log');const conv=localStorage.getItem('conv')||crypto.randomUUID();localStorage.setItem('conv',conv);
 const add=(cls,text)=>{const d=document.createElement('div');d.className='m '+cls;d.textContent=text;log.append(d);log.scrollTop=log.scrollHeight;return d};
 document.getElementById('f').onsubmit=async(e)=>{e.preventDefault();const t=document.getElementById('t');const text=t.value.trim();if(!text)return;t.value='';add('you',text);
 const wait=add('agent step','Working on it…');const r=await fetch('api/chat',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({message:text,conversation:conv})}).then(r=>r.json()).catch(e=>({error:e.message}));
 wait.remove();add('agent',r.result??('Error: '+r.error))};
+const ap=document.getElementById('ap');const esc=(s)=>String(s).replace(/[&<>"]/g,(c)=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[c]);
+async function approvals(){const l=await fetch('api/approvals').then(r=>r.json()).catch(()=>[]);ap.innerHTML=l.map(a=>'<div class="ap"><b>Approve '+esc(a.tool)+'?</b> <span class="step">asked '+new Date(a.at).toLocaleTimeString()+'</span><pre>'+esc(JSON.stringify(a.input,null,2))+'</pre><button data-id="'+esc(a.id)+'" data-allow="1">Approve</button> <button class="no" data-id="'+esc(a.id)+'">Deny</button></div>').join('')}
+ap.onclick=async(e)=>{const b=e.target.closest('button[data-id]');if(!b)return;b.disabled=true;await fetch('api/approvals/'+b.dataset.id,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({allow:!!b.dataset.allow})});approvals()};
+approvals();setInterval(approvals,2000);
 document.getElementById('t').onkeydown=(e)=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();document.getElementById('f').requestSubmit()}};
 </script></body></html>`;
 
@@ -66,6 +71,14 @@ export function startHttp(agent, { port, host = '127.0.0.1', log = () => {} } = 
     if (!message) throw Object.assign(new Error('message is required'), { status: 400 });
     return agent.run(message, { source: 'chat', conversation: String(req.body?.conversation ?? '').slice(0, 80) || crypto.randomUUID() });
   }));
+  // Tools waiting for a person's approval, and their answers (JSON only: a page elsewhere can't post here).
+  app.get('/api/approvals', wrap(() => agent.approvals.pending()));
+  app.post('/api/approvals/:id', wrap((req) => {
+    if (!req.is('application/json') || typeof req.body?.allow !== 'boolean') throw Object.assign(new Error('Send {"allow": true|false}'), { status: 400 });
+    if (!agent.approvals.decide(req.params.id, req.body.allow, { by: 'the chat page', note: String(req.body.note ?? '') })) throw Object.assign(new Error('Already decided'), { status: 409 });
+    return { ok: true };
+  }));
+  agent.approvals.channels.add('chat');
   app.post('/api/runs', wrap((req) => agent.run(String(req.body?.input ?? ''), { source: 'api' })));
   app.get('/api/runs', wrap(() => agent.runs()));
   app.get('/api/runs/:id', wrap((req) => agent.runLog(req.params.id) ?? Promise.reject(Object.assign(new Error('No such run'), { status: 404 }))));
@@ -112,7 +125,7 @@ export function startHttp(agent, { port, host = '127.0.0.1', log = () => {} } = 
     server.listen(port, host, () => {
       const url = `http://${host}:${server.address().port}`;
       log(`chat and API: ${url}${agent.spec.interfaces.a2a ? `  ·  A2A card: ${url}/.well-known/agent.json` : ''}`);
-      resolve({ server, url, close: () => new Promise((r) => server.close(r)) });
+      resolve({ server, url, close: () => (agent.approvals.channels.delete('chat'), new Promise((r) => server.close(r))) });
     });
   });
 }
