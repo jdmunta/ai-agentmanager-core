@@ -894,3 +894,15 @@ form.dropping { outline: 2px dashed var(--accent, #6b8cff); outline-offset: 4px;
 .menu-theme .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; margin-left: auto; }
 .menu-theme .seg button { border: 0; border-radius: 0; padding: 3px 9px; font-size: 12px; background: transparent; }
 .menu-theme .seg button.on { background: var(--accent); color: var(--accent-text); }
+
+/* Diagram export buttons: on each drawn diagram, shown on hover (always on touch screens). */
+.diagram { position: relative; }
+.dg-tools { position: absolute; top: 6px; right: 6px; display: flex; gap: 4px; opacity: 0; transition: opacity .15s; z-index: 1; }
+.diagram:hover .dg-tools, .diagram:focus-within .dg-tools { opacity: 1; }
+@media (hover: none) { .dg-tools { opacity: 1; position: static; justify-content: flex-end; margin-bottom: 4px; } }
+.dg-tools button { background: var(--panel); }
+/* Listen controls. */
+.say { display: inline-flex; gap: 4px; align-items: center; vertical-align: middle; }
+.say.on button:first-child { min-width: 30px; }
+.explain-foot { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.sd-step.current { box-shadow: 0 0 0 2px var(--accent, #6b8cff); }

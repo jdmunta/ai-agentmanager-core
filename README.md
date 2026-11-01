@@ -331,6 +331,8 @@ The Brief panel's **Share for review** buttons, or `agentmgr doc <agent> <kind>`
 | **Human vs AI** | Your top 5 decisions, each with why it needs you, the stakes, options and what the work suggests, plus a box for your answer. Up to 5 questions the AI answers, each with its confidence, evidence and how to check it. A second model's verdict on each. |
 | **Diagrams** | Diagrams only, for a quick grasp: the problem, the architecture (with what changes highlighted), the design, the data flow (animated) and the key interaction, plus the plan. Drawn from the documents already written and the agent's work. Optional: **Write all** leaves it out. |
 
+Each drawn diagram has **Copy image** (paste it into Slack, a PR comment or a doc), **PNG** and **SVG**, and a document with diagrams also downloads as one **.html** file. **🔊 Listen** reads Explain, documents and the change walkthrough aloud with the browser's own voices; the walkthrough is read change by change, showing each as it goes.
+
 **Human vs AI.** This review takes two separate read-only calls.
 1. **The split.** The agent's engine splits the open questions. *For you to decide* covers judgment calls such as intent, priorities, risk appetite and trade-offs. *Answered by AI* covers reasoning and evaluation: correctness, edge cases, test coverage and what's left.
 2. **The second opinion.** Another model reviews that split against the same context. It marks each AI answer *agrees*, *partly* or *disagrees*, with a correction where needed. It marks each of your questions *keep*, *AI could answer* or *reword*, and lists questions both lists missed.

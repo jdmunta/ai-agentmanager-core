@@ -6,6 +6,8 @@ import { touchScroll } from '/touchscroll.js';
 import { openStream, post, REMOTE } from '/transport.js';
 import { attachBox } from '/attach.js';
 import { initSide } from '/side.js';
+import { addTools, download, htmlFile, initExport } from '/export.js';
+import { bindListen, listenHtml, play, speakable, now as speaking, stop as stopSpeaking } from '/speak.js';
 import { initReview } from '/review.js';
 import { initLand, prChips } from '/land.js';
 import { initTriggers } from '/triggers.js';
@@ -169,10 +171,13 @@ const isDark = () => {
   const t = document.documentElement.dataset.theme;
   return t ? t === 'dark' : matchMedia('(prefers-color-scheme: dark)').matches;
 };
+// SVG text labels rather than HTML ones: a diagram then exports to PNG (the browser won't turn
+// HTML-in-SVG into an image).
+const mermaidConfig = () => ({ startOnLoad: false, securityLevel: 'strict', theme: isDark() ? 'dark' : 'default', htmlLabels: false, flowchart: { htmlLabels: false } });
 // Diagrams are drawn in the theme's colors: redraw them when it changes.
 window.addEventListener('agentmgr-theme', () => {
   diagrams.clear();
-  mermaidLib?.initialize({ startOnLoad: false, securityLevel: 'strict', theme: isDark() ? 'dark' : 'default' });
+  mermaidLib?.initialize(mermaidConfig());
   for (const el of document.querySelectorAll('[data-mermaid][data-filled]')) delete el.dataset.filled;
   renderDiagrams(document);
 });
@@ -201,8 +206,7 @@ async function renderDiagrams(root) {
       try {
         if (!mermaidLib) {
           mermaidLib = (await import('/vendor/mermaid/mermaid.esm.min.mjs')).default;
-          const dark = isDark();
-          mermaidLib.initialize({ startOnLoad: false, securityLevel: 'strict', theme: dark ? 'dark' : 'default' });
+          mermaidLib.initialize(mermaidConfig());
         }
         const { svg } = await mermaidLib.render(`mmd-${diagrams.size}-${Date.now()}`, src);
         diagrams.set(src, { svg });
@@ -215,7 +219,10 @@ async function renderDiagrams(root) {
     for (const el of document.querySelectorAll('[data-mermaid]')) {
       if (el.dataset.mermaid !== src || el.dataset.filled) continue;
       el.dataset.filled = '1';
-      if (out.svg) el.innerHTML = out.svg;
+      if (out.svg) {
+        el.innerHTML = out.svg;
+        addTools(el);
+      }
       else el.innerHTML = `<div class="hint">Diagram could not be drawn (${esc(out.error)}). Source:</div><pre>${esc(src)}</pre>`;
     }
   }
@@ -233,7 +240,7 @@ function explainBox(a) {
       ${ex.markdown
         ? `${stale ? '<p class="hint">The brief has changed since this explanation; use <b>Explain again</b> to refresh it.</p>' : ''}
            ${clamp(a, 'explain', md(ex.markdown))}
-           <p class="hint">Explained ${ago(ex.at)}.</p>`
+           <p class="hint explain-foot">Explained ${ago(ex.at)}. ${listenHtml(`explain:${a.id}`, { title: 'Read the explanation aloud' })}</p>`
         : ''}
     </div>`;
   return { button, box };
@@ -366,6 +373,9 @@ function renderDocDialog() {
   const by = d?.writer ? ` by ${d.writer}${d.critique ? `, checked by ${d.critique.label}` : ''}${d.from ? ` from ${d.from.length ? d.from.join(', ') : "the agent's work"}` : ''}` : '';
   $('#doc-meta').textContent = d?.markdown ? `${plan ? `Plan · ${PLAN_LABEL[a.planReview.status]} · updated` : docView.kind === 'diagrams' ? 'Drawn' : 'Written'} ${ago(d.at)}${by}${stale ? ' · the brief has changed since; Regenerate for the latest' : ''}` : '';
   for (const id of ['doc-copy', 'doc-download', 'doc-print']) $(`#${id}`).disabled = !d?.markdown;
+  // Diagrams: the whole document as one HTML file with every diagram (each also has Copy / PNG / SVG).
+  $('#doc-html').hidden = !/```mermaid/.test(d?.markdown ?? '');
+  $('#doc-listen').innerHTML = d?.markdown && docView.kind !== 'diagrams' ? listenHtml(`doc:${docView.agentId}:${docView.kind}`, { title: 'Read the document aloud' }) : '';
   $('#doc-print').hidden = plan;
   $('#doc-regen').hidden = plan;
   $('#doc-regen').disabled = Boolean(d?.pending);
@@ -398,6 +408,7 @@ function generateDoc() {
 }
 
 $('#doc-close').onclick = () => {
+  if (speaking()?.id.startsWith('doc:')) stopSpeaking();
   docView = null;
   $('#doc-dialog').close();
 };
@@ -484,6 +495,25 @@ function planRow(a) {
     ${p.status !== 'approved' ? '<button class="small ghost" data-act="plan-skip" title="Stop waiting for review; the agent goes ahead">Skip review</button>' : ''}</div>`;
 }
 $('#doc-print').onclick = () => window.open(`/share.html#${docView.agentId}/${docView.kind}`, '_blank', 'noopener');
+$('#doc-html').onclick = () => {
+  const a = agents.get(docView.agentId);
+  download(htmlFile($('#doc-body'), `${DOC_TITLES[docView.kind]}: ${a?.name ?? ''}`), `${a?.slug ?? 'agent'}-${docView.kind}.html`);
+};
+
+// Diagram export: files named after the agent they belong to.
+initExport({ toast, base: (slot) => (slot.closest('#doc-body') && docView ? agents.get(docView.agentId)?.slug : agents.get(term.agentId)?.slug ?? agents.get(selectedId)?.slug) ?? '' });
+
+// Listening: what each Listen control reads.
+bindListen((id) => {
+  const [what, agentId, kind] = id.split(':');
+  const a = agents.get(agentId);
+  let parts = null;
+  if (what === 'explain') parts = [speakable(a?.explanation?.markdown)];
+  else if (what === 'doc') parts = [speakable(kind === 'explain' ? a?.explanation?.markdown : a?.docs?.[kind]?.markdown)];
+  else if (what === 'walk') parts = reviewUi.listenParts();
+  else if (what === 'sidewalk') parts = sidePane?.listenParts();
+  if (!parts?.length || !play(id, parts)) toast('Nothing to read aloud here (or this browser has no speech)');
+});
 
 /** Why / What / How / Now as four cards. */
 function insightsBox(a) {
@@ -2120,6 +2150,7 @@ sidePane = initSide({
   codeUi,
   docHtml,
   renderDiagrams,
+  listenHtml,
   mainKind: () => term.kind,
   setMain: (kind) => term.agentId && term.open(term.agentId, kind),
   refit: () => requestAnimationFrame(() => term.refit()),

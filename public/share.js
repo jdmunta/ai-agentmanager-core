@@ -24,7 +24,7 @@ async function main() {
   document.title = (d.markdown.match(/^#\s+(.+)$/m)?.[1] ?? `${kind} · ${a.name}`).slice(0, 120);
   if (blocks.length) {
     const mermaid = (await import('/vendor/mermaid/mermaid.esm.min.mjs')).default;
-    mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme: 'default' });
+    mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme: 'default', htmlLabels: false, flowchart: { htmlLabels: false } });
     for (const el of document.querySelectorAll('.diagram')) {
       try {
         el.innerHTML = (await mermaid.render(`d${el.dataset.i}`, blocks[Number(el.dataset.i)])).svg;

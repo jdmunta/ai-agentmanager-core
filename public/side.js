@@ -2,7 +2,7 @@
 // pane shows the same agent's Code, its Docs (Diagrams by default) or its Changes explained one by
 // one. On, the tab and the document are remembered in this browser.
 import { parseDiff } from '/review.js';
-import { cardHtml, explainButton, walkthroughOf } from '/walkthrough.js';
+import { cardHtml, explainButton, listenParts as walkParts, walkthroughOf } from '/walkthrough.js';
 
 const DOCS = [
   ['diagrams', 'Diagrams'],
@@ -27,7 +27,7 @@ const pref = {
   },
 };
 
-export function initSide({ api, esc, toast, $, agents, codeUi, docHtml, renderDiagrams, mainKind, setMain, refit }) {
+export function initSide({ api, esc, toast, $, agents, codeUi, docHtml, renderDiagrams, listenHtml, mainKind, setMain, refit }) {
   const pane = $('#side-pane');
   const body = $('#side-body');
   const code = $('#code');
@@ -71,7 +71,8 @@ export function initSide({ api, esc, toast, $, agents, codeUi, docHtml, renderDi
     else if (d?.error && !d?.markdown) content = `<p class="error">Couldn't write it: ${esc(d.error)}</p>`;
     else if (d?.markdown) content = `<div class="md ${st.doc === 'diagrams' ? 'diagrams-view' : ''}">${docHtml(d.markdown)}</div>`;
     else content = `<p class="hint">No ${esc(label.toLowerCase())} for this agent yet.</p>`;
-    body.innerHTML = `<div class="side-tools">${picker}<span class="spacer"></span>${stale ? '<span class="hint">brief changed since</span>' : ''}${action}</div><div class="side-scroll">${content}</div>`;
+    const listen = d?.markdown && st.doc !== 'diagrams' ? listenHtml(`doc:${st.agentId}:${st.doc}`, { title: 'Read it aloud' }) : '';
+    body.innerHTML = `<div class="side-tools">${picker}<span class="spacer"></span>${stale ? '<span class="hint">brief changed since</span>' : ''}${listen}${action}</div><div class="side-scroll">${content}</div>`;
     renderDiagrams(body);
   }
 
@@ -107,7 +108,7 @@ export function initSide({ api, esc, toast, $, agents, codeUi, docHtml, renderDi
     const sig = `changes|${st.agentId}|${a?.docs?.walkthrough?.at}|${w.pending}|${w.error}|${st.changes.diffHash}`;
     if (!force && sig === st.sig) return;
     st.sig = sig;
-    const tools = `<div class="side-tools">${explainButton(w, 'data-side-explain')}<span class="spacer"></span><button type="button" class="small ghost" data-side-reload title="Load the changes again">⟳</button></div>`;
+    const tools = `<div class="side-tools">${explainButton(w, 'data-side-explain')}${w.doc ? listenHtml(`sidewalk:${st.agentId}`, { title: 'Hear the changes one by one' }) : ''}<span class="spacer"></span><button type="button" class="small ghost" data-side-reload title="Load the changes again">⟳</button></div>`;
     let content;
     if (st.changes.error) content = `<p class="error">${esc(st.changes.error)}</p>`;
     else if (!st.changes.files.length) content = '<p class="hint">No changes yet.</p>';
@@ -115,7 +116,7 @@ export function initSide({ api, esc, toast, $, agents, codeUi, docHtml, renderDi
     else {
       const list = w.doc.data.changes;
       content = `<p class="hint">${esc(w.doc.data.summary)}${w.stale ? ' <b>The changes moved since this was written.</b>' : ''}</p>${list
-        .map((c, i) => `<section class="sd-step"><div class="sd-file"><code>${esc(c.file)}</code></div>${cardHtml(c, i, list.length, esc)}${hunkHtml(c.file, c.head)}</section>`)
+        .map((c, i) => `<section class="sd-step" id="sd-step-${i}"><div class="sd-file"><code>${esc(c.file)}</code></div>${cardHtml(c, i, list.length, esc)}${hunkHtml(c.file, c.head)}</section>`)
         .join('')}`;
     }
     body.innerHTML = `${tools}<div class="side-scroll">${content}</div>`;
@@ -182,6 +183,17 @@ export function initSide({ api, esc, toast, $, agents, codeUi, docHtml, renderDi
       }
     },
     showing: (tab) => st.on && Boolean(st.agentId) && st.tab === tab,
+    /** What Listen reads in Changes: each change, scrolled to and marked as it is read. */
+    listenParts() {
+      const w = walkthroughOf(agents.get(st.agentId), st.changes?.diffHash);
+      if (!w.doc) return [];
+      return walkParts(w.doc.data, (i) => () => {
+        body.querySelectorAll('.sd-step.current').forEach((el) => el.classList.remove('current'));
+        const el = body.querySelector(`#sd-step-${i}`);
+        el?.classList.add('current');
+        el?.scrollIntoView({ block: 'start', behavior: 'smooth' });
+      });
+    },
     agentChanged(a) {
       if (!st.on || a.id !== st.agentId) return;
       if (st.tab === 'docs') renderDocs(false);
