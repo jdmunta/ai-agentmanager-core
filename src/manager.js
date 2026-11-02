@@ -113,7 +113,7 @@ import { leadPrompt, subagents, teamDir, teamPrompt } from './teams.js';
 import { assistantDir, assistantPrompt, assistantSettings } from './assistant.js';
 import { learnCommand, memoryKey, memoryPrompt, memoryText } from './memory.js';
 import { runningClaude, scanClaudeSessions } from './sessions.js';
-import { agentkitCommands, builderPrompt } from './builder.js';
+import { builderAllowedTools, builderPrompt } from './builder.js';
 import {
   bugFromRef,
   extractRefs,
@@ -1068,8 +1068,8 @@ export class AgentManager extends EventEmitter {
     }
     if (agent.builds && agent.workdir) {
       prompts.push(builderPrompt({ dir: agent.workdir, name: agent.builds.name, engine: agent.builds.engine }));
-      // Checking the agent loads needs no permission prompt.
-      allowedTools = [...(allowedTools ?? []), `Bash(${agentkitCommands(agent.workdir).check}:*)`];
+      // Checking the agent loads and reading the reference need no permission prompt.
+      allowedTools = [...(allowedTools ?? []), ...builderAllowedTools(agent.workdir)];
     }
     if (agent.kind === 'assistant') {
       fs.mkdirSync(assistantDir(), { recursive: true });
@@ -1163,6 +1163,14 @@ export class AgentManager extends EventEmitter {
     this.runtimes.set(agent.id, rt);
 
     proc.onData((data) => {
+      // Newer Claude Code blinks a ⏺ beside a pending tool call (while its permission prompt is
+      // up): drawn, not work. It goes to the terminal but doesn't keep the agent busy or fill the
+      // screen text the prompt is read from.
+      if (!data.replace(ANSI, '').replace(/[\s⏺]/g, '')) {
+        this.appendOutput(rt, data);
+        this.broadcast(rt, { t: 'o', d: data });
+        return;
+      }
       rt.linkScan = true;
       rt.lastOutputAt = Date.now();
       rt.tail = (rt.tail + data).slice(-4000);

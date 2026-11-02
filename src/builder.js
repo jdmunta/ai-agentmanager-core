@@ -36,6 +36,11 @@ export function agentkitCommands(dir) {
   return { check: `${process.execPath} ${AGENTKIT} check`, run: `${process.execPath} ${AGENTKIT} run ${dir} --once` };
 }
 
+/** What its session may do without a permission prompt: check the agent, read the reference. */
+export function builderAllowedTools(dir) {
+  return [`Bash(${agentkitCommands(dir).check}:*)`, `Read(/${DOCS})`];
+}
+
 /**
  * What a session that builds an agent is told (appended to its system prompt on every launch):
  * the folder is the agent, the files it keeps, the format, and how to check and try it.
@@ -53,11 +58,12 @@ export function builderPrompt({ dir, name, engine = 'claude' }) {
     '',
     `agent.yaml has: name, title, description (one line), goal (what is true when it has done its job, for each input), instructions: instructions.md, engine: ${engine},`,
     '  tools (MCP servers by id: {command, args, env}; only servers that really exist; secrets only as "${VAR}"),',
-    '  allow (engine tools it may use without asking, e.g. Read, Grep, "mcp__<id>__*"), approve (tools that change things in the outside world and need a person\'s yes),',
+    '  allow (engine tools it may use without asking, e.g. Read, Grep, "mcp__<id>__*"; to let it write files only under a folder: "Edit(./out/**)", which covers Write), approve (tools that change things in the outside world and need a person\'s yes),',
     '  triggers (only when the task implies running on its own: {every: 30m}, {cron: "0 9 * * 1-5"}, {webhook: /hooks/<name>}, {watch: ./inbox}; a chat-only agent has none),',
     '  loop: {plan: true, check: true, maxSteps: 4}, memory: true, interfaces: {http: {port: 0}, a2a: true, acp: true, mcp: true}.',
     `The full reference: ${DOCS}.`,
     '',
+    'Write and edit these files with your file tools (Write, Edit), not with shell commands.',
     `After every change, check it loads: ${cmd.check} ${dir}`,
     `To try one input for real (it runs with its allowed tools; tools that need approval are refused): ${cmd.run} "<input>". Only with inputs that are safe to run for real.`,
     'Be concrete; do not invent systems the task does not mention. When something only the person knows is missing (an account, a team name, a label set), ask.',
@@ -70,15 +76,55 @@ export function buildIntent({ task, name, engine }) {
   return `Build the agent "${name}" (engine: ${engine}) for this task:\n\n${task}\n\nWrite analysis.json, agent.yaml, instructions.md and tests.yaml in this folder, check it, then tell me what it does and what I should decide or provide.`;
 }
 
-export function judgePrompt({ goal, input, expect, result }) {
+export function judgePrompt({ goal, input, expect, result, files = [] }) {
   return [
     "You check one test of an autonomous agent. Decide if the agent's result meets the expectation for the input.",
+    'The files it created or changed during the run are shown too: judge what it did from them, not only from what it says.',
     'Be strict about substance, lenient about wording. Reply with JSON only: {"pass": true|false, "why": "<one sentence>"}.',
     `<goal>\n${goal}\n</goal>`,
     `<input>\n${input}\n</input>`,
     `<expectation>\n${expect}\n</expectation>`,
     `<result>\n${result}\n</result>`,
+    ...(files.length ? ['<files_written>', ...files.map((f) => `--- ${f.path}${f.truncated ? ' (first part)' : ''}\n${f.text}`), '</files_written>'] : ['<files_written>\n(none)\n</files_written>']),
   ].join('\n');
+}
+
+const SKIP = new Set(['.agentkit', '.git', 'node_modules', 'dist']);
+/** Files under `dir` (not its own state, git or build output) with when each last changed. */
+export function snapshot(dir, { max = 5000 } = {}) {
+  const seen = new Map();
+  const walk = (d) => {
+    let entries = [];
+    try {
+      entries = fs.readdirSync(d, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      if (seen.size >= max) return;
+      const p = path.join(d, e.name);
+      if (e.isDirectory()) {
+        if (!SKIP.has(e.name)) walk(p);
+      } else if (e.isFile()) {
+        const st = fs.statSync(p, { throwIfNoEntry: false });
+        if (st) seen.set(p, `${st.mtimeMs}:${st.size}`);
+      }
+    }
+  };
+  walk(dir);
+  return seen;
+}
+
+/** The text files created or changed since `before` (a snapshot), for the judge; a few, each capped. */
+export function filesWritten(dir, before, { root = dir, limit = 6, bytes = 4000 } = {}) {
+  const out = [];
+  for (const [p, sig] of snapshot(dir)) {
+    if (before.get(p) === sig || out.length >= limit) continue;
+    const buf = fs.readFileSync(p);
+    if (buf.subarray(0, 2000).includes(0)) continue; // binary
+    out.push({ path: path.relative(root, p), text: buf.subarray(0, bytes).toString('utf8'), truncated: buf.length > bytes });
+  }
+  return out;
 }
 
 export class Builder {
@@ -281,18 +327,22 @@ export class Builder {
       // Tests don't wait for people: approval tools are simply not available in them.
       const agent = new Agent({ ...spec, triggers: [], report: null }, { env: this.env, engineTurn: this.runTurn, approvals: 'deny' });
       const results = [];
+      // The judge sees what each run wrote in the agent's folders, not only what it says it did.
+      const roots = [...new Set([dir, spec.workdir])].filter((d, i, all) => !all.some((o, j) => j !== i && d.startsWith(o + path.sep)));
       for (const t of tests) {
+        const before = roots.map((d) => snapshot(d));
         const r = await agent.run(t.input, { source: 'test' });
+        const files = roots.flatMap((d, i) => filesWritten(d, before[i], { root: dir })).slice(0, 6);
         let verdict = { pass: false, why: 'The run failed' };
         if (r.status !== 'failed') {
           try {
-            const v = parseJsonReply(await this.oneShot(judgePrompt({ goal: spec.goal, input: t.input, expect: t.expect, result: r.result })));
+            const v = parseJsonReply(await this.oneShot(judgePrompt({ goal: spec.goal, input: t.input, expect: t.expect, result: r.result, files })));
             verdict = { pass: v.pass === true, why: String(v.why ?? '') };
           } catch (e) {
             verdict = { pass: false, why: `Could not judge: ${e.message}` };
           }
         }
-        results.push({ input: t.input, expect: t.expect, result: r.result, status: r.status, costUsd: r.costUsd, ...verdict });
+        results.push({ input: t.input, expect: t.expect, result: r.result, status: r.status, costUsd: r.costUsd, files: files.map((f) => f.path), ...verdict });
       }
       const passed = results.filter((r) => r.pass).length;
       this.saveMeta(name, { results: { at: now(), passed, total: results.length, list: results }, status: passed === results.length ? 'tested' : 'failing' });

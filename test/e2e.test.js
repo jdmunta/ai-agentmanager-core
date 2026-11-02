@@ -1690,6 +1690,19 @@ test('decision inbox: live prompts list their choices and take a key', async () 
   await call('POST', `/agents/${a.id}/stop`);
 });
 
+test('a prompt is seen while newer Claude Code blinks the ⏺ beside the pending tool call', async () => {
+  const [a] = (await call('POST', '/agents', { intent: 'Needs permission #ask #blink' })).body;
+  await runningAgent(a.id);
+  const v = await waitFor(async () => {
+    const x = await agentNow(a.id);
+    return x.runtime.attention ? x : null;
+  }, 10000, 'the prompt flagged despite the blinking');
+  assert.equal(v.runtime.busy, false);
+  assert.equal(v.runtime.attention, 'Permission prompt');
+  await call('POST', `/agents/${a.id}/stop`);
+  await call('DELETE', `/agents/${a.id}`);
+});
+
 test('stuck detection: the same failure three times raises a finding with a nudge', async () => {
   const [a] = (await call('POST', '/agents', { intent: 'Fix auth #stuck' })).body;
   await runningAgent(a.id);

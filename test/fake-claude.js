@@ -215,6 +215,11 @@ if (prompt.includes('#waiting')) setTimeout(() => process.stdout.write('\r\nWhic
 if (prompt.includes('#finish')) setTimeout(() => process.stdout.write('\r\nAll done: the token refresh fix is in.\r\n'), 200);
 if (args.includes('--') && args[args.indexOf('--') + 1]?.includes('#ask')) {
   setTimeout(() => process.stdout.write('\r\nDo you want to proceed?\r\n❯ 1. Yes\r\n  2. No\r\n'), 200);
+  // "#blink": keep blinking the ⏺ beside the tool call above the prompt, as newer Claude Code does.
+  if (prompt.includes('#blink')) {
+    let on = false;
+    setTimeout(() => setInterval(() => process.stdout.write(`\x1b[1C\x1b[7A\r\x1b[23A\x1b[38;2;153;153;153m${(on = !on) ? '⏺' : ' '}\x1b[39m\r\r\n${'\r\n'.repeat(22)}`), 300), 400);
+  }
 }
 process.stdout.write(`fake-claude ready ${args.includes('--resume') ? 'resumed' : 'new'} ${sid}\r\n`);
 process.stdin.setRawMode?.(true);
