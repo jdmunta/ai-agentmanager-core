@@ -127,7 +127,14 @@ $('#new-playbook').onclick = () => {
 };
 $('#triggers-open').onclick = () => triggersUi.open();
 let builtReports = []; // agents built with agentkit that report here (runs, approvals)
-const builtUi = initBuilt({ api, esc, toast, $, isOpen: () => sideTab === 'built', setCount: (n) => ($('#built-count').textContent = n), reports: () => builtReports });
+const builtUi = initBuilt({
+  api, esc, toast, $,
+  isOpen: () => sideTab === 'built',
+  setCount: (n) => ($('#built-count').textContent = n),
+  reports: () => builtReports,
+  openSession: (id) => (showTab('agents'), select(id)),
+  onPanel: () => agents.get(selectedId)?.builds && renderDetail(),
+});
 const landUi = initLand({ api, esc, toast, agents, $, scoreBadge, select: (id) => (showTab('agents'), select(id)), openReview: (id) => reviewUi.open(id), isOpen: () => sideTab === 'land' });
 
 function statusOf(a) {
@@ -713,7 +720,7 @@ function agentItem(a) {
   const idle = !isActive(a);
   return `<li data-id="${a.id}" ${a.kind === 'general' || a.kind === 'assistant' ? '' : 'draggable="true" '}class="agent pr${a.priority ?? 2} ${a.id === selectedId ? 'selected' : ''} ${idle ? 'idle' : ''}">
     <div class="line1">${prioChip(a.priority ?? 2)}${a.results?.outcome === 'blocked' ? '<span class="outcome-mark" title="Blocked">⛔</span>' : a.results?.outcome === 'done' ? '<span class="outcome-mark" title="Done">✅</span>' : ''}<span class="name">${esc(a.name)}</span>${flags(a)}<span class="pill ${st}">${pillText(st)}</span></div>
-    <div class="intent" title="${esc(describeTitle(a) ?? '')}">${a.kind === 'general' ? '<span class="tag">general</span> ' : a.kind === 'assistant' ? '<span class="tag assistant">assistant</span> ' : a.startedBy ? '<span class="tag assistant" title="Started by the assistant">🤖 by assistant</span> ' : a.trigger ? `<span class="tag assistant" title="Started from ${a.trigger.source === 'github' ? 'a labeled GitHub issue' : 'the webhook'}${a.trigger.url ? `: ${esc(a.trigger.url)}` : ''}">⚡ ${a.trigger.source === 'github' ? 'GitHub' : 'webhook'}</span> ` : a.playbook ? `<span class="tag assistant" title="Started by the playbook ${esc(a.playbook.name)}">▶ ${esc(a.playbook.name)}</span> ` : ''}${a.engine && a.engine !== 'claude' ? `<span class="tag engine">${esc(ENGINE_LABEL[a.engine] ?? a.engine)}</span> ` : ''}${a.isolation === 'container' ? '<span class="tag engine" title="Runs in its own Docker container: it sees only its own folder">📦 container</span> ' : ''}${esc(describe(a) || (a.kind === 'assistant' ? 'Finds new work and starts agents for it' : 'General session'))}</div>
+    <div class="intent" title="${esc(describeTitle(a) ?? '')}">${a.builds ? `<span class="tag assistant" title="Develops the agent ${esc(a.builds.name)} (Built tab)">⚙ builds agent</span> ` : ''}${a.kind === 'general' ? '<span class="tag">general</span> ' : a.kind === 'assistant' ? '<span class="tag assistant">assistant</span> ' : a.startedBy ? '<span class="tag assistant" title="Started by the assistant">🤖 by assistant</span> ' : a.trigger ? `<span class="tag assistant" title="Started from ${a.trigger.source === 'github' ? 'a labeled GitHub issue' : 'the webhook'}${a.trigger.url ? `: ${esc(a.trigger.url)}` : ''}">⚡ ${a.trigger.source === 'github' ? 'GitHub' : 'webhook'}</span> ` : a.playbook ? `<span class="tag assistant" title="Started by the playbook ${esc(a.playbook.name)}">▶ ${esc(a.playbook.name)}</span> ` : ''}${a.engine && a.engine !== 'claude' ? `<span class="tag engine">${esc(ENGINE_LABEL[a.engine] ?? a.engine)}</span> ` : ''}${a.isolation === 'container' ? '<span class="tag engine" title="Runs in its own Docker container: it sees only its own folder">📦 container</span> ' : ''}${esc(describe(a) || (a.kind === 'assistant' ? 'Finds new work and starts agents for it' : 'General session'))}</div>
     ${a.status === 'preparing' && a.progress ? `<div class="progress-line">${esc(progressText(a.progress))}</div>` : ''}
     <div class="meta">
       <span class="mono">${a.id}</span>
@@ -1743,6 +1750,7 @@ function renderDetail() {
     ${a.runtime.attention ? `<div class="error-box">${esc(a.runtime.attention)}: the agent is waiting for an answer. Open its terminal to respond.</div>` : ''}
     ${raceBanner(a)}
     ${teamBanner(a)}
+    ${a.builds ? builtUi.panel(a) : ''}
     ${a.forkOf ? `<div class="bl-banner">⑂ Forked from <a href="#${a.forkOf.agentId}" data-goto="${a.forkOf.agentId}">${esc(a.forkOf.name)}</a>${a.forkOf.checkpoint ? ` at checkpoint ${a.forkOf.checkpoint}` : ''} ${ago(a.forkOf.at)}</div>` : ''}
     ${(() => {
       const items = needsFor(a, { both: true });
@@ -3641,6 +3649,7 @@ function handleEvent(msg) {
     agents.set(msg.agent.id, msg.agent);
     watchDocs(msg.agent);
     agentChanged(msg.agent);
+    if (msg.agent.builds) builtUi.sessionChanged(msg.agent);
   } else if (msg.t === 'removed') {
     agents.delete(msg.id);
     if (selectedId === msg.id) select(null);

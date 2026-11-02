@@ -1,6 +1,7 @@
-// The agent builder: a task or workflow in words → an analysis and an agentkit agent
-// (docs/agentkit.md) with test cases, which the person reviews, tests, runs and downloads. Built
-// agents live in ~/.agentmanager/built/<name>/ as ordinary agentkit folders.
+// The agent builder: a task or workflow in words → an agentkit agent (docs/agentkit.md), developed
+// in an agent session that works in the agent's folder: it writes the analysis, spec, instructions
+// and tests, and makes the changes the person asks for. The person tests, runs, packages and
+// downloads it here. Built agents live in ~/.agentmanager/built/<name>/ as ordinary agentkit folders.
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -19,34 +20,54 @@ const err = (status, message) => Object.assign(new Error(message), { status });
 const now = () => new Date().toISOString();
 const slug = (s) => String(s ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'agent';
 
-export function designPrompt({ task, engine, attachments = [] }) {
+const DOCS = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'docs', 'agentkit.md');
+const ENGINES = ['claude', 'codex', 'muse'];
+
+/** The agent's name from the task: its first few words. */
+export function nameFrom(task) {
+  const words = String(task).toLowerCase().replace(/https?:\/\/\S+/g, ' ').split(/[^a-z0-9]+/).filter((w) => w && !STOP.has(w));
+  const n = slug(words.slice(0, 4).join('-')).slice(0, 32).replace(/-+$/, '');
+  return /^[a-z][a-z0-9-]{1,}$/.test(n) ? n : `agent-${n}`.replace(/-+$/, '').slice(0, 32);
+}
+const STOP = new Set(['a', 'an', 'the', 'to', 'of', 'for', 'and', 'or', 'in', 'on', 'by', 'with', 'from', 'that', 'this', 'it', 'is', 'are', 'be', 'i', 'we', 'my', 'our', 'want', 'need', 'agent', 'build', 'make', 'create', 'please', 'which', 'who']);
+
+/** The commands its session uses to check and try the agent. */
+export function agentkitCommands(dir) {
+  return { check: `${process.execPath} ${AGENTKIT} check`, run: `${process.execPath} ${AGENTKIT} run ${dir} --once` };
+}
+
+/**
+ * What a session that builds an agent is told (appended to its system prompt on every launch):
+ * the folder is the agent, the files it keeps, the format, and how to check and try it.
+ */
+export function builderPrompt({ dir, name, engine = 'claude' }) {
+  const cmd = agentkitCommands(dir);
   return [
-    'You design an autonomous agent that will run continuously on its own and do one job well. It runs through',
-    `${engine === 'claude' ? 'Claude Code' : engine} as its engine, uses tools through MCP servers, and is reached by people (chat) and other agents (A2A, MCP).`,
-    'From the task below, write the analysis and the agent. Be concrete; do not invent systems the task does not mention.',
+    `You are building an autonomous agent together with the person: an agentkit agent that runs on its own, continuously, and does one job well. This folder (${dir}) is the agent. Its name is "${name}"; keep it (it is the folder's name).`,
     '',
-    'Reply with one JSON object only:',
-    '{',
-    '  "analysis": {"problem": "<what the job is and why>", "inputs": ["<what it receives>"], "outputs": ["<what it produces>"], "risks": ["<what could go wrong, and what needs a person>"]},',
-    '  "name": "<lowercase-with-dashes, 2-40 chars>", "title": "<short>", "description": "<one line>",',
-    '  "goal": "<what is true when it has done its job, for each input; one or two sentences>",',
-    '  "instructions": "<Markdown: how to do the job, step by step; what to never do; when to ask>",',
-    '  "tools": [{"name": "<short id>", "why": "<what it needs it for>", "command": "<MCP server command, e.g. npx>", "args": ["…"], "env": {"VAR": "${VAR}"}}],',
-    '  "allow": ["<engine tool names it may use without asking, e.g. Read, Grep, mcp__<tool>__*>"],',
-    '  "approve": ["<tools that change things in the outside world and need a person\'s yes>"],',
-    '  "triggers": [{"every": "30m"} | {"cron": "0 9 * * 1-5"} | {"webhook": "/hooks/<name>"} | {"watch": "./inbox"}],',
-    '  "tests": [{"input": "<a realistic input>", "expect": "<what a good result does or contains>"}]',
-    '}',
+    'Keep these files current:',
+    '- agent.yaml: the spec (below).',
+    '- instructions.md: how to do the job, step by step; what it must never do; when it asks a person.',
+    '- tests.yaml: 3 to 8 test cases, a YAML list of {input, expect}: the normal case, an edge case, and a case it should refuse or escalate. The person runs them from the Built tab; each result is judged against `expect`.',
+    '- analysis.json: {"analysis": {"problem": "<the job and why>", "inputs": [...], "outputs": [...], "risks": ["<what could go wrong, what needs a person>"]}, "tools": [{"name": "<MCP server id>", "why": "<what for>"}]}. The person reads it in the Built tab; update it when the design changes.',
     '',
-    'Rules: 3 to 5 tests that cover the normal case, an edge case and a case it should refuse or escalate.',
-    'Only MCP servers that really exist and fit (leave "tools" empty when none is needed). Secrets only as "${VAR}".',
-    'Triggers only when the task implies running on its own (a schedule, events); chat-only agents have none.',
+    `agent.yaml has: name, title, description (one line), goal (what is true when it has done its job, for each input), instructions: instructions.md, engine: ${engine},`,
+    '  tools (MCP servers by id: {command, args, env}; only servers that really exist; secrets only as "${VAR}"),',
+    '  allow (engine tools it may use without asking, e.g. Read, Grep, "mcp__<id>__*"), approve (tools that change things in the outside world and need a person\'s yes),',
+    '  triggers (only when the task implies running on its own: {every: 30m}, {cron: "0 9 * * 1-5"}, {webhook: /hooks/<name>}, {watch: ./inbox}; a chat-only agent has none),',
+    '  loop: {plan: true, check: true, maxSteps: 4}, memory: true, interfaces: {http: {port: 0}, a2a: true, acp: true, mcp: true}.',
+    `The full reference: ${DOCS}.`,
     '',
-    '<task>',
-    task,
-    '</task>',
-    ...(attachments.length ? ['<attached_files>', ...attachments.map((a) => `--- ${a.name}\n${a.text}`), '</attached_files>'] : []),
+    `After every change, check it loads: ${cmd.check} ${dir}`,
+    `To try one input for real (it runs with its allowed tools; tools that need approval are refused): ${cmd.run} "<input>". Only with inputs that are safe to run for real.`,
+    'Be concrete; do not invent systems the task does not mention. When something only the person knows is missing (an account, a team name, a label set), ask.',
+    'The person tests, starts, packages and downloads it from the Built tab; you do not start it continuously or package it. When they ask for a change, make it in these files, check, and say in a sentence what changed.',
   ].join('\n');
+}
+
+/** The first message of a build session. */
+export function buildIntent({ task, name, engine }) {
+  return `Build the agent "${name}" (engine: ${engine}) for this task:\n\n${task}\n\nWrite analysis.json, agent.yaml, instructions.md and tests.yaml in this folder, check it, then tell me what it does and what I should decide or provide.`;
 }
 
 export function judgePrompt({ goal, input, expect, result }) {
@@ -60,38 +81,19 @@ export function judgePrompt({ goal, input, expect, result }) {
   ].join('\n');
 }
 
-/** agent.yaml text from a design. */
-export function yamlOf(d, engine) {
-  const tools = Object.fromEntries((d.tools ?? []).filter((t) => t?.name && t.command).map((t) => [slug(t.name), { command: t.command, ...(t.args?.length ? { args: t.args } : {}), ...(t.env && Object.keys(t.env).length ? { env: t.env } : {}) }]));
-  const doc = {
-    name: slug(d.name),
-    title: d.title || d.name,
-    description: d.description ?? '',
-    goal: d.goal,
-    instructions: 'instructions.md',
-    engine,
-    tools,
-    allow: d.allow ?? [],
-    approve: d.approve ?? [],
-    triggers: d.triggers ?? [],
-    loop: { plan: true, check: true, maxSteps: 4 },
-    memory: true,
-    interfaces: { http: { port: 0 }, a2a: true, acp: true, mcp: true },
-  };
-  return YAML.stringify(doc, { lineWidth: 0 });
-}
-
 export class Builder {
-  /** `oneShot(prompt)` answers a design or judge prompt (the daemon's writer engine). */
+  /** `oneShot(prompt)` answers a judge prompt (the daemon's writer engine). */
+  /** `sessions`: the daemon's agent sessions ({ create, get, tell, stop }); each built agent is developed in one. */
   /** `reportEnv()`: settings that make an agent started here report to this daemon. */
-  constructor({ oneShot, env = process.env, runTurn = engineTurn, pack = packageAgent, reportEnv = () => ({}) }) {
+  constructor({ oneShot, sessions, env = process.env, runTurn = engineTurn, pack = packageAgent, reportEnv = () => ({}) }) {
     this.reportEnv = reportEnv;
     this.oneShot = oneShot;
+    this.sessions = sessions;
     this.env = env;
     this.runTurn = runTurn;
     this.pack = pack;
     this.procs = new Map(); // name -> child process of `agentkit run`
-    this.pending = new Map(); // name -> what's in progress (designing, testing)
+    this.pending = new Map(); // name -> what's in progress (testing, packaging)
   }
 
   dir(name) {
@@ -128,59 +130,108 @@ export class Builder {
     const read = (f) => (fs.existsSync(path.join(dir, f)) ? fs.readFileSync(path.join(dir, f), 'utf8') : '');
     let spec = null;
     let specError = null;
-    try {
-      spec = loadAgent(dir, { env: this.env });
-    } catch (e) {
-      specError = e.message;
+    const yaml = read('agent.yaml');
+    if (yaml) {
+      try {
+        spec = loadAgent(dir, { env: this.env });
+      } catch (e) {
+        specError = e.message;
+      }
     }
     const p = this.procs.get(name);
     let runs = [];
     if (spec) runs = new Agent(spec, { env: this.env }).runs(20);
+    // Its session keeps analysis.json and tests.yaml current; read them as they are now.
+    let design = {};
+    try {
+      design = JSON.parse(read('analysis.json') || '{}');
+    } catch {}
+    let tests = m.tests ?? [];
+    try {
+      tests = (YAML.parse(read('tests.yaml') || '[]') ?? []).filter((t) => t?.input).map((t) => ({ input: String(t.input), expect: String(t.expect ?? '') }));
+    } catch {}
+    // Until its spec loads, the status follows the files: designing, then designed or needs fixing.
+    let status = m.status;
+    if (!yaml) status = 'designing';
+    else if (specError) status = 'needs-fixing';
+    else if (['designing', 'needs-fixing'].includes(status)) status = 'designed';
+    const s = m.session ? this.sessions?.get(m.session) : null;
+    // When its files last changed (its session edits them): results and executables from before are out of date.
+    const changedAt = new Date(Math.max(0, ...['agent.yaml', 'instructions.md', 'tests.yaml'].map((f) => fs.statSync(path.join(dir, f), { throwIfNoEntry: false })?.mtimeMs ?? 0))).toISOString();
     return {
       ...m,
       name,
+      status,
       title: spec?.title ?? name,
       description: spec?.description ?? '',
       dir,
-      yaml: read('agent.yaml'),
+      yaml,
       instructionsText: read('instructions.md'),
+      analysis: design.analysis ?? m.analysis ?? null,
+      tools: design.tools ?? m.tools ?? [],
+      tests,
       specError,
-      engine: spec?.engine ?? null,
+      engine: spec?.engine ?? m.engine ?? null,
       triggers: spec?.triggers.map((t) => t.label) ?? [],
       missingEnv: spec?.missingEnv ?? [],
       pending: this.pending.get(name) ?? null,
       running: p ? { pid: p.child.pid, url: p.url, since: p.since } : null,
+      session: s ? { id: s.id, name: s.name, status: s.status, running: s.runtime.running, busy: s.runtime.busy, attention: s.runtime.attention ?? s.runtime.waiting?.text ?? null } : null,
       runs,
       platforms: PLATFORMS.filter((x) => process.platform === 'darwin' || !x.startsWith('macos-')),
       host: HOST,
+      changedAt,
       // Executables built since the last edit that are still there.
       executables: Object.fromEntries(Object.entries(m.executables ?? {}).filter(([, x]) => fs.existsSync(path.join(dir, 'dist', x.file)))),
     };
   }
 
-  /** Design an agent from a task (one model call); writes the folder and returns it. */
-  async design({ task, engine = 'claude', attachments = [] }) {
+  /**
+   * Start building an agent for a task: its folder, and an agent session working in it that
+   * analyses the task and writes the agent (analysis, spec, instructions, tests). The person
+   * keeps developing it in that session.
+   */
+  design({ task, engine = 'claude', name, attachments, permissionMode, model }) {
     task = String(task ?? '').trim();
     if (!task) throw err(400, 'Describe the task or workflow');
-    if (!['claude', 'codex', 'muse'].includes(engine) && !/^acp:[a-z0-9-]+$/.test(engine)) throw err(400, 'engine: claude, codex, muse or acp:<name>');
-    const d = parseJsonReply(await this.oneShot(designPrompt({ task, engine, attachments })));
-    if (!d.goal || !d.name) throw err(502, 'The design was missing a name or goal; try again');
-    let name = slug(d.name);
-    for (let i = 2; fs.existsSync(path.join(root(), name)); i++) name = `${slug(d.name).slice(0, 36)}-${i}`;
-    const dir = path.join(root(), name);
+    if (!ENGINES.includes(engine) && !/^acp:[a-z0-9-]+$/.test(engine)) throw err(400, 'engine: claude, codex, muse or acp:<name>');
+    if (!this.sessions) throw err(503, 'Agent sessions are not available');
+    const want = name ? slug(name) : nameFrom(task);
+    if (!/^[a-z][a-z0-9-]{1,40}$/.test(want)) throw err(400, 'name: lowercase letters, digits and dashes, starting with a letter');
+    let n = want;
+    for (let i = 2; fs.existsSync(path.join(root(), n)); i++) n = `${want.slice(0, 36)}-${i}`;
+    const dir = path.join(root(), n);
     fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(path.join(dir, 'agent.yaml'), yamlOf({ ...d, name }, engine));
-    fs.writeFileSync(path.join(dir, 'instructions.md'), String(d.instructions ?? '').trim() + '\n');
-    const tests = (d.tests ?? []).filter((t) => t?.input).slice(0, 8).map((t) => ({ input: String(t.input), expect: String(t.expect ?? '') }));
-    fs.writeFileSync(path.join(dir, 'tests.yaml'), YAML.stringify(tests));
-    // Check it loads; a broken design is kept so the person can fix it.
-    let specError = null;
+    this.saveMeta(n, { task, engine, results: null, status: 'designing', createdAt: now() });
     try {
-      checkAgent(YAML.parse(fs.readFileSync(path.join(dir, 'agent.yaml'), 'utf8')), { dir, env: this.env });
+      const s = this.sessions.create({ name: n, dir, intent: buildIntent({ task, name: n, engine }), builds: { name: n, engine }, attachments, permissionMode, model });
+      this.saveMeta(n, { session: s.id });
     } catch (e) {
-      specError = e.message;
+      fs.rmSync(dir, { recursive: true, force: true });
+      throw e;
     }
-    this.saveMeta(name, { task, analysis: d.analysis ?? null, tools: (d.tools ?? []).map((t) => ({ name: t.name, why: t.why ?? '' })), tests, results: null, status: specError ? 'needs-fixing' : 'designed', createdAt: now() });
+    return this.view(n);
+  }
+
+  /**
+   * Ask its session for a change (typed in when it's idle; started if it's closed). An agent with
+   * no session yet (built before sessions, or its session deleted) gets a new one.
+   */
+  change(name, text) {
+    const dir = this.dir(name);
+    const m = this.meta(name);
+    if (!m) throw err(404, `No built agent "${name}"`);
+    text = String(text ?? '').trim();
+    const s = m.session ? this.sessions.get(m.session) : null;
+    if (s) {
+      if (!text) throw err(400, 'Say what to change');
+      this.sessions.tell(s.id, text);
+    } else {
+      const engine = this.view(name).engine ?? 'claude';
+      const intent = `This folder is the agent "${name}"${m.task ? `, built for this task:\n\n${m.task}\n\n` : '. '}Read agent.yaml, instructions.md and tests.yaml${fs.existsSync(path.join(dir, 'analysis.json')) ? ' and analysis.json' : ' and write analysis.json'}. ${text || 'Then tell me briefly what it does and wait for what to change.'}`;
+      const created = this.sessions.create({ name, dir, intent, builds: { name, engine } });
+      this.saveMeta(name, { session: created.id });
+    }
     return this.view(name);
   }
 
@@ -326,6 +377,9 @@ export class Builder {
 
   remove(name) {
     this.stop(name);
+    // Its session works in the folder about to go; close it (the conversation is kept).
+    const sid = this.meta(name)?.session;
+    if (sid && this.sessions?.get(sid)) this.sessions.stop(sid);
     fs.rmSync(this.dir(name), { recursive: true, force: true });
     return { ok: true };
   }

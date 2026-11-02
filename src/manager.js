@@ -113,6 +113,7 @@ import { leadPrompt, subagents, teamDir, teamPrompt } from './teams.js';
 import { assistantDir, assistantPrompt, assistantSettings } from './assistant.js';
 import { learnCommand, memoryKey, memoryPrompt, memoryText } from './memory.js';
 import { runningClaude, scanClaudeSessions } from './sessions.js';
+import { agentkitCommands, builderPrompt } from './builder.js';
 import {
   bugFromRef,
   extractRefs,
@@ -596,6 +597,7 @@ export class AgentManager extends EventEmitter {
     trigger,
     attachments,
     isolation,
+    builds,
   }) {
     intent = (intent ?? '').trim();
     const staged = stagedFiles(attachments);
@@ -648,6 +650,8 @@ export class AgentManager extends EventEmitter {
       ...(startedBy ? { startedBy } : {}),
       ...(trigger ? { trigger } : {}),
       ...(isolation ? { isolation } : {}),
+      // A session that develops an agent built here (builder.js): { name, engine }.
+      ...(builds ? { builds: { name: String(builds.name), engine: String(builds.engine ?? 'claude') } } : {}),
       name: name?.trim() || jiraKey || slug,
       slug,
       intent,
@@ -664,7 +668,7 @@ export class AgentManager extends EventEmitter {
       model: model || null,
       // Review the implementation plan before the agent implements it: null = no review.
       // Team members get their review from the team instead.
-      planReview: !general && !team && (planReview ?? this.config.planReview ?? false) ? { status: 'writing' } : null,
+      planReview: !general && !team && !builds && (planReview ?? this.config.planReview ?? false) ? { status: 'writing' } : null,
       status: 'preparing',
       desired: start ? 'running' : 'stopped',
       error: null,
@@ -1042,7 +1046,8 @@ export class AgentManager extends EventEmitter {
       if (this.config.inbox !== false) prompts.push(questionsPrompt(path.join(dir, path.basename(questionsPath(agent.id)))));
     }
     // SPEC.md before changing code, and PLAN.md kept as it goes (unless the plan review asks for the plan).
-    if (task && this.config.specs !== false) {
+    // A session building an agent keeps its analysis in the agent's folder instead.
+    if (task && this.config.specs !== false && !agent.builds) {
       fs.mkdirSync(briefDir(agent.id), { recursive: true });
       const dir = fs.realpathSync(briefDir(agent.id));
       writableDir ??= dir;
@@ -1060,6 +1065,11 @@ export class AgentManager extends EventEmitter {
     if (task && this.config.memory !== false) {
       prompts.push(memoryPrompt(memoryText(memoryKey(agent))));
       allowedTools = [`Bash(${learnCommand()}:*)`];
+    }
+    if (agent.builds && agent.workdir) {
+      prompts.push(builderPrompt({ dir: agent.workdir, name: agent.builds.name, engine: agent.builds.engine }));
+      // Checking the agent loads needs no permission prompt.
+      allowedTools = [...(allowedTools ?? []), `Bash(${agentkitCommands(agent.workdir).check}:*)`];
     }
     if (agent.kind === 'assistant') {
       fs.mkdirSync(assistantDir(), { recursive: true });

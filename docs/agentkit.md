@@ -55,6 +55,19 @@ interfaces:
   mcp: true                         # `<agent> mcp` exposes it as an MCP tool
 ```
 
+## Building one in AI Agent Manager
+
+**Built → + Build an agent** takes a task or workflow (attachments welcome), the engine it runs on and an optional name. It starts an **agent session** whose folder is the new agent (`~/.agentmanager/built/<name>/`), and opens that session. The session writes the agent and checks that it loads (`agentkit check`):
+
+- `analysis.json`: the problem, inputs, outputs, risks and the MCP tools it chose
+- `agent.yaml`
+- `instructions.md`
+- `tests.yaml`: 3 to 8 `{input, expect}` cases
+
+It asks you what only you know: accounts, labels, teams. You keep developing the agent in that conversation.
+
+The session's page shows a panel for its agent: status and test results, with **Run tests** (each test runs through the real runtime and is judged against `expect`), **Start**/**Stop** (runs it continuously on this computer, with its chat page and API) and **Details**. Failing tests can go straight back to the session. The Built tab lists every built agent with a link to its session. Its details dialog sends change requests to the session and has the spec, executables and downloads. Results and executables from before the latest change are marked out of date.
+
 ## A run
 
 1. **Input** arrives: a trigger fires (with its payload), someone chats, an A2A task or an MCP

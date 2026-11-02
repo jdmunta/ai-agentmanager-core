@@ -1491,22 +1491,47 @@ test('ACP engines: an ACP agent runs in the terminal client, adopted, tracked, r
   await call('DELETE', `/agents/${a.id}`);
 });
 
-test('builder: a task becomes an agent (analysis, spec, tests), edited, tested, run here, downloaded', async () => {
+test('builder: a task becomes an agent developed in its own session (analysis, spec, tests), changed, tested, run here, downloaded', async () => {
   process.env.AGENTKIT_CLAUDE_BIN = `${process.execPath} ${path.join(here, 'fake-agentkit-claude.js')}`;
   process.env.FAKE_AGENTKIT_STATE = path.join(home, 'fake-agentkit-state.json');
+  const sessionIds = [];
   try {
     assert.equal((await call('POST', '/builder', { task: ' ' })).status, 400);
-    const b = (await call('POST', '/builder', { task: 'Label incoming support tickets by product area' })).body;
-    assert.equal(b.name, 'ticket-labeler');
-    assert.equal(b.status, 'designed');
+    assert.equal((await call('POST', '/builder', { task: 'x', name: '9lives' })).status, 400);
+    const first = (await call('POST', '/builder', { task: 'Label incoming support tickets by product area', name: 'ticket-labeler' })).body;
+    assert.equal(first.name, 'ticket-labeler');
+    assert.equal(first.status, 'designing');
+    assert.ok(first.session?.id, 'it is developed in an agent session');
+    sessionIds.push(first.session.id);
+    // The session works in the agent's folder, knows what it builds, and checks it without a prompt.
+    const ses = await agentNow(first.session.id);
+    assert.deepEqual(ses.builds, { name: 'ticket-labeler', engine: 'claude' });
+    assert.equal(ses.planReview, null);
+    const b = await waitFor(async () => {
+      const x = (await call('GET', '/builder/ticket-labeler')).body;
+      return x.status === 'designed' ? x : null;
+    }, 15000, 'its session wrote the agent');
+    const launch = launches().find((l) => l.cwd === fs.realpathSync(b.dir));
+    assert.ok(launch, 'the session runs in the agent folder');
+    const sys = launch.args[launch.args.indexOf('--append-system-prompt') + 1];
+    assert.match(sys, /This folder \(.*ticket-labeler\) is the agent/);
+    assert.ok(!/SPEC\.md/.test(sys), 'no separate SPEC.md: the analysis lives in the agent folder');
+    assert.ok(launch.args.some((x) => /^Bash\(.*agentkit\.js check:\*\)$/.test(x)) || launch.args.join(' ').includes('agentkit.js check:*'), 'checking needs no permission prompt');
     assert.match(b.analysis.problem, /^Handle: Label incoming support tickets/);
     assert.match(b.yaml, /goal: Every ticket gets one product-area label\./);
     assert.match(b.yaml, /webhook: \/hooks\/ticket/);
     assert.equal(b.instructionsText, '1. Read the ticket.\n2. Pick a label.\n');
     assert.equal(b.tests.length, 2);
     assert.deepEqual(b.triggers, ['webhook /hooks/ticket']);
-    // A second design with the same name gets its own folder.
-    assert.equal((await call('POST', '/builder', { task: 'again' })).body.name, 'ticket-labeler-2');
+    assert.equal(b.session.id, first.session.id);
+    // A change is asked of its session (typed in when it's idle).
+    assert.equal((await call('POST', '/builder/ticket-labeler/change', { text: ' ' })).status, 400);
+    assert.equal((await call('POST', '/builder/ticket-labeler/change', { text: 'Never reassign tickets' })).status, 200);
+    await waitFor(async () => (await agentNow(first.session.id)).outbox === 0, 15000, 'the change typed into the session');
+    // A second agent with the same name gets its own folder (and session); the name comes from the task otherwise.
+    const second = (await call('POST', '/builder', { task: 'again', name: 'ticket-labeler' })).body;
+    assert.equal(second.name, 'ticket-labeler-2');
+    sessionIds.push(second.session.id);
     // Edits are checked: the name stays, the YAML must be valid.
     assert.equal((await call('PUT', '/builder/ticket-labeler', { yaml: b.yaml.replace('name: ticket-labeler', 'name: other') })).status, 400);
     assert.match((await call('PUT', '/builder/ticket-labeler', { yaml: 'name: ticket-labeler\ngoal: [' })).body.error, /agent\.yaml/);
@@ -1557,8 +1582,11 @@ test('builder: a task becomes an agent (analysis, spec, tests), edited, tested, 
     assert.deepEqual((await call('GET', '/builder')).body.map((x) => x.name).sort(), ['ticket-labeler', 'ticket-labeler-2']);
     for (const n of ['ticket-labeler', 'ticket-labeler-2']) await call('DELETE', `/builder/${n}`);
     assert.deepEqual((await call('GET', '/builder')).body, []);
+    // Deleting the agent closes its session (the conversation stays).
+    await waitFor(async () => !(await agentNow(first.session.id)).runtime.running, 8000, 'its session closed');
   } finally {
     await call('POST', '/builder/ticket-labeler/stop').catch(() => {}); // never leave it running
+    for (const id of sessionIds) await call('DELETE', `/agents/${id}`).catch(() => {});
     delete process.env.AGENTKIT_CLAUDE_BIN;
     delete process.env.FAKE_AGENTKIT_STATE;
   }
