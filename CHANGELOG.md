@@ -6,6 +6,11 @@
 - The session's page has a panel for its agent: status, tests, **Run tests**, **Start**/**Stop**, its chat, **Details**. Failing tests go back to the session with **Ask this session to fix them**.
 - In the Built tab, each agent links to its session. The details dialog has a box that sends a change request to the session. Agents built before this get **Open a session for it**.
 - Test results and executables built before the agent's latest change are marked as out of date. Deleting a built agent closes its session; the conversation is kept.
+- **Fixes from building a real agent:**
+  - A permission prompt is now flagged when newer Claude Code blinks a ⏺ beside the pending tool call. The blinking used to keep the session looking busy, so the prompt never reached the Inbox. This affects every session, not just build sessions.
+  - agentkit agents can write files under a folder they're allowed: Claude Code ignores `Write(<path>)` allow rules, so each one now also gets its `Edit(<path>)` rule.
+  - The test judge sees the files each test run created or changed, not only the agent's reply, and the Tests list shows them.
+  - Build sessions read the agentkit reference without asking, and write the agent's files with their file tools.
 - The build dialog takes an optional name; otherwise the name comes from the task's first words. `POST /api/builder/:name/change` sends a change request to the session from scripts.
 
 ## 1.12.0 (2026-11-01)

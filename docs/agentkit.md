@@ -27,7 +27,8 @@ tools:                              # MCP servers the engine gets
     command: npx
     args: [-y, "@acme/jira-mcp"]
     env: { JIRA_TOKEN: "${JIRA_TOKEN}" }  # "${VAR}" (quoted) comes from the environment, never stored
-allow: [Read, Grep, "mcp__jira__*"] # tools it may use without asking (engine names)
+allow: [Read, Grep, "mcp__jira__*"] # tools it may use without asking (engine names);
+                                    # "Edit(./out/**)" lets it write files under ./out only
 approve: ["mcp__jira__transition"]  # tools that need a person's yes (asked in chat / Inbox)
 approveTimeout: 30m                 # no answer by then counts as no
 report:                             # report to AI Agent Manager (or set AGENTKIT_REPORT_*)

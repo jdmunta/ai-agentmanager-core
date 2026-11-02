@@ -11,6 +11,8 @@ import { Agent, verdictOf } from '../src/agentkit/agent.js';
 import { startHttp } from '../src/agentkit/http.js';
 import { checkAgent, loadAgent } from '../src/agentkit/spec.js';
 import { cronMatches } from '../src/agentkit/triggers.js';
+import { claudeRules } from '../src/agentkit/engines.js';
+import { filesWritten, judgePrompt, snapshot } from '../src/builder.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'agentkit-'));
@@ -137,6 +139,28 @@ test('stdio: as an MCP tool, and as an ACP agent with its steps streamed', async
   } finally {
     acp.close();
   }
+});
+
+test('claude rules: a Write(<path>) allow also gets its Edit(<path>), which is what Claude Code checks', () => {
+  assert.deepEqual(claudeRules(['Read', 'Write(./summaries/**)', 'Bash(date:*)']), ['Read', 'Write(./summaries/**)', 'Bash(date:*)', 'Edit(./summaries/**)']);
+  assert.deepEqual(claudeRules(['Write(a/**)', 'Edit(a/**)']), ['Write(a/**)', 'Edit(a/**)']);
+  assert.deepEqual(claudeRules(['Write']), ['Write']);
+});
+
+test('builder judge: sees the files a test run created or changed, not the agent state or binaries', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentkit-files-'));
+  fs.mkdirSync(path.join(dir, 'out'));
+  fs.mkdirSync(path.join(dir, '.agentkit'));
+  fs.writeFileSync(path.join(dir, 'out', 'old.md'), 'old');
+  const before = snapshot(dir);
+  fs.writeFileSync(path.join(dir, 'out', 'new.md'), 'Covers up to: 1.3.0');
+  fs.writeFileSync(path.join(dir, '.agentkit', 'memory.md'), 'notes');
+  fs.writeFileSync(path.join(dir, 'out', 'img.bin'), Buffer.from([1, 0, 2]));
+  const files = filesWritten(dir, before);
+  assert.deepEqual(files, [{ path: path.join('out', 'new.md'), text: 'Covers up to: 1.3.0', truncated: false }]);
+  assert.match(judgePrompt({ goal: 'g', input: 'i', expect: 'e', result: 'r', files }), /<files_written>\n--- out\/new\.md\nCovers up to: 1\.3\.0\n<\/files_written>/);
+  assert.match(judgePrompt({ goal: 'g', input: 'i', expect: 'e', result: 'r' }), /<files_written>\n\(none\)/);
+  fs.rmSync(dir, { recursive: true, force: true });
 });
 
 test('triggers: cron fields (lists, ranges, steps)', () => {

@@ -59,6 +59,19 @@ export function approverServer({ url, token }) {
 }
 
 /**
+ * Claude Code scopes file writes with Edit(<path>) rules (they cover Write too); a Write(<path>)
+ * rule is ignored. Each Write(<path>) also gets its Edit(<path>), so writing there is allowed.
+ */
+export function claudeRules(allow) {
+  const out = [...allow];
+  for (const p of allow) {
+    const m = /^Write\((.+)\)$/.exec(p);
+    if (m && !out.includes(`Edit(${m[1]})`)) out.push(`Edit(${m[1]})`);
+  }
+  return out;
+}
+
+/**
  * One turn. `session`: the engine session to continue (null starts one); returns
  * { text, session, costUsd }. `system` goes in as an extra system prompt where the engine has one,
  * else ahead of the prompt.
@@ -77,7 +90,7 @@ export async function turn(agent, { prompt, system = '', session = null, mcpFile
     args.push('--setting-sources', 'project', '--strict-mcp-config');
     if (mcpFile) args.push('--mcp-config', mcpFile);
     // The approve list wins: an allow pattern that also covers an approval tool goes to the approver.
-    const allow = approver ? allowedOutright(agent) : agent.allow;
+    const allow = claudeRules(approver ? allowedOutright(agent) : agent.allow);
     if (allow.length) args.push('--allowedTools', ...allow);
     // With an approver, Claude asks it before anything not allowed outright (it says no to tools
     // off the approve list); without one, approval tools are simply not available.
