@@ -68,16 +68,6 @@ if (args.includes('-p')) {
       process.stdout.write('```json\n' + JSON.stringify(reply) + '\n```\n', () => process.exit(0));
       return;
     }
-    if (input.startsWith('You design an autonomous agent')) {
-      return json({
-        analysis: { problem: `Handle: ${section('task').slice(0, 40)}`, inputs: ['a ticket'], outputs: ['a label'], risks: ['wrong label'] },
-        name: 'Ticket Labeler', title: 'Ticket labeler', description: 'Labels tickets.',
-        goal: 'Every ticket gets one product-area label.',
-        instructions: '1. Read the ticket.\n2. Pick a label.',
-        tools: [], allow: ['Read'], approve: [], triggers: [{ webhook: '/hooks/ticket' }],
-        tests: [{ input: 'Login page crashes', expect: 'labelled auth' }, { input: 'Invoice total wrong', expect: 'labelled billing' }],
-      });
-    }
     if (input.startsWith('You check one test of an autonomous agent')) return json({ pass: !section('input').includes('Invoice'), why: 'checked' });
     if (input.startsWith("You score an AI coding agent's changes")) {
       const ids = [...input.matchAll(/<hunk id="(H\d+)"/g)].map((m) => m[1]);
@@ -182,6 +172,15 @@ if (briefDir) {
   );
 }
 const prompt = args.includes('--') ? args[args.indexOf('--') + 1] ?? '' : '';
+// A session building an agent (src/builder.js): write the agent's files in its folder, as Claude would.
+const building = prompt.match(/^Build the agent "([a-z0-9-]+)" \(engine: ([^)]+)\) for this task:\n\n([\s\S]*?)\n\nWrite /);
+if (building) {
+  const [, name, engine, task] = building;
+  fs.writeFileSync('analysis.json', JSON.stringify({ analysis: { problem: `Handle: ${task.slice(0, 40)}`, inputs: ['a ticket'], outputs: ['a label'], risks: ['wrong label'] }, tools: [] }));
+  fs.writeFileSync('agent.yaml', `name: ${name}\ntitle: Ticket labeler\ndescription: Labels tickets.\ngoal: Every ticket gets one product-area label.\ninstructions: instructions.md\nengine: ${engine}\ntools: {}\nallow: [Read]\napprove: []\ntriggers:\n  - webhook: /hooks/ticket\nloop: { plan: true, check: true, maxSteps: 4 }\nmemory: true\ninterfaces: { http: { port: 0 }, a2a: true, acp: true, mcp: true }\n`);
+  fs.writeFileSync('instructions.md', '1. Read the ticket.\n2. Pick a label.\n');
+  fs.writeFileSync('tests.yaml', '- input: Login page crashes\n  expect: labelled auth\n- input: Invoice total wrong\n  expect: labelled billing\n');
+}
 // "#stuck": the same command failing the same way three times.
 if (prompt.includes('#stuck')) {
   for (let i = 0; i < 3; i++) {

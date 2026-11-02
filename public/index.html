@@ -382,14 +382,15 @@
     <dialog id="build-dialog">
       <form id="build-form" method="dialog">
         <h2>Build an agent</h2>
-        <p class="hint">Describe the task or workflow it takes over: what comes in, what it should do, what it must never do. It's designed for you to review (analysis, spec, test cases) before it runs.</p>
+        <p class="hint">Describe the task or workflow it takes over: what comes in, what it should do, what it must never do. An agent session works it out with you in the agent's own folder (analysis, spec, instructions, test cases); you keep shaping it there, then test, run and package it.</p>
         <label>Task or workflow
           <textarea name="task" rows="8" required placeholder="Every morning, look at new support tickets in Jira, label each by product area, route it to the right team, and draft a first reply for a person to send. Never close or reply to tickets on its own."></textarea>
         </label>
         <div id="build-attach"></div>
-        <label>Engine <select name="engine"><option value="claude">Claude Code</option></select></label>
+        <div class="row"><label>Engine it runs on <select name="engine"><option value="claude">Claude Code</option></select></label>
+        <label>Name <input name="name" placeholder="from the task" pattern="[a-z][a-z0-9-]{1,40}" title="lowercase letters, digits and dashes"></label></div>
         <p id="build-error" class="error" hidden></p>
-        <div class="dialog-actions"><button type="button" id="build-cancel" class="ghost">Cancel</button><button type="submit" class="primary">Design the agent</button></div>
+        <div class="dialog-actions"><button type="button" id="build-cancel" class="ghost">Cancel</button><button type="submit" class="primary">Start building</button></div>
       </form>
     </dialog>
 

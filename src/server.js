@@ -525,9 +525,19 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
   api.get('/agents/:id/memory', wrap((req) => memory.read(req.params.id)));
   api.put('/agents/:id/memory', wrap((req) => memory.write(req.params.id, req.body?.text)));
   api.post('/agents/:id/learn', wrap((req) => memory.learn(req.params.id, req.body?.text, { by: req.headers['x-agentmgr-agent'] ? undefined : 'you' })));
-  // The agent builder (agentkit agents designed from a task): design, edit, test, run, download.
-  // Agents started here report to this daemon (runs, cost, approvals).
-  const builder = new Builder({ oneShot: (prompt) => manager.oneShot(null, prompt, { ...manager.writerFor({}), timeoutMs: 300_000 }), reportEnv: () => ({ AGENTKIT_REPORT_URL: `http://127.0.0.1:${port}`, AGENTKIT_REPORT_TOKEN: reports.reportToken() }) });
+  // The agent builder (agentkit agents built from a task, each developed in an agent session
+  // working in its folder): build, change, test, run, package, download. Agents started here
+  // report to this daemon (runs, cost, approvals).
+  const sessions = {
+    create: (opts) => manager.create({ ...opts, worktree: false }),
+    get: (id) => {
+      const a = manager.get(id);
+      return a ? manager.view(a) : null;
+    },
+    tell: (id, text) => manager.tell(id, text),
+    stop: (id) => manager.stop(id).catch(() => {}),
+  };
+  const builder = new Builder({ sessions, oneShot: (prompt) => manager.oneShot(null, prompt, { ...manager.writerFor({}), timeoutMs: 300_000 }), reportEnv: () => ({ AGENTKIT_REPORT_URL: `http://127.0.0.1:${port}`, AGENTKIT_REPORT_TOKEN: reports.reportToken() }) });
   api.post('/agentkit/report', wrap((req) => reports.report(req.body ?? {})));
   api.get('/agentkit/agents', wrap(() => reports.list()));
   api.post('/agentkit/agents/:key/approvals/:id', wrap((req) => reports.decide(req.params.key, req.params.id, req.body?.allow === true, req.device ? `${req.device.name ?? 'a signed-in device'}` : 'you')));
@@ -535,7 +545,8 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
   // What an agent elsewhere needs to report here (this computer only: it shows the token).
   api.get('/agentkit/connect', wrap(() => ({ token: reports.reportToken(), local: `http://127.0.0.1:${port}`, remote: remoteServer ? remote.remoteUrls(remotePort).map((u) => u.url) : [], cert: remoteServer ? remote.certificateFingerprint() : null })));
   api.get('/builder', wrap(() => builder.list()));
-  api.post('/builder', wrap((req) => builder.design({ task: req.body?.task, engine: req.body?.engine || 'claude', attachments: req.body?.attachments?.length ? manager.stagedText(req.body.attachments) : [] })));
+  api.post('/builder', wrap((req) => builder.design({ task: req.body?.task, engine: req.body?.engine || 'claude', name: req.body?.name || undefined, attachments: req.body?.attachments, permissionMode: req.body?.permissionMode || undefined, model: req.body?.model || undefined })));
+  api.post('/builder/:name/change', wrap((req) => builder.change(req.params.name, req.body?.text)));
   api.get('/builder/:name', wrap((req) => builder.view(req.params.name)));
   api.put('/builder/:name', wrap((req) => builder.update(req.params.name, req.body ?? {})));
   api.post('/builder/:name/test', wrap((req) => {

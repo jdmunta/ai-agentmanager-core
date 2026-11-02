@@ -968,6 +968,12 @@ body.remote .settings-links .local-only { display: none; }
 .built-body details > summary { cursor: pointer; padding: 4px 0; }
 .built-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .built-exe { margin: 10px 0; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; }
+.built-session, .built-panel { margin: 0 0 10px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel, transparent); }
+.built-session .line1, .built-panel .line1 { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.built-panel { margin: 10px 0; }
+.built-panel p { margin: 6px 0 0; }
+.built-change { display: flex; gap: 6px; margin-top: 6px; align-items: flex-end; }
+.built-change textarea { flex: 1; min-width: 0; }
 .built-exe-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
 .built-tests li { margin-bottom: 8px; } .built-tests li.pass b { color: var(--green); } .built-tests li.fail b { color: var(--red); }
 .built-tests pre, .built-runs div { white-space: pre-wrap; font-size: 12.5px; }
