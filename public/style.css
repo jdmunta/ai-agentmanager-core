@@ -979,3 +979,9 @@ body.remote .settings-links .local-only { display: none; }
 .built-tests pre, .built-runs div { white-space: pre-wrap; font-size: 12.5px; }
 .code-area { width: 100%; font: 12.5px/1.45 var(--mono); margin-top: 6px; }
 .built-runs { list-style: none; padding: 0; } .built-runs li { padding: 6px 0; border-bottom: 1px solid var(--border); }
+
+/* Approval rules (Settings) and agents waiting on the same command (inbox) */
+.rules-list { list-style: none; padding: 0; margin: 6px 0 0; display: grid; gap: 6px; }
+.rules-list li { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.rules-list li button { margin-left: auto; }
+.need.group { border-style: dashed; }

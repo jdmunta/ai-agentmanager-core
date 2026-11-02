@@ -213,7 +213,12 @@ if (prompt.includes('#signin')) {
 // "#waiting" / "#finish": plain words a rule can't recognize; the AI judge reads them.
 if (prompt.includes('#waiting')) setTimeout(() => process.stdout.write('\r\nWhich database should I use for the cache, Postgres or SQLite?\r\n'), 200);
 if (prompt.includes('#finish')) setTimeout(() => process.stdout.write('\r\nAll done: the token refresh fix is in.\r\n'), 200);
+// The tool call a permission prompt asks about ("#run(<command>)", else npm test), in the transcript
+// before the menu shows, as Claude Code writes it; answering "1" gives it a result.
+let asked = null;
 if (args.includes('--') && args[args.indexOf('--') + 1]?.includes('#ask')) {
+  asked = `toolu_ask_${Date.now()}`;
+  write({ type: 'assistant', timestamp: new Date().toISOString(), message: { id: `msg_ask_${Date.now()}`, content: [{ type: 'tool_use', id: asked, name: 'Bash', input: { command: /#run\(([^)]+)\)/.exec(prompt)?.[1] ?? 'npm test' } }] } });
   setTimeout(() => process.stdout.write('\r\nDo you want to proceed?\r\n❯ 1. Yes\r\n  2. No\r\n'), 200);
   // "#blink": keep blinking the ⏺ beside the tool call above the prompt, as newer Claude Code does.
   if (prompt.includes('#blink')) {
@@ -226,6 +231,12 @@ process.stdin.setRawMode?.(true);
 process.stdin.on('data', (d) => {
   const s = d.toString();
   if (s.includes('exit')) process.exit(3);
+  if (asked && s === '1') {
+    write({ type: 'user', timestamp: new Date().toISOString(), message: { content: [{ type: 'tool_result', tool_use_id: asked, content: 'ok' }] } });
+    asked = null;
+    // The tool runs and its output scrolls the menu away, as in Claude Code.
+    process.stdout.write(`\r\n${'Ran the command: ok\r\n'.repeat(90)}`);
+  }
   process.stdout.write(`echo:${s}`);
 });
 // FAKE_CLAUDE_HUP_DELAY_MS: take that long to close, like a busy session.

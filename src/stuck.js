@@ -20,12 +20,14 @@ const textOf = (c) => (typeof c === 'string' ? c : Array.isArray(c) ? c.map((b) 
 
 /**
  * Incrementally read new transcript lines into `state.events` (tool calls with their results).
- * state: { offset, events: [{ t, kind: 'cmd'|'edit'|'other', ... }], pending: Map(id -> event) }.
+ * state: { offset, events: [{ t, kind: 'cmd'|'edit'|'other', ... }], pending: Map(id -> event),
+ *   calls: Map(id -> { name, input }) for the tool calls still waiting for a result (what a prompt asks about) }.
  */
 export function scanActivity(file, state) {
   state.offset ??= 0;
   state.events ??= [];
   state.pending ??= new Map();
+  state.calls ??= new Map();
   let fd;
   try {
     fd = fs.openSync(file, 'r');
@@ -34,7 +36,7 @@ export function scanActivity(file, state) {
   }
   try {
     const { size } = fs.fstatSync(fd);
-    if (size < state.offset) Object.assign(state, { offset: 0, events: [], pending: new Map() });
+    if (size < state.offset) Object.assign(state, { offset: 0, events: [], pending: new Map(), calls: new Map() });
     if (size === state.offset) return state;
     const buf = Buffer.alloc(size - state.offset);
     fs.readSync(fd, buf, 0, buf.length, state.offset);
@@ -56,7 +58,12 @@ export function scanActivity(file, state) {
           const ev = eventFor(b, t);
           state.events.push(ev);
           state.pending.set(b.id, ev);
+          // Calls left without a result by an earlier response (interrupted) aren't what's asked now.
+          if (rec.message?.id && rec.message.id !== state.callsMsg) state.calls.clear();
+          state.callsMsg = rec.message?.id;
+          state.calls.set(b.id, { name: b.name, input: b.input ?? {} });
         } else if (rec.type === 'user' && b.type === 'tool_result') {
+          state.calls.delete(b.tool_use_id);
           const ev = state.pending.get(b.tool_use_id);
           if (!ev) continue;
           state.pending.delete(b.tool_use_id);

@@ -112,6 +112,7 @@ import { Plugins } from './plugins.js';
 import { leadPrompt, subagents, teamDir, teamPrompt } from './teams.js';
 import { assistantDir, assistantPrompt, assistantSettings } from './assistant.js';
 import { learnCommand, memoryKey, memoryPrompt, memoryText } from './memory.js';
+import { Rules, describeTool } from './rules.js';
 import { runningClaude, scanClaudeSessions } from './sessions.js';
 import { builderAllowedTools, builderPrompt } from './builder.js';
 import {
@@ -149,6 +150,8 @@ const ANSI = /\x1b(\[[0-9;?<>=]*[ -\/]*[@-~]|\][^\x07\x1b]*(\x07|\x1b\\)|[()][0-
 // When a link is found from several sources, the higher-ranked source is kept.
 const SOURCE_RANK = { manual: 5, intent: 4, session: 3, branch: 2, mentioned: 1 };
 const BUSY_IDLE_MS = 3000;
+// The attention label engines give a tool permission menu (what rules can answer).
+const PERMISSION = 'Permission prompt';
 /** Looser stuck thresholds: candidates the judge looks at before anyone is bothered. */
 const loosen = (o) => ({
   repeatFailures: Math.max(2, Math.ceil(o.repeatFailures / 2)),
@@ -282,6 +285,7 @@ export class AgentManager extends EventEmitter {
     this.stuck = new Map(); // agent id -> [finding]
     this.outbox = new Map(); // agent id -> [message] waiting to be typed into its session
     // The AI judge: rules decide when to look, a model decides what is going on (see judge.js).
+    this.rules = new Rules({ suggestAfter: config.rules?.suggestAfter });
     this.judge = new Judge({ config, call: (agent, prompt, { timeoutMs }) => this.oneShot(agent, prompt, { ...this.judgeModel(agent), timeoutMs }) });
     this.stuckVerdicts = new Map(); // agent id -> Map(finding key -> { at, since, data })
     this.signIns = new Map(); // agent id -> { url, port, callback, terminal, at, finished } from a CLI's sign-in link
@@ -373,7 +377,7 @@ export class AgentManager extends EventEmitter {
         shell: this.shellNumbers(agent.id).length > 0,
         shells: this.shellNumbers(agent.id),
         lastOutputAt: rt?.lastOutputAt ? new Date(rt.lastOutputAt).toISOString() : null,
-        prompt: rt?.pty && !rt.busy && rt.attention ? engineOf(agent).promptChoices(rt.tail) : null,
+        prompt: rt?.pty && !rt.busy && rt.attention ? this.promptView(agent, rt) : null,
       },
     };
   }
@@ -1066,6 +1070,9 @@ export class AgentManager extends EventEmitter {
       prompts.push(memoryPrompt(memoryText(memoryKey(agent))));
       allowedTools = [`Bash(${learnCommand()}:*)`];
     }
+    // Commands you chose to always allow in this repo.
+    const ruled = agent.workdir ? this.rules.allowed(memoryKey(agent)) : [];
+    if (ruled.length) allowedTools = [...(allowedTools ?? []), ...ruled];
     if (agent.builds && agent.workdir) {
       prompts.push(builderPrompt({ dir: agent.workdir, name: agent.builds.name, engine: agent.builds.engine }));
       // Checking the agent loads and reading the reference need no permission prompt.
@@ -2866,8 +2873,51 @@ export class AgentManager extends EventEmitter {
         items.push({ ...base, kind: 'conflict', key: `conflict:${agent.id}:${g.agent.id}`, title: `Overlaps with ${g.agent.name}`, conflict: g });
       }
     }
-    const order = { prompt: 0, waiting: 1, question: 1, review: 2, stuck: 3, conflict: 4 };
+    // Commands you keep allowing in a repo: offer to always allow them there.
+    for (const r of this.rules.view().suggestions) items.push({ kind: 'rule', key: `rule:${r.repo}:${r.rule}`, title: `Always allow ${r.label}?`, priority: 2, ...r });
+    const order = { prompt: 0, waiting: 1, question: 1, rule: 2, review: 2, stuck: 3, conflict: 4 };
     return items.sort((a, b) => order[a.kind] - order[b.kind] || a.priority - b.priority);
+  }
+
+  /** A live prompt's question and choices, and the tool call it asks about when the transcript says. */
+  promptView(agent, rt) {
+    const p = engineOf(agent).promptChoices(rt.tail);
+    const call = rt.attention === PERMISSION ? this.pendingCall(agent) : null;
+    return call ? { ...p, tool: describeTool(call) } : p;
+  }
+
+  /** The one tool call a live prompt is waiting on, from the transcript (Claude Code); null when unsure. */
+  pendingCall(agent) {
+    const engine = engineOf(agent);
+    if (engine.id !== 'claude' || !agent.workdir || !agent.sessionId) return null;
+    const key = `${agent.sessionId}:${agent.workdir}`;
+    const state = this.activity.get(key) ?? {};
+    this.activity.set(key, engine.activity(engine.sessionFile(agent.workdir, agent.sessionId), state));
+    return state.calls?.size === 1 ? [...state.calls.values()][0] : null;
+  }
+
+  /** A permission prompt for a call one of the repo's allowed rules covers is answered yes by itself. */
+  autoAllow(agent, rt) {
+    if (this.config.rules?.auto === false) return false;
+    const call = this.pendingCall(agent);
+    const repo = call ? memoryKey(agent) : null;
+    const rule = call && this.rules.allows(repo, call);
+    if (!rule) return false;
+    const first = engineOf(agent).promptChoices(rt.tail)?.choices?.[0];
+    if (first?.key !== '1' || !/^yes\b/i.test(first.label)) return false;
+    this.write(agent.id, '1');
+    rt.attention = null;
+    this.rules.used(repo, rule);
+    this.plugins.emit('agent.prompt.allowed', { agent: this.auditView(agent), rule, tool: describeTool(call) });
+    return true;
+  }
+
+  /** After a rule is allowed: prompts already waiting on a call it covers are answered too. */
+  applyRules() {
+    for (const [id, rt] of this.runtimes) {
+      const agent = this.store.get(id);
+      if (agent && rt.pty && !rt.busy && rt.attention === PERMISSION && this.autoAllow(agent, rt)) this.changed(agent);
+    }
   }
 
   /** Send keys to a live prompt (e.g. "1" to pick the first option). */
@@ -2876,6 +2926,13 @@ export class AgentManager extends EventEmitter {
     const keys = { esc: '\x1b', enter: '\r', up: '\x1b[A', down: '\x1b[B' };
     const data = keys[key] ?? (/^\d$/.test(key) ? key : null);
     if (!data) throw Object.assign(new Error('Unsupported key'), { status: 400 });
+    // A yes to a permission prompt counts toward offering a rule for it in this repo.
+    const rt = this.runtimes.get(agent.id);
+    if (rt?.pty && !rt.busy && rt.attention === PERMISSION) {
+      const choice = engineOf(agent).promptChoices(rt.tail)?.choices?.find((c) => c.key === key);
+      const call = /^yes\b/i.test(choice?.label ?? '') ? this.pendingCall(agent) : null;
+      if (call) this.rules.approved(memoryKey(agent), call);
+    }
     // Menus that read a line (the ACP client's) take Enter after the choice.
     this.write(agent.id, engineOf(agent).promptKeyEnter && key !== 'enter' ? `${data}\r` : data);
     return { ok: true };
@@ -2985,6 +3042,7 @@ export class AgentManager extends EventEmitter {
         const screen = rt.tail.slice(-1500).replace(ANSI, '').replace(/\s+/g, '');
         const a0 = this.store.get(id);
         rt.attention = (a0 ? engineOf(a0).attention : []).find(([re]) => re.test(screen))?.[1] ?? null;
+        if (a0 && rt.attention === PERMISSION) this.autoAllow(a0, rt);
         const a = this.store.get(id);
         if (a) this.changed(a);
         // A turn just ended: remember the code and conversation at this point.

@@ -541,12 +541,15 @@ The **Inbox** tab (and `agentmgr inbox`) lists what needs you, across all agents
 
 | Kind | What it is | How you answer |
 | --- | --- | --- |
-| Needs input | A permission prompt or question menu is open in the agent's terminal | Click a choice (1, 2, 3, Esc); no need to open the terminal |
+| Needs input | A permission prompt or question menu is open in the agent's terminal; for Claude Code, the card shows the command or file it asks about | Click a choice (1, 2, 3, Esc); no need to open the terminal. Several agents waiting on the same command: **Yes to all** |
+| Always allow? | You allowed the same command 3 times in a repo | **Always allow** (agents there stop asking) or **Not now** |
 | Waiting on you | The AI judge read an idle screen and saw a question (or an error) no rule recognized | Click a choice or type an answer; **Not waiting** if it misread |
 | Question | The agent asked something without stopping | Click an option or type an answer |
 | AI review | The agent said it was done and the judge checked the work against the intent and brief | **Send back to finish** (types the missing items in) or **Looks good** |
 | Stuck? | The agent seems to be going in circles | Send the suggested nudge (edit it first if you like) or dismiss |
 | Overlap | It changes the same files as another agent | Tell one or both agents; see the suggested merge order |
+
+**Fewer questions: approval rules.** Each yes you give a permission prompt counts toward the command, per repo (`npm test`, `pytest`, `git status`; an MCP tool; fetching from a site). After 3, the inbox offers to always allow it there. An allowed rule goes to every agent in that repo when it starts (Claude Code's `--allowedTools`), and answers its prompts that are already open, so you aren't asked again. Rules are never offered for commands that chain, redirect or substitute (`&&`, `|`, `>`, `$(…)`), or that delete, escalate, publish or reach the network (`rm`, `sudo`, `git push`, `npm publish`, `curl`…). Settings → Approval rules (or `agentmgr rules`) lists them with how many prompts each answered; **Remove** to be asked again. Stored in `~/.agentmanager/rules.json`; In config.json, `"rules": { "auto": false }` stops rules answering open prompts and `"rules": { "suggestAfter": 5 }` changes the count. Claude Code agents only for now.
 
 **Questions without stopping.** Task agents are told to write questions that don't block all their work to `QUESTIONS.md` next to their brief, with options and the default they'll assume meanwhile, and then keep going:
 

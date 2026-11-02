@@ -92,6 +92,7 @@ export function initMenu({ api, esc, toast, $ }) {
       form.maxRunning.value = c.maxRunning ?? '';
       $('#settings-running').textContent = `Open now: ${c.running}.`;
       service = null;
+      showRules(await api('GET', '/rules').catch(() => null));
       const u = await api('GET', '/update').catch(() => null);
       form.updateCheck.checked = u?.check !== false;
       if (!remote()) {
@@ -115,6 +116,23 @@ export function initMenu({ api, esc, toast, $ }) {
       toast(`Error: ${err.message}`, 5000);
     }
   };
+  /** Allowed rules, newest first, each with what it has saved and a Remove button. */
+  const showRules = (r) => {
+    const list = [...(r?.allowed ?? [])].sort((a, b) => String(b.at).localeCompare(String(a.at)));
+    $('#settings-rules-list').innerHTML = list.length
+      ? list.map((x) => `<li><code>${esc(x.label)}</code> <span class="hint">in ${esc(String(x.repo).replace(/^dir:/, '').split('/').filter(Boolean).slice(-2).join('/'))}${x.uses ? ` · answered ${x.uses} prompt${x.uses === 1 ? '' : 's'}` : ''}</span> <button type="button" class="small ghost" data-rule-remove="${esc(x.rule)}" data-repo="${esc(x.repo)}">Remove</button></li>`).join('')
+      : '<li class="hint">None yet.</li>';
+  };
+  $('#settings-rules-list').addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-rule-remove]');
+    if (!b) return;
+    try {
+      showRules(await api('POST', '/rules/remove', { repo: b.dataset.repo, rule: b.dataset.ruleRemove }));
+      toast('Rule removed; agents there will ask again');
+    } catch (err) {
+      toast(`Error: ${err.message}`, 5000);
+    }
+  });
   $('#settings-cancel').onclick = () => dialog.close();
   dialog.addEventListener('click', (e) => {
     const go = e.target.closest('[data-open]');
