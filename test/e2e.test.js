@@ -71,6 +71,15 @@ const waitFor = async (fn, ms = 8000, label = 'condition') => {
   }
 };
 const agentNow = async (id) => (await call('GET', `/agents/${id}`)).body;
+// A port nothing is listening on (a random one can be taken on a CI runner).
+const freePort = async () => {
+  const net = await import('node:net');
+  const srv = net.createServer();
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+  const { port } = srv.address();
+  await new Promise((r) => srv.close(r));
+  return port;
+};
 const launches = () => (fs.existsSync(claudeLog) ? fs.readFileSync(claudeLog, 'utf8') : '').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l));
 
 test.after(async () => {
@@ -706,7 +715,7 @@ const sseUntil = (rport, route, cookie, until, ms = 8000) =>
 
 test('remote access: HTTPS, token sign-in, local-only management, SSE terminal, revocation', async () => {
   const remote = await import('../src/remote.js');
-  const rport = 20000 + Math.floor(Math.random() * 20000);
+  const rport = await freePort();
   remote.saveSettings({ extraHosts: ['127.0.0.1'] }); // the test connects over loopback
   const st = (await call('POST', '/remote/enable', { port: rport })).body;
   assert.equal(st.running, true);
@@ -837,7 +846,7 @@ test('browser tabs: any address, saved per agent, suggested from terminal output
 
   // From another device: a relay listener per address, behind the same sign-in.
   const remote = await import('../src/remote.js');
-  const rport = 20000 + Math.floor(Math.random() * 20000);
+  const rport = await freePort();
   remote.saveSettings({ extraHosts: ['127.0.0.1'] });
   await call('POST', '/remote/enable', { port: rport });
   test.after(() => call('POST', '/remote/disable'));
@@ -2742,7 +2751,7 @@ test('hub sign-in links: only with "signin", one use, a minute, then the machine
     const res = await fetch(`${hubBase}/api${route}`, { method, headers: { 'content-type': 'application/json', authorization: `Bearer ${hub.token}` }, body: body && JSON.stringify(body) });
     return { status: res.status, body: await res.json().catch(() => ({})) };
   };
-  const rport = 20000 + Math.floor(Math.random() * 20000);
+  const rport = await freePort();
   remote.saveSettings({ extraHosts: ['127.0.0.1'] });
   try {
     assert.equal((await call('POST', '/remote/enable', { port: rport })).status, 200);
