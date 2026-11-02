@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- **Fewer questions: approval rules.** When you allow the same command 3 times in a repo (`npm test`, an MCP tool, fetching from a site), the inbox offers **Always allow**. Allowed rules go to every Claude Code agent in that repo at launch and answer its open prompts, including the ones waiting when you allow it. Never offered for compound commands or ones that delete, escalate, publish or reach the network. Settings → Approval rules and `agentmgr rules` list them, with how many prompts each answered, and remove them.
+- **Prompt cards say what they ask about:** "Wants to run `npm test`" (from the session's transcript) instead of only "Do you want to proceed?".
+- **Yes to all:** several agents waiting on the same command get one card that answers them together.
+
 ## 1.13.0 (2026-11-01)
 
 - **Agents are built in an agent session.** **+ Build an agent** now starts an agent session that works in the new agent's folder (`~/.agentmanager/built/<name>/`) and goes straight to it. The session writes the analysis (`analysis.json`), `agent.yaml`, `instructions.md` and `tests.yaml`, and checks that the agent loads. You keep shaping the agent in that conversation, like any other session (terminal, resume, inbox).

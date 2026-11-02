@@ -1690,6 +1690,52 @@ test('decision inbox: live prompts list their choices and take a key', async () 
   await call('POST', `/agents/${a.id}/stop`);
 });
 
+test('approval rules: three yeses to the same command offer a rule; allowed, agents in the repo stop asking', async () => {
+  const dir = path.join(home, 'rules-repo');
+  fs.mkdirSync(dir, { recursive: true });
+  execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: dir });
+  execFileSync('git', ['-c', 'commit.gpgsign=false', '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '--allow-empty', '-m', 'init'], { cwd: dir });
+  const ids = [];
+  try {
+    for (let i = 0; i < 3; i++) {
+      const [a] = (await call('POST', '/agents', { intent: `Run the tests ${i} #ask #run(npm test -- --watch=false)`, dir, worktree: true, base: 'HEAD' })).body;
+      ids.push(a.id);
+      await runningAgent(a.id);
+      // The card says what it asks about, from the transcript.
+      const item = await waitFor(async () => (await call('GET', '/inbox')).body.find((x) => x.agentId === a.id && x.kind === 'prompt' && x.prompt.tool), 10000, 'prompt with its tool');
+      assert.deepEqual(item.prompt.tool, { name: 'Bash', text: 'npm test -- --watch=false' });
+      assert.equal((await call('POST', `/agents/${a.id}/prompt-key`, { key: '1' })).status, 200);
+      await call('POST', `/agents/${a.id}/stop`);
+      if (i < 2) assert.equal((await call('GET', '/rules')).body.suggestions.length, 0, 'not after one or two');
+    }
+    const r = (await call('GET', '/rules')).body;
+    assert.deepEqual(r.suggestions.map((x) => [x.rule, x.label, x.n]), [['Bash(npm test:*)', 'npm test', 3]]);
+    const { repo } = r.suggestions[0];
+    assert.ok((await call('GET', '/inbox')).body.some((x) => x.kind === 'rule' && x.rule === 'Bash(npm test:*)'));
+    assert.equal((await call('POST', '/rules/accept', { repo })).status, 400);
+    // An agent already waiting on it when you allow the rule is answered then.
+    const [w] = (await call('POST', '/agents', { intent: 'Waiting on the tests #ask #run(npm test)', dir, worktree: true, base: 'HEAD' })).body;
+    ids.push(w.id);
+    await waitFor(async () => (await call('GET', '/inbox')).body.find((x) => x.agentId === w.id && x.kind === 'prompt' && x.prompt.tool), 15000, 'waiting prompt');
+    assert.deepEqual((await call('POST', '/rules/accept', { repo, rule: 'Bash(npm test:*)' })).body.allowed.map((x) => [x.rule, x.uses]), [['Bash(npm test:*)', 1]]);
+    assert.ok(!(await call('GET', '/inbox')).body.some((x) => x.agentId === w.id && x.kind === 'prompt'));
+
+    // The next agent there launches with it allowed, and a prompt for it is answered by itself.
+    const [d] = (await call('POST', '/agents', { intent: 'Run the tests again #ask #run(npm test)', dir, worktree: true, base: 'HEAD' })).body;
+    ids.push(d.id);
+    const launch = await waitFor(() => launches().find((l) => l.args.includes(d.sessionId)), 20000, 'launch');
+    assert.ok(launch.args.slice(launch.args.indexOf('--allowedTools') + 1).includes('Bash(npm test:*)'));
+    const used = await waitFor(async () => (await call('GET', '/rules')).body.allowed.find((x) => x.uses === 2), 15000, 'answered by the rule');
+    assert.ok(used.lastUsedAt);
+    assert.ok(!(await call('GET', '/inbox')).body.some((x) => x.agentId === d.id && x.kind === 'prompt'), 'not in the inbox');
+
+    assert.deepEqual((await call('POST', '/rules/remove', { repo, rule: 'Bash(npm test:*)' })).body.allowed, []);
+    assert.equal((await call('POST', '/rules/remove', { repo, rule: 'Bash(npm test:*)' })).status, 404);
+  } finally {
+    for (const id of ids) await call('DELETE', `/agents/${id}`);
+  }
+});
+
 test('a prompt is seen while newer Claude Code blinks the ⏺ beside the pending tool call', async () => {
   const [a] = (await call('POST', '/agents', { intent: 'Needs permission #ask #blink' })).body;
   await runningAgent(a.id);

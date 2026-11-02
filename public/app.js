@@ -127,6 +127,7 @@ $('#new-playbook').onclick = () => {
 };
 $('#triggers-open').onclick = () => triggersUi.open();
 let builtReports = []; // agents built with agentkit that report here (runs, approvals)
+let rulesState = { allowed: [], suggestions: [] }; // approval rules learned from your answers (src/rules.js)
 const builtUi = initBuilt({
   api, esc, toast, $,
   isOpen: () => sideTab === 'built',
@@ -1013,7 +1014,7 @@ function flags(a) {
 }
 
 const TRIAGED = { now: 'sent (AI: urgent)', digest: 'held for the digest', skip: 'dropped by the AI judge' };
-const NEED_ORDER = { approval: 0, prompt: 0, waiting: 1, plan: 1, question: 1, team: 1, review: 2, stuck: 3, conflict: 4 };
+const NEED_ORDER = { approval: 0, prompt: 0, waiting: 1, plan: 1, question: 1, team: 1, rule: 2, review: 2, stuck: 3, conflict: 4 };
 /** What an agent needs from the user. `both`: overlaps on both agents (detail), else only the one that should rebase (inbox). */
 function needsFor(a, { both = false } = {}) {
   const items = [];
@@ -1037,20 +1038,49 @@ function teamNeeds() {
 function approvalNeeds() {
   return builtReports.flatMap((r) => r.pending.map((p) => ({ a: { id: r.key, name: r.title, priority: 1 }, kind: 'approval', key: `approval:${r.key}:${p.id}`, r, p })));
 }
+/** The repo a rule belongs to, short: its last two path parts. */
+const repoLabel = (k) => String(k).replace(/^dir:/, '').split('/').filter(Boolean).slice(-2).join('/');
+/** Commands you keep allowing in a repo, offered as a standing rule. */
+function ruleNeeds() {
+  return rulesState.suggestions.map((r) => ({ a: { id: 'rules', name: repoLabel(r.repo), priority: 2 }, kind: 'rule', key: `rule:${r.repo}:${r.rule}`, r }));
+}
 function inboxItems() {
-  return [...approvalNeeds(), ...[...agents.values()].flatMap((a) => needsFor(a)), ...teamNeeds()]
+  return [...approvalNeeds(), ...[...agents.values()].flatMap((a) => needsFor(a)), ...teamNeeds(), ...ruleNeeds()]
     .sort((x, y) => NEED_ORDER[x.kind] - NEED_ORDER[y.kind] || (x.a.priority ?? 2) - (y.a.priority ?? 2));
 }
 
-const NEED_LABEL = { approval: 'Approval', team: 'Team', prompt: 'Needs input', waiting: 'Waiting on you', plan: 'Plan review', question: 'Question', review: 'AI review', stuck: 'Stuck?', conflict: 'Overlap' };
+const NEED_LABEL = { rule: 'Always allow?', approval: 'Approval', team: 'Team', prompt: 'Needs input', waiting: 'Waiting on you', plan: 'Plan review', question: 'Question', review: 'AI review', stuck: 'Stuck?', conflict: 'Overlap' };
 /** Why the AI judge thinks so, as a small tag. */
 const aiTag = (confidence, what = 'AI') => `<span class="tag ai" title="Judged by a model from the agent's activity; your reactions tune later calls">🤖 ${what}${confidence != null ? ` ${Math.round(confidence * 100)}%` : ''}</span>`;
+/** What a permission prompt asks about: the command, file or tool. */
+const toolLine = (t) => (t.name === 'Bash' ? `Wants to run <code>${esc(t.text)}</code>` : `Wants to use ${esc(t.name)}${t.text ? ` <code>${esc(t.text)}</code>` : ''}`);
+/** Agents waiting on the same command, answered together. */
+function promptGroups(items) {
+  const groups = new Map();
+  for (const it of items) {
+    const p = it.kind === 'prompt' && it.a.runtime.prompt;
+    if (!p?.tool || p.choices?.[0]?.key !== '1' || !/^yes\b/i.test(p.choices[0].label)) continue;
+    const k = `${p.tool.name}\0${p.tool.text}`;
+    (groups.get(k) ?? groups.set(k, []).get(k)).push(it);
+  }
+  return [...groups.values()].filter((g) => g.length > 1);
+}
+function groupCard(g) {
+  const t = g[0].a.runtime.prompt.tool;
+  const names = g.map((it) => `<a href="#${it.a.id}" data-goto="${it.a.id}">${esc(it.a.name)}</a>`).join(', ');
+  return `<div class="need prompt group" data-need="group:${esc(g.map((it) => it.a.id).join(','))}" data-agents="${esc(g.map((it) => it.a.id).join(','))}">
+    <div class="need-head"><span class="need-kind prompt">${g.length} agents</span></div>
+    <p class="need-title">${toolLine(t)}</p><p class="hint">${names}</p>
+    <div class="need-actions"><button class="small primary" data-ib="yes-all">Yes to all ${g.length}</button></div></div>`;
+}
 function needCard(it, { inDetail = false } = {}) {
   const { a } = it;
   const who = inDetail
     ? ''
     : it.kind === 'approval'
     ? `<a href="#" class="need-agent" data-ib="built-open">⚙ ${esc(a.name)}</a> <span class="hint">${esc(it.r.host)}</span>`
+    : it.kind === 'rule'
+    ? `<span class="need-agent" title="${esc(it.r.repo)}">${esc(a.name)}</span>`
     : `<a href="#${a.id}" class="need-agent" data-goto="${a.id}">${prioChip(a.priority ?? 2)}${esc(a.name)}</a>${a.projectInfo?.name ? ` <span class="hint">${esc(a.projectInfo.name)}</span>` : ''}`;
   const head = `<div class="need-head"><span class="need-kind ${it.kind}">${NEED_LABEL[it.kind]}</span>${who}</div>`;
   const draft = (k, fallback = '') => esc(needDrafts.get(`${it.key}:${k}`) ?? fallback);
@@ -1060,9 +1090,13 @@ function needCard(it, { inDetail = false } = {}) {
     body = `<p class="need-title">Wants to run <code>${esc(p.tool)}</code> <span class="hint">asked ${ago(p.at)}</span></p>
       <pre class="need-input">${esc(JSON.stringify(p.input, null, 2).slice(0, 1500))}</pre>
       <div class="need-actions"><button class="small primary" data-ib="approve" data-allow="1">Approve</button><button class="small" data-ib="approve">Deny</button>${it.r.chat ? `<a class="button small ghost" href="${esc(it.r.chat)}" target="_blank" rel="noopener">Its chat ↗</a>` : ''}</div>`;
+  } else if (it.kind === 'rule') {
+    body = `<p class="need-title">You've allowed <code>${esc(it.r.label)}</code> ${it.r.n} times in this repo. Always allow it here?</p>
+      <p class="hint">Agents in ${esc(a.name)} won't ask about it again. Remove it any time in Settings → Approval rules.</p>
+      <div class="need-actions"><button class="small primary" data-ib="rule-accept">Always allow</button><button class="small" data-ib="rule-dismiss">Not now</button></div>`;
   } else if (it.kind === 'prompt') {
     const p = a.runtime.prompt;
-    body = `<p class="need-title">${esc(p?.question || a.runtime.attention)}</p>
+    body = `${p?.tool ? `<p class="need-title">${toolLine(p.tool)}</p><p class="hint">${esc(p.question || a.runtime.attention)}</p>` : `<p class="need-title">${esc(p?.question || a.runtime.attention)}</p>`}
       <div class="need-actions">
         ${(p?.choices ?? []).map((c) => `<button class="small ${c.key === '1' ? 'primary' : ''}" data-ib="key" data-key="${c.key}">${c.key}. ${esc(c.label)}</button>`).join('')}
         <button class="small" data-ib="key" data-key="esc" title="Escape">Esc</button>
@@ -1171,7 +1205,7 @@ function renderInbox() {
   const view = $('#inbox-view');
   if (view.contains(document.activeElement) && document.activeElement.dataset.draft) return; // don't yank the field being typed in
   view.innerHTML = items.length
-    ? `<div class="counts"><span>${items.length} waiting on you</span></div><div class="needs inbox">${items.map((it) => needCard(it)).join('')}</div>`
+    ? `<div class="counts"><span>${items.length} waiting on you</span></div><div class="needs inbox">${promptGroups(items).map(groupCard).join('')}${items.map((it) => needCard(it)).join('')}</div>`
     : `<div class="empty"><p>Nothing needs you right now.</p><p>Prompts waiting for an answer, questions agents ask, agents that seem stuck and agents editing the same files show up here.</p></div>`;
   view.insertAdjacentHTML('beforeend', judgeLine());
 }
@@ -1208,6 +1242,19 @@ async function onNeed(e) {
     }
     case 'key':
       return act(() => api('POST', `/agents/${id}/prompt-key`, { key: el.dataset.key }), 'Sent');
+    case 'yes-all': {
+      const ids = card.dataset.agents.split(',');
+      return act(() => Promise.all(ids.map((x) => api('POST', `/agents/${x}/prompt-key`, { key: '1' }))), `Allowed for ${ids.length} agents`);
+    }
+    case 'rule-accept':
+    case 'rule-dismiss': {
+      const [, repo, rule] = key.match(/^rule:(.+?):((?:Bash|WebFetch|mcp__).*)$/) ?? [];
+      const accept = el.dataset.ib === 'rule-accept';
+      return act(async () => {
+        rulesState = await api('POST', `/rules/${accept ? 'accept' : 'dismiss'}`, { repo, rule });
+        renderInbox();
+      }, accept ? 'Allowed in this repo; agents there won\'t ask again' : 'Won\'t suggest it again');
+    }
     case 'terminal':
       showTab('agents');
       select(id);
@@ -3637,6 +3684,7 @@ function handleEvent(msg) {
     teams.clear();
     for (const t of msg.teams ?? []) teams.set(t.id, t);
     builtReports = msg.built ?? [];
+    if (msg.rules) rulesState = msg.rules;
     builtUi.render();
     msg.agents.forEach(watchDocs);
     if (selectedId && !agents.has(selectedId)) selectedId = null;
@@ -3661,6 +3709,8 @@ function handleEvent(msg) {
     teams.set(msg.team.id, msg.team);
   } else if (msg.t === 'team-removed') {
     teams.delete(msg.id);
+  } else if (msg.t === 'rules') {
+    rulesState = msg.rules;
   } else if (msg.t === 'built') {
     builtReports = msg.reports;
     builtUi.render();

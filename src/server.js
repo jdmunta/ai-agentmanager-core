@@ -448,6 +448,16 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
   );
   // Everything waiting on the user: live prompts, agents' questions, stuck agents, overlaps.
   api.get('/inbox', wrap(() => manager.inbox()));
+  // Approval rules learned from your answers (src/rules.js): allowed per repo, and suggestions.
+  const ruleArgs = (req) => {
+    const { repo, rule } = req.body ?? {};
+    if (typeof repo !== 'string' || typeof rule !== 'string') throw Object.assign(new Error('repo and rule are required'), { status: 400 });
+    return [repo, rule];
+  };
+  api.get('/rules', wrap(() => manager.rules.view()));
+  api.post('/rules/accept', wrap((req) => (manager.rules.accept(...ruleArgs(req)), manager.applyRules(), manager.rules.view())));
+  api.post('/rules/dismiss', wrap((req) => (manager.rules.dismiss(...ruleArgs(req)), manager.rules.view())));
+  api.post('/rules/remove', wrap((req) => (manager.rules.remove(...ruleArgs(req)), manager.rules.view())));
   api.post('/agents/:id/tell', wrap((req) => manager.tell(req.params.id, req.body?.text)));
   api.post('/agents/:id/answer', wrap((req) => manager.answerQuestion(req.params.id, req.body?.question, req.body?.text)));
   api.post('/agents/:id/prompt-key', wrap((req) => manager.answerPrompt(req.params.id, String(req.body?.key ?? ''))));
@@ -912,6 +922,7 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
   };
   manager.on('change', (agent) => broadcast({ t: 'agent', agent }));
   reports.on('change', () => broadcast({ t: 'built', reports: reports.list() }));
+  manager.rules.on('change', (rules) => broadcast({ t: 'rules', rules }));
   manager.on('removed', (id) => {
     broadcast({ t: 'removed', id });
     live.closeAgent(id).catch(() => {});
@@ -948,7 +959,7 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
     const url = new URL(req.url, 'http://x');
     if (url.pathname === '/ws/events') {
       eventClients.add(ws);
-      ws.send(JSON.stringify({ t: 'snapshot', agents: manager.list(), backlog: backlog.view(), projects: manager.listProjects(), races: races.list(), teams: teams.list(), built: reports.list() }));
+      ws.send(JSON.stringify({ t: 'snapshot', agents: manager.list(), backlog: backlog.view(), projects: manager.listProjects(), races: races.list(), teams: teams.list(), built: reports.list(), rules: manager.rules.view() }));
       ws.on('close', () => eventClients.delete(ws));
       return;
     }

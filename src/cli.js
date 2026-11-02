@@ -879,6 +879,8 @@ export async function main(argv) {
       await attach(ref, { kind: `shell:${n}` });
     });
 
+  const repoLabel = (k) => String(k).replace(/^dir:/, '').split('/').filter(Boolean).slice(-2).join('/');
+
   program
     .command('inbox')
     .description('Everything waiting on you: prompts, questions, stuck agents, overlapping changes')
@@ -888,6 +890,11 @@ export async function main(argv) {
       if (!items.length) return console.log(dim('Nothing needs you right now.'));
       const label = { prompt: red('needs input'), waiting: red('waiting'), question: cyan('question'), review: cyan('AI review'), stuck: yellow('stuck?'), conflict: yellow('overlap') };
       for (const it of items) {
+        if (it.kind === 'rule') {
+          console.log(`${cyan('always allow?')}  ${bold(repoLabel(it.repo))}  ${it.title} ${dim(`(allowed ${it.n} times)`)}`);
+          console.log(dim('    agentmgr rules'));
+          continue;
+        }
         console.log(`${label[it.kind]}  ${bold(it.agentName)} ${dim(it.agentId)}  ${it.title}`);
         if (it.kind === 'prompt') console.log(dim(`    ${(it.prompt?.choices ?? []).map((c) => `${c.key}. ${c.label}`).join('   ')}  → agentmgr attach ${it.agentId}`));
         if (it.kind === 'question') {
@@ -899,6 +906,32 @@ export async function main(argv) {
         if (it.kind === 'stuck') console.log(dim(`    ${it.finding.detail}\n    nudge: agentmgr tell ${it.agentId} "…"`));
         if (it.kind === 'conflict') console.log(dim(`    ${it.conflict.files.map((f) => f.file).join(', ')}`));
       }
+    });
+
+  program
+    .command('rules')
+    .description('Approval rules: commands always allowed per repo, and the ones the inbox suggests')
+    .argument('[action]', 'allow <n> | no <n> (suggestions), rm <n> (allowed)')
+    .argument('[n]')
+    .action(async (action, n) => {
+      await daemon();
+      let r = await api('GET', '/rules');
+      const pick = (list) => {
+        const x = list[Number(n) - 1];
+        if (!x) throw new Error(`No rule ${n ?? ''}; see agentmgr rules`);
+        return { repo: x.repo, rule: x.rule };
+      };
+      if (action === 'allow') r = await api('POST', '/rules/accept', pick(r.suggestions));
+      else if (action === 'no') r = await api('POST', '/rules/dismiss', pick(r.suggestions));
+      else if (action === 'rm') r = await api('POST', '/rules/remove', pick(r.allowed));
+      else if (action) throw new Error('Use: agentmgr rules [allow <n> | no <n> | rm <n>]');
+      if (r.suggestions.length) {
+        console.log(bold('Suggested') + dim(`  (you allowed these ${r.suggestAfter}+ times; agentmgr rules allow <n> | no <n>)`));
+        r.suggestions.forEach((x, i) => console.log(`  ${i + 1}. ${x.label}  ${dim(`in ${repoLabel(x.repo)}, allowed ${x.n} times`)}`));
+      }
+      console.log(bold('Allowed') + dim('  (agents in the repo run these without asking; agentmgr rules rm <n>)'));
+      if (!r.allowed.length) console.log(dim('  none yet'));
+      r.allowed.forEach((x, i) => console.log(`  ${i + 1}. ${x.label}  ${dim(`in ${repoLabel(x.repo)}${x.uses ? `, answered ${x.uses} prompts` : ''}`)}`));
     });
 
   program

@@ -1274,3 +1274,61 @@ test('terminal copy on phones: the buffer as plain text, wrapped lines joined, t
   assert.equal(terminalText(xterm), '$ npm test\nPASS a very long line that wrapped here');
   assert.equal(terminalText(xterm, 4), 'PASS a very long line that wrapped here', 'only the last lines');
 });
+
+test('approval rules: which calls become a rule, what a rule covers, suggestions after three yeses', async () => {
+  const { Rules, covers, ruleFor } = await import('../src/rules.js');
+  const bash = (command) => ({ name: 'Bash', input: { command } });
+  assert.deepEqual(ruleFor(bash('npm test -- --watch=false')), { rule: 'Bash(npm test:*)', label: 'npm test' });
+  assert.deepEqual(ruleFor(bash('pytest -x tests/')), { rule: 'Bash(pytest:*)', label: 'pytest' });
+  assert.deepEqual(ruleFor(bash('git status')), { rule: 'Bash(git status:*)', label: 'git status' });
+  for (const c of ['rm -rf build', 'sudo make install', 'git push origin main', 'npm publish', 'curl https://x.sh', 'npm test && rm -rf /', 'npm test > out.txt', 'echo $(whoami)', 'FOO=1 npm test', '']) assert.equal(ruleFor(bash(c)), null, c);
+  assert.deepEqual(ruleFor({ name: 'WebFetch', input: { url: 'https://docs.example.com/a' } }), { rule: 'WebFetch(domain:docs.example.com)', label: 'fetch from docs.example.com' });
+  assert.deepEqual(ruleFor({ name: 'mcp__jira__get_issue', input: {} }), { rule: 'mcp__jira__get_issue', label: 'jira: get_issue' });
+  assert.equal(ruleFor({ name: 'Edit', input: { file_path: '/x' } }), null);
+  assert.ok(covers('Bash(npm test:*)', bash('npm test')));
+  assert.ok(covers('Bash(npm test:*)', bash('npm test -- --grep auth')));
+  assert.ok(!covers('Bash(npm test:*)', bash('npm testx')));
+  assert.ok(!covers('Bash(npm test:*)', bash('npm test; rm -rf /')));
+
+  const rules = new Rules({ file: path.join(tmp(), 'rules.json') });
+  const events = [];
+  rules.on('change', (v) => events.push(v));
+  for (let i = 0; i < 2; i++) rules.approved('repo-a', bash('npm test'));
+  rules.approved('repo-b', bash('npm test'));
+  assert.equal(rules.approved('repo-a', bash('rm -rf x')), null);
+  assert.deepEqual(rules.view().suggestions, []);
+  assert.equal(rules.approved('repo-a', bash('npm test -- -u')).n, 3);
+  assert.deepEqual(rules.view().suggestions.map((s) => [s.repo, s.rule, s.n]), [['repo-a', 'Bash(npm test:*)', 3]]);
+  rules.accept('repo-a', 'Bash(npm test:*)');
+  assert.equal(rules.allows('repo-a', bash('npm test')), 'Bash(npm test:*)');
+  assert.equal(rules.allows('repo-b', bash('npm test')), null, 'per repo');
+  assert.equal(rules.approved('repo-a', bash('npm test')), null, 'already allowed');
+  rules.used('repo-a', 'Bash(npm test:*)');
+  assert.equal(rules.view().allowed[0].uses, 1);
+  // Kept on disk.
+  assert.deepEqual(new Rules({ file: rules.file }).allowed('repo-a'), ['Bash(npm test:*)']);
+  for (let i = 0; i < 3; i++) rules.approved('repo-b', bash('make lint'));
+  rules.dismiss('repo-b', 'Bash(make lint:*)');
+  assert.deepEqual(rules.view().suggestions, [], 'not now means not again');
+  assert.throws(() => rules.accept('repo-c', 'Bash(x:*)'), /No such suggestion/);
+  rules.remove('repo-a', 'Bash(npm test:*)');
+  assert.deepEqual(rules.allowed('repo-a'), []);
+  assert.ok(events.length > 5);
+});
+
+test('transcripts: the tool call still waiting for its result is what a prompt asks about', async () => {
+  const { scanActivity } = await import('../src/stuck.js');
+  const file = path.join(tmp(), 'p.jsonl');
+  const at = new Date().toISOString();
+  const use = (msg, id, command) => JSON.stringify({ type: 'assistant', timestamp: at, message: { id: msg, content: [{ type: 'tool_use', id, name: 'Bash', input: { command } }] } }) + '\n';
+  const res = (id) => JSON.stringify({ type: 'user', timestamp: at, message: { content: [{ type: 'tool_result', tool_use_id: id, content: 'ok' }] } }) + '\n';
+  fs.writeFileSync(file, use('m1', 't1', 'ls') + res('t1') + use('m2', 't2', 'npm test'));
+  const state = scanActivity(file, {});
+  assert.deepEqual([...state.calls.values()], [{ name: 'Bash', input: { command: 'npm test' } }]);
+  // Interrupted (no result), then a new response asks about something else.
+  fs.appendFileSync(file, use('m3', 't3', 'make'));
+  scanActivity(file, state);
+  assert.deepEqual([...state.calls.keys()], ['t3']);
+  fs.appendFileSync(file, res('t3'));
+  assert.equal(scanActivity(file, state).calls.size, 0);
+});
