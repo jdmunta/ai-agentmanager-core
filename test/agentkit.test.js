@@ -12,7 +12,7 @@ import { startHttp } from '../src/agentkit/http.js';
 import { checkAgent, loadAgent } from '../src/agentkit/spec.js';
 import { cronMatches } from '../src/agentkit/triggers.js';
 import { claudeRules } from '../src/agentkit/engines.js';
-import { filesWritten, judgePrompt, snapshot } from '../src/builder.js';
+import { Builder, filesWritten, judgePrompt, snapshot, testCopy } from '../src/builder.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'agentkit-'));
@@ -160,6 +160,46 @@ test('builder judge: sees the files a test run created or changed, not the agent
   assert.deepEqual(files, [{ path: path.join('out', 'new.md'), text: 'Covers up to: 1.3.0', truncated: false }]);
   assert.match(judgePrompt({ goal: 'g', input: 'i', expect: 'e', result: 'r', files }), /<files_written>\n--- out\/new\.md\nCovers up to: 1\.3\.0\n<\/files_written>/);
   assert.match(judgePrompt({ goal: 'g', input: 'i', expect: 'e', result: 'r' }), /<files_written>\n\(none\)/);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('builder tests: each runs in its own copy of the agent folder, so outputs and memory stay out of it', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentkit-copy-'));
+  fs.mkdirSync(path.join(dir, 'fixtures', 'a', 'summaries'), { recursive: true });
+  fs.mkdirSync(path.join(dir, '.agentkit', 'runs'), { recursive: true });
+  fs.mkdirSync(path.join(dir, 'dist'));
+  fs.writeFileSync(path.join(dir, 'fixtures', 'a', 'summaries', 'old.md'), 'Covers up to: 1.2.0');
+  fs.writeFileSync(path.join(dir, '.agentkit', 'memory.md'), 'remember this');
+  fs.writeFileSync(path.join(dir, '.agentkit', 'sessions.json'), '{"x":"live-session"}');
+  fs.writeFileSync(path.join(dir, 'dist', 'big'), 'binary');
+  fs.writeFileSync(path.join(dir, 'instructions.md'), 'Summarize.\n');
+  fs.writeFileSync(path.join(dir, 'agent.yaml'), 'name: copied\ngoal: write a summary\ninstructions: instructions.md\nengine: claude\nworkdir: .\nmemory: true\nloop: { plan: false, check: false }\n');
+  fs.writeFileSync(path.join(dir, 'tests.yaml'), '- input: one\n  expect: writes it\n- input: two\n  expect: writes it\n');
+  fs.writeFileSync(path.join(dir, 'build.json'), '{}');
+
+  const copy = testCopy(dir);
+  assert.equal(fs.readFileSync(path.join(copy, '.agentkit', 'memory.md'), 'utf8'), 'remember this');
+  assert.ok(!fs.existsSync(path.join(copy, '.agentkit', 'sessions.json')) && !fs.existsSync(path.join(copy, '.agentkit', 'runs')), 'not its sessions or run logs');
+  assert.ok(!fs.existsSync(path.join(copy, 'dist')), 'not its executables');
+  fs.rmSync(copy, { recursive: true, force: true });
+
+  // Each run sees the fixtures as they are in the agent's folder: no file from the run before.
+  const seen = [];
+  const runTurn = async (spec, { prompt }) => {
+    if (/^In at most two/.test(prompt)) return { text: 'a lesson' };
+    const out = path.join(spec.workdir, 'fixtures', 'a', 'summaries');
+    seen.push(fs.readdirSync(out).sort());
+    fs.writeFileSync(path.join(out, 'new.md'), 'Covers up to: 1.3.0');
+    return { text: 'done', costUsd: 0.01 };
+  };
+  const b = new Builder({ oneShot: async () => '{"pass": true, "why": "ok"}', sessions: { get: () => null }, runTurn });
+  b.dir = () => dir;
+  const v = await b.test('copied');
+  assert.deepEqual([v.results.passed, v.results.total], [2, 2]);
+  assert.deepEqual(seen, [['old.md'], ['old.md']]);
+  assert.deepEqual(v.results.list[0].files, [path.join('fixtures', 'a', 'summaries', 'new.md')]);
+  assert.deepEqual(fs.readdirSync(path.join(dir, 'fixtures', 'a', 'summaries')), ['old.md'], 'the agent folder is unchanged');
+  assert.equal(fs.readFileSync(path.join(dir, '.agentkit', 'memory.md'), 'utf8'), 'remember this', 'no lessons from tests');
   fs.rmSync(dir, { recursive: true, force: true });
 });
 

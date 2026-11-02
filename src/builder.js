@@ -4,6 +4,7 @@
 // downloads it here. Built agents live in ~/.agentmanager/built/<name>/ as ordinary agentkit folders.
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import YAML from 'yaml';
@@ -125,6 +126,19 @@ export function filesWritten(dir, before, { root = dir, limit = 6, bytes = 4000 
     out.push({ path: path.relative(root, p), text: buf.subarray(0, bytes).toString('utf8'), truncated: buf.length > bytes });
   }
   return out;
+}
+
+/**
+ * A throwaway copy of the agent's folder for one test run, so what a run writes (outputs, memory,
+ * changed fixtures) doesn't change the agent or the next test. It keeps the agent's memory, not its
+ * engine sessions, run logs, executables, dependencies or git data.
+ */
+export function testCopy(dir) {
+  const copy = fs.mkdtempSync(path.join(os.tmpdir(), `agentkit-test-${path.basename(dir)}-`));
+  const state = path.join(dir, '.agentkit');
+  const keep = (src) => src === dir || (path.dirname(src) === state ? path.basename(src) === 'memory.md' : src === state || !SKIP.has(path.basename(src)));
+  fs.cpSync(dir, copy, { recursive: true, filter: keep });
+  return copy;
 }
 
 export class Builder {
@@ -324,25 +338,32 @@ export class Builder {
     this.pending.set(name, 'testing');
     this.saveMeta(name, { status: 'testing' });
     try {
-      // Tests don't wait for people: approval tools are simply not available in them.
-      const agent = new Agent({ ...spec, triggers: [], report: null }, { env: this.env, engineTurn: this.runTurn, approvals: 'deny' });
+      // Each test runs in its own copy of the agent's folder (a workdir outside it is used in place),
+      // and the judge sees what the run wrote there, not only what it says it did. Tests don't wait
+      // for people: approval tools are simply not available in them.
       const results = [];
-      // The judge sees what each run wrote in the agent's folders, not only what it says it did.
-      const roots = [...new Set([dir, spec.workdir])].filter((d, i, all) => !all.some((o, j) => j !== i && d.startsWith(o + path.sep)));
       for (const t of tests) {
-        const before = roots.map((d) => snapshot(d));
-        const r = await agent.run(t.input, { source: 'test' });
-        const files = roots.flatMap((d, i) => filesWritten(d, before[i], { root: dir })).slice(0, 6);
-        let verdict = { pass: false, why: 'The run failed' };
-        if (r.status !== 'failed') {
-          try {
-            const v = parseJsonReply(await this.oneShot(judgePrompt({ goal: spec.goal, input: t.input, expect: t.expect, result: r.result, files })));
-            verdict = { pass: v.pass === true, why: String(v.why ?? '') };
-          } catch (e) {
-            verdict = { pass: false, why: `Could not judge: ${e.message}` };
+        const copy = testCopy(dir);
+        try {
+          const run = loadAgent(copy, { env: this.env });
+          const agent = new Agent({ ...run, triggers: [], report: null }, { env: this.env, engineTurn: this.runTurn, approvals: 'deny' });
+          const roots = [...new Set([copy, run.workdir])].filter((d, i, all) => !all.some((o, j) => j !== i && d.startsWith(o + path.sep)));
+          const before = roots.map((d) => snapshot(d));
+          const r = await agent.run(t.input, { source: 'test' });
+          const files = roots.flatMap((d, i) => filesWritten(d, before[i], { root: copy })).slice(0, 6);
+          let verdict = { pass: false, why: 'The run failed' };
+          if (r.status !== 'failed') {
+            try {
+              const v = parseJsonReply(await this.oneShot(judgePrompt({ goal: spec.goal, input: t.input, expect: t.expect, result: r.result, files })));
+              verdict = { pass: v.pass === true, why: String(v.why ?? '') };
+            } catch (e) {
+              verdict = { pass: false, why: `Could not judge: ${e.message}` };
+            }
           }
+          results.push({ input: t.input, expect: t.expect, result: r.result, status: r.status, costUsd: r.costUsd, files: files.map((f) => f.path), ...verdict });
+        } finally {
+          fs.rmSync(copy, { recursive: true, force: true });
         }
-        results.push({ input: t.input, expect: t.expect, result: r.result, status: r.status, costUsd: r.costUsd, files: files.map((f) => f.path), ...verdict });
       }
       const passed = results.filter((r) => r.pass).length;
       this.saveMeta(name, { results: { at: now(), passed, total: results.length, list: results }, status: passed === results.length ? 'tested' : 'failing' });

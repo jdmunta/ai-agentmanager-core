@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Built agents' tests run in a throwaway copy** of the agent's folder: what a run writes (summaries, changed fixtures, memory) no longer stays in the agent or changes the next test's starting point. The copy keeps the agent's memory, not its engine sessions or run logs. A `workdir` outside the agent's folder is still used in place.
+
 ## 1.13.0 (2026-11-01)
 
 - **Agents are built in an agent session.** **+ Build an agent** now starts an agent session that works in the new agent's folder (`~/.agentmanager/built/<name>/`) and goes straight to it. The session writes the analysis (`analysis.json`), `agent.yaml`, `instructions.md` and `tests.yaml`, and checks that the agent loads. You keep shaping the agent in that conversation, like any other session (terminal, resume, inbox).
