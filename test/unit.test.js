@@ -123,6 +123,26 @@ test('scanTranscript: last message time ignores lines a resume appends', () => {
   assert.equal(scanTranscript(file, { offset: 0 }).lastMessageAt, '2026-10-20T10:05:00.000Z');
 });
 
+test('transcripts: the copy of a request newer Claude Code keeps (api-request-blob) is not counted again', async () => {
+  const { scanActivity } = await import('../src/stuck.js');
+  const file = path.join(tmp(), 'b.jsonl');
+  const use = { type: 'tool_use', id: 'toolu_1', name: 'Bash', input: { command: 'npm test' } };
+  const res = { type: 'tool_result', tool_use_id: 'toolu_1', content: 'ok' };
+  const at = (ago) => new Date(Date.now() - ago).toISOString();
+  const lines = [
+    { type: 'assistant', timestamp: at(60_000), message: { id: 'm1', content: [use], usage: { input_tokens: 1, output_tokens: 2 } } },
+    { type: 'user', timestamp: at(1000), message: { content: [res] } },
+    { type: 'api-request-blob', hash: 'h', sessionId: 's', message: { role: 'user', content: [use, res] } },
+  ];
+  fs.writeFileSync(file, lines.map((l) => JSON.stringify(l)).join('\n') + '\n');
+  const state = scanActivity(file, { offset: 0, events: [], pending: new Map() });
+  assert.equal(state.events.length, 1);
+  assert.equal(state.events[0].result, 'ok');
+  const cursor = { offset: 0 };
+  assert.equal(scanTranscript(file, cursor).lastMessageAt, lines[1].timestamp);
+  assert.equal(cursor.usage.size, 1);
+});
+
 test('Store persists and resolves by id, prefix and name', () => {
   const file = path.join(tmp(), 'state.json');
   const s = new Store(file);
