@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.13.0 (2026-11-01)
 
 - **Agents are built in an agent session.** **+ Build an agent** now starts an agent session that works in the new agent's folder (`~/.agentmanager/built/<name>/`) and goes straight to it. The session writes the analysis (`analysis.json`), `agent.yaml`, `instructions.md` and `tests.yaml`, and checks that the agent loads. You keep shaping the agent in that conversation, like any other session (terminal, resume, inbox).
 - The session's page has a panel for its agent: status, tests, **Run tests**, **Start**/**Stop**, its chat, **Details**. Failing tests go back to the session with **Ask this session to fix them**.
