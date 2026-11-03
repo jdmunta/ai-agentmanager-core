@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.16.0 (2026-11-03)
 
 - **Faster typing and switching with many agents:** the page no longer redraws everything on every agent update. Updates are drawn once per frame, only the views they touch are redrawn (another agent's update leaves the open agent's details and terminal alone), and lists change only the cards that changed. With 40 busy agents, the page's redraw work went from about 870 ms to 35 ms per 10 seconds. Add `?perf` to the address to see how long redraws take.
 - Switching agents with a terminal open no longer leaves the previous agent in the address (a reload opened the wrong one).
