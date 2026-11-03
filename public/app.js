@@ -21,6 +21,7 @@ import { initUpdate } from '/update.js';
 import { initMenu } from '/menu.js';
 import { initCode } from '/code.js';
 import { initMachine } from '/machine.js';
+import { morph } from '/morph.js';
 
 const $ = (sel) => document.querySelector(sel);
 const agents = new Map();
@@ -158,8 +159,11 @@ function fmtTokens(n) {
 
 const ioOf = (u) => (u ? (u.io ?? u.input + u.output) : 0);
 
+// One formatter for all: n.toLocaleString() builds a new one per call, slow on every card of every redraw.
+const num = new Intl.NumberFormat().format;
+
 function usageTitle(u) {
-  return `I/O ${ioOf(u).toLocaleString()} (input ${u.input.toLocaleString()} + output ${u.output.toLocaleString()}) · cache write ${u.cacheCreation.toLocaleString()} · cache read ${u.cacheRead.toLocaleString()} · total incl. cache ${u.total.toLocaleString()} · ${u.requests} API requests`;
+  return `I/O ${num(ioOf(u))} (input ${num(u.input)} + output ${num(u.output)}) · cache write ${num(u.cacheCreation)} · cache read ${num(u.cacheRead)} · total incl. cache ${num(u.total)} · ${u.requests} API requests`;
 }
 
 const tokensOpen = new Set(); // agents whose token breakdown is expanded
@@ -827,7 +831,7 @@ function renderList() {
   const totals = new Map();
   for (const a of all) totals.set(a.projectInfo?.key ?? 'other', (totals.get(a.projectInfo?.key ?? 'other') ?? 0) + 1);
 
-  $('#agent-list').innerHTML = projectGroups(shown)
+  morph($('#agent-list'), projectGroups(shown)
     .map((g) => {
       const total = totals.get(g.key) ?? g.agents.length;
       const n = g.agents.length;
@@ -848,7 +852,7 @@ function renderList() {
         ${open ? `<ul class="project-agents">${g.agents.map(agentItem).join('')}</ul>` : ''}
       </li>`;
     })
-    .join('');
+    .join(''));
 }
 
 // ------------------------------------------------------------------ backlog
@@ -877,7 +881,7 @@ function renderBacklog() {
   }
   const proj = Object.fromEntries(backlogState.projects.map((p) => [p.key, p]));
   const count = (s) => backlogState.items.filter((i) => i.status === s).length;
-  $('#backlog-view').innerHTML = `
+  morph($('#backlog-view'), `
     <div class="counts">
       <span>${count('queued')} queued</span><span>${count('active')} active</span>
       ${count('review') ? `<span class="fail">${count('review')} to review</span>` : '<span>0 to review</span>'}
@@ -903,7 +907,7 @@ function renderBacklog() {
           })
           .join('')}</ul>`
       : `<div class="empty"><p>The backlog is empty.</p><p>Add asks with <b>+ Add</b> (or <b>+ New agents</b> → Queue in backlog). Agents pick them up one by one, ${backlogState.defaultLimit} at a time per project, until each is done.</p></div>`}
-    <p class="hint bl-foot"><label><input type="checkbox" data-bl="completed" ${showCompleted ? 'checked' : ''}/> Show done and cancelled</label></p>`;
+    <p class="hint bl-foot"><label><input type="checkbox" data-bl="completed" ${showCompleted ? 'checked' : ''}/> Show done and cancelled</label></p>`);
 }
 
 const AUTOPILOT_LEVELS = { off: 'Off', pr: 'Open PRs', merge: 'Merge' };
@@ -1248,10 +1252,12 @@ function renderInbox() {
   if (sideTab !== 'inbox') return;
   const view = $('#inbox-view');
   if (view.contains(document.activeElement) && document.activeElement.dataset.draft) return; // don't yank the field being typed in
-  view.innerHTML = items.length
-    ? `<div class="counts"><span>${items.length} waiting on you</span></div><div class="needs inbox">${promptGroups(items).map(groupCard).join('')}${items.map((it) => needCard(it)).join('')}</div>`
-    : `<div class="empty"><p>Nothing needs you right now.</p><p>Prompts waiting for an answer, questions agents ask, agents that seem stuck and agents editing the same files show up here.</p></div>`;
-  view.insertAdjacentHTML('beforeend', judgeLine());
+  morph(
+    view,
+    (items.length
+      ? `<div class="counts"><span>${items.length} waiting on you</span></div><div class="needs inbox">${promptGroups(items).map(groupCard).join('')}${items.map((it) => needCard(it)).join('')}</div>`
+      : `<div class="empty"><p>Nothing needs you right now.</p><p>Prompts waiting for an answer, questions agents ask, agents that seem stuck and agents editing the same files show up here.</p></div>`) + judgeLine(),
+  );
 }
 
 async function onNeed(e) {
@@ -1800,7 +1806,9 @@ function renderDetail() {
   const u = a.usage ?? { total: 0 };
   const current = a.sessions.find((s) => s.id === a.sessionId);
 
-  body.innerHTML = `
+  const changed = morph(
+    body,
+    `
     <div class="d-head">
       <div class="d-title">
         <h2>
@@ -1948,7 +1956,9 @@ function renderDetail() {
         <h3>Notes</h3>
         <textarea class="notes" data-field="notes" placeholder="Anything worth remembering about this agent">${esc(drafts.notes ?? a.notes ?? '')}</textarea>
       </div>
-    </div>`;
+    </div>`,
+  );
+  if (!changed) return;
 
   renderDiagrams(body);
   markOverflow(body);
@@ -1963,22 +1973,77 @@ function renderDetail() {
   }
 }
 
+const VIEWS = {
+  list: () => renderList(),
+  backlog: () => renderBacklog(),
+  land: () => landUi.render(),
+  inbox: () => renderInbox(),
+  race: () => renderRace(),
+  team: () => renderTeam(),
+  doc: () => renderDocDialog(),
+  detail: () => renderDetail(),
+  overlay: () => term.syncOverlay(),
+};
+const ALL_VIEWS = Object.keys(VIEWS);
+
 function render() {
-  renderList();
-  renderBacklog();
-  landUi.render();
-  renderInbox();
-  renderRace();
-  renderTeam();
-  renderDocDialog();
-  renderDetail();
-  term.syncOverlay();
+  dirty.clear();
+  perf.draw(ALL_VIEWS);
 }
+
+// Live updates come many times a second when many agents work. They mark the views they touch,
+// and those are drawn once in the next frame, so typing never waits behind a run of redraws.
+const dirty = new Set();
+let drawQueued = false;
+
+function invalidate(views = ALL_VIEWS) {
+  for (const v of views) dirty.add(v);
+  if (drawQueued) return;
+  drawQueued = true;
+  const draw = () => {
+    if (!drawQueued) return;
+    drawQueued = false;
+    const views = ALL_VIEWS.filter((v) => dirty.has(v));
+    dirty.clear();
+    perf.draw(views);
+  };
+  requestAnimationFrame(draw);
+  // A background tab gets no frames; it still keeps its title ("(2) needs input") current.
+  setTimeout(draw, 500);
+}
+
+// ?perf: how long redraws take, in a corner of the page.
+const perf = {
+  on: new URLSearchParams(location.search).has('perf'),
+  runs: [], // [at, ms, { view: ms }] over the last 5 seconds
+  draw(views) {
+    if (!this.on) {
+      for (const v of views) VIEWS[v]();
+      return;
+    }
+    const each = {};
+    const t = performance.now();
+    for (const v of views) {
+      const t0 = performance.now();
+      VIEWS[v]();
+      each[v] = performance.now() - t0;
+    }
+    const now = performance.now();
+    this.runs = [...this.runs.filter(([at]) => now - at < 5000), [now, now - t, each]];
+    const ms = this.runs.map(([, d]) => d).sort((x, y) => x - y);
+    const by = {};
+    for (const [, , e] of this.runs) for (const [v, d] of Object.entries(e)) by[v] = (by[v] ?? 0) + d;
+    const top = Object.entries(by).sort((x, y) => y[1] - x[1]).slice(0, 3).map(([v, d]) => `${v} ${Math.round((d / ms.reduce((x, y) => x + y, 0)) * 100)}%`);
+    const el = $('#perf') ?? document.body.appendChild(Object.assign(document.createElement('div'), { id: 'perf', className: 'perf' }));
+    el.textContent = `redraw ${ms[ms.length >> 1].toFixed(1)} ms · p95 ${ms[Math.floor(ms.length * 0.95)].toFixed(1)} ms · ${(ms.length / 5).toFixed(1)}/s · ${top.join(' ')}`;
+  },
+};
 
 function select(id) {
   selectedId = id;
-  history.replaceState(null, '', id ? `#${id}` : '#');
+  // Closing the terminal puts its agent in the address; the one switched to goes there after.
   if (term.agentId && term.agentId !== id) term.close();
+  history.replaceState(null, '', id ? `#${id}` : '#');
   render();
 }
 
@@ -2083,7 +2148,8 @@ const term = {
       } else if (msg.t === 'error') {
         toast(`Terminal unavailable: ${msg.error}`, 5000);
       } else if (msg.t === 'o') {
-        this.xterm.write(msg.d);
+        // Output is most of what arrives (every keystroke's echo): nothing else on the page changes.
+        return this.xterm.write(msg.d);
       } else if (msg.t === 'exit') {
         if (isShell(this.kind)) this.shellExited = true;
         else this.xterm.write(`\r\n\x1b[2m[claude exited with code ${msg.code}; session kept]\x1b[0m\r\n`);
@@ -3759,10 +3825,18 @@ function handleEvent(msg) {
     }
     openTermOnLoad = false;
   } else if (msg.t === 'agent') {
-    agents.set(msg.agent.id, msg.agent);
+    const id = msg.agent.id;
+    agents.set(id, msg.agent);
     watchDocs(msg.agent);
     agentChanged(msg.agent);
     if (msg.agent.builds) builtUi.sessionChanged(msg.agent);
+    // The detail, terminal and document views show one agent; another agent's update leaves them be.
+    return invalidate([
+      'list', 'backlog', 'land', 'inbox', 'race', 'team',
+      ...(docView?.agentId === id ? ['doc'] : []),
+      ...(id === selectedId || msg.agent.forkOf?.agentId === selectedId ? ['detail'] : []),
+      ...(id === term.agentId ? ['overlay'] : []),
+    ]);
   } else if (msg.t === 'removed') {
     agents.delete(msg.id);
     if (selectedId === msg.id) select(null);
@@ -3787,7 +3861,7 @@ function handleEvent(msg) {
     projectsState = msg.projects;
     renderProjectOptions();
   }
-  render();
+  invalidate();
 }
 
 function connectEvents() {
