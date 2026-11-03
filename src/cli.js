@@ -890,6 +890,11 @@ export async function main(argv) {
       if (!items.length) return console.log(dim('Nothing needs you right now.'));
       const label = { prompt: red('needs input'), waiting: red('waiting'), question: cyan('question'), review: cyan('AI review'), stuck: yellow('stuck?'), conflict: yellow('overlap') };
       for (const it of items) {
+        if (it.kind === 'repeat') {
+          console.log(`${cyan('make it a playbook?')}  asked ${it.count} times: ${it.intent}`);
+          console.log(dim(`    agentmgr playbook add "${it.name}" "${it.intent.replace(/"/g, '\\"')}" --projects ${it.projects.join(',') || '<project>'}`));
+          continue;
+        }
         if (it.kind === 'autopilot') {
           console.log(`${yellow('autopilot held')}  ${bold(it.project ?? '')}  ${it.title}`);
           console.log(dim(`    ${it.note ?? ''}\n    agentmgr backlog ship ${it.itemId}  ·  agentmgr changes ${it.agentId}`));

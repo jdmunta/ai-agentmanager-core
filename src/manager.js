@@ -2878,7 +2878,7 @@ export class AgentManager extends EventEmitter {
     for (const r of this.rules.view().suggestions) items.push({ kind: 'rule', key: `rule:${r.repo}:${r.rule}`, title: `Always allow ${r.label}?`, priority: 2, ...r });
     // Others' items (autopilot's held backlog work).
     for (const source of this.inboxSources) items.push(...source());
-    const order = { prompt: 0, waiting: 1, question: 1, rule: 2, review: 2, autopilot: 2, stuck: 3, conflict: 4 };
+    const order = { prompt: 0, waiting: 1, question: 1, rule: 2, review: 2, autopilot: 2, stuck: 3, conflict: 4, repeat: 5 };
     return items.sort((a, b) => order[a.kind] - order[b.kind] || a.priority - b.priority);
   }
 

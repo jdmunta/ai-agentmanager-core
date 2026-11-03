@@ -1490,3 +1490,40 @@ test('review: Commit all waits out the index lock of a git status running at the
     for (const k of Object.keys(process.env)) if (!(k in env)) delete process.env[k];
   }
 });
+
+test('repeats: requests you keep making are offered as a playbook, with what changes as a placeholder', async () => {
+  const { Repeats, template, words, nameFor } = await import('../src/repeats.js');
+  assert.deepEqual(words('Upgrade "react-dom" to 18.2 for ABC-123, see https://x.y/z and #42'), ['upgrade', 'see']);
+  assert.equal(template(['Upgrade react to the latest version', 'Upgrade the eslint plugins to the latest version']), 'Upgrade {{what}} to the latest version');
+  assert.equal(template(['Triage the flaky tests', 'Triage the flaky tests']), 'Triage the flaky tests');
+  assert.equal(template(['Bump node in web', 'Write the release notes']), 'Bump node in web', 'too little in common: the newest as written');
+  assert.equal(nameFor('Upgrade {{what}} to the latest version and fix what breaks'), 'Upgrade to the latest version');
+  let books = [];
+  const r = new Repeats({ file: path.join(tmp(), 'asks.json'), playbooks: () => books, projects: () => ({ 'p:web': 'web', 'p:api': 'api' }) });
+  const events = [];
+  r.on('change', (v) => events.push(v));
+  r.record([{ text: 'Upgrade react to the latest version and fix what breaks', projectKey: 'p:web' }]);
+  r.record([{ text: 'Fix the login page styling', projectKey: 'p:web' }]);
+  r.record([{ text: 'Upgrade vite to the latest version and fix what breaks', projectKey: 'p:api' }]);
+  assert.deepEqual(r.view().suggestions, [], 'twice is not a pattern yet');
+  r.record([{ text: 'Upgrade eslint to the latest version and fix what breaks', projectKey: 'p:web' }]);
+  const [s] = r.view().suggestions;
+  assert.equal(s.count, 3);
+  assert.equal(s.intent, 'Upgrade {{what}} to the latest version and fix what breaks');
+  assert.equal(s.name, 'Upgrade to the latest version');
+  assert.deepEqual(s.projects.sort(), ['api', 'web']);
+  assert.equal(s.examples[0], 'Upgrade eslint to the latest version and fix what breaks', 'newest first');
+  assert.equal(r.inbox()[0].kind, 'repeat');
+  // Already a playbook: not offered.
+  books = [{ intent: 'Upgrade {{package}} to the latest version and fix what breaks' }];
+  assert.deepEqual(r.view().suggestions, []);
+  books = [];
+  // Not now: not again, even as more come in; kept on disk.
+  r.dismiss(s.key);
+  r.record([{ text: 'Upgrade jest to the latest version and fix what breaks', projectKey: 'p:web' }]);
+  assert.deepEqual(r.view().suggestions, []);
+  assert.deepEqual(new Repeats({ file: r.file }).view().suggestions, []);
+  assert.throws(() => r.dismiss('nope'), /No such suggestion/);
+  assert.deepEqual(new Repeats({ file: path.join(tmp(), 'x.json'), enabled: false }).view().suggestions, []);
+  assert.ok(events.length >= 5);
+});

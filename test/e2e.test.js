@@ -1183,6 +1183,30 @@ test('autopilot: a finished backlog item the scorecard calls ready is committed,
   }
 });
 
+test('repeats: the third request alike is offered as a playbook; saving one or Not now ends the offer', async () => {
+  const mine = async (word) => (await call('GET', '/repeats')).body.suggestions.find((s) => s.intent.includes(word));
+  await call('POST', '/backlog/settings', { autoRun: false }); // only recording what was asked
+  const ids = [];
+  for (const pkg of ['zod', 'yup', 'joi']) ids.push(...(await call('POST', '/backlog', { items: [`Migrate the ${pkg} schemas to valibot and keep the API`], project: 'Rep' })).body.map((i) => i.id));
+  const s = await mine('valibot');
+  assert.ok(s, 'offered after three');
+  assert.equal(s.intent, 'Migrate the {{what}} schemas to valibot and keep the API');
+  assert.ok((await call('GET', '/inbox')).body.some((it) => it.kind === 'repeat' && it.key === `repeat:${s.key}`));
+  // Saved as a playbook: no longer offered.
+  const p = (await call('POST', '/playbooks', { name: 'Valibot migration', intent: s.intent, projects: s.projects.length ? s.projects : ['Rep'] }));
+  if (p.status === 200) {
+    assert.equal(await mine('valibot'), undefined);
+    await call('DELETE', `/playbooks/${p.body.id}`);
+  }
+  // Not now.
+  assert.ok(await mine('valibot'), 'offered again once the playbook is gone');
+  assert.equal((await call('POST', '/repeats/dismiss', { key: s.key })).status, 200);
+  assert.equal(await mine('valibot'), undefined);
+  assert.equal((await call('POST', '/repeats/dismiss', { key: 'nope' })).status, 404);
+  for (const id of ids) await call('DELETE', `/backlog/${id}`);
+  await call('POST', '/backlog/settings', { autoRun: true });
+});
+
 test('Slack alerts: needs input after the delay, once per episode; review; settings are local-only', async () => {
   const http = await import('node:http');
   const got = [];

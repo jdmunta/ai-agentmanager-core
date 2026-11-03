@@ -9,7 +9,7 @@ import { spawn } from 'node:child_process';
 import express from 'express';
 import { WebSocketServer } from 'ws';
 import { ensureHome, HOST, loadConfig, paths, PORT, saveConfig } from './config.js';
-import { AgentManager, MACHINE, shellNumber } from './manager.js';
+import { AgentManager, MACHINE, projectOf, shellNumber } from './manager.js';
 import { Backlog } from './backlog.js';
 import { Races } from './races.js';
 import { Review } from './review.js';
@@ -21,6 +21,7 @@ import { Autopilot } from './autopilot.js';
 import { Budgets } from './budgets.js';
 import { stats } from './stats.js';
 import { Playbooks } from './playbooks.js';
+import { Repeats } from './repeats.js';
 import { Updates } from './update.js';
 import { identity } from './identity.js';
 import { Studio } from './studio.js';
@@ -108,6 +109,14 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
   const triggers = new Triggers({ manager, store, config, notifier });
   const budgets = new Budgets({ manager, store, config, notifier });
   const playbooks = new Playbooks({ manager, store });
+  // Requests you keep typing, offered as a playbook.
+  const repeats = new Repeats({
+    suggestAfter: config.repeats?.suggestAfter,
+    enabled: config.repeats?.enabled !== false,
+    playbooks: () => playbooks.list(),
+    projects: () => Object.fromEntries(Object.values(store.data.projects ?? {}).map((p) => [p.key, p.shortcut || p.name])),
+  });
+  manager.inboxSources.push(() => repeats.inbox());
   const memory = new Memory({ manager, config });
   const updates = new Updates({ config });
   let remoteServer = null;
@@ -234,6 +243,7 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
       // Agents the assistant's own session starts: its limits apply, and they are marked as its.
       const extra = assistant.admit(req.headers['x-agentmgr-agent'], list, opts);
       const created = manager.createMany(list, { ...opts, ...extra });
+      if (!extra.startedBy) repeats.record(created.map((a) => ({ text: a.intent, projectKey: projectOf(store.get(a.id) ?? a).key })));
       if (extra.startedBy) {
         for (const a of created) notifier.send('assistant', a, `was started by the assistant: ${a.intent.replace(/\s+/g, ' ').slice(0, 160)}`);
       }
@@ -447,7 +457,9 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
     '/backlog',
     wrap((req) => {
       const { items, item, ...opts } = req.body ?? {};
-      return backlog.add(Array.isArray(items) ? items : [item], opts);
+      const added = backlog.add(Array.isArray(items) ? items : [item], opts);
+      repeats.record(added.map((it) => ({ text: it.title, projectKey: it.projectKey })));
+      return added;
     }),
   );
   // Everything waiting on the user: live prompts, agents' questions, stuck agents, overlaps.
@@ -662,9 +674,17 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
     };
   }));
   api.get('/playbooks', wrap(() => playbooks.list()));
-  api.post('/playbooks', wrap((req) => playbooks.create(req.body ?? {})));
-  api.put('/playbooks/:id', wrap((req) => playbooks.update(req.params.id, req.body ?? {})));
-  api.delete('/playbooks/:id', wrap((req) => playbooks.remove(req.params.id)));
+  // Saving a playbook can answer a repeated-request suggestion.
+  const withRepeats = (fn) => (req) => {
+    const out = fn(req);
+    repeats.changed();
+    return out;
+  };
+  api.post('/playbooks', wrap(withRepeats((req) => playbooks.create(req.body ?? {}))));
+  api.put('/playbooks/:id', wrap(withRepeats((req) => playbooks.update(req.params.id, req.body ?? {}))));
+  api.delete('/playbooks/:id', wrap(withRepeats((req) => playbooks.remove(req.params.id))));
+  api.get('/repeats', wrap(() => repeats.view()));
+  api.post('/repeats/dismiss', wrap((req) => repeats.dismiss(String(req.body?.key ?? ''))));
   api.post('/playbooks/:id/run', wrap((req) => playbooks.run(req.params.id, { vars: req.body?.vars ?? {} })));
   api.get('/stats', wrap((req) => {
     const days = req.query.days === undefined ? 30 : Math.max(0, Math.min(3650, Math.floor(Number(req.query.days)) || 0));
@@ -928,6 +948,7 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
   manager.on('change', (agent) => broadcast({ t: 'agent', agent }));
   reports.on('change', () => broadcast({ t: 'built', reports: reports.list() }));
   manager.rules.on('change', (rules) => broadcast({ t: 'rules', rules }));
+  repeats.on('change', (view) => broadcast({ t: 'repeats', repeats: view }));
   manager.on('removed', (id) => {
     broadcast({ t: 'removed', id });
     live.closeAgent(id).catch(() => {});
@@ -964,7 +985,7 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
     const url = new URL(req.url, 'http://x');
     if (url.pathname === '/ws/events') {
       eventClients.add(ws);
-      ws.send(JSON.stringify({ t: 'snapshot', agents: manager.list(), backlog: backlog.view(), projects: manager.listProjects(), races: races.list(), teams: teams.list(), built: reports.list(), rules: manager.rules.view() }));
+      ws.send(JSON.stringify({ t: 'snapshot', agents: manager.list(), backlog: backlog.view(), projects: manager.listProjects(), races: races.list(), teams: teams.list(), built: reports.list(), rules: manager.rules.view(), repeats: repeats.view() }));
       ws.on('close', () => eventClients.delete(ws));
       return;
     }
