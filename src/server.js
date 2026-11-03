@@ -17,6 +17,7 @@ import { Teams } from './teams.js';
 import { Assistant } from './assistant.js';
 import { Cleanup } from './cleanup.js';
 import { Landing } from './landing.js';
+import { Autopilot } from './autopilot.js';
 import { Budgets } from './budgets.js';
 import { stats } from './stats.js';
 import { Playbooks } from './playbooks.js';
@@ -90,6 +91,9 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
   const teams = new Teams({ manager, store, config });
   const cleanup = new Cleanup({ manager, store, config, teams });
   const landing = new Landing({ manager, store, config });
+  // Backlog work the scorecard calls ready goes on to a pull request (and merged) by itself.
+  const autopilot = new Autopilot({ manager, store, backlog, review, landing, config });
+  manager.inboxSources.push(() => autopilot.inbox());
   const assistant = new Assistant({ manager, store, config });
   // Alerts link to the phone address when remote access is on, else the local UI.
   const notifier = new Notifier({
@@ -713,6 +717,7 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
   api.post('/backlog/:id/move', wrap((req) => backlog.move(req.params.id, req.body?.where)));
   api.post('/backlog/:id/split', wrap((req) => backlog.split(req.params.id, req.body?.parts)));
   api.post('/backlog/:id/keep-whole', wrap((req) => backlog.keepWhole(req.params.id)));
+  api.post('/backlog/:id/ship', wrap((req) => autopilot.shipNow(req.params.id)));
   api.post(
     '/shutdown',
     wrap(() => {
@@ -1040,6 +1045,7 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
     closing = true;
     cleanup.close();
     landing.close();
+    autopilot.close();
     triggers.close();
     budgets.close();
     playbooks.close();

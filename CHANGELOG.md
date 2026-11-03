@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- **Autopilot for the backlog:** finished items go on to a pull request, and merged, without you, when the review scorecard says they're ready. Per project (🛫 in the Backlog tab, `agentmgr backlog autopilot <project> off|pr|merge`), off by default. *Open PRs* commits, pushes and opens the pull request. *Merge* also merges it once checks pass, updating a branch that fell behind. Not-ready work goes back to the agent with the scorecard's reasons (twice at most). Anything else waits in the Inbox as *Autopilot held*, with **Ship it**, **Review changes** and **Send back**. An item whose pull request merges is done. **Ship it** is on every item in review.
+- **Commit all** no longer fails with `index.lock: File exists` when it lands on the app's own background `git status` of the same worktree. It retries for a moment.
+
 ## 1.14.0 (2026-11-02)
 
 - **Fewer questions: approval rules.** When you allow the same command 3 times in a repo (`npm test`, an MCP tool, fetching from a site), the inbox offers **Always allow**. Allowed rules go to every Claude Code agent in that repo at launch and answer its open prompts, including the ones waiting when you allow it. Never offered for compound commands or ones that delete, escalate, publish or reach the network. Settings → Approval rules and `agentmgr rules` list them, with how many prompts each answered, and remove them.

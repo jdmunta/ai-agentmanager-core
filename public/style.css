@@ -581,6 +581,10 @@ pre.diff .meta { color: var(--muted); font-weight: 600; }
 
 .bl-ai { margin: 4px 0 0; }
 .bl-ai ul { margin: 2px 0 4px 18px; padding: 0; }
+.bl-ap.held { color: var(--yellow); }
+.bl-ap { overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+.bl-autopilot { margin-left: auto; flex-shrink: 0; font-size: 12px; font-weight: 500; display: inline-flex; align-items: center; gap: 4px; }
+.bl-autopilot select { font-size: 12px; padding: 1px 4px; }
 
 /* A CLI's sign-in link, above the terminal */
 .signin-bar { padding: 8px 12px; background: var(--panel-2); border-bottom: 1px solid var(--border); font-size: 13px; color: var(--text); }

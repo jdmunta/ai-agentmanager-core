@@ -163,10 +163,8 @@ if (briefDir) {
       '- **PRD**: [SSO login PRD](https://confluence.example.com/prd/42) — sessions must survive token rotation',
       '- **Tech Spec**: none on ABC-4242',
       '## Checks',
-      '- [x] go test ./auth/...',
-      '- [!] e2e login suite',
-      '- [~] lint',
-      '- [ ] manual SSO login',
+      // "#green" in the intent: every check passed.
+      ...(args.includes('--') && args[args.indexOf('--') + 1]?.includes('#green') ? ['- [x] go test ./auth/...', '- [x] e2e login suite'] : ['- [x] go test ./auth/...', '- [!] e2e login suite', '- [~] lint', '- [ ] manual SSO login']),
       '',
     ].join('\n'),
   );

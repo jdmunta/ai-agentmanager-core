@@ -3,6 +3,7 @@
 import crypto from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { parsePriority, projectOf } from './manager.js';
+import { AUTOPILOT_LEVELS } from './autopilot.js';
 import { dispatchPrompt, hash } from './judge.js';
 
 const now = () => new Date().toISOString();
@@ -19,6 +20,7 @@ export class Backlog extends EventEmitter {
     this.config = config;
     store.data.backlog ??= { items: {}, limits: {}, autoRun: true };
     this.data = store.data.backlog;
+    this.data.autopilot ??= {};
     this.dispatching = false;
     this.plan = null; // the AI judge's dispatch plan: { hash, data, pending }
 
@@ -36,6 +38,12 @@ export class Backlog extends EventEmitter {
 
   limitFor(projectKey) {
     return this.data.limits[projectKey] ?? this.defaultLimit();
+  }
+
+  /** Autopilot for a project's items (see autopilot.js): "off", "pr" or "merge". */
+  autopilotFor(projectKey) {
+    const level = this.data.autopilot[projectKey] ?? this.config.autopilot?.level;
+    return AUTOPILOT_LEVELS.includes(level) ? level : 'off';
   }
 
   items() {
@@ -63,7 +71,7 @@ export class Backlog extends EventEmitter {
     const projects = {};
     for (const it of items) {
       const shortcut = Object.values(this.store.data.projects ?? {}).find((x) => x.key === it.projectKey)?.shortcut ?? null;
-      const p = (projects[it.projectKey] ??= { key: it.projectKey, name: it.projectName, shortcut, limit: this.limitFor(it.projectKey), counts: {} });
+      const p = (projects[it.projectKey] ??= { key: it.projectKey, name: it.projectName, shortcut, limit: this.limitFor(it.projectKey), autopilot: this.autopilotFor(it.projectKey), counts: {} });
       p.counts[it.status] = (p.counts[it.status] ?? 0) + 1;
     }
     return {
@@ -180,14 +188,18 @@ export class Backlog extends EventEmitter {
     return { id };
   }
 
-  settings({ autoRun, limits, project, limit } = {}) {
+  settings({ autoRun, limits, project, limit, autopilot } = {}) {
     if (typeof autoRun === 'boolean') this.data.autoRun = autoRun;
     if (limits && typeof limits === 'object') Object.assign(this.data.limits, limits);
-    if (project !== undefined && limit !== undefined) {
-      const key =
-        this.manager.resolveProject(project)?.key ??
-        this.items().find((x) => x.projectKey === project || x.projectName === project)?.projectKey ??
-        project;
+    const key =
+      project === undefined
+        ? null
+        : this.manager.resolveProject(project)?.key ?? this.items().find((x) => x.projectKey === project || x.projectName === project)?.projectKey ?? project;
+    if (key && autopilot !== undefined) {
+      if (!AUTOPILOT_LEVELS.includes(autopilot)) throw err(400, `autopilot must be one of ${AUTOPILOT_LEVELS.join(', ')}`);
+      this.data.autopilot[key] = autopilot;
+    }
+    if (key && limit !== undefined) {
       const n = Number(limit);
       if (!(n >= 0 && n <= 20)) throw err(400, 'limit must be 0-20');
       this.data.limits[key] = n;

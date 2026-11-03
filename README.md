@@ -514,6 +514,21 @@ Queue asks instead of starting them. Use **+ Add** in the Backlog tab, **Queue i
 
 The backlog is saved with the rest of the state.
 
+### Autopilot
+
+Autopilot takes a project's finished items the rest of the way when the [review scorecard](#review-changes) says the work is ready. Set it per project with **🛫** in the project's row in the Backlog tab, or `agentmgr backlog autopilot <project> off|pr|merge`. It is off by default.
+
+- **Off:** items wait in review for **Accept** or **Reopen**, as above.
+- **Open PRs:** when an item reaches review, its changes are scored (again, if they changed since the last score). If the scorecard says *Ready to approve*, autopilot commits what's left (the item's title as the message), pushes and opens the pull request, with the scorecard in its description.
+- **Merge:** also merges that pull request once its checks pass and GitHub allows it. A branch that fell behind is brought up to date first, and failing checks go back to the agent through [Landing](#landing-pull-requests).
+
+What it does with work that isn't ready:
+
+- **Not ready, for a concrete reason** (failing CI, acceptance criteria not met, barely verified): the item goes back to the same agent with those reasons. This happens twice at most; after that it waits for you.
+- **Look at these first, a failed step, or a closed pull request:** autopilot stops and it waits for you in the **Inbox** ("Autopilot held"), saying why. You can **Review changes**, **Ship it** (go ahead anyway), or **Send back** with a note.
+
+An item whose pull request merges is done. Each item shows where autopilot stands ("pull request open #12", "waiting for checks to merge", "sent back to the agent"). **Ship it** is also on every item in review, so you can ship one by hand with autopilot off. Plugins can still refuse the commit, the pull request or the merge (`agent.commit`, `agent.pr`, `agent.merge`).
+
 ## Playbooks
 
 Saved requests you run again: **Backlog → Playbooks**, **Save as playbook…** in New agents, or `agentmgr playbook`. A playbook is a request, the projects to run it in (one agent each), and optionally a model, permission mode, priority and schedule:

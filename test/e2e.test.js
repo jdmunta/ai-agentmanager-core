@@ -1140,6 +1140,49 @@ test('backlog: per-project limit, done → review frees a slot, accept, reopen, 
   for (const it of (await bl()).items) if (['queued', 'active', 'review', 'blocked'].includes(it.status)) await call('POST', `/backlog/${it.id}/cancel`);
 });
 
+test('autopilot: a finished backlog item the scorecard calls ready is committed, opened as a PR, merged and done', async () => {
+  const item = async (id) => (await call('GET', '/backlog')).body.items.find((i) => i.id === id);
+  const origin = makeOrigin('autopilot');
+  const ghState = path.join(home, 'fake-gh-autopilot.json');
+  const ghLog = path.join(home, 'fake-gh-autopilot.log');
+  const saved = { bin: process.env.AGENTMGR_GH_BIN, noGh: process.env.AGENTMGR_NO_GH, st: process.env.FAKE_GH_STATE, log: process.env.FAKE_GH_LOG };
+  Object.assign(process.env, { AGENTMGR_GH_BIN: path.join(here, 'fake-gh.js'), FAKE_GH_STATE: ghState, FAKE_GH_LOG: ghLog });
+  delete process.env.AGENTMGR_NO_GH;
+  fs.writeFileSync(ghState, JSON.stringify({ prs: [] }));
+  const gh = () => fs.readFileSync(ghLog, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  try {
+    const [it] = (await call('POST', '/backlog', { items: ['Write the notes #done #green'], repo: `file://${origin}`, project: 'AP' })).body;
+    await waitFor(async () => (await item(it.id)).status === 'review', 15000, 'in review');
+    const agent = await agentNow((await item(it.id)).agent.id);
+    fs.writeFileSync(path.join(agent.workdir, 'NOTES.md'), '# Notes\n\nWritten.\n');
+    assert.equal((await call('POST', '/backlog/settings', { project: 'AP', autopilot: 'bogus' })).status, 400);
+    const v = (await call('POST', '/backlog/settings', { project: 'AP', autopilot: 'merge' })).body;
+    assert.equal(v.projects.find((p) => p.name === 'AP').autopilot, 'merge');
+    // Scored ready (a docs change: nothing to cap), committed, pushed and opened.
+    await waitFor(async () => (await item(it.id)).autopilot?.pr, 20000, 'pull request opened');
+    const create = gh().find((c) => c[0] === 'pr' && c[1] === 'create');
+    assert.equal(create[create.indexOf('--title') + 1], 'Write the notes #done #green');
+    assert.match(create[create.indexOf('--body') + 1], /### Review scorecard: /);
+    assert.ok(execFileSync('git', ['log', '--format=%s', '-1', 'HEAD'], { cwd: agent.workdir, encoding: 'utf8' }).includes('Write the notes'), 'committed');
+    // Checks pass and GitHub says it can merge: merged, and the item is done.
+    const st = JSON.parse(fs.readFileSync(ghState, 'utf8'));
+    Object.assign(st.prs[0], { mergeStateStatus: 'CLEAN', mergeable: 'MERGEABLE' });
+    fs.writeFileSync(ghState, JSON.stringify(st));
+    await call('POST', `/agents/${agent.id}/refresh`, { withPrs: true });
+    await waitFor(async () => (await item(it.id)).status === 'done', 20000, 'merged and done');
+    assert.ok(gh().some((c) => c[0] === 'pr' && c[1] === 'merge'));
+    assert.equal((await item(it.id)).autopilot.state, 'merged');
+    assert.equal((await call('POST', `/backlog/${it.id}/ship`)).status, 409, 'only items in review');
+    await call('POST', '/backlog/settings', { project: 'AP', autopilot: 'off' });
+    await call('DELETE', `/agents/${agent.id}`);
+  } finally {
+    for (const [k, val] of [['AGENTMGR_GH_BIN', saved.bin], ['AGENTMGR_NO_GH', saved.noGh], ['FAKE_GH_STATE', saved.st], ['FAKE_GH_LOG', saved.log]]) {
+      if (val === undefined) delete process.env[k];
+      else process.env[k] = val;
+    }
+  }
+});
+
 test('Slack alerts: needs input after the delay, once per episode; review; settings are local-only', async () => {
   const http = await import('node:http');
   const got = [];

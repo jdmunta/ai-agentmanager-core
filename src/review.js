@@ -9,6 +9,18 @@ import { ghBin } from './tracker.js';
 const err = (status, message) => Object.assign(new Error(message), { status });
 const MAX_COMMENTS = 100;
 
+/** A git command that writes the index, retried while another git process (the app's own status refresh) holds its lock. */
+async function locked(args, opts, tries = 5) {
+  for (let i = 1; ; i++) {
+    try {
+      return await git.run('git', args, opts);
+    } catch (e) {
+      if (i >= tries || !/index\.lock|another git process/i.test(e.message)) throw e;
+      await new Promise((r) => setTimeout(r, 300 * i));
+    }
+  }
+}
+
 /** "origin/main @ 1a2b3c4d5" -> { ref: 'origin/main', sha: '1a2b3c4d5' } */
 export function parseBaseRef(baseRef) {
   const m = /^(.*) @ ([0-9a-f]{4,40})$/.exec(baseRef ?? '');
@@ -190,8 +202,8 @@ export class Review {
     const opts = { cwd: agent.workdir, timeout: 60_000 };
     const status = await git.run('git', ['status', '--porcelain'], opts);
     if (!status.trim()) throw err(409, 'Nothing to commit');
-    await git.run('git', ['add', '-A'], opts);
-    await git.run('git', ['commit', '-m', message], opts);
+    await locked(['add', '-A'], opts);
+    await locked(['commit', '-m', message], opts);
     const sha = await git.run('git', ['rev-parse', '--short', 'HEAD'], opts);
     this.manager.plugins.emit('agent.commit', { agent: this.manager.auditView(agent), message, sha });
     this.manager.refresh(agent.id).catch(() => {});
