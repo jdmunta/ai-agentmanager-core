@@ -1517,6 +1517,38 @@ test('scorecard: the changes scored, capped by what was measured, kept with the 
   await call('DELETE', `/agents/${a.id}`);
 });
 
+test('scorecard Improve: the scorecard goes back to the agent before review, and its next done brief is scored again', async () => {
+  const origin = makeOrigin('improve');
+  const [a] = (await call('POST', '/agents', { intent: 'Polish the score #done', repo: `file://${origin}`, start: false })).body;
+  const ready = await waitFor(async () => ((await agentNow(a.id)).status === 'stopped' ? agentNow(a.id) : null), 20000, 'ready');
+  assert.equal((await call('POST', `/agents/${a.id}/scorecard/improve`)).status, 409, 'nothing scored yet');
+  fs.writeFileSync(path.join(ready.workdir, 'polish.js'), 'export const polish = () => 1;\n');
+  // It finishes (brief: done) and is scored by itself.
+  await call('POST', `/agents/${a.id}/start`);
+  const scored = await waitFor(async () => ((await agentNow(a.id)).docs?.scorecard?.data ? agentNow(a.id) : null), 20000, 'scored when done');
+  const from = scored.docs.scorecard.data.overall;
+  await call('POST', `/agents/${a.id}/stop`);
+  await waitFor(async () => !(await agentNow(a.id)).runtime.running, 8000, 'stopped');
+  // Improve: the low spots are queued for the agent (which resumes) and it is marked as improving.
+  // FAKE_DONE: the resumed agent rewrites its brief still done, so only Improve can score it again.
+  process.env.FAKE_DONE = '1';
+  try {
+    const res = await call('POST', `/agents/${a.id}/scorecard/improve`);
+    assert.equal(res.status, 200, JSON.stringify(res.body));
+    assert.equal(res.body.improving.from, from);
+    assert.equal(res.body.outbox, 1, 'queued for the agent');
+    const again = await waitFor(async () => {
+      const x = await agentNow(a.id);
+      return x.improving === null && x.docs.scorecard.improvedFrom === from && !x.docs.scorecard.pending ? x : null;
+    }, 25000, 'scored again');
+    assert.ok(again.docs.scorecard.at > scored.docs.scorecard.at);
+    await waitFor(async () => (await agentNow(a.id)).outbox === 0, 15000, 'message delivered');
+  } finally {
+    delete process.env.FAKE_DONE;
+  }
+  await call('DELETE', `/agents/${a.id}`);
+});
+
 test('isolation: container agents are checked at creation and marked; the status says what is ready', async () => {
   assert.equal((await call('POST', '/agents', { intent: 'x', isolation: 'vm', start: false })).status, 400);
   assert.match((await call('POST', '/agents', { intent: 'x', isolation: 'container', engine: 'antigravity', start: false })).body.error, /can't run in a container yet/);

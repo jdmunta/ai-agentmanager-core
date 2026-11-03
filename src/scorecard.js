@@ -156,6 +156,29 @@ export function combine(reply, f, hunks) {
 }
 
 export const RECOMMENDATION = { ready: 'Ready to approve', look: 'Look at these first', not_ready: 'Not ready' };
+const IMPROVE_BELOW = 80; // scores under this are named in the Improve message
+
+/**
+ * Improve: the agent's own scorecard sent back to it before a person reviews the work. The scores
+ * to raise (lowest first, with why), the acceptance criteria not met or not verified, and where a
+ * reviewer would look.
+ */
+export function improveMessage(sc) {
+  const weak = DIMENSIONS.filter(([k]) => sc.scores[k] && sc.scores[k].score < IMPROVE_BELOW)
+    .sort(([a], [b]) => sc.scores[a].score - sc.scores[b].score)
+    .map(([k, label]) => `- ${label} ${sc.scores[k].score}/100: ${[sc.scores[k].why, ...sc.scores[k].notes].filter(Boolean).join('; ')}`);
+  const criteria = sc.criteria.filter((c) => c.status !== 'met').map((c) => `- ${c.status === 'not_met' ? 'Not met' : 'Not verified'}: ${c.criterion}${c.evidence ? ` (${c.evidence})` : ''}`);
+  const look = sc.look.map((l) => `- ${l.file}: ${l.reason}`);
+  return [
+    `Before this goes to review: the review scorecard rates your changes ${sc.overall ?? '?'}/100 (${RECOMMENDATION[sc.recommendation]}${sc.reasons.length ? `: ${sc.reasons.join('; ')}` : ''}). Improve them where they fall short.`,
+    weak.length ? `Scores to raise:\n${weak.join('\n')}` : '',
+    criteria.length ? `Acceptance criteria:\n${criteria.join('\n')}` : '',
+    look.length ? `Where a reviewer would look first:\n${look.join('\n')}` : '',
+    'Fix what these point at: add or fix tests and run them, meet the criteria, handle the risky spots. Stay within the task, and say in the brief what you left as it is and why. Update the brief when you are done; the changes are scored again then.',
+  ]
+    .filter(Boolean)
+    .join('\n\n');
+}
 
 /** Markdown: for Copy / Download, the pull request's description and a PR comment. */
 export function scorecardMarkdown(sc, title = '') {
