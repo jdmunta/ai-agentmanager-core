@@ -1352,3 +1352,141 @@ test('transcripts: the tool call still waiting for its result is what a prompt a
   fs.appendFileSync(file, res('t3'));
   assert.equal(scanActivity(file, state).calls.size, 0);
 });
+
+test('autopilot: ready work becomes a merged pull request, not-ready work goes back, the rest waits for you', async () => {
+  const { EventEmitter } = await import('node:events');
+  const { Autopilot, returnMessage } = await import('../src/autopilot.js');
+  const calls = [];
+  const card = (recommendation, diffHash = 'd1', extra = {}) => ({ data: { recommendation, overall: 70, reasons: recommendation === 'not_ready' ? ['CI is failing'] : [], criteria: [], look: [{ file: 'a.js' }], ...extra }, diffHash });
+  const agent = { id: 'ag', prs: {}, docs: {}, landing: { sent: {} } };
+  const manager = Object.assign(new EventEmitter(), {
+    busy: false,
+    view: () => ({ runtime: { busy: manager.busy } }),
+    summarize: async () => {
+      calls.push('score');
+      agent.docs.scorecard = manager.nextCard;
+    },
+    refresh: async () => {},
+  });
+  const store = { get: (id) => (id === 'ag' ? agent : null) };
+  let level = 'merge';
+  const it = { id: 'i1', title: 'Add the thing\nmore', projectKey: 'p', status: 'review', agentId: 'ag', reviewAt: 't1' };
+  const backlog = Object.assign(new EventEmitter(), {
+    items: () => [it],
+    get: () => it,
+    changed: () => {},
+    autopilotFor: () => level,
+    accept: () => ((it.status = 'done'), calls.push('accept')),
+    reopen: (id, { note }) => ((it.status = 'active'), calls.push(`reopen:${note.split('\n')[0]}`)),
+  });
+  const review = {
+    diff: 'd1',
+    get: async () => ({ files: [{ file: 'a.js' }], diffHash: review.diff }),
+    commit: async (id, { message }) => calls.push(`commit:${message}`),
+    pr: async () => (calls.push('pr'), { url: 'https://github.com/o/r/pull/7' }),
+  };
+  const landing = { settings: { maxFixes: 3 }, merge: async (id, { url }) => calls.push(`merge:${url}`), updateBranch: async () => calls.push('update') };
+  const ap = new Autopilot({ manager, store, backlog, review, landing, log: () => {} });
+  ap.close();
+  try {
+    // Not scored yet: score first; ready: commit (first line of the title), push and open the PR.
+    manager.nextCard = card('ready');
+    await ap.tick();
+    assert.deepEqual(calls, ['score']);
+    await ap.tick();
+    assert.deepEqual(calls.slice(1), ['commit:Add the thing', 'pr']);
+    assert.equal(it.autopilot.state, 'landing');
+    // At "merge": waits for checks, updates a branch that fell behind (once per head), merges when ready.
+    agent.prs['https://github.com/o/r/pull/7'] = { url: 'https://github.com/o/r/pull/7', state: 'OPEN', checks: { state: 'running' }, head: 'h1' };
+    calls.length = 0;
+    await ap.tick();
+    assert.deepEqual(calls, []);
+    Object.assign(agent.prs['https://github.com/o/r/pull/7'], { checks: { state: 'passed' }, mergeState: 'BEHIND' });
+    await ap.tick();
+    await ap.tick();
+    assert.deepEqual(calls, ['update']);
+    agent.prs['https://github.com/o/r/pull/7'].mergeState = 'CLEAN';
+    await ap.tick();
+    assert.deepEqual(calls, ['update', 'merge:https://github.com/o/r/pull/7']);
+    // Merged: the item is done.
+    agent.prs['https://github.com/o/r/pull/7'].state = 'MERGED';
+    await ap.tick();
+    assert.equal(it.status, 'done');
+    assert.equal(it.autopilot.state, 'merged');
+
+    // A new item, not ready: back to the agent with the reasons, at most twice; then it waits for you.
+    Object.assign(it, { status: 'review', reviewAt: 't2', autopilot: undefined });
+    agent.prs = {};
+    agent.docs.scorecard = card('not_ready');
+    calls.length = 0;
+    for (const round of ['t3', 't4']) {
+      await ap.tick();
+      Object.assign(it, { status: 'review', reviewAt: round });
+    }
+    assert.deepEqual(calls, ["reopen:Autopilot: the review scorecard says this isn't ready yet: CI is failing.", "reopen:Autopilot: the review scorecard says this isn't ready yet: CI is failing."]);
+    await ap.tick();
+    assert.equal(it.autopilot.state, 'held');
+    assert.match(it.autopilot.note, /Still not ready after 2 tries: CI is failing/);
+    assert.equal(ap.inbox().length, 1);
+    assert.equal(ap.inbox()[0].kind, 'autopilot');
+    // Held: nothing more this round. Ship it goes ahead anyway.
+    await ap.tick();
+    assert.equal(calls.length, 2);
+    ap.shipNow('i1');
+    await ap.tick();
+    assert.deepEqual(calls.slice(2), ['commit:Add the thing', 'pr']);
+    assert.equal(ap.inbox().length, 0);
+
+    // "Look at these first", with autopilot at "pr": waits for you, naming where to look.
+    Object.assign(it, { status: 'review', reviewAt: 't5', autopilot: undefined });
+    level = 'pr';
+    agent.docs.scorecard = card('look');
+    await ap.tick();
+    assert.match(it.autopilot.note, /look first \(70\/100\): a\.js/);
+    // Changes since the scorecard: scored again. Busy agents and "off" are left alone.
+    Object.assign(it, { reviewAt: 't6', autopilot: undefined });
+    review.diff = 'd2';
+    manager.nextCard = card('ready', 'd2');
+    manager.busy = true;
+    calls.length = 0;
+    await ap.tick();
+    assert.deepEqual(calls, []);
+    manager.busy = false;
+    level = 'off';
+    await ap.tick();
+    assert.deepEqual(calls, []);
+    level = 'pr';
+    await ap.tick();
+    await ap.tick();
+    assert.deepEqual(calls, ['score', 'commit:Add the thing', 'pr']);
+    assert.equal(it.autopilot.state, 'pr', 'at "pr" it stops at the pull request');
+    assert.match(returnMessage(card('not_ready', 'x', { criteria: [{ criterion: 'Works offline', status: 'not_met', evidence: 'no cache' }] }).data), /- Works offline \(no cache\)/);
+  } finally {
+    ap.close();
+  }
+});
+
+test('review: Commit all waits out the index lock of a git status running at the same time', async () => {
+  const { Review } = await import('../src/review.js');
+  const dir = tmp();
+  const g = (...a) => execFileSync('git', ['-c', 'commit.gpgsign=false', '-c', 'user.email=t@t', '-c', 'user.name=t', ...a], { cwd: dir });
+  g('init', '-q');
+  fs.writeFileSync(path.join(dir, 'a.txt'), '1\n');
+  g('add', '.');
+  g('commit', '-q', '-m', 'one');
+  fs.writeFileSync(path.join(dir, 'a.txt'), '2\n');
+  const agent = { id: 'x', workdir: dir, kind: 'agent' };
+  const manager = { mustGet: () => agent, plugins: { check() {}, emit() {} }, auditView: (a) => a, refresh: async () => {} };
+  const lock = path.join(dir, '.git', 'index.lock');
+  fs.writeFileSync(lock, '');
+  setTimeout(() => fs.rmSync(lock), 500);
+  const env = { ...process.env };
+  Object.assign(process.env, { GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@t', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@t', GIT_CONFIG_COUNT: '1', GIT_CONFIG_KEY_0: 'commit.gpgsign', GIT_CONFIG_VALUE_0: 'false' });
+  try {
+    const res = await new Review({ manager }).commit('x', { message: 'two' });
+    assert.ok(res.sha);
+    assert.equal(execFileSync('git', ['log', '-1', '--format=%s'], { cwd: dir, encoding: 'utf8' }).trim(), 'two');
+  } finally {
+    for (const k of Object.keys(process.env)) if (!(k in env)) delete process.env[k];
+  }
+});

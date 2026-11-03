@@ -890,6 +890,11 @@ export async function main(argv) {
       if (!items.length) return console.log(dim('Nothing needs you right now.'));
       const label = { prompt: red('needs input'), waiting: red('waiting'), question: cyan('question'), review: cyan('AI review'), stuck: yellow('stuck?'), conflict: yellow('overlap') };
       for (const it of items) {
+        if (it.kind === 'autopilot') {
+          console.log(`${yellow('autopilot held')}  ${bold(it.project ?? '')}  ${it.title}`);
+          console.log(dim(`    ${it.note ?? ''}\n    agentmgr backlog ship ${it.itemId}  ·  agentmgr changes ${it.agentId}`));
+          continue;
+        }
         if (it.kind === 'rule') {
           console.log(`${cyan('always allow?')}  ${bold(repoLabel(it.repo))}  ${it.title} ${dim(`(allowed ${it.n} times)`)}`);
           console.log(dim('    agentmgr rules'));
@@ -1244,15 +1249,18 @@ export async function main(argv) {
     const items = v.items.filter((i) => all || !['done', 'cancelled'].includes(i.status));
     console.log(`${v.autoRun ? green('running') : yellow('paused')}  ${dim(`${v.defaultLimit} per project by default, ${v.maxActive} overall`)}`);
     if (!items.length) return console.log(dim('Backlog is empty. Add: agentmgr backlog add "ask" -r <repo>'));
-    const lim = Object.fromEntries(v.projects.map((p) => [p.key, p.limit]));
+    const proj = Object.fromEntries(v.projects.map((p) => [p.key, p]));
     let last = null;
     for (const it of items) {
       if (it.projectKey !== last) {
-        console.log(`\n${bold(it.projectName)} ${dim(`(${lim[it.projectKey] ?? v.defaultLimit} at a time)`)}`);
+        const p = proj[it.projectKey];
+        const ap = p?.autopilot && p.autopilot !== 'off' ? `, autopilot: ${p.autopilot === 'merge' ? 'merge' : 'open PRs'}` : '';
+        console.log(`\n${bold(it.projectName)} ${dim(`(${p?.limit ?? v.defaultLimit} at a time${ap})`)}`);
         last = it.projectKey;
       }
       const agent = it.agent ? dim(` → ${it.agent.name} (${it.agent.id})${it.agent.briefStatus ? ` brief: ${it.agent.briefStatus}` : ''}`) : '';
       console.log(`  ${it.id}  P${it.priority}  ${(ST[it.status] ?? it.status).padEnd(18)} ${truncate(it.title, 60)}${agent}`);
+      if (it.status === 'review' && it.autopilot?.state) console.log(dim(`        autopilot: ${it.autopilot.state}${it.autopilot.pr ? ` ${it.autopilot.pr}` : ''}${it.autopilot.note ? `: ${it.autopilot.note}` : ''}`));
     }
   };
   bl.command('ls')
@@ -1340,6 +1348,15 @@ export async function main(argv) {
       await daemon();
       printBacklog(await api('POST', '/backlog/settings', { project, limit: Number(n) }));
     });
+  bl.command('autopilot')
+    .description("Take a project's finished items on by themselves when the review scorecard says ready: off, pr (open the pull request) or merge (and merge it once checks pass)")
+    .argument('<project>', 'project name as shown in "backlog ls"')
+    .argument('<level>', 'off, pr or merge')
+    .action(async (project, level) => {
+      await daemon();
+      printBacklog(await api('POST', '/backlog/settings', { project, autopilot: level }));
+    });
+  itemCmd('ship', 'Go ahead with an item autopilot held: open its pull request (and merge, at the merge level)', 'ship');
   bl.command('pause')
     .description('Stop starting new items (active ones continue)')
     .action(async () => {

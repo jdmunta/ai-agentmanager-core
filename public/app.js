@@ -855,7 +855,7 @@ function renderList() {
 const ITEM_ACTIONS = {
   queued: [['up', '▲', 'Move up'], ['down', '▼', 'Move down'], ['start', 'Start now', 'Start now, even if the project is at its limit'], ['cancel', 'Cancel', '']],
   active: [['open', 'Open', 'Open its agent'], ['accept', 'Done', 'Mark done now'], ['cancel', 'Cancel', '']],
-  review: [['accept', 'Accept', 'Accept the work: done'], ['reopen', 'Reopen', 'Send it back to the same agent with a note'], ['open', 'Open', 'Open its agent']],
+  review: [['accept', 'Accept', 'Accept the work: done'], ['ship', 'Ship it', 'Commit, push and open its pull request (and merge it, at the Merge autopilot level)'], ['reopen', 'Reopen', 'Send it back to the same agent with a note'], ['open', 'Open', 'Open its agent']],
   blocked: [['start', 'Retry', 'Retry the agent'], ['open', 'Open', 'Open its agent'], ['cancel', 'Cancel', '']],
   done: [['reopen', 'Reopen', ''], ['open', 'Open', ''], ['remove', '✕', 'Remove from the list']],
   cancelled: [['remove', '✕', 'Remove from the list']],
@@ -895,6 +895,7 @@ function renderBacklog() {
                 ${p.shortcut ? `<span class="shortcut">${esc(p.shortcut)}</span>` : ''}
                 <span class="pname">${esc(g.name)}</span>
                 <button class="link" data-bl="limit" data-project="${esc(g.key)}" data-name="${esc(g.name)}" title="How many items of this project agents work on at once">${p.limit} at a time ✎</button>
+                <label class="bl-autopilot" title="${esc(AUTOPILOT_HINT)}">🛫 <select aria-label="Autopilot" data-bl-autopilot="${esc(g.key)}">${Object.entries(AUTOPILOT_LEVELS).map(([v, l]) => `<option value="${v}" ${(p.autopilot ?? 'off') === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
               </div>
               <ul class="project-agents">${g.items.map(itemRow).join('')}</ul>
             </li>`;
@@ -902,6 +903,17 @@ function renderBacklog() {
           .join('')}</ul>`
       : `<div class="empty"><p>The backlog is empty.</p><p>Add asks with <b>+ Add</b> (or <b>+ New agents</b> → Queue in backlog). Agents pick them up one by one, ${backlogState.defaultLimit} at a time per project, until each is done.</p></div>`}
     <p class="hint bl-foot"><label><input type="checkbox" data-bl="completed" ${showCompleted ? 'checked' : ''}/> Show done and cancelled</label></p>`;
+}
+
+const AUTOPILOT_LEVELS = { off: 'Off', pr: 'Open PRs', merge: 'Merge' };
+const AUTOPILOT_HINT = 'When an item is done and its review scorecard says ready: Open PRs commits, pushes and opens the pull request; Merge also merges it once checks pass. Not-ready work goes back to the agent; anything else waits for you in the inbox.';
+const AUTOPILOT_STATE = { queued: 'going ahead', scoring: 'scoring the changes', shipping: 'opening the pull request', pr: 'pull request open', landing: 'waiting for checks to merge', merging: 'merging', returned: 'sent back to the agent', held: 'waiting for you', merged: 'merged' };
+/** Where autopilot stands on an item, under it in the backlog. */
+function autopilotLine(it) {
+  const ap = it.autopilot;
+  if (!ap?.state || !['review', 'active', 'done'].includes(it.status) || (it.status === 'active' && ap.state !== 'returned')) return '';
+  const pr = ap.pr ? ` <a href="${esc(ap.pr)}" target="_blank" rel="noopener">#${esc(ap.pr.split('/').pop())} ↗</a>` : '';
+  return `<p class="hint bl-ai bl-ap ${ap.state === 'held' ? 'held' : ''}">🛫 Autopilot: ${AUTOPILOT_STATE[ap.state] ?? esc(ap.state)}${pr}${ap.note ? ` · ${esc(ap.note)}` : ''}</p>`;
 }
 
 function itemRow(it) {
@@ -919,10 +931,11 @@ function itemRow(it) {
       ${it.base ? `<span>⎇ from ${esc(it.base)}</span>` : ''}
       ${it.doneAt ? `<span>done ${ago(it.doneAt)}</span>` : it.reviewAt ? `<span>ready ${ago(it.reviewAt)}</span>` : it.startedAt ? `<span>started ${ago(it.startedAt)}</span>` : `<span>added ${ago(it.createdAt)}</span>`}
     </div>
+    ${autopilotLine(it)}
     ${it.status === 'queued' && it.aiHold ? `<p class="hint bl-ai">🤖 Waits for <b>${esc(it.aiHold.afterTitle)}</b>${it.aiHold.reason ? `: ${esc(it.aiHold.reason)}` : ''}</p>` : ''}
     ${it.status === 'queued' && it.aiSplit ? `<div class="hint bl-ai">🤖 Could be split${it.aiSplit.reason ? ` (${esc(it.aiSplit.reason)})` : ''}:<ul>${it.aiSplit.parts.map((p) => `<li>${esc(p)}</li>`).join('')}</ul>
       <button class="small" data-bl="split">Split into ${it.aiSplit.parts.length}</button> <button class="small ghost" data-bl="keep-whole">Keep whole</button></div>` : ''}
-    <div class="bl-actions">${(ITEM_ACTIONS[it.status] ?? []).map(([act, label, title]) => `<button class="small" data-bl="${act}" title="${esc(title)}">${label}</button>`).join('')}</div>
+    <div class="bl-actions">${(ITEM_ACTIONS[it.status] ?? []).filter(([act]) => act !== 'ship' || !['pr', 'landing', 'merging', 'shipping'].includes(it.autopilot?.state)).map(([act, label, title]) => `<button class="small" data-bl="${act}" title="${esc(title)}">${label}</button>`).join('')}</div>
   </li>`;
 }
 
@@ -942,6 +955,12 @@ function showTab(tab) {
 }
 for (const b of document.querySelectorAll('.side-tab')) b.onclick = () => showTab(b.dataset.tab);
 
+$('#backlog-view').addEventListener('change', (e) => {
+  const key = e.target.dataset?.blAutopilot;
+  if (!key) return;
+  const level = e.target.value;
+  act(() => api('POST', '/backlog/settings', { project: key, autopilot: level }), level === 'off' ? 'Autopilot off' : `Autopilot: ${AUTOPILOT_LEVELS[level]}`);
+});
 $('#backlog-view').addEventListener('click', async (e) => {
   const el = e.target.closest('[data-bl]');
   if (!el) return;
@@ -989,6 +1008,8 @@ $('#backlog-view').addEventListener('click', async (e) => {
       return blApi('POST', `/backlog/${id}/split`, { parts: it.aiSplit.parts });
     case 'keep-whole':
       return blApi('POST', `/backlog/${id}/keep-whole`);
+    case 'ship':
+      return act(() => api('POST', `/backlog/${id}/ship`), 'Shipping: opening its pull request');
     case 'open': {
       const agentId = it?.agent?.id;
       if (!agentId) return;
@@ -1014,7 +1035,7 @@ function flags(a) {
 }
 
 const TRIAGED = { now: 'sent (AI: urgent)', digest: 'held for the digest', skip: 'dropped by the AI judge' };
-const NEED_ORDER = { approval: 0, prompt: 0, waiting: 1, plan: 1, question: 1, team: 1, rule: 2, review: 2, stuck: 3, conflict: 4 };
+const NEED_ORDER = { approval: 0, prompt: 0, waiting: 1, plan: 1, question: 1, team: 1, rule: 2, review: 2, autopilot: 2, stuck: 3, conflict: 4 };
 /** What an agent needs from the user. `both`: overlaps on both agents (detail), else only the one that should rebase (inbox). */
 function needsFor(a, { both = false } = {}) {
   const items = [];
@@ -1044,12 +1065,18 @@ const repoLabel = (k) => String(k).replace(/^dir:/, '').split('/').filter(Boolea
 function ruleNeeds() {
   return rulesState.suggestions.map((r) => ({ a: { id: 'rules', name: repoLabel(r.repo), priority: 2 }, kind: 'rule', key: `rule:${r.repo}:${r.rule}`, r }));
 }
+/** Backlog work autopilot held for you. */
+function autopilotNeeds() {
+  return backlogState.items
+    .filter((it) => it.status === 'review' && it.autopilot?.state === 'held' && it.autopilot.round === it.reviewAt)
+    .map((it) => ({ a: { id: it.agentId ?? '', name: it.agent?.name ?? it.projectName, priority: it.priority }, kind: 'autopilot', key: `autopilot:${it.id}`, it }));
+}
 function inboxItems() {
-  return [...approvalNeeds(), ...[...agents.values()].flatMap((a) => needsFor(a)), ...teamNeeds(), ...ruleNeeds()]
+  return [...approvalNeeds(), ...[...agents.values()].flatMap((a) => needsFor(a)), ...teamNeeds(), ...ruleNeeds(), ...autopilotNeeds()]
     .sort((x, y) => NEED_ORDER[x.kind] - NEED_ORDER[y.kind] || (x.a.priority ?? 2) - (y.a.priority ?? 2));
 }
 
-const NEED_LABEL = { rule: 'Always allow?', approval: 'Approval', team: 'Team', prompt: 'Needs input', waiting: 'Waiting on you', plan: 'Plan review', question: 'Question', review: 'AI review', stuck: 'Stuck?', conflict: 'Overlap' };
+const NEED_LABEL = { autopilot: 'Autopilot held', rule: 'Always allow?', approval: 'Approval', team: 'Team', prompt: 'Needs input', waiting: 'Waiting on you', plan: 'Plan review', question: 'Question', review: 'AI review', stuck: 'Stuck?', conflict: 'Overlap' };
 /** Why the AI judge thinks so, as a small tag. */
 const aiTag = (confidence, what = 'AI') => `<span class="tag ai" title="Judged by a model from the agent's activity; your reactions tune later calls">🤖 ${what}${confidence != null ? ` ${Math.round(confidence * 100)}%` : ''}</span>`;
 /** What a permission prompt asks about: the command, file or tool. */
@@ -1090,6 +1117,10 @@ function needCard(it, { inDetail = false } = {}) {
     body = `<p class="need-title">Wants to run <code>${esc(p.tool)}</code> <span class="hint">asked ${ago(p.at)}</span></p>
       <pre class="need-input">${esc(JSON.stringify(p.input, null, 2).slice(0, 1500))}</pre>
       <div class="need-actions"><button class="small primary" data-ib="approve" data-allow="1">Approve</button><button class="small" data-ib="approve">Deny</button>${it.r.chat ? `<a class="button small ghost" href="${esc(it.r.chat)}" target="_blank" rel="noopener">Its chat ↗</a>` : ''}</div>`;
+  } else if (it.kind === 'autopilot') {
+    body = `<p class="need-title">${esc(it.it.title)}</p>
+      <p class="hint">${esc(it.it.autopilot.note ?? '')}</p>
+      <div class="need-actions"><button class="small primary" data-ib="ap-review">Review changes</button><button class="small" data-ib="ap-ship" title="Commit, push and open its pull request (and merge it, at the Merge level)">Ship it</button><button class="small" data-ib="ap-reopen">Send back…</button></div>`;
   } else if (it.kind === 'rule') {
     body = `<p class="need-title">You've allowed <code>${esc(it.r.label)}</code> ${it.r.n} times in this repo. Always allow it here?</p>
       <p class="hint">Agents in ${esc(a.name)} won't ask about it again. Remove it any time in Settings → Approval rules.</p>
@@ -1245,6 +1276,17 @@ async function onNeed(e) {
     case 'yes-all': {
       const ids = card.dataset.agents.split(',');
       return act(() => Promise.all(ids.map((x) => api('POST', `/agents/${x}/prompt-key`, { key: '1' }))), `Allowed for ${ids.length} agents`);
+    }
+    case 'ap-review':
+      showTab('agents');
+      select(id);
+      return reviewUi.open(id);
+    case 'ap-ship':
+      return act(() => api('POST', `/backlog/${key.split(':')[1]}/ship`), 'Shipping: opening its pull request');
+    case 'ap-reopen': {
+      const note = prompt('What still needs doing? (sent to the same agent)', '');
+      if (note === null) return;
+      return act(() => api('POST', `/backlog/${key.split(':')[1]}/reopen`, { note }), 'Sent back');
     }
     case 'rule-accept':
     case 'rule-dismiss': {

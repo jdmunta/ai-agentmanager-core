@@ -286,6 +286,7 @@ export class AgentManager extends EventEmitter {
     this.outbox = new Map(); // agent id -> [message] waiting to be typed into its session
     // The AI judge: rules decide when to look, a model decides what is going on (see judge.js).
     this.rules = new Rules({ suggestAfter: config.rules?.suggestAfter });
+    this.inboxSources = [];
     this.judge = new Judge({ config, call: (agent, prompt, { timeoutMs }) => this.oneShot(agent, prompt, { ...this.judgeModel(agent), timeoutMs }) });
     this.stuckVerdicts = new Map(); // agent id -> Map(finding key -> { at, since, data })
     this.signIns = new Map(); // agent id -> { url, port, callback, terminal, at, finished } from a CLI's sign-in link
@@ -2875,7 +2876,9 @@ export class AgentManager extends EventEmitter {
     }
     // Commands you keep allowing in a repo: offer to always allow them there.
     for (const r of this.rules.view().suggestions) items.push({ kind: 'rule', key: `rule:${r.repo}:${r.rule}`, title: `Always allow ${r.label}?`, priority: 2, ...r });
-    const order = { prompt: 0, waiting: 1, question: 1, rule: 2, review: 2, stuck: 3, conflict: 4 };
+    // Others' items (autopilot's held backlog work).
+    for (const source of this.inboxSources) items.push(...source());
+    const order = { prompt: 0, waiting: 1, question: 1, rule: 2, review: 2, autopilot: 2, stuck: 3, conflict: 4 };
     return items.sort((a, b) => order[a.kind] - order[b.kind] || a.priority - b.priority);
   }
 
