@@ -995,3 +995,6 @@ body.remote .settings-links .local-only { display: none; }
 .rules-list li { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .rules-list li button { margin-left: auto; }
 .need.group { border-style: dashed; }
+
+/* ?perf: redraw timings */
+.perf { position: fixed; right: 8px; bottom: 8px; z-index: 1000; padding: 3px 8px; border-radius: 6px; background: var(--panel, #1a1d27); color: var(--muted); font: 11px ui-monospace, Menlo, monospace; pointer-events: none; opacity: 0.9; }
