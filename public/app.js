@@ -127,6 +127,7 @@ $('#new-playbook').onclick = () => {
 };
 $('#triggers-open').onclick = () => triggersUi.open();
 let builtReports = []; // agents built with agentkit that report here (runs, approvals)
+let repeatsState = { suggestions: [] }; // requests you keep making, offered as playbooks (src/repeats.js)
 let rulesState = { allowed: [], suggestions: [] }; // approval rules learned from your answers (src/rules.js)
 const builtUi = initBuilt({
   api, esc, toast, $,
@@ -1035,7 +1036,7 @@ function flags(a) {
 }
 
 const TRIAGED = { now: 'sent (AI: urgent)', digest: 'held for the digest', skip: 'dropped by the AI judge' };
-const NEED_ORDER = { approval: 0, prompt: 0, waiting: 1, plan: 1, question: 1, team: 1, rule: 2, review: 2, autopilot: 2, stuck: 3, conflict: 4 };
+const NEED_ORDER = { approval: 0, prompt: 0, waiting: 1, plan: 1, question: 1, team: 1, rule: 2, review: 2, autopilot: 2, stuck: 3, conflict: 4, repeat: 5 };
 /** What an agent needs from the user. `both`: overlaps on both agents (detail), else only the one that should rebase (inbox). */
 function needsFor(a, { both = false } = {}) {
   const items = [];
@@ -1071,12 +1072,16 @@ function autopilotNeeds() {
     .filter((it) => it.status === 'review' && it.autopilot?.state === 'held' && it.autopilot.round === it.reviewAt)
     .map((it) => ({ a: { id: it.agentId ?? '', name: it.agent?.name ?? it.projectName, priority: it.priority }, kind: 'autopilot', key: `autopilot:${it.id}`, it }));
 }
+/** Requests you keep making, offered as a playbook. */
+function repeatNeeds() {
+  return repeatsState.suggestions.map((r) => ({ a: { id: 'repeats', name: r.projects.join(', ') || 'Requests', priority: 3 }, kind: 'repeat', key: `repeat:${r.key}`, r }));
+}
 function inboxItems() {
-  return [...approvalNeeds(), ...[...agents.values()].flatMap((a) => needsFor(a)), ...teamNeeds(), ...ruleNeeds(), ...autopilotNeeds()]
+  return [...approvalNeeds(), ...[...agents.values()].flatMap((a) => needsFor(a)), ...teamNeeds(), ...ruleNeeds(), ...autopilotNeeds(), ...repeatNeeds()]
     .sort((x, y) => NEED_ORDER[x.kind] - NEED_ORDER[y.kind] || (x.a.priority ?? 2) - (y.a.priority ?? 2));
 }
 
-const NEED_LABEL = { autopilot: 'Autopilot held', rule: 'Always allow?', approval: 'Approval', team: 'Team', prompt: 'Needs input', waiting: 'Waiting on you', plan: 'Plan review', question: 'Question', review: 'AI review', stuck: 'Stuck?', conflict: 'Overlap' };
+const NEED_LABEL = { repeat: 'Make it a playbook?', autopilot: 'Autopilot held', rule: 'Always allow?', approval: 'Approval', team: 'Team', prompt: 'Needs input', waiting: 'Waiting on you', plan: 'Plan review', question: 'Question', review: 'AI review', stuck: 'Stuck?', conflict: 'Overlap' };
 /** Why the AI judge thinks so, as a small tag. */
 const aiTag = (confidence, what = 'AI') => `<span class="tag ai" title="Judged by a model from the agent's activity; your reactions tune later calls">🤖 ${what}${confidence != null ? ` ${Math.round(confidence * 100)}%` : ''}</span>`;
 /** What a permission prompt asks about: the command, file or tool. */
@@ -1108,6 +1113,8 @@ function needCard(it, { inDetail = false } = {}) {
     ? `<a href="#" class="need-agent" data-ib="built-open">⚙ ${esc(a.name)}</a> <span class="hint">${esc(it.r.host)}</span>`
     : it.kind === 'rule'
     ? `<span class="need-agent" title="${esc(it.r.repo)}">${esc(a.name)}</span>`
+    : it.kind === 'repeat'
+    ? `<span class="need-agent">${esc(a.name)}</span>`
     : `<a href="#${a.id}" class="need-agent" data-goto="${a.id}">${prioChip(a.priority ?? 2)}${esc(a.name)}</a>${a.projectInfo?.name ? ` <span class="hint">${esc(a.projectInfo.name)}</span>` : ''}`;
   const head = `<div class="need-head"><span class="need-kind ${it.kind}">${NEED_LABEL[it.kind]}</span>${who}</div>`;
   const draft = (k, fallback = '') => esc(needDrafts.get(`${it.key}:${k}`) ?? fallback);
@@ -1117,6 +1124,12 @@ function needCard(it, { inDetail = false } = {}) {
     body = `<p class="need-title">Wants to run <code>${esc(p.tool)}</code> <span class="hint">asked ${ago(p.at)}</span></p>
       <pre class="need-input">${esc(JSON.stringify(p.input, null, 2).slice(0, 1500))}</pre>
       <div class="need-actions"><button class="small primary" data-ib="approve" data-allow="1">Approve</button><button class="small" data-ib="approve">Deny</button>${it.r.chat ? `<a class="button small ghost" href="${esc(it.r.chat)}" target="_blank" rel="noopener">Its chat ↗</a>` : ''}</div>`;
+  } else if (it.kind === 'repeat') {
+    const r = it.r;
+    body = `<p class="need-title">You've asked for this ${r.count} times: <code>${esc(r.intent)}</code></p>
+      <ul class="need-files">${r.examples.map((x) => `<li>${esc(x.length > 140 ? `${x.slice(0, 140)}…` : x)}</li>`).join('')}</ul>
+      <p class="hint">Save it as a playbook to run it again in one click, or on a schedule.</p>
+      <div class="need-actions"><button class="small primary" data-ib="repeat-save">Save as playbook…</button><button class="small" data-ib="repeat-dismiss">Not now</button></div>`;
   } else if (it.kind === 'autopilot') {
     body = `<p class="need-title">${esc(it.it.title)}</p>
       <p class="hint">${esc(it.it.autopilot.note ?? '')}</p>
@@ -1277,6 +1290,15 @@ async function onNeed(e) {
       const ids = card.dataset.agents.split(',');
       return act(() => Promise.all(ids.map((x) => api('POST', `/agents/${x}/prompt-key`, { key: '1' }))), `Allowed for ${ids.length} agents`);
     }
+    case 'repeat-save': {
+      const r = repeatsState.suggestions.find((x) => `repeat:${x.key}` === key);
+      return r && playbooksUi.open({ name: r.name, intent: r.intent, projects: r.projects });
+    }
+    case 'repeat-dismiss':
+      return act(async () => {
+        repeatsState = await api('POST', '/repeats/dismiss', { key: key.slice('repeat:'.length) });
+        renderInbox();
+      }, "Won't suggest it again");
     case 'ap-review':
       showTab('agents');
       select(id);
@@ -3727,6 +3749,7 @@ function handleEvent(msg) {
     for (const t of msg.teams ?? []) teams.set(t.id, t);
     builtReports = msg.built ?? [];
     if (msg.rules) rulesState = msg.rules;
+    if (msg.repeats) repeatsState = msg.repeats;
     builtUi.render();
     msg.agents.forEach(watchDocs);
     if (selectedId && !agents.has(selectedId)) selectedId = null;
@@ -3753,6 +3776,8 @@ function handleEvent(msg) {
     teams.delete(msg.id);
   } else if (msg.t === 'rules') {
     rulesState = msg.rules;
+  } else if (msg.t === 'repeats') {
+    repeatsState = msg.repeats;
   } else if (msg.t === 'built') {
     builtReports = msg.reports;
     builtUi.render();

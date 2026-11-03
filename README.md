@@ -539,6 +539,13 @@ Saved requests you run again: **Backlog → Playbooks**, **Save as playbook…**
 
 Agents started by a playbook are marked **▶ <playbook>**, and the playbook lists the agents of its last run.
 
+**Requests you keep making become playbooks.** AI Agent Manager remembers the requests you type for new agents and backlog items (the last 500, in `~/.agentmanager/asks.json`). Requests started by playbooks, triggers or the assistant aren't counted. When 3 read alike, the Inbox offers **Make it a playbook?** with the examples. "Alike" means the same words once numbers, quoted names, URLs, issue keys and filler words are set aside.
+
+- **Save as playbook…** opens the playbook editor prefilled. The words the requests share become the request, and the part that changes becomes `{{what}}`: "Upgrade react to the latest version" and "Upgrade vite to the latest version" become "Upgrade `{{what}}` to the latest version". The projects they ran in become the playbook's projects.
+- **Not now** stops offering that one.
+- A request that is already a playbook isn't offered.
+- Change the count with `"repeats": { "suggestAfter": 3 }`, or turn it off with `"repeats": { "enabled": false }`.
+
 ```sh
 agentmgr playbook add "Flaky tests" "Find yesterday's flaky tests in CI and fix or quarantine them" --projects web,api --every weekday --at 09:00
 agentmgr playbook ls

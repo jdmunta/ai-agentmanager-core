@@ -3,6 +3,7 @@
 ## Unreleased
 
 - **Autopilot for the backlog:** finished items go on to a pull request, and merged, without you, when the review scorecard says they're ready. Per project (🛫 in the Backlog tab, `agentmgr backlog autopilot <project> off|pr|merge`), off by default. *Open PRs* commits, pushes and opens the pull request. *Merge* also merges it once checks pass, updating a branch that fell behind. Not-ready work goes back to the agent with the scorecard's reasons (twice at most). Anything else waits in the Inbox as *Autopilot held*, with **Ship it**, **Review changes** and **Send back**. An item whose pull request merges is done. **Ship it** is on every item in review.
+- **Requests you keep making become playbooks:** when you've typed alike requests 3 times (new agents and backlog items, with numbers, names, URLs and issue keys set aside), the Inbox offers **Make it a playbook?**. **Save as playbook…** opens the editor prefilled: the shared words become the request, the part that changes becomes `{{what}}`, and the projects they ran in become its projects. **Not now** stops offering it. Requests already saved as a playbook aren't offered. `"repeats": { "suggestAfter": 3, "enabled": true }` in config.json.
 - **Commit all** no longer fails with `index.lock: File exists` when it lands on the app's own background `git status` of the same worktree. It retries for a moment.
 
 ## 1.14.0 (2026-11-02)
