@@ -934,6 +934,12 @@ form.dropping { outline: 2px dashed var(--accent, #6b8cff); outline-offset: 4px;
 .sc-crit li.met .sc-mark { color: var(--green); } .sc-crit li.not_met .sc-mark { color: var(--red); } .sc-crit li.unverified .sc-mark { color: var(--yellow); }
 .sc-facts { font-size: 11.5px; }
 .sc-badge { display: inline-block; padding: 1px 8px; border-radius: 999px; border: 1px solid currentColor; font-size: 12px; white-space: nowrap; }
+/* Scorecard before review: the number on list rows, how far Improve moved it, and the strip in Results. */
+.sc-chip { white-space: nowrap; }
+.sc-delta { margin-left: 3px; font-size: 11px; font-weight: 600; }
+.sc-delta.up { color: var(--green); } .sc-delta.down { color: var(--red); }
+.sc-overall .sc-delta { align-self: center; }
+.sc-strip { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 4px 0 8px; }
 .rv-score { margin: 0 12px 8px; }
 .rv-score-empty { display: flex; align-items: center; gap: 10px; margin: 0 12px 8px; }
 .rv-hunk.flash td { animation: rvflash 1.6s; }

@@ -9,7 +9,7 @@ import { initSide } from '/side.js';
 import { openCopy, pasteInto } from '/termclip.js';
 import { initBuilt } from '/built.js';
 import { addTools, download, htmlFile, initExport } from '/export.js';
-import { badgeHtml as scoreBadge, scorecardHtml, scorecardSpeech } from '/scorecard.js';
+import { badgeHtml as scoreBadge, chipHtml as scoreChip, improveHtml, scorecardHtml, scorecardSpeech } from '/scorecard.js';
 import { bindListen, listenHtml, play, speakable, now as speaking, stop as stopSpeaking } from '/speak.js';
 import { initReview } from '/review.js';
 import { initLand, prChips } from '/land.js';
@@ -401,9 +401,11 @@ function renderDocDialog() {
   else if (specKind && !d?.loaded) body.innerHTML = '<p class="hint">Loading…</p>';
   else if (specKind && !d?.markdown) body.innerHTML = `<p class="hint">${docView.kind === 'intent' ? 'No intent file for this agent (agents created before 1.9 have none).' : `The agent hasn't written its ${label.toLowerCase()} yet. It writes ${docView.kind === 'spec' ? 'the spec before changing code' : 'the plan and keeps it current'}.`}</p>`;
   else if (d?.markdown) {
-    if (body.dataset.rendered !== d.at) {
-      body.innerHTML = docView.kind === 'scorecard' ? scorecardHtml(d, esc) : d.data ? humanAiHtml(d) : docHtml(d.markdown);
-      body.dataset.rendered = d.at;
+    // The scorecard's Improve button follows the agent being improved.
+    const version = docView.kind === 'scorecard' ? `${d.at}:${Boolean(a.improving)}` : d.at;
+    if (body.dataset.rendered !== version) {
+      body.innerHTML = docView.kind === 'scorecard' ? scorecardHtml(d, esc, { actions: improveHtml(a) }) : d.data ? humanAiHtml(d) : docHtml(d.markdown);
+      body.dataset.rendered = version;
       renderDiagrams(body);
     }
   }
@@ -591,6 +593,12 @@ const OUTCOME = {
   'in progress': ['🔄', 'In progress'],
 };
 
+/** The scorecard before you review: the score, Improve, and the full card. */
+function scoreStrip(a) {
+  if (!a.docs?.scorecard?.data && !a.improving) return '';
+  return `<div class="sc-strip">${scoreBadge(a.docs?.scorecard, esc, { improving: a.improving })} ${improveHtml(a)} ${a.docs?.scorecard?.data ? '<button class="small ghost" data-doc="scorecard">Scorecard</button>' : ''}</div>`;
+}
+
 /** End result, status and blockers: first thing a reviewer reads. */
 function resultsCard(a) {
   const r = a.results;
@@ -599,6 +607,7 @@ function resultsCard(a) {
   const item = (x, cls) => `<li class="${cls}">${x.url ? `<a href="${esc(x.url)}" target="_blank" rel="noopener">${md(x.text).replace(/^<p>|<\/p>\s*$/g, '')}</a>` : md(x.text).replace(/^<p>|<\/p>\s*$/g, '')}</li>`;
   return `<div class="results ${r.outcome.replace(' ', '-')}">
     <h4>Results <span class="outcome">${icon} ${label}</span>${r.fromAgent ? '' : ' <span class="hint">(from what AI Agent Manager can see; the agent adds its own when it next updates its brief)</span>'}</h4>
+    ${scoreStrip(a)}
     ${r.blockers.length ? `<ul class="blockers">${r.blockers.map((x) => item(x, 'blocker')).join('')}</ul>` : ''}
     ${r.delivered.length ? `<ul class="delivered">${r.delivered.map((x) => item(x, 'delivered')).join('')}</ul>` : '<p class="hint">Nothing delivered yet.</p>'}
     ${r.notes ? `<div class="md">${md(r.notes)}</div>` : ''}
@@ -731,6 +740,7 @@ function agentItem(a) {
       ${a.prs.length ? `<span>${a.prs.length} PR</span>` : ''}
       ${a.bugs.length ? `<span>${a.bugs.length} bug</span>` : ''}
       ${a.usage?.total ? `<span title="${esc(usageTitle(a.usage))}">${fmtTokens(ioOf(a.usage))} tok</span>` : ''}
+      ${scoreChip(a, esc)}
       ${(a.brief?.references ?? []).filter((r) => r.key && r.url).map((r) => `<span class="tag key-ref" title="${esc(r.title || r.url)}">${esc(r.label)}</span>`).join('')}
       ${a.brief?.summary?.total
         ? `<span class="${a.brief.summary.failed ? 'fail' : ''}" title="${esc(checksSummary(a.brief))}">✓${a.brief.summary.passed}/${a.brief.summary.total}${a.brief.summary.failed ? ` ✗${a.brief.summary.failed}` : ''}</span>`
@@ -930,13 +940,14 @@ function itemRow(it) {
       <span class="mono">${it.id}</span>
       ${a ? `<span>agent <a href="#${a.id}" data-bl="open">${esc(a.name)}</a>${a.briefStatus ? ` · brief: ${esc(a.briefStatus)}` : ''}</span>` : ''}
       ${it.base ? `<span>⎇ from ${esc(it.base)}</span>` : ''}
+      ${['review', 'active'].includes(it.status) ? scoreChip(agents.get(it.agentId), esc) : ''}
       ${it.doneAt ? `<span>done ${ago(it.doneAt)}</span>` : it.reviewAt ? `<span>ready ${ago(it.reviewAt)}</span>` : it.startedAt ? `<span>started ${ago(it.startedAt)}</span>` : `<span>added ${ago(it.createdAt)}</span>`}
     </div>
     ${autopilotLine(it)}
     ${it.status === 'queued' && it.aiHold ? `<p class="hint bl-ai">🤖 Waits for <b>${esc(it.aiHold.afterTitle)}</b>${it.aiHold.reason ? `: ${esc(it.aiHold.reason)}` : ''}</p>` : ''}
     ${it.status === 'queued' && it.aiSplit ? `<div class="hint bl-ai">🤖 Could be split${it.aiSplit.reason ? ` (${esc(it.aiSplit.reason)})` : ''}:<ul>${it.aiSplit.parts.map((p) => `<li>${esc(p)}</li>`).join('')}</ul>
       <button class="small" data-bl="split">Split into ${it.aiSplit.parts.length}</button> <button class="small ghost" data-bl="keep-whole">Keep whole</button></div>` : ''}
-    <div class="bl-actions">${(ITEM_ACTIONS[it.status] ?? []).filter(([act]) => act !== 'ship' || !['pr', 'landing', 'merging', 'shipping'].includes(it.autopilot?.state)).map(([act, label, title]) => `<button class="small" data-bl="${act}" title="${esc(title)}">${label}</button>`).join('')}</div>
+    <div class="bl-actions">${(ITEM_ACTIONS[it.status] ?? []).filter(([act]) => act !== 'ship' || !['pr', 'landing', 'merging', 'shipping'].includes(it.autopilot?.state)).map(([act, label, title]) => `<button class="small" data-bl="${act}" title="${esc(title)}">${label}</button>`).join('')}${it.status === 'review' ? improveHtml(agents.get(it.agentId)).replace('small primary', 'small') : ''}</div>
   </li>`;
 }
 
@@ -1133,7 +1144,7 @@ function needCard(it, { inDetail = false } = {}) {
   } else if (it.kind === 'autopilot') {
     body = `<p class="need-title">${esc(it.it.title)}</p>
       <p class="hint">${esc(it.it.autopilot.note ?? '')}</p>
-      <div class="need-actions"><button class="small primary" data-ib="ap-review">Review changes</button><button class="small" data-ib="ap-ship" title="Commit, push and open its pull request (and merge it, at the Merge level)">Ship it</button><button class="small" data-ib="ap-reopen">Send back…</button></div>`;
+      <div class="need-actions"><button class="small primary" data-ib="ap-review">Review changes</button><button class="small" data-ib="ap-ship" title="Commit, push and open its pull request (and merge it, at the Merge level)">Ship it</button><button class="small" data-ib="ap-reopen">Send back…</button>${improveHtml(agents.get(it.it.agentId)).replace('small primary', 'small')}</div>`;
   } else if (it.kind === 'rule') {
     body = `<p class="need-title">You've allowed <code>${esc(it.r.label)}</code> ${it.r.n} times in this repo. Always allow it here?</p>
       <p class="hint">Agents in ${esc(a.name)} won't ask about it again. Remove it any time in Settings → Approval rules.</p>
@@ -1165,6 +1176,7 @@ function needCard(it, { inDetail = false } = {}) {
       <div class="need-actions">
         ${r.missing.length ? '<button class="small primary" data-ib="review-finish" title="Send the missing items to the agent">Send back to finish</button>' : ''}
         <button class="small ${r.missing.length ? '' : 'primary'}" data-ib="review-accept">Looks good</button>
+        ${improveHtml(a).replace('small primary', 'small')}
       </div>`;
   } else if (it.kind === 'team') {
     const t = it.t;
@@ -3128,6 +3140,16 @@ $('#counts').addEventListener('click', (e) => {
     const r = await api('POST', '/flush');
     toast(`Saved ${r.agents} agents · scrollback for ${r.scrollback}`);
   });
+});
+
+// Improve (agent details, scorecard, backlog, inbox): its scorecard goes back to the agent to fix.
+document.addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-sc-improve]');
+  if (!btn) return;
+  e.preventDefault();
+  e.stopPropagation();
+  btn.disabled = true;
+  act(async () => upsert(await api('POST', `/agents/${btn.dataset.scImprove}/scorecard/improve`)), 'Sent to the agent to improve; scored again when it is done').finally(() => (btn.disabled = false));
 });
 
 $('#agent-list').addEventListener('click', (e) => {

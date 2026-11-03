@@ -1210,6 +1210,28 @@ test('pr description: the intent in full, the spec and plan folded, their own he
   assert.doesNotMatch(out, /Plan/, 'no plan written');
 });
 
+test('scorecard: Improve tells the agent its low scores (lowest first), the criteria not met or verified and where to look', async () => {
+  const { improveMessage } = await import('../src/scorecard.js');
+  const msg = improveMessage({
+    overall: 58,
+    recommendation: 'not_ready',
+    reasons: ['it is barely verified'],
+    scores: { intent: { score: 90, why: 'does it', notes: [] }, scope: { score: 70, why: 'touches config', notes: [] }, tests: { score: 30, why: 'no tests', notes: ['code changed with no tests'] }, spec: null },
+    criteria: [{ criterion: 'Returns 404', status: 'not_met', evidence: 'still 500' }, { criterion: 'Logs it', status: 'unverified', evidence: '' }, { criterion: 'Fast', status: 'met', evidence: '' }],
+    look: [{ file: 'src/a.js', head: '@@', reason: 'unchecked null' }],
+  });
+  assert.match(msg, /rates your changes 58\/100 \(Not ready: it is barely verified\)/);
+  assert.match(msg, /Scores to raise:\n- Tests 30\/100: no tests; code changed with no tests\n- Scope 70\/100: touches config\n\n/, 'lowest first, 80 and up left out');
+  assert.ok(!msg.includes('Intent'));
+  assert.match(msg, /- Not met: Returns 404 \(still 500\)\n- Not verified: Logs it\n\n/);
+  assert.ok(!msg.includes('Fast'));
+  assert.match(msg, /- src\/a\.js: unchecked null/);
+  assert.match(msg, /scored again then\.$/);
+  // Nothing low: no empty sections.
+  const clean = improveMessage({ overall: 92, recommendation: 'ready', reasons: [], scores: { intent: { score: 95, why: '', notes: [] } }, criteria: [], look: [] });
+  assert.ok(!/Scores to raise|Acceptance criteria|Where a reviewer/.test(clean));
+});
+
 test('scorecard: facts measured, scores capped by them, spec scored from the criteria, recommendation by rule', async () => {
   const { facts, combine, scorecardMarkdown } = await import('../src/scorecard.js');
   const f = facts({

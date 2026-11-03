@@ -101,7 +101,7 @@ import { spawn } from 'node:child_process';
 import * as git from './git.js';
 import { parseDiff } from '../public/review.js';
 import { issueSummary, leadingIssue, wordsAfterLink } from './jira.js';
-import { combine, facts as scoreFacts, scorecardMarkdown, scorecardPrompt } from './scorecard.js';
+import { combine, facts as scoreFacts, improveMessage, scorecardMarkdown, scorecardPrompt } from './scorecard.js';
 import { CONTAINER_ENGINES, claudeToken, containerName, containerRunning, engineMounts, gitCommonDir, removeContainer, runArgs, stopContainer } from './container.js';
 import { conflictMessage, findConflicts, related, repoKey, summarize as summarizeConflicts } from './conflicts.js';
 import { answerMessage, loadQuestions, questionsPath, questionsPrompt } from './inbox.js';
@@ -1956,13 +1956,17 @@ export class AgentManager extends EventEmitter {
   reloadBrief(id) {
     const agent = this.store.get(id);
     if (!agent) return;
-    const brief = loadBrief(id, agent.brief);
+    const before = agent.brief; // patch() below changes agent.brief in place
+    const brief = loadBrief(id, before);
     if (brief) {
       this.patch(id, { brief });
+      const finished = brief.status === 'done' && before?.status !== 'done';
+      // Asked to improve: its next update of the brief as done is scored again (also with auto off).
+      const improved = brief.status === 'done' && agent.improving && brief.updatedAt !== agent.improving.briefAt;
       // The agent says it is done: have the judge check the work before the person looks.
-      if (brief.status === 'done' && agent.brief?.status !== 'done' && this.judge.enabled) this.requestReview(id, { trigger: 'brief' }).catch(() => {});
+      if (finished && this.judge.enabled) this.requestReview(id, { trigger: 'brief' }).catch(() => {});
       // ...and score it for the reviewer ("scorecard": { "auto": false } in config.json turns this off).
-      if (brief.status === 'done' && agent.brief?.status !== 'done' && this.config.scorecard?.auto !== false && !NO_REPO.has(agent.kind) && this.changesSource) this.summarize(id, 'scorecard').catch(() => {});
+      if ((improved || (finished && this.config.scorecard?.auto !== false)) && !NO_REPO.has(agent.kind) && this.changesSource) this.summarize(id, 'scorecard').catch(() => {});
     }
     if (agent.planReview) {
       const file = loadPlanFile(id, agent.planReview);
@@ -2230,22 +2234,40 @@ export class AgentManager extends EventEmitter {
     const cur = this.store.get(agent.id);
     if (!cur) return null;
     return this.view(
-      this.patch(
-        agent.id,
-        summaryPatch(cur, 'scorecard', {
+      this.patch(agent.id, {
+        ...summaryPatch(cur, 'scorecard', {
           data: sc,
           cut,
           diffHash: hash(data.diff),
           markdown: scorecardMarkdown(sc, cur.name),
           writer: `${writer.engine.label}${writer.model ? ` (${writer.model})` : ''}`,
           postedTo: cur.docs?.scorecard?.postedTo ?? null,
+          // After Improve: the score it had, to show how far it moved.
+          improvedFrom: cur.improving ? cur.improving.from : null,
           at: now(),
           briefUpdatedAt: cur.brief?.updatedAt ?? null,
           pending: false,
           error: null,
         }),
-      ),
+        improving: null,
+      }),
     );
+  }
+
+  /**
+   * Improve before review: the agent gets its scorecard's low scores, unmet criteria and where a
+   * reviewer would look, and its changes are scored again when it next updates its brief as done.
+   * `send` delivers the message (the backlog reopens an item in review); else it is told directly.
+   */
+  improve(ref, { send } = {}) {
+    const agent = this.mustGet(ref);
+    const doc = agent.docs?.scorecard;
+    if (doc?.pending) throw Object.assign(new Error('The changes are being scored; try again when that is done'), { status: 409 });
+    if (!doc?.data) throw Object.assign(new Error('Score the changes first'), { status: 409 });
+    const text = improveMessage(doc.data);
+    if (send) send(text);
+    else this.tell(agent.id, text, { source: 'scorecard' });
+    return this.view(this.patch(agent.id, { improving: { from: doc.data.overall, at: now(), briefAt: agent.brief?.updatedAt ?? null } }));
   }
 
   /** Diagrams only: the problem and its solution drawn from the documents already written and the live context. */

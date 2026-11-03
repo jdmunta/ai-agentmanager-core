@@ -268,6 +268,15 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
   );
   api.get('/agents/:id/specs/:name', wrap((req) => manager.specDoc(req.params.id, req.params.name)));
   api.post('/agents/:id/scorecard/post', wrap((req) => review.postScorecard(req.params.id)));
+  // Improve: its scorecard goes back to the agent; a backlog item in review is reopened with it.
+  api.post(
+    '/agents/:id/scorecard/improve',
+    wrap((req) => {
+      const id = manager.mustGet(req.params.id).id;
+      const it = backlog.items().find((i) => i.agentId === id && i.status === 'review');
+      return manager.improve(id, it ? { send: (note) => backlog.reopen(it.id, { note }) } : {});
+    }),
+  );
   api.post('/agents/:id/plan', wrap((req) => manager.startPlanning(req.params.id)));
   api.post('/agents/:id/plan/approve', wrap((req) => manager.approvePlan(req.params.id, req.body?.note)));
   api.post('/agents/:id/plan/changes', wrap((req) => manager.requestPlanChanges(req.params.id, req.body?.note)));

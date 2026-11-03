@@ -275,7 +275,8 @@ export class Backlog extends EventEmitter {
     Promise.resolve(this.manager.start(agentId))
       .then(() => new Promise((r) => setTimeout(r, 1500)))
       .then(() => {
-        this.manager.write(agentId, message);
+        // Bracketed paste keeps a note of several lines one message (each line would submit).
+        this.manager.write(agentId, message.includes('\n') ? `\x1b[200~${message}\x1b[201~` : message);
         setTimeout(() => this.manager.write(agentId, '\r'), 200);
       })
       .catch(() => {});

@@ -19,11 +19,37 @@ export function scorecardOf(agent, diffHash) {
   return { doc: d?.data ? d : null, pending: Boolean(d?.pending), error: d?.error ?? null, stale: Boolean(d?.data && diffHash && d.diffHash !== diffHash) };
 }
 
-/** A small badge: "82 · Ready to approve". */
-export function badgeHtml(doc, esc) {
+/** How far Improve moved the score: "↑18" (from 64), or nothing. */
+const delta = (doc) => {
+  const from = doc.improvedFrom;
+  const to = doc.data?.overall;
+  if (from == null || to == null || from === to) return '';
+  return `<span class="sc-delta ${to > from ? 'up' : 'down'}" title="After Improve: was ${from}">${to > from ? '↑' : '↓'}${Math.abs(to - from)}</span>`;
+};
+
+/** A small badge: "82 · Ready to approve". Pass the agent's `improving` to show it being improved. */
+export function badgeHtml(doc, esc, { improving = null } = {}) {
+  if (improving) return `<span class="sc-badge" title="Sent back to improve its ${improving.from ?? '—'}/100; scored again when it is done">↻ Improving from ${improving.from ?? '—'}</span>`;
   if (!doc?.data) return '';
   const sc = doc.data;
-  return `<span class="sc-badge ${recTone[sc.recommendation]}" title="Review scorecard: ${esc(RECOMMENDATION[sc.recommendation])}${sc.reasons.length ? ` (${esc(sc.reasons.join('; '))})` : ''}">${sc.overall ?? '—'} · ${esc(RECOMMENDATION[sc.recommendation])}</span>`;
+  return `<span class="sc-badge ${recTone[sc.recommendation]}" title="Review scorecard: ${esc(RECOMMENDATION[sc.recommendation])}${sc.reasons.length ? ` (${esc(sc.reasons.join('; '))})` : ''}">${sc.overall ?? '—'}${delta(doc)} · ${esc(RECOMMENDATION[sc.recommendation])}</span>`;
+}
+
+/** Just the number, for a list row: "82", "82↑18" or "↻" while being improved. */
+export function chipHtml(agent, esc) {
+  const doc = agent?.docs?.scorecard;
+  if (agent?.improving) return `<span class="sc-chip" title="Being improved from ${agent.improving.from ?? '—'}/100">↻ ${agent.improving.from ?? ''}</span>`;
+  if (!doc?.data) return '';
+  return `<span class="sc-chip ${recTone[doc.data.recommendation]}" title="Review scorecard: ${doc.data.overall ?? '—'}/100, ${esc(RECOMMENDATION[doc.data.recommendation])}">📊 ${doc.data.overall ?? '—'}${delta(doc)}</span>`;
+}
+
+/** Improve: send the agent its scorecard to fix before review (POST /agents/:id/scorecard/improve). */
+export function improveHtml(agent) {
+  const doc = agent?.docs?.scorecard;
+  if (!doc?.data) return '';
+  if (agent.improving) return '<button type="button" class="small ghost" disabled title="Scored again when the agent updates its brief">Improving…</button>';
+  const ready = doc.data.recommendation === 'ready';
+  return `<button type="button" class="small ${ready ? 'ghost' : 'primary'}" data-sc-improve="${agent.id}" title="Send the agent its low scores, unmet criteria and where a reviewer would look, to fix before you review; it is scored again when it is done">✨ Improve</button>`;
 }
 
 /**
@@ -46,7 +72,7 @@ export function scorecardHtml(doc, esc, { stale = false, actions = '' } = {}) {
   const f = sc.facts;
   return `<div class="scorecard">
     <div class="sc-head">
-      <span class="sc-overall ${recTone[sc.recommendation]}"><b>${sc.overall ?? '—'}</b><small>/100</small></span>
+      <span class="sc-overall ${recTone[sc.recommendation]}"><b>${sc.overall ?? '—'}</b><small>/100</small>${delta(doc)}</span>
       <div class="sc-verdict"><b>${esc(RECOMMENDATION[sc.recommendation])}</b>${sc.reasons.length ? `<div class="hint">${esc(sc.reasons.join(' · '))}</div>` : ''}<div class="hint">${esc(sc.summary)}</div></div>
       <span class="spacer"></span>${actions}
     </div>

@@ -3,7 +3,7 @@
 // With a walkthrough, each hunk shows its explanation and ◀ / ▶ step through them in reading order.
 import { cardHtml, explainButton, listenParts as walkParts, stepOf, walkthroughOf } from './walkthrough.js';
 import { listenHtml, now as speaking, stop as stopSpeaking } from './speak.js';
-import { scorecardHtml, scorecardOf } from './scorecard.js';
+import { improveHtml, scorecardHtml, scorecardOf } from './scorecard.js';
 
 /** Unified diff -> [{ path, status, binary, hunks: [{ head, lines: [{ t, old, new, text }] }] }] */
 export function parseDiff(text) {
@@ -168,7 +168,7 @@ export function initReview({ api, esc, toast, agents, $ }) {
       return `<div class="rv-score-empty">${run}<span class="hint">${sc.error && !sc.pending ? `<span class="error">Couldn't score: ${esc(sc.error)}</span>` : 'Scores against the intent, spec, scope, plan, tests and safety, with an overall readiness and the few places to read.'}</span></div>`;
     }
     const post = openPr ? `<button type="button" class="small ghost" data-sc-post title="Post the scorecard on the pull request as a comment (posting again updates it)">${sc.doc.postedTo === openPr.url ? 'Update on PR' : 'Post to PR'}</button>` : '';
-    return `<div class="rv-score">${scorecardHtml(sc.doc, esc, { stale: sc.stale, actions: `${listenHtml(`score:${st.id}`, { title: 'Hear the scorecard' })}${post}${run}` })}</div>`;
+    return `<div class="rv-score">${scorecardHtml(sc.doc, esc, { stale: sc.stale, actions: `${listenHtml(`score:${st.id}`, { title: 'Hear the scorecard' })}${sc.stale ? '' : improveHtml(agents.get(st.id))}${post}${run}` })}</div>`;
   }
 
   /** Open the file of a hunk (from "where to look") and scroll to it. */
@@ -323,6 +323,18 @@ export function initReview({ api, esc, toast, agents, $ }) {
       keepInputs();
       try {
         agents.set(st.id, await api('POST', `/agents/${st.id}/docs/scorecard?background=1`));
+        render();
+      } catch (err) {
+        toast(`Error: ${err.message}`, 5000);
+      }
+      return;
+    }
+    if (t.closest('[data-sc-improve]')) {
+      e.stopPropagation(); // the page's own Improve handler is for elsewhere
+      keepInputs();
+      try {
+        agents.set(st.id, await api('POST', `/agents/${st.id}/scorecard/improve`));
+        toast('Sent to the agent to improve; scored again when it is done', 5000);
         render();
       } catch (err) {
         toast(`Error: ${err.message}`, 5000);

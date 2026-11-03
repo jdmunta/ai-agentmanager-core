@@ -958,6 +958,17 @@ export async function main(argv) {
     });
 
   program
+    .command('improve')
+    .description("Before review: send an agent its scorecard's low scores, unmet criteria and where a reviewer would look, to fix; it is scored again when done")
+    .argument('<agent>')
+    .action(async (ref) => {
+      await daemon();
+      const a = await resolveAgent(ref);
+      await api('POST', `/agents/${a.id}/scorecard/improve`);
+      console.log(`${green('✓')} sent ${a.name} its scorecard (${a.docs.scorecard.data.overall ?? '—'}/100) to improve; scored again when it updates its brief`);
+    });
+
+  program
     .command('tell')
     .description("Send a message into an agent's session (typed in when it is idle; resumes it if closed)")
     .argument('<agent>')
