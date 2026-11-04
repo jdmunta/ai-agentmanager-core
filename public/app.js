@@ -59,6 +59,16 @@ const saveRecent = () => {
     localStorage.setItem('agentmgr.recentDays', String(recent.days));
   } catch {}
 };
+// How the agents list is ordered: recently used (the default) or running first, one list each; or grouped by project.
+const ORDERS = ['recent', 'running', 'project'];
+let listOrder = (() => {
+  try {
+    const v = localStorage.getItem('agentmgr.listOrder');
+    return ORDERS.includes(v) ? v : 'recent';
+  } catch {
+    return 'recent';
+  }
+})();
 
 // ------------------------------------------------------------------ helpers
 
@@ -732,15 +742,18 @@ const prioChip = (p, { always = false } = {}) =>
 
 const noRepo = (a) => a.kind === 'general' || a.kind === 'assistant';
 
-function agentItem(a) {
+function agentItem(a, { project = false } = {}) {
   const st = statusOf(a);
   const idle = !isActive(a);
+  const p = project && a.projectInfo && !['other', 'general', 'assistant'].includes(a.projectInfo.key) ? a.projectInfo : null;
   return `<li data-id="${a.id}" ${a.kind === 'general' || a.kind === 'assistant' ? '' : 'draggable="true" '}class="agent pr${a.priority ?? 2} ${a.id === selectedId ? 'selected' : ''} ${idle ? 'idle' : ''}">
     <div class="line1">${prioChip(a.priority ?? 2)}${a.results?.outcome === 'blocked' ? '<span class="outcome-mark" title="Blocked">⛔</span>' : a.results?.outcome === 'done' ? '<span class="outcome-mark" title="Done">✅</span>' : ''}<span class="name">${esc(a.name)}</span>${flags(a)}<span class="pill ${st}">${pillText(st)}</span></div>
     <div class="intent" title="${esc(describeTitle(a) ?? '')}">${a.builds ? `<span class="tag assistant" title="Develops the agent ${esc(a.builds.name)} (Built tab)">⚙ builds agent</span> ` : ''}${a.kind === 'general' ? '<span class="tag">general</span> ' : a.kind === 'assistant' ? '<span class="tag assistant">assistant</span> ' : a.startedBy ? '<span class="tag assistant" title="Started by the assistant">🤖 by assistant</span> ' : a.trigger ? `<span class="tag assistant" title="Started from ${a.trigger.source === 'github' ? 'a labeled GitHub issue' : 'the webhook'}${a.trigger.url ? `: ${esc(a.trigger.url)}` : ''}">⚡ ${a.trigger.source === 'github' ? 'GitHub' : 'webhook'}</span> ` : a.playbook ? `<span class="tag assistant" title="Started by the playbook ${esc(a.playbook.name)}">▶ ${esc(a.playbook.name)}</span> ` : ''}${a.engine && a.engine !== 'claude' ? `<span class="tag engine">${esc(ENGINE_LABEL[a.engine] ?? a.engine)}</span> ` : ''}${a.isolation === 'container' ? '<span class="tag engine" title="Runs in its own Docker container: it sees only its own folder">📦 container</span> ' : ''}${esc(describe(a) || (a.kind === 'assistant' ? 'Finds new work and starts agents for it' : 'General session'))}</div>
     ${a.status === 'preparing' && a.progress ? `<div class="progress-line">${esc(progressText(a.progress))}</div>` : ''}
     <div class="meta">
       <span class="mono">${a.id}</span>
+      ${p ? `<span class="tag proj" title="Project: ${esc(p.full || p.name)}">${esc(p.shortcut || p.name)}</span>` : ''}
+      ${!idle && project && a.activeAt ? `<span title="Last used">${ago(a.activeAt)}</span>` : ''}
       ${idle && a.activeAt ? `<span title="Idle: no work and no input from you for over a day">💤 ${ago(a.activeAt)}</span>` : ''}
       ${a.git?.branch ? `<span class="branch" title="${esc(a.git.branch)}">⎇ ${esc(a.git.branch)}</span>` : ''}
       ${a.prs.length ? `<span>${a.prs.length} PR</span>` : ''}
@@ -806,6 +819,13 @@ function projectGroups(list) {
   );
 }
 
+/** One list, most recently used first (Running first: the running agents, then the rest). */
+const usedAt = (a) => a.activeAt ?? a.createdAt ?? '';
+function orderedAgents(list) {
+  const top = (a) => (listOrder === 'running' && !a.runtime.running ? 1 : 0);
+  return [...list].sort((a, b) => top(a) - top(b) || usedAt(b).localeCompare(usedAt(a)));
+}
+
 function renderList() {
   if (dragging) return void (listStale = true);
   const waiting = [...agents.values()].filter((a) => a.runtime.attention).length;
@@ -833,16 +853,19 @@ function renderList() {
   const all = [...agents.values()];
   const projects = new Set(all.map((a) => a.projectInfo?.key ?? 'other')).size;
   const running = all.filter((a) => a.runtime.running).length;
+  const open = all.filter((a) => a.runtime.running && a.kind !== 'assistant').length;
   $('#counts').innerHTML = agents.size
     ? `<span title="Projects">${projects} project${projects === 1 ? '' : 's'}</span><span>${agents.size} agents</span><span>${running} running</span>
        ${waiting ? `<span class="fail">${waiting} need${waiting === 1 ? 's' : ''} input</span>` : ''}
-       <span class="spacer"></span><button class="link" id="import-btn" title="Continue Claude sessions you started in a terminal or the Claude desktop app on this machine">Import</button><button class="link" id="flush-btn" title="Save session IDs, terminal scrollback and state to disk now (also automatic every 30s)">Save now</button>`
+       <span class="spacer"></span><button class="link" id="import-btn" title="Continue Claude sessions you started in a terminal or the Claude desktop app on this machine">Import</button>${open ? `<button class="link" id="close-all-btn" title="Close every open agent session (the assistant's stays); they resume when you open them">Close all</button>` : ''}<button class="link" id="flush-btn" title="Save session IDs, terminal scrollback and state to disk now (also automatic every 30s)">Save now</button>`
     : '';
 
   // Every agent a project has, also the ones a filter hides.
   const totals = new Map();
   for (const a of all) totals.set(a.projectInfo?.key ?? 'other', (totals.get(a.projectInfo?.key ?? 'other') ?? 0) + 1);
 
+  $('#list-order').value = listOrder;
+  if (listOrder !== 'project') return void morph($('#agent-list'), orderedAgents(shown).map((a) => agentItem(a, { project: true })).join(''));
   morph($('#agent-list'), projectGroups(shown)
     .map((g) => {
       const total = totals.get(g.key) ?? g.agents.length;
@@ -912,7 +935,7 @@ function renderBacklog() {
                 ${p.shortcut ? `<span class="shortcut">${esc(p.shortcut)}</span>` : ''}
                 <span class="pname">${esc(g.name)}</span>
                 <button class="link" data-bl="limit" data-project="${esc(g.key)}" data-name="${esc(g.name)}" title="How many items of this project agents work on at once">${p.limit} at a time ✎</button>
-                <label class="bl-autopilot" title="${esc(AUTOPILOT_HINT)}">🛫 <select aria-label="Autopilot" data-bl-autopilot="${esc(g.key)}">${Object.entries(AUTOPILOT_LEVELS).map(([v, l]) => `<option value="${v}" ${(p.autopilot ?? 'off') === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+                <label class="bl-autopilot" title="${esc(AUTOPILOT_HINT)}">🛫 <select aria-label="Autopilot" data-bl-autopilot="${esc(g.key)}">${Object.entries(AUTOPILOT_LEVELS).map(([v, l]) => `<option value="${v}" ${(p.autopilot ?? 'off') === v ? 'selected' : ''}>${l}</option>`).join('')}</select>${(p.autopilot ?? 'off') !== 'off' ? ` <select aria-label="Ships at" title="${esc(TARGET_HINT)}" data-bl-target="${esc(g.key)}">${AUTOPILOT_TARGETS.map((n) => `<option value="${n}" ${(p.target ?? 0) === n ? 'selected' : ''}>${n ? `at ${n}+` : 'when ready'}</option>`).join('')}</select>` : ''}</label>
               </div>
               <ul class="project-agents">${g.items.map(itemRow).join('')}</ul>
             </li>`;
@@ -924,13 +947,16 @@ function renderBacklog() {
 
 const AUTOPILOT_LEVELS = { off: 'Off', pr: 'Open PRs', merge: 'Merge' };
 const AUTOPILOT_HINT = 'When an item is done and its review scorecard says ready: Open PRs commits, pushes and opens the pull request; Merge also merges it once checks pass. Not-ready work goes back to the agent; anything else waits for you in the inbox.';
+const AUTOPILOT_TARGETS = [0, 80, 85, 90, 95];
+const TARGET_HINT = 'When it ships. At a score: work goes back to its agent to improve until the scorecard says ready and rates it at least that, a few times at most, stopping early when a try no longer raises the score.';
 const AUTOPILOT_STATE = { queued: 'going ahead', scoring: 'scoring the changes', shipping: 'opening the pull request', pr: 'pull request open', landing: 'waiting for checks to merge', merging: 'merging', returned: 'sent back to the agent', held: 'waiting for you', merged: 'merged' };
 /** Where autopilot stands on an item, under it in the backlog. */
 function autopilotLine(it) {
   const ap = it.autopilot;
   if (!ap?.state || !['review', 'active', 'done'].includes(it.status) || (it.status === 'active' && ap.state !== 'returned')) return '';
   const pr = ap.pr ? ` <a href="${esc(ap.pr)}" target="_blank" rel="noopener">#${esc(ap.pr.split('/').pop())} ↗</a>` : '';
-  return `<p class="hint bl-ai bl-ap ${ap.state === 'held' ? 'held' : ''}">🛫 Autopilot: ${AUTOPILOT_STATE[ap.state] ?? esc(ap.state)}${pr}${ap.note ? ` · ${esc(ap.note)}` : ''}</p>`;
+  const trail = ap.scores?.length > (ap.state === 'returned' ? 1 : 0) ? ` · scores ${ap.scores.map((n) => n ?? '?').join(' → ')}` : '';
+  return `<p class="hint bl-ai bl-ap ${ap.state === 'held' ? 'held' : ''}">🛫 Autopilot: ${AUTOPILOT_STATE[ap.state] ?? esc(ap.state)}${pr}${ap.note ? ` · ${esc(ap.note)}` : ''}${trail}</p>`;
 }
 
 function itemRow(it) {
@@ -974,6 +1000,11 @@ function showTab(tab) {
 for (const b of document.querySelectorAll('.side-tab')) b.onclick = () => showTab(b.dataset.tab);
 
 $('#backlog-view').addEventListener('change', (e) => {
+  const tkey = e.target.dataset?.blTarget;
+  if (tkey) {
+    const n = Number(e.target.value);
+    return act(() => api('POST', '/backlog/settings', { project: tkey, target: n || null }), n ? `Autopilot ships at ${n}/100 or more` : 'Autopilot ships when the scorecard says ready');
+  }
   const key = e.target.dataset?.blAutopilot;
   if (!key) return;
   const level = e.target.value;
@@ -1053,7 +1084,7 @@ function flags(a) {
 }
 
 const TRIAGED = { now: 'sent (AI: urgent)', digest: 'held for the digest', skip: 'dropped by the AI judge' };
-const NEED_ORDER = { approval: 0, prompt: 0, waiting: 1, plan: 1, question: 1, team: 1, rule: 2, review: 2, autopilot: 2, stuck: 3, conflict: 4, repeat: 5 };
+const NEED_ORDER = { approval: 0, prompt: 0, waiting: 1, plan: 1, question: 1, team: 1, rule: 2, review: 2, autopilot: 2, stuck: 3, conflict: 4, reminder: 5, close: 5, repeat: 5 };
 /** What an agent needs from the user. `both`: overlaps on both agents (detail), else only the one that should rebase (inbox). */
 function needsFor(a, { both = false } = {}) {
   const items = [];
@@ -1063,6 +1094,7 @@ function needsFor(a, { both = false } = {}) {
   if (a.aiReview?.verdict && !a.aiReview.seen) items.push({ a, kind: 'review', key: `review:${a.id}` });
   for (const q of a.questions ?? []) if (!q.answer) items.push({ a, kind: 'question', key: `q:${a.id}:${q.id}`, q });
   for (const f of a.stuck ?? []) items.push({ a, kind: 'stuck', key: `stuck:${a.id}:${f.key}`, f });
+  if (a.followUp) items.push({ a, kind: a.followUp.kind === 'close' ? 'close' : 'reminder', key: `reminder:${a.id}`, r: a.followUp });
   for (const g of a.conflicts ?? []) if (both || g.mergeFirst !== a.id) items.push({ a, kind: 'conflict', key: `conflict:${a.id}:${g.agent.id}`, g });
   return items;
 }
@@ -1098,7 +1130,7 @@ function inboxItems() {
     .sort((x, y) => NEED_ORDER[x.kind] - NEED_ORDER[y.kind] || (x.a.priority ?? 2) - (y.a.priority ?? 2));
 }
 
-const NEED_LABEL = { repeat: 'Make it a playbook?', autopilot: 'Autopilot held', rule: 'Always allow?', approval: 'Approval', team: 'Team', prompt: 'Needs input', waiting: 'Waiting on you', plan: 'Plan review', question: 'Question', review: 'AI review', stuck: 'Stuck?', conflict: 'Overlap' };
+const NEED_LABEL = { reminder: 'Follow up', close: 'Close session?', repeat: 'Make it a playbook?', autopilot: 'Autopilot held', rule: 'Always allow?', approval: 'Approval', team: 'Team', prompt: 'Needs input', waiting: 'Waiting on you', plan: 'Plan review', question: 'Question', review: 'AI review', stuck: 'Stuck?', conflict: 'Overlap' };
 /** Why the AI judge thinks so, as a small tag. */
 const aiTag = (confidence, what = 'AI') => `<span class="tag ai" title="Judged by a model from the agent's activity; your reactions tune later calls">🤖 ${what}${confidence != null ? ` ${Math.round(confidence * 100)}%` : ''}</span>`;
 /** What a permission prompt asks about: the command, file or tool. */
@@ -1122,6 +1154,7 @@ function groupCard(g) {
     <p class="need-title">${toolLine(t)}</p><p class="hint">${names}</p>
     <div class="need-actions"><button class="small primary" data-ib="yes-all">Yes to all ${g.length}</button></div></div>`;
 }
+const FOLLOW_UP = "Where are you on this? Carry on with the next step, or update the brief with what's left and what's blocking you.";
 function needCard(it, { inDetail = false } = {}) {
   const { a } = it;
   const who = inDetail
@@ -1204,6 +1237,19 @@ function needCard(it, { inDetail = false } = {}) {
         <input data-draft="${esc(it.key)}:text" placeholder="Or type an answer…" value="${draft('text')}" />
         <button class="small primary">Send</button>
       </form>`;
+  } else if (it.kind === 'reminder' || it.kind === 'close') {
+    const r = it.r;
+    const later = `<button type="button" class="small ghost" data-ib="remind-later" title="Remind me again in a few hours">Later</button><button type="button" class="small ghost" data-ib="remind-dismiss" title="No reminder until it's used again">Not needed</button>`;
+    body = `<p class="need-title">${esc(r.title)} <span class="hint">last used ${ago(r.since)}</span></p>
+      ${r.detail ? `<p class="hint">${esc(r.detail)}</p>` : ''}
+      ${it.kind === 'close'
+        ? `<div class="need-actions"><button class="small primary" data-ib="remind-close">Close session</button><button class="small ghost" data-ib="terminal">Open terminal</button>${later}</div>`
+        : r.closed
+          ? `<div class="need-actions"><button class="small primary" data-ib="remind-resume">Resume</button>${later}</div>`
+          : `<form class="need-reply col" data-ib-form="remind">
+        <textarea rows="2" data-draft="${esc(it.key)}:text">${draft('text', FOLLOW_UP)}</textarea>
+        <div class="need-actions"><button class="small primary">Send</button><button type="button" class="small ghost" data-ib="terminal">Open terminal</button><button type="button" class="small ghost" data-ib="remind-close">Close session</button>${later}</div>
+      </form>`}`;
   } else if (it.kind === 'stuck') {
     const f = it.f;
     const judged = f.ai?.verdict === 'stuck' ? aiTag(f.ai.confidence, 'confirmed') : f.ai?.verdict === 'checking' ? '<span class="tag ai">🤖 checking…</span>' : '';
@@ -1357,6 +1403,14 @@ async function onNeed(e) {
       return act(async () => upsert(await api('POST', `/agents/${id}/conflicts/dismiss`, { with: el.dataset.with })));
     case 'waiting-choice':
       return act(async () => upsert(await api('POST', `/agents/${id}/waiting/answer`, { text: el.dataset.text })), 'Answer queued');
+    case 'remind-close':
+      return act(async () => upsert(await api('POST', `/agents/${id}/stop`)), 'Session closed; resume it any time');
+    case 'remind-resume':
+      return act(async () => upsert(await api('POST', `/agents/${id}/start`, {})), 'Resumed');
+    case 'remind-later':
+      return act(async () => upsert(await api('POST', `/agents/${id}/reminder`, { action: 'later' })), 'Reminding you later');
+    case 'remind-dismiss':
+      return act(async () => upsert(await api('POST', `/agents/${id}/reminder`, { action: 'dismiss' })));
     case 'waiting-dismiss':
       return act(async () => upsert(await api('POST', `/agents/${id}/waiting/dismiss`)));
     case 'review-finish':
@@ -1386,6 +1440,8 @@ async function onNeedSubmit(e) {
   const done = () => needDrafts.delete(field.dataset.draft);
   if (form.dataset.ibForm === 'waiting') {
     await act(async () => upsert(await api('POST', `/agents/${id}/waiting/answer`, { text })), 'Answer queued');
+  } else if (form.dataset.ibForm === 'remind') {
+    await act(() => api('POST', `/agents/${id}/tell`, { text }), 'Sent');
   } else if (form.dataset.ibForm === 'answer') {
     await act(async () => upsert(await api('POST', `/agents/${id}/answer`, { question: form.dataset.q, text })), 'Answer sent');
   } else {
@@ -3204,8 +3260,21 @@ function agentChanged(a) {
   sidePane?.agentChanged(a);
 }
 
+/** Close all: every open session but the assistant's; agents working right now only when you say so. */
+async function closeAll(working = false) {
+  const open = [...agents.values()].filter((a) => a.runtime.running && a.kind !== 'assistant');
+  const busy = open.filter((a) => a.runtime.busy).length;
+  if (!working && !confirm(`Close ${open.length - busy} open session${open.length - busy === 1 ? '' : 's'}? They resume when you open them.${busy ? `\n\n${busy} working right now stay open.` : ''}`)) return;
+  const r = await act(() => api('POST', '/agents/close-all', { working }));
+  if (!r) return;
+  const msg = `Closed ${r.closed.length} session${r.closed.length === 1 ? '' : 's'}${r.failed.length ? `; ${r.failed.length} couldn't be closed` : ''}`;
+  if (r.working.length) toast(`${msg}. ${r.working.length} still working: ${r.working.map((x) => x.name).slice(0, 3).join(', ')}${r.working.length > 3 ? '…' : ''}`, 10000, { label: 'Close them too', run: () => closeAll(true) });
+  else toast(msg);
+}
+
 $('#counts').addEventListener('click', (e) => {
   if (e.target.id === 'import-btn') return openImport();
+  if (e.target.id === 'close-all-btn') return closeAll();
   if (e.target.id !== 'flush-btn') return;
   act(async () => {
     const r = await api('POST', '/flush');
@@ -3480,6 +3549,13 @@ $('#filter').addEventListener('input', (e) => {
   renderList();
 });
 
+$('#list-order').addEventListener('change', (e) => {
+  listOrder = ORDERS.includes(e.target.value) ? e.target.value : 'recent';
+  try {
+    localStorage.setItem('agentmgr.listOrder', listOrder);
+  } catch {}
+  renderList();
+});
 $('#recent-days').value = recent.days;
 $('#recent-on').addEventListener('change', (e) => {
   recent.on = e.target.checked;

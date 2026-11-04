@@ -1159,6 +1159,10 @@ test('autopilot: a finished backlog item the scorecard calls ready is committed,
     assert.equal((await call('POST', '/backlog/settings', { project: 'AP', autopilot: 'bogus' })).status, 400);
     const v = (await call('POST', '/backlog/settings', { project: 'AP', autopilot: 'merge' })).body;
     assert.equal(v.projects.find((p) => p.name === 'AP').autopilot, 'merge');
+    assert.equal(v.projects.find((p) => p.name === 'AP').target, null);
+    assert.equal((await call('POST', '/backlog/settings', { project: 'AP', target: 30 })).status, 400);
+    assert.equal((await call('POST', '/backlog/settings', { project: 'AP', target: 90 })).body.projects.find((p) => p.name === 'AP').target, 90);
+    assert.equal((await call('POST', '/backlog/settings', { project: 'AP', target: null })).body.projects.find((p) => p.name === 'AP').target, null);
     // Scored ready (a docs change: nothing to cap), committed, pushed and opened.
     await waitFor(async () => (await item(it.id)).autopilot?.pr, 20000, 'pull request opened');
     const create = gh().find((c) => c[0] === 'pr' && c[1] === 'create');
@@ -4194,6 +4198,36 @@ test('hub move: an agent continues on another machine with its conversation, bra
     await new Promise((r) => setTimeout(r, 500));
     await hub.close?.();
   }
+});
+
+test('Close all closes every open session but the busy ones (unless asked) and the assistant; reminders snooze', async () => {
+  const repo = path.join(home, 'close-all-repo');
+  fs.mkdirSync(repo);
+  execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: repo });
+  execFileSync('git', ['-c', 'commit.gpgsign=false', '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '--allow-empty', '-m', 'init'], { cwd: repo });
+  const made = (await call('POST', '/agents', { intents: ['Close me one', 'Close me two'], dir: repo })).body;
+  for (const a of made) await waitFor(async () => (await agentNow(a.id)).runtime?.running && !(await agentNow(a.id)).runtime.busy, 15000, 'running and idle');
+
+  // Reminders: none for an agent just used; Later and Not needed are kept; anything else is refused.
+  assert.equal((await agentNow(made[0].id)).followUp, null);
+  assert.equal((await call('POST', `/agents/${made[0].id}/reminder`, { action: 'bogus' })).status, 400);
+  assert.ok(Date.parse((await call('POST', `/agents/${made[0].id}/reminder`, { action: 'later' })).body.reminder.laterUntil) > Date.now());
+  assert.ok((await call('POST', `/agents/${made[0].id}/reminder`, { action: 'dismiss' })).body.reminder.dismissedAt);
+
+  // Each closes, or is left open as working (an agent can turn busy at any moment); the rest are closed.
+  const r = (await call('POST', '/agents/close-all', {})).body;
+  for (const a of made) assert.ok(r.closed.some((x) => x.id === a.id) || r.working.some((x) => x.id === a.id), `${a.name} closed or working`);
+  const all = (await call('GET', '/agents')).body;
+  assert.deepEqual(all.filter((a) => a.runtime.running && a.kind !== 'assistant' && !r.working.some((w) => w.id === a.id)).map((a) => a.name), []);
+  // With working: the busy ones close too; then nothing but the assistant is open.
+  assert.deepEqual((await call('POST', '/agents/close-all', { working: true })).body.working, []);
+  for (const a of made) {
+    const now = await agentNow(a.id);
+    assert.equal(now.runtime.running, false);
+    assert.equal(now.desired, 'stopped');
+    assert.equal(now.followUp, null, 'closed by you: no reminder');
+  }
+  assert.deepEqual((await call('GET', '/agents')).body.filter((a) => a.runtime.running && a.kind !== 'assistant').map((a) => a.name), []);
 });
 
 test('work record: what the agents got done, appended to a CSV in agentmgr home, with a summary to copy', async () => {

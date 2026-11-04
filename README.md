@@ -319,7 +319,8 @@ How it behaves:
 Every agent has a priority, **P0** (urgent) to **P3** (low). **P2** is the default.
 
 - **Look.** P0 shows a solid red chip and a red bar on the agent. P1 shows a red outline chip, and P3 a muted chip. P2 shows nothing, to keep the list calm.
-- **Ordering.** Within a project, agents sort by priority, then needs-input, then running. Projects holding a P0 or P1 agent move to the top and show the chip in their header.
+- **Ordering.** In the **By project** order, agents within a project sort by priority, then needs-input, then running. Projects holding a P0 or P1 agent move to the top and show the chip in their header.
+- **Order.** The list starts with the agents created or used most recently on top: one list, each agent with its project. A new agent starts at the top; after that, you or it working in it moves it up (typing, its conversation, its brief); a restart alone doesn't. Above the list, switch to **Running first** (running agents on top, most recently used first, then the rest) or **By project** (the grouping described here). Each browser remembers its choice.
 - **Setting it.** Use the selector next to the agent's name, the New agents dialog, `add --priority P1`, or `agentmgr priority <agent> P0`.
 - **Backlog.** Items use the same P0–P3 scale and pass it on to their agents.
 - **Slack.** Alerts are tagged `[P0]` / `[P1]`.
@@ -531,8 +532,10 @@ Autopilot takes a project's finished items the rest of the way when the [review 
 
 What it does with work that isn't ready:
 
-- **Not ready, for a concrete reason** (failing CI, acceptance criteria not met, barely verified): the item goes back to the same agent with those reasons. This happens twice at most; after that it waits for you.
+- **Not ready, for a concrete reason** (failing CI, acceptance criteria not met, barely verified): the item goes back to the same agent with its scorecard, as [**✨ Improve**](#review-changes) sends it: the low scores with why, the criteria not met, where a reviewer would look. This happens three times at most (`"autopilot": { "rounds": 3 }`); after that it waits for you.
 - **Look at these first, a failed step, or a closed pull request:** autopilot stops and it waits for you in the **Inbox** ("Autopilot held"), saying why. You can **Review changes**, **Ship it** (go ahead anyway), or **Send back** with a note.
+
+**Ship at a score.** Next to the level, choose when it ships: **when ready** (the scorecard says *Ready to approve*), or **at 80+**, **85+**, **90+** or **95+** (`agentmgr backlog autopilot <project> merge --target 85`; `--target none` goes back to when ready; a default for all projects goes in config.json as `"autopilot": { "target": 85 }`). With a score set, work that isn't there yet, *Look at these first* included, goes back to its agent to improve, and is scored again when the agent is done. It ships once the scorecard says ready and rates it at least the target. It waits for you when the tries are used up, or earlier when a try raised the score by less than 3 points, since more of the same won't get there. The item shows the scores so far (*scores 72 → 81 → 87*).
 
 An item whose pull request merges is done. Each item shows where autopilot stands ("pull request open #12", "waiting for checks to merge", "sent back to the agent"). **Ship it** is also on every item in review, so you can ship one by hand with autopilot off. Plugins can still refuse the commit, the pull request or the merge (`agent.commit`, `agent.pr`, `agent.merge`).
 
@@ -577,6 +580,10 @@ The **Inbox** tab (and `agentmgr inbox`) lists what needs you, across all agents
 | AI review | The agent said it was done and the judge checked the work against the intent and brief | **Send back to finish** (types the missing items in) or **Looks good** |
 | Stuck? | The agent seems to be going in circles | Send the suggested nudge (edit it first if you like) or dismiss |
 | Overlap | It changes the same files as another agent | Tell one or both agents; see the suggested merge order |
+| Follow up | An agent used in the last 3 days has been quiet for 2 hours and isn't finished: still open, or its session ended by itself or was closed by the session cap or clean up | Send the suggested nudge (edit it first), **Resume** a closed one, or **Close session**; **Later** (4 hours) or **Not needed** (until it's used again) |
+| Close session? | It's done (its brief says so, or its pull request merged), quiet for 2 hours, and its session is still open | **Close session** (it resumes when you open it), **Later** or **Not needed** |
+
+Follow-up reminders skip agents that are working or already waiting on you for something else, and agents you closed yourself. Change the timing in config.json: `"reminders": { "quietHours": 2, "recentDays": 3, "laterHours": 4 }`, or turn them off with `"enabled": false`. From the command line: `agentmgr remind <agent> later|dismiss`.
 
 **Fewer questions: approval rules.** Each yes you give a permission prompt counts toward the command, per repo (`npm test`, `pytest`, `git status`; an MCP tool; fetching from a site). After 3, the inbox offers to always allow it there. An allowed rule goes to every agent in that repo when it starts (Claude Code's `--allowedTools`), and answers its prompts that are already open, so you aren't asked again. Rules are never offered for commands that chain, redirect or substitute (`&&`, `|`, `>`, `$(…)`), or that delete, escalate, publish or reach the network (`rm`, `sudo`, `git push`, `npm publish`, `curl`…). Settings → Approval rules (or `agentmgr rules`) lists them with how many prompts each answered; **Remove** to be asked again. Stored in `~/.agentmanager/rules.json`; In config.json, `"rules": { "auto": false }` stops rules answering open prompts and `"rules": { "suggestAfter": 5 }` changes the count. Claude Code agents only for now.
 
@@ -937,6 +944,8 @@ The same dialog shows what agents cost today, the last two weeks and the costlie
 Alerts for both go to Slack with **Alerts → nears or reaches its budget**.
 
 ## Cleaning up old agents
+
+**Close all** (next to the agent counts above the list) closes every open agent session at once. The assistant's stays open, and so do agents working at that moment unless you choose **Close them too**. Closed sessions keep their conversation and resume when you open them. From the command line: `agentmgr close --all`.
 
 Agents you no longer use keep a session open and a worktree on disk. **Clean up** (in the top bar, or `agentmgr cleanup`) closes agents with no activity for a while and deletes agents that stayed closed long after that. Pick a strategy:
 
