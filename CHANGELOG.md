@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- **Follow-up reminders.** The Inbox reminds you about recent agents that went quiet: work that isn't finished (still open, or closed by itself, the session cap or clean up), with a nudge to send, Resume or Close session; and finished agents whose session is still open, to close. **Later** snoozes a reminder for a few hours, **Not needed** until the agent is used again (`agentmgr remind`). Timing in config.json under `reminders`.
+- **Close all** next to the agent counts closes every open session at once. The assistant stays open, and so do agents working right now unless you also choose **Close them too**.
+
 ## 1.17.0 (2026-11-03)
 
 - **Sessions go both ways with the Claude desktop app.** **Open in Claude desktop** on a Claude agent (and `agentmgr desktop <agent>`) continues its conversation in the desktop app through Claude Code's `claude --desktop --resume`. The agent's session here closes first, messages for it wait until you resume it here, and **Resume** picks up what was said in the desktop app. **Import** now lists sessions started in the desktop app's Code tab (marked **Claude desktop**, with their title there) and in editors. Before, it only listed sessions started from a terminal. A session open in the desktop app is protected like one open in a terminal: close it there, or continue a copy.

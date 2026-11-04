@@ -1549,3 +1549,34 @@ test('repeats: requests you keep making are offered as a playbook, with what cha
   assert.deepEqual(new Repeats({ file: path.join(tmp(), 'x.json'), enabled: false }).view().suggestions, []);
   assert.ok(events.length >= 5);
 });
+
+test('reminders: a recent agent gone quiet gets a follow-up, a finished open one a close, others none', async () => {
+  const { reminderFor, reminderSettings } = await import('../src/reminders.js');
+  const s = reminderSettings({});
+  const t = Date.parse('2026-11-04T12:00:00Z');
+  const ago = (h) => new Date(t - h * 3_600_000).toISOString();
+  const agent = (extra = {}) => ({ id: 'a', kind: 'task', status: 'running', sessionId: 's', activeAt: ago(3), runtime: { running: true }, results: { outcome: 'in progress', blockers: [] }, prs: [], ...extra });
+  // Open and not finished, quiet 3 hours: follow up, with what's left.
+  assert.deepEqual(reminderFor(agent({ git: { dirtyFiles: 2 } }), s, t), { kind: 'followup', title: 'Quiet for 3 hours and not finished', detail: '2 files changed, not committed', since: ago(3) });
+  assert.equal(reminderFor(agent({ results: { outcome: 'blocked', blockers: [{ text: 'needs a token' }] } }), s, t).detail, 'Blocked: needs a token');
+  assert.equal(reminderFor(agent({ prs: [{ url: 'https://github.com/o/r/pull/4', state: 'OPEN', land: 'fix' }] }), s, t).detail, 'Pull request #4 is open and needs fixes');
+  // Finished, or its pull request merged, with the session open: close it.
+  assert.equal(reminderFor(agent({ results: { outcome: 'done' } }), s, t).kind, 'close');
+  assert.match(reminderFor(agent({ prs: [{ state: 'MERGED' }] }), s, t).title, /^Its pull request merged and quiet for 3 hours/);
+  // Not yet quiet long enough, too old, working, waiting on you, the assistant: nothing.
+  for (const a of [agent({ activeAt: ago(1) }), agent({ activeAt: ago(80) }), agent({ runtime: { running: true, busy: true } }), agent({ runtime: { running: true, attention: 'permission' } }), agent({ kind: 'assistant' })]) assert.equal(reminderFor(a, s, t), null);
+  // Closed: by itself or the cap, not finished, resumable: follow up. Closed by you, or finished: nothing.
+  const closed = (extra) => agent({ runtime: { running: false }, ...extra });
+  assert.deepEqual([reminderFor(closed({ status: 'exited' }), s, t).title, reminderFor(closed({ status: 'exited' }), s, t).closed], ['Not finished, and its session ended', true]);
+  assert.equal(reminderFor(closed({ status: 'stopped', closedBy: 'cap' }), s, t).title, 'Not finished, and closed by the session cap');
+  assert.equal(reminderFor(closed({ status: 'stopped', closedBy: null }), s, t), null);
+  assert.equal(reminderFor(closed({ status: 'exited', results: { outcome: 'done' } }), s, t), null);
+  // Later hides it for a while; Not needed until the agent is used again.
+  assert.equal(reminderFor(agent({ reminder: { laterUntil: ago(-1) } }), s, t), null);
+  assert.ok(reminderFor(agent({ reminder: { laterUntil: ago(1) } }), s, t));
+  assert.equal(reminderFor(agent({ reminder: { dismissedAt: ago(3) } }), s, t), null);
+  assert.ok(reminderFor(agent({ activeAt: ago(2.5), reminder: { dismissedAt: ago(3) } }), s, t));
+  // Settings: off, or other hours.
+  assert.equal(reminderFor(agent(), reminderSettings({ reminders: { enabled: false } }), t), null);
+  assert.equal(reminderFor(agent(), reminderSettings({ reminders: { quietHours: 4 } }), t), null);
+});

@@ -577,6 +577,10 @@ The **Inbox** tab (and `agentmgr inbox`) lists what needs you, across all agents
 | AI review | The agent said it was done and the judge checked the work against the intent and brief | **Send back to finish** (types the missing items in) or **Looks good** |
 | Stuck? | The agent seems to be going in circles | Send the suggested nudge (edit it first if you like) or dismiss |
 | Overlap | It changes the same files as another agent | Tell one or both agents; see the suggested merge order |
+| Follow up | An agent used in the last 3 days has been quiet for 2 hours and isn't finished: still open, or its session ended by itself or was closed by the session cap or clean up | Send the suggested nudge (edit it first), **Resume** a closed one, or **Close session**; **Later** (4 hours) or **Not needed** (until it's used again) |
+| Close session? | It's done (its brief says so, or its pull request merged), quiet for 2 hours, and its session is still open | **Close session** (it resumes when you open it), **Later** or **Not needed** |
+
+Follow-up reminders skip agents that are working or already waiting on you for something else, and agents you closed yourself. Change the timing in config.json: `"reminders": { "quietHours": 2, "recentDays": 3, "laterHours": 4 }`, or turn them off with `"enabled": false`. From the command line: `agentmgr remind <agent> later|dismiss`.
 
 **Fewer questions: approval rules.** Each yes you give a permission prompt counts toward the command, per repo (`npm test`, `pytest`, `git status`; an MCP tool; fetching from a site). After 3, the inbox offers to always allow it there. An allowed rule goes to every agent in that repo when it starts (Claude Code's `--allowedTools`), and answers its prompts that are already open, so you aren't asked again. Rules are never offered for commands that chain, redirect or substitute (`&&`, `|`, `>`, `$(…)`), or that delete, escalate, publish or reach the network (`rm`, `sudo`, `git push`, `npm publish`, `curl`…). Settings → Approval rules (or `agentmgr rules`) lists them with how many prompts each answered; **Remove** to be asked again. Stored in `~/.agentmanager/rules.json`; In config.json, `"rules": { "auto": false }` stops rules answering open prompts and `"rules": { "suggestAfter": 5 }` changes the count. Claude Code agents only for now.
 
@@ -924,6 +928,8 @@ The same dialog shows what agents cost today, the last two weeks and the costlie
 Alerts for both go to Slack with **Alerts → nears or reaches its budget**.
 
 ## Cleaning up old agents
+
+**Close all** (next to the agent counts above the list) closes every open agent session at once. The assistant's stays open, and so do agents working at that moment unless you choose **Close them too**. Closed sessions keep their conversation and resume when you open them. From the command line: `agentmgr close --all`.
 
 Agents you no longer use keep a session open and a worktree on disk. **Clean up** (in the top bar, or `agentmgr cleanup`) closes agents with no activity for a while and deletes agents that stayed closed long after that. Pick a strategy:
 
