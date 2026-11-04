@@ -15,6 +15,7 @@ import { initReview } from '/review.js';
 import { initLand, prChips } from '/land.js';
 import { initTriggers } from '/triggers.js';
 import { initSpend } from '/spend.js';
+import { initWorklog } from '/worklog.js';
 import { initPlaybooks } from '/playbooks.js';
 import { initSetup } from '/setup.js';
 import { initUpdate } from '/update.js';
@@ -124,6 +125,7 @@ async function act(fn, okMsg) {
 const reviewUi = initReview({ api, esc, toast, agents, $ });
 const triggersUi = initTriggers({ api, esc, toast, $ });
 initSpend({ api, esc, toast, $ });
+initWorklog({ api, esc, toast, $ });
 initSetup({ api, esc, $ });
 const updateUi = initUpdate({ api, esc, toast, $ });
 initMenu({ api, esc, toast, $ });

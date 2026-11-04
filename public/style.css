@@ -747,6 +747,10 @@ input.inline { display: inline-block; width: 80px; padding: 1px 4px; }
 .kpi { border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; }
 .kpi-v { font-size: 20px; font-weight: 700; }
 .kpi-l { font-size: 12px; color: var(--muted); }
+#worklog-body .kpis { grid-template-columns: repeat(4, 1fr); }
+@media (max-width: 560px) { #worklog-body .kpis { grid-template-columns: repeat(2, 1fr); } }
+.worklog-events td { vertical-align: top; }
+.worklog-events td:first-child { white-space: nowrap; }
 .stats-table { margin: 6px 0; }
 .stats-table summary { cursor: pointer; font-size: 13px; color: var(--muted); }
 .spend-h { margin: 14px 0 4px; font-size: 14px; }

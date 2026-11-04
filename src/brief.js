@@ -27,7 +27,8 @@ export const briefPrompt = (file) =>
   '"- [ ]" pending, "- [~]" running, "- [x]" passed, "- [!]" failed.\n' +
   '## Results\nThe end result so far. First line "Outcome: in progress | partial | done | blocked". Then bullets:\n' +
   '"- Delivered: ..." for each concrete result (PR or commit links, files, documents, answers), and\n' +
-  '"- Blocked by: ... (needs: who or what)" for anything blocking progress. Keep it current; it is what reviewers read first.\n' +
+  '"- Blocked by: ... (needs: who or what)" for anything blocking progress, and\n' +
+  '"- Filed: <issue link> <title>" for each bug or issue you opened (GitHub, Jira, ...). Keep it current; it is what reviewers read first.\n' +
   'Add a fifth section only when the task links Jira issues (or other tickets):\n' +
   '## References\nLook each linked issue up (use your Jira / Atlassian tools if you have them) and list the ' +
   'documents its fields point to, above all its PRD and Tech Spec fields, plus design docs or Confluence pages. ' +
@@ -94,8 +95,9 @@ export function parseBrief(markdown) {
         // Tolerates "Delivered:", "**Delivered:**" and "**Delivered**:".
         delivered: pick(/^\s*[-*]\s+\**\s*delivered\s*\**\s*:\s*\**\s*(.+)$/i),
         blockers: pick(/^\s*[-*]\s+\**\s*blocked by\s*\**\s*:\s*\**\s*(.+)$/i),
+        filed: pick(/^\s*[-*]\s+\**\s*filed\s*\**\s*:\s*\**\s*(.+)$/i),
         notes: lines
-          .filter((l) => !/^\s*\**\s*outcome\s*\**\s*:/i.test(l) && !/^\s*[-*]\s+\**\s*(delivered|blocked by)\s*\**\s*:/i.test(l))
+          .filter((l) => !/^\s*\**\s*outcome\s*\**\s*:/i.test(l) && !/^\s*[-*]\s+\**\s*(delivered|blocked by|filed)\s*\**\s*:/i.test(l))
           .join('\n')
           .trim(),
       };

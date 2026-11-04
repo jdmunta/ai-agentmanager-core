@@ -921,6 +921,19 @@ Agents started this way are marked **⚡ GitHub** or **⚡ webhook**, Slack aler
 
 **Results** in the top bar shows how agents did over the last 7, 30 or 90 days (or all time): how many started and how many opened a pull request, PRs merged and closed, the merge rate, the median time from starting an agent to its first PR and to merge, and the cost per merged PR. The same by engine and model (which one gets merged more, for less), by where agents came from (you, the assistant, triggers, the backlog, teams, races) and by project. `agentmgr stats --days 30`.
 
+### Work record
+
+**Work record…** in the menu (and `agentmgr worklog`) keeps what your agents got done, for your own notes and for performance reviews. It's recorded as it happens, into two spreadsheets (CSV files that open in Excel or Numbers, or File → Import in Google Sheets):
+
+- **`~/.agentmanager/worklog.csv`**: one row per event, with the date, project, agent, title, link, linked bugs, engine and model:
+  - *pull request opened*, *merged* (with the hours from opening to merge) or *closed* unmerged;
+  - *bug fixed*: a bug the agent's request linked (a Jira or GitHub issue), once its pull request merges;
+  - *issue filed*: an issue the agent opened, from a `- Filed: <link> <title>` line in its brief's Results (agents are asked to add one for each);
+  - *agent finished*: its brief says done, with the hours since it started and what it cost.
+- **`~/.agentmanager/worklog-weekly.csv`**: one row per week, Monday to Sunday, added once the week is over. It counts PRs opened, merged and closed, the merge rate, bugs fixed, issues filed, agents finished, the median time to merge, and the week's spend.
+
+Rows are only ever added; edit or chart them in your spreadsheet. The first time, the history already recorded is written too, with the dates it happened. The dialog shows a period's totals, the weeks and every event. **Copy summary** (`agentmgr worklog --days 90 --summary`) gives the period as Markdown with links, ready for a review document. To keep the files somewhere else, such as a synced folder, set `"worklog": { "dir": "~/Documents/agent-work" }` in config.json; `"enabled": false` stops recording.
+
 ### Spend and budgets
 
 The same dialog shows what agents cost today, the last two weeks and the costliest agents, from the cost Claude Code records for each session (the API price, even on a subscription plan; Codex and Antigravity record none). Set limits there, with `agentmgr spend --per-agent 5 --per-day 50`, or in config.json (`"budgets": { "perAgentUsd": 5, "perDayUsd": 50 }`):

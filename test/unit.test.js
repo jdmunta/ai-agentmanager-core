@@ -354,6 +354,7 @@ Some notes.
     outcome: 'partial',
     delivered: ['PR https://github.com/a/b/pull/9', 'design doc'],
     blockers: ['QA environment (needs: QE)'],
+    filed: [],
     notes: 'Some notes.',
   });
 });
@@ -1649,4 +1650,72 @@ test('reminders: a recent agent gone quiet gets a follow-up, a finished open one
   // Settings: off, or other hours.
   assert.equal(reminderFor(agent(), reminderSettings({ reminders: { enabled: false } }), t), null);
   assert.equal(reminderFor(agent(), reminderSettings({ reminders: { quietHours: 4 } }), t), null);
+});
+
+test('work record: events from what agents did, appended once to a CSV, with a row per finished week', async () => {
+  const { EventEmitter } = await import('node:events');
+  const { WorkLog, agentEvents, summaryMarkdown, csvField, weekStart } = await import('../src/worklog.js');
+  const { parseBrief } = await import('../src/brief.js');
+  assert.equal(csvField('a, "b"\nc'), '"a, ""b""\nc"');
+  // "Filed:" lines in the brief's Results.
+  const brief = parseBrief('# Fix login\n## Results\nOutcome: done\n- Delivered: the fix\n- Filed: https://github.com/o/r/issues/9 Token refresh races on resume\n- Filed: [ABC-7](https://jira.example.com/browse/ABC-7) flaky e2e');
+  assert.deepEqual(brief.results.filed, ['https://github.com/o/r/issues/9 Token refresh races on resume', '[ABC-7](https://jira.example.com/browse/ABC-7) flaky e2e']);
+  const agent = {
+    id: 'a1', name: 'fix-login', intent: 'Fix ABC-1 login\nmore', createdAt: '2026-10-26T09:00:00Z', engine: 'claude',
+    prs: {
+      p1: { url: 'https://github.com/o/r/pull/1', title: 'Fix login', state: 'MERGED', openedAt: '2026-10-27T10:00:00Z', mergedAt: '2026-10-28T10:00:00Z' },
+      p2: { url: 'https://github.com/o/r/pull/2', title: 'Try B', state: 'CLOSED', openedAt: '2026-10-27T11:00:00Z' },
+      m: { url: 'https://github.com/x/y/pull/5', state: 'MERGED', source: 'mentioned' },
+    },
+    bugs: { 'ABC-1': { key: 'ABC-1', url: 'https://jira.example.com/browse/ABC-1', title: 'Login fails' } },
+    brief: { status: 'done', updatedAt: '2026-10-28T11:00:00Z', results: brief.results },
+    sessions: [{ cost: { usd: 1.5 } }],
+  };
+  const ev = agentEvents(agent);
+  assert.deepEqual(ev.map((e) => e.event), ['pr_opened', 'pr_merged', 'pr_opened', 'pr_closed', 'bug_fixed', 'issue_filed', 'issue_filed', 'agent_finished']);
+  assert.equal(ev[1].hours, 24);
+  assert.deepEqual([ev[4].title, ev[4].at], ['ABC-1 Login fails', '2026-10-28T10:00:00.000Z']);
+  assert.deepEqual([ev[5].link, ev[5].title], ['https://github.com/o/r/issues/9', 'Token refresh races on resume']);
+  assert.deepEqual([ev[6].link, ev[6].title], ['https://jira.example.com/browse/ABC-7', 'ABC-7 flaky e2e']);
+  assert.deepEqual([ev[7].title, ev[7].cost, ev[7].hours], ['Fix ABC-1 login', 1.5, 50]);
+  assert.deepEqual(agentEvents({ ...agent, kind: 'assistant' }), []);
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'worklog-'));
+  // A second agent on the same pull request: it's recorded once.
+  const agents = [agent, { id: 'a2', name: 'same-pr', createdAt: agent.createdAt, prs: { p1: { ...agent.prs.p1 } } }];
+  const manager = Object.assign(new EventEmitter(), { view: () => ({ projectInfo: { name: 'web' } }) });
+  const store = { data: { spend: { days: { '2026-10-27': { total: 2 }, '2026-10-28': { total: 1.25 } } } }, list: () => agents, save: () => {} };
+  const wl = new WorkLog({ manager, store, config: { worklog: { dir }, worklogFirstMs: 3_600_000 }, who: Promise.resolve('Pat'), log: () => {} });
+  try {
+    const t = Date.parse('2026-11-04T12:00:00Z');
+    // First run: the history so far, in date order, and the weeks that ended (the week of 26 Oct).
+    assert.deepEqual(await wl.record(t), { added: 8, weeks: 1 });
+    const rows = fs.readFileSync(path.join(dir, 'worklog.csv'), 'utf8').trim().split('\n');
+    assert.equal(rows[0], 'date,event,project,agent,agent_id,title,link,bugs,engine,model,cost_usd,hours,by');
+    assert.equal(rows.length, 9);
+    assert.match(rows[1], /^2026-10-27T10:00:00.000Z,pr_opened,web,fix-login,a1,Fix login,https:\/\/github.com\/o\/r\/pull\/1,ABC-1,claude,,,25,Pat$/);
+    assert.ok(rows.slice(1).every((r, i, a) => i === 0 || r.slice(0, 24) >= a[i - 1].slice(0, 24) || r.includes('issue_filed') || r.includes('pr_closed')));
+    const weekly = fs.readFileSync(path.join(dir, 'worklog-weekly.csv'), 'utf8').trim().split('\n');
+    assert.equal(weekly[0], 'week_start,week_end,prs_opened,prs_merged,prs_closed,merge_rate,bugs_fixed,issues_filed,agents_finished,median_hours_to_merge,cost_usd');
+    assert.deepEqual(weekly.slice(1), ['2026-10-26,2026-11-01,2,1,0,1,1,0,1,24,3.25']);
+    // Nothing new: nothing appended. A new merge: one row; next week: one more weekly row.
+    assert.deepEqual(await wl.record(t), { added: 0, weeks: 0 });
+    agent.prs.p3 = { url: 'https://github.com/o/r/pull/3', title: 'Follow-up', state: 'MERGED', openedAt: '2026-11-03T09:00:00Z', mergedAt: '2026-11-04T09:00:00Z' };
+    assert.deepEqual(await wl.record(t), { added: 2, weeks: 0 });
+    assert.deepEqual(await wl.record(t + 7 * 86_400_000), { added: 0, weeks: 1 });
+    assert.equal(fs.readFileSync(path.join(dir, 'worklog.csv'), 'utf8').trim().split('\n').length, 11);
+    // The view: a period's totals and events; and the Markdown summary.
+    const v = wl.view({ days: 30, t });
+    assert.deepEqual([v.totals.prs_merged, v.totals.prs_opened, v.totals.bugs_fixed, v.totals.issues_filed, v.totals.agents_finished], [2, 3, 1, 2, 1]);
+    assert.equal(v.weeks[0].week_start, '2026-11-02');
+    assert.equal(v.weeks[0].current, true);
+    const md = summaryMarkdown(v, { who: 'Pat' });
+    assert.match(md, /^# Work record: Pat, the last 30 days/);
+    assert.match(md, /- \[Fix login\]\(https:\/\/github.com\/o\/r\/pull\/1\) \(web\), 2026-10-28/);
+    assert.match(md, /## Bugs fixed\n- \[ABC-1 Login fails\]/);
+    assert.equal(new Date(weekStart(t)).getDay(), 1);
+  } finally {
+    wl.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
