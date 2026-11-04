@@ -532,8 +532,10 @@ Autopilot takes a project's finished items the rest of the way when the [review 
 
 What it does with work that isn't ready:
 
-- **Not ready, for a concrete reason** (failing CI, acceptance criteria not met, barely verified): the item goes back to the same agent with those reasons. This happens twice at most; after that it waits for you.
+- **Not ready, for a concrete reason** (failing CI, acceptance criteria not met, barely verified): the item goes back to the same agent with its scorecard, as [**✨ Improve**](#review-changes) sends it: the low scores with why, the criteria not met, where a reviewer would look. This happens three times at most (`"autopilot": { "rounds": 3 }`); after that it waits for you.
 - **Look at these first, a failed step, or a closed pull request:** autopilot stops and it waits for you in the **Inbox** ("Autopilot held"), saying why. You can **Review changes**, **Ship it** (go ahead anyway), or **Send back** with a note.
+
+**Ship at a score.** Next to the level, choose when it ships: **when ready** (the scorecard says *Ready to approve*), or **at 80+**, **85+**, **90+** or **95+** (`agentmgr backlog autopilot <project> merge --target 85`; `--target none` goes back to when ready; a default for all projects goes in config.json as `"autopilot": { "target": 85 }`). With a score set, work that isn't there yet, *Look at these first* included, goes back to its agent to improve, and is scored again when the agent is done. It ships once the scorecard says ready and rates it at least the target. It waits for you when the tries are used up, or earlier when a try raised the score by less than 3 points, since more of the same won't get there. The item shows the scores so far (*scores 72 → 81 → 87*).
 
 An item whose pull request merges is done. Each item shows where autopilot stands ("pull request open #12", "waiting for checks to merge", "sent back to the agent"). **Ship it** is also on every item in review, so you can ship one by hand with autopilot off. Plugins can still refuse the commit, the pull request or the merge (`agent.commit`, `agent.pr`, `agent.merge`).
 

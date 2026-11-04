@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Autopilot ships at a score.** Per project, choose when autopilot ships: when the scorecard says ready, as before, or at 80+, 85+, 90+ or 95+ (`agentmgr backlog autopilot <project> merge --target 85`). With a score set, work that isn't there yet, *Look at these first* included, goes back to its agent with its scorecard to improve, and ships once it's ready at the target. It waits for you when the tries run out (3) or when a try raised the score by less than 3 points. Items show their scores so far (*72 → 81 → 87*).
+- Autopilot sends not-ready work back with the full scorecard, as **✨ Improve** does, instead of only the reasons, and up to three times instead of two (`"autopilot": { "rounds": 3 }`).
 - **The agents list puts the most recently created or used agents on top.** It's one list now, each agent tagged with its project. Above the list, switch to **Running first** (running agents on top, then the rest) or **By project** (the grouped view as before). Each browser remembers the choice.
 
 ## 1.17.0 (2026-11-03)

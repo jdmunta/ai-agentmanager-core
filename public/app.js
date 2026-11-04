@@ -932,7 +932,7 @@ function renderBacklog() {
                 ${p.shortcut ? `<span class="shortcut">${esc(p.shortcut)}</span>` : ''}
                 <span class="pname">${esc(g.name)}</span>
                 <button class="link" data-bl="limit" data-project="${esc(g.key)}" data-name="${esc(g.name)}" title="How many items of this project agents work on at once">${p.limit} at a time ✎</button>
-                <label class="bl-autopilot" title="${esc(AUTOPILOT_HINT)}">🛫 <select aria-label="Autopilot" data-bl-autopilot="${esc(g.key)}">${Object.entries(AUTOPILOT_LEVELS).map(([v, l]) => `<option value="${v}" ${(p.autopilot ?? 'off') === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+                <label class="bl-autopilot" title="${esc(AUTOPILOT_HINT)}">🛫 <select aria-label="Autopilot" data-bl-autopilot="${esc(g.key)}">${Object.entries(AUTOPILOT_LEVELS).map(([v, l]) => `<option value="${v}" ${(p.autopilot ?? 'off') === v ? 'selected' : ''}>${l}</option>`).join('')}</select>${(p.autopilot ?? 'off') !== 'off' ? ` <select aria-label="Ships at" title="${esc(TARGET_HINT)}" data-bl-target="${esc(g.key)}">${AUTOPILOT_TARGETS.map((n) => `<option value="${n}" ${(p.target ?? 0) === n ? 'selected' : ''}>${n ? `at ${n}+` : 'when ready'}</option>`).join('')}</select>` : ''}</label>
               </div>
               <ul class="project-agents">${g.items.map(itemRow).join('')}</ul>
             </li>`;
@@ -944,13 +944,16 @@ function renderBacklog() {
 
 const AUTOPILOT_LEVELS = { off: 'Off', pr: 'Open PRs', merge: 'Merge' };
 const AUTOPILOT_HINT = 'When an item is done and its review scorecard says ready: Open PRs commits, pushes and opens the pull request; Merge also merges it once checks pass. Not-ready work goes back to the agent; anything else waits for you in the inbox.';
+const AUTOPILOT_TARGETS = [0, 80, 85, 90, 95];
+const TARGET_HINT = 'When it ships. At a score: work goes back to its agent to improve until the scorecard says ready and rates it at least that, a few times at most, stopping early when a try no longer raises the score.';
 const AUTOPILOT_STATE = { queued: 'going ahead', scoring: 'scoring the changes', shipping: 'opening the pull request', pr: 'pull request open', landing: 'waiting for checks to merge', merging: 'merging', returned: 'sent back to the agent', held: 'waiting for you', merged: 'merged' };
 /** Where autopilot stands on an item, under it in the backlog. */
 function autopilotLine(it) {
   const ap = it.autopilot;
   if (!ap?.state || !['review', 'active', 'done'].includes(it.status) || (it.status === 'active' && ap.state !== 'returned')) return '';
   const pr = ap.pr ? ` <a href="${esc(ap.pr)}" target="_blank" rel="noopener">#${esc(ap.pr.split('/').pop())} ↗</a>` : '';
-  return `<p class="hint bl-ai bl-ap ${ap.state === 'held' ? 'held' : ''}">🛫 Autopilot: ${AUTOPILOT_STATE[ap.state] ?? esc(ap.state)}${pr}${ap.note ? ` · ${esc(ap.note)}` : ''}</p>`;
+  const trail = ap.scores?.length > (ap.state === 'returned' ? 1 : 0) ? ` · scores ${ap.scores.map((n) => n ?? '?').join(' → ')}` : '';
+  return `<p class="hint bl-ai bl-ap ${ap.state === 'held' ? 'held' : ''}">🛫 Autopilot: ${AUTOPILOT_STATE[ap.state] ?? esc(ap.state)}${pr}${ap.note ? ` · ${esc(ap.note)}` : ''}${trail}</p>`;
 }
 
 function itemRow(it) {
@@ -994,6 +997,11 @@ function showTab(tab) {
 for (const b of document.querySelectorAll('.side-tab')) b.onclick = () => showTab(b.dataset.tab);
 
 $('#backlog-view').addEventListener('change', (e) => {
+  const tkey = e.target.dataset?.blTarget;
+  if (tkey) {
+    const n = Number(e.target.value);
+    return act(() => api('POST', '/backlog/settings', { project: tkey, target: n || null }), n ? `Autopilot ships at ${n}/100 or more` : 'Autopilot ships when the scorecard says ready');
+  }
   const key = e.target.dataset?.blAutopilot;
   if (!key) return;
   const level = e.target.value;
