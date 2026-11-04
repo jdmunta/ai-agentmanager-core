@@ -580,6 +580,7 @@ pre.diff .meta { color: var(--muted); font-weight: 600; }
 .tag.plan-approved { color: #2f9e55; }
 .tag.plan-changes { color: #c08a1e; }
 .need-kind.plan { background: var(--accent); color: #fff; }
+.need-kind.reminder, .need-kind.close { color: var(--accent); }
 
 .bl-ai { margin: 4px 0 0; }
 .bl-ai ul { margin: 2px 0 4px 18px; padding: 0; }

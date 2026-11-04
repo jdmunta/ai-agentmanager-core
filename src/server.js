@@ -416,6 +416,8 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
   );
   api.post('/agents/:id/start', wrap((req) => manager.start(req.params.id, req.body ?? {})));
   api.post('/agents/:id/stop', wrap((req) => manager.stop(req.params.id)));
+  api.post('/agents/close-all', wrap((req) => manager.closeAll({ working: Boolean(req.body?.working) })));
+  api.post('/agents/:id/reminder', wrap((req) => manager.remind(req.params.id, req.body?.action)));
   api.post('/agents/:id/desktop', wrap((req) => manager.openInDesktop(req.params.id)));
   api.post('/agents/:id/refresh', wrap((req) => manager.refresh(req.params.id, { withPrs: true })));
   api.post('/agents/:id/links', wrap((req) => manager.addLink(req.params.id, req.body ?? {})));
