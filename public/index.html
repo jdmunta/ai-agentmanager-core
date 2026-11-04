@@ -694,6 +694,24 @@
       </form>
     </dialog>
 
+    <dialog id="goal-dialog">
+      <form id="goal-form" class="alerts-body">
+        <h2>New goal</h2>
+        <p class="hint">An outcome to reach, in one or more projects. It's planned into tasks, one agent each; they go to the backlog and run until the goal is done. Where a project's autopilot is on, finished work ships by itself.</p>
+        <label>The outcome
+          <textarea name="text" rows="5" required placeholder="By Friday: users can sign in with SSO on web, and the API returns paginated results for /orders. Both with tests."></textarea>
+        </label>
+        <div class="row">
+          <label>When <select name="period"><option value="day">Today</option><option value="week" selected>This week</option><option value="none">No deadline</option></select></label>
+          <label>Priority <select name="priority"><option value="0">P0</option><option value="1">P1</option><option value="2" selected>P2</option><option value="3">P3</option></select></label>
+        </div>
+        <div>Projects<div id="goal-projects" class="goal-projects"></div></div>
+        <label class="check"><input type="checkbox" name="review"> Show me the plan before agents start</label>
+        <p id="goal-error" class="error" hidden></p>
+        <div class="dialog-actions"><span class="spacer"></span><button type="button" id="goal-cancel" class="ghost">Cancel</button><button class="primary">Plan and start</button></div>
+      </form>
+    </dialog>
+
     <dialog id="worklog-dialog">
       <form method="dialog" class="alerts-body">
         <h2>Work record <select id="worklog-days" class="inline-select"><option value="7">last 7 days</option><option value="30" selected>last 30 days</option><option value="90">last 90 days</option><option value="365">last year</option><option value="0">all time</option></select></h2>

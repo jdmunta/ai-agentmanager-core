@@ -1294,6 +1294,65 @@ export async function main(argv) {
       console.log(`removed ${sc}`);
     });
 
+  const goal = program.command('goal').description('Goals: outcomes for today or this week across projects, planned into tasks that agents see through');
+  const printGoal = (g) => {
+    const c = g.counts;
+    console.log(`${bold(g.id)}  ${g.title}  ${dim(`[${g.status}${g.overdue ? ', overdue' : ''}]`)}`);
+    console.log(dim(`    ${g.projects.join(', ')}${g.due ? `  due ${g.due.slice(0, 10)}` : ''}  ${c.completed} completed · ${c.pending} pending · ${c.followUps} follow-ups${g.error ? `  ${g.error}` : ''}`));
+  };
+  goal
+    .command('add')
+    .description('Plan an outcome into tasks and start agents on them')
+    .argument('<outcome>', 'what should be true when it is done')
+    .requiredOption('-p, --projects <shortcuts>', 'comma-separated project shortcuts (agentmgr project ls)')
+    .option('--today', 'due today')
+    .option('--no-deadline', 'no due date (default: this week)')
+    .option('--review', 'show the plan first; start it with: agentmgr goal approve <id>')
+    .option('--priority <p>', '0-3 (P0 highest)', '2')
+    .action(async (text, opts) => {
+      await daemon();
+      const period = opts.today ? 'day' : opts.deadline === false ? 'none' : 'week';
+      printGoal(await api('POST', '/goals', { text, projects: opts.projects.split(','), period, review: Boolean(opts.review), priority: Number(opts.priority) }));
+      console.log(dim(`    planning; see it with: agentmgr goal show <id>`));
+    });
+  goal
+    .command('ls')
+    .description('Goals with completed, pending and follow-ups')
+    .action(async () => {
+      await daemon();
+      const list = await api('GET', '/goals');
+      if (!list.length) return console.log(dim('No goals yet. Add one: agentmgr goal add "outcome" -p <project>'));
+      list.forEach(printGoal);
+    });
+  goal
+    .command('show')
+    .description("A goal's summary: completed, pending and follow-ups (Markdown)")
+    .argument('<id>')
+    .action(async (id) => {
+      await daemon();
+      const g = (await api('GET', '/goals')).find((x) => x.id === id);
+      if (g?.status === 'review') console.log(`Plan (start with: agentmgr goal approve ${id}):\n${g.plan.map((t, i) => `  ${i + 1}. [${t.project}] ${t.title}`).join('\n')}\n`);
+      console.log((await api('GET', `/goals/${id}/summary`)).markdown);
+    });
+  for (const [name, desc, method, route] of [
+    ['approve', 'Start a goal whose plan you reviewed', 'POST', 'approve'],
+    ['replan', 'Plan a goal again', 'POST', 'replan'],
+    ['extend', 'Carry an overdue goal over to the next day or week', 'POST', 'extend'],
+    ['stop', 'Stop a goal: its queued tasks are cancelled', 'POST', 'stop'],
+    ['rm', 'Remove a stopped or finished goal', 'DELETE', ''],
+  ]) {
+    goal
+      .command(name)
+      .description(desc)
+      .argument('<id>')
+      .action(async (id) => {
+        await daemon();
+        const r = await api(method, `/goals/${id}${route ? `/${route}` : ''}`);
+        if (r.counts) printGoal(r);
+        else console.log(`${green('✓')} removed`);
+      });
+  }
+
   const bl = program.command('backlog').description('Work orders that agents pick up one by one, per project, until done');
   const ST = { queued: dim('queued'), active: green('active'), review: yellow('review'), blocked: red('blocked'), done: dim('done'), cancelled: dim('cancelled') };
   const printBacklog = (v, { all = false } = {}) => {

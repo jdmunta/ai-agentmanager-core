@@ -1005,3 +1005,24 @@ body.remote .settings-links .local-only { display: none; }
 
 /* ?perf: redraw timings */
 .perf { position: fixed; right: 8px; bottom: 8px; z-index: 1000; padding: 3px 8px; border-radius: 6px; background: var(--panel, #1a1d27); color: var(--muted); font: 11px ui-monospace, Menlo, monospace; pointer-events: none; opacity: 0.9; }
+
+/* Goals, at the top of the Backlog tab */
+.goals { border-bottom: 1px solid var(--border); padding: 6px 14px 8px; }
+.goals-head { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.goals-head .spacer { flex: 1; }
+.goal-cards { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.goal { border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; }
+.goal.overdue { border-color: var(--red); }
+.goal-head { display: flex; align-items: center; gap: 6px; width: 100%; background: none; border: 0; padding: 0; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.goal-title { flex: 1; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.goal-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; font-size: 12px; margin-top: 4px; }
+.goal-bar { display: inline-block; width: 80px; height: 6px; border-radius: 3px; background: var(--border); overflow: hidden; }
+.goal-bar span { display: block; height: 100%; background: var(--green, #2da44e); }
+.goal-body { margin-top: 6px; font-size: 13px; }
+.goal-h { margin: 8px 0 2px; font-weight: 600; font-size: 12px; }
+.goal-list, .goal-plan { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; }
+.goal-plan label { display: flex; gap: 6px; align-items: baseline; font-weight: normal; }
+.goal-plan input { width: auto; }
+.goal-projects { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 4px 0 8px; }
+.goal-proj { display: inline-flex; align-items: center; gap: 4px; font-weight: normal; }
+.goal-proj input { width: auto; margin: 0; }

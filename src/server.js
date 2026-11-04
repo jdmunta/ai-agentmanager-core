@@ -18,6 +18,7 @@ import { Assistant } from './assistant.js';
 import { Cleanup } from './cleanup.js';
 import { Landing } from './landing.js';
 import { Autopilot } from './autopilot.js';
+import { Goals, goalMarkdown } from './goals.js';
 import { Budgets } from './budgets.js';
 import { stats } from './stats.js';
 import { Playbooks } from './playbooks.js';
@@ -96,6 +97,8 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
   // Backlog work the scorecard calls ready goes on to a pull request (and merged) by itself.
   const autopilot = new Autopilot({ manager, store, backlog, review, landing, config });
   manager.inboxSources.push(() => autopilot.inbox());
+  // Daily or weekly goals across projects, planned into backlog tasks and seen through (goals.js).
+  const goals = new Goals({ manager, store, backlog, config });
   // What agents got done, appended to a CSV for reviews (worklog.js).
   const me = identity().then((i) => i.display, () => '');
   const worklog = new WorkLog({ manager, store, config, who: me });
@@ -766,6 +769,14 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
   api.post('/backlog/:id/move', wrap((req) => backlog.move(req.params.id, req.body?.where)));
   api.post('/backlog/:id/split', wrap((req) => backlog.split(req.params.id, req.body?.parts)));
   api.post('/backlog/:id/keep-whole', wrap((req) => backlog.keepWhole(req.params.id)));
+  api.get('/goals', wrap(() => goals.list()));
+  api.post('/goals', wrap((req) => goals.create(req.body ?? {})));
+  api.post('/goals/:id/approve', wrap((req) => goals.approve(req.params.id, req.body ?? {})));
+  api.post('/goals/:id/replan', wrap((req) => goals.replan(req.params.id)));
+  api.post('/goals/:id/extend', wrap((req) => goals.extend(req.params.id)));
+  api.post('/goals/:id/stop', wrap((req) => goals.stop(req.params.id)));
+  api.delete('/goals/:id', wrap((req) => goals.remove(req.params.id)));
+  api.get('/goals/:id/summary', wrap((req) => ({ markdown: goalMarkdown(goals.view(goals.get(req.params.id))) })));
   api.post('/backlog/:id/ship', wrap((req) => autopilot.shipNow(req.params.id)));
   api.post(
     '/shutdown',
@@ -882,7 +893,7 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
   const eventSinks = new Set();
   api.get('/events/stream', (req, res) => {
     const send = sse(req, res);
-    send({ t: 'snapshot', agents: manager.list(), backlog: backlog.view(), projects: manager.listProjects(), races: races.list(), teams: teams.list(), built: reports.list() });
+    send({ t: 'snapshot', agents: manager.list(), backlog: backlog.view(), goals: goals.list(), projects: manager.listProjects(), races: races.list(), teams: teams.list(), built: reports.list() });
     eventSinks.add(send);
     req.on('close', () => eventSinks.delete(send));
   });
@@ -983,6 +994,19 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
     live.closeAgent(id).catch(() => {});
   });
   backlog.on('change', (view) => broadcast({ t: 'backlog', backlog: view }));
+  // Goals' summaries follow their tasks and agents: sent at most every couple of seconds.
+  let goalsSoon = null;
+  const sendGoals = () => {
+    if (goalsSoon) return;
+    goalsSoon = setTimeout(() => {
+      goalsSoon = null;
+      broadcast({ t: 'goals', goals: goals.list() });
+    }, 2000);
+    goalsSoon.unref?.();
+  };
+  goals.on('change', sendGoals);
+  backlog.on('change', sendGoals);
+  manager.on('change', () => Object.values(goals.data).some((g) => g.status === 'running') && sendGoals());
   const raceTimers = new Map();
   races.on('change', (id) => {
     if (raceTimers.has(id)) return;
@@ -1014,7 +1038,7 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
     const url = new URL(req.url, 'http://x');
     if (url.pathname === '/ws/events') {
       eventClients.add(ws);
-      ws.send(JSON.stringify({ t: 'snapshot', agents: manager.list(), backlog: backlog.view(), projects: manager.listProjects(), races: races.list(), teams: teams.list(), built: reports.list(), rules: manager.rules.view(), repeats: repeats.view() }));
+      ws.send(JSON.stringify({ t: 'snapshot', agents: manager.list(), backlog: backlog.view(), goals: goals.list(), projects: manager.listProjects(), races: races.list(), teams: teams.list(), built: reports.list(), rules: manager.rules.view(), repeats: repeats.view() }));
       ws.on('close', () => eventClients.delete(ws));
       return;
     }
@@ -1096,6 +1120,7 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
     cleanup.close();
     landing.close();
     autopilot.close();
+    goals.close();
     worklog.close();
     triggers.close();
     budgets.close();

@@ -15,6 +15,7 @@ import { initReview } from '/review.js';
 import { initLand, prChips } from '/land.js';
 import { initTriggers } from '/triggers.js';
 import { initSpend } from '/spend.js';
+import { initGoals } from '/goals.js';
 import { initWorklog } from '/worklog.js';
 import { initPlaybooks } from '/playbooks.js';
 import { initSetup } from '/setup.js';
@@ -125,6 +126,7 @@ async function act(fn, okMsg) {
 const reviewUi = initReview({ api, esc, toast, agents, $ });
 const triggersUi = initTriggers({ api, esc, toast, $ });
 initSpend({ api, esc, toast, $ });
+const goalsUi = initGoals({ api, esc, toast, $, ago: (t) => ago(t), getProjects: () => projectsState, rerender: () => renderBacklog() });
 initWorklog({ api, esc, toast, $ });
 initSetup({ api, esc, $ });
 const updateUi = initUpdate({ api, esc, toast, $ });
@@ -926,6 +928,7 @@ function renderBacklog() {
       <button class="link" data-bl="playbooks" title="Saved requests you run again, by hand or on a schedule">Playbooks</button>
     </div>
     ${!backlogState.autoRun ? '<p class="hint bl-paused">Paused: queued items wait until you resume.</p>' : ''}
+    ${goalsUi.html()}
     ${items.length
       ? `<ul class="agent-list">${[...groups.values()]
           .map((g) => {
@@ -1011,6 +1014,7 @@ $('#backlog-view').addEventListener('change', (e) => {
   act(() => api('POST', '/backlog/settings', { project: key, autopilot: level }), level === 'off' ? 'Autopilot off' : `Autopilot: ${AUTOPILOT_LEVELS[level]}`);
 });
 $('#backlog-view').addEventListener('click', async (e) => {
+  if (e.target.closest('[data-goal-act]')) return goalsUi.onClick(e);
   const el = e.target.closest('[data-bl]');
   if (!el) return;
   const what = el.dataset.bl;
@@ -3919,6 +3923,7 @@ function handleEvent(msg) {
     agents.clear();
     msg.agents.forEach((a) => agents.set(a.id, a));
     if (msg.backlog) backlogState = msg.backlog;
+    if (msg.goals) goalsUi.set(msg.goals);
     if (msg.projects) projectsState = msg.projects;
     races.clear();
     for (const r of msg.races ?? []) races.set(r.id, r);
@@ -3968,6 +3973,8 @@ function handleEvent(msg) {
     builtUi.render();
   } else if (msg.t === 'backlog') {
     backlogState = msg.backlog;
+  } else if (msg.t === 'goals') {
+    goalsUi.set(msg.goals);
   } else if (msg.t === 'projects') {
     projectsState = msg.projects;
     renderProjectOptions();

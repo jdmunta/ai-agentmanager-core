@@ -4245,3 +4245,66 @@ test('work record: what the agents got done, appended to a CSV in agentmgr home,
   assert.equal(csv, fs.readFileSync(v.files.events, 'utf8'));
   assert.match((await call('GET', '/worklog/summary?days=0')).body.markdown, /^# Work record.*\n- Pull requests: \d+ merged/);
 });
+
+test('goals: an outcome across projects is planned into backlog tasks, checked when they finish, and summarized', async () => {
+  const mk = (name) => {
+    const dir = path.join(home, name);
+    fs.mkdirSync(dir);
+    execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: dir });
+    execFileSync('git', ['-c', 'commit.gpgsign=false', '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '--allow-empty', '-m', 'init'], { cwd: dir });
+    return dir;
+  };
+  assert.equal((await call('POST', '/projects', { shortcut: 'gw', name: 'goal-web', dir: mk('goal-web') })).status, 200);
+  assert.equal((await call('POST', '/projects', { shortcut: 'ga', name: 'goal-api', dir: mk('goal-api') })).status, 200);
+  assert.equal((await call('POST', '/goals', { text: 'x', projects: [] })).status, 400);
+  assert.equal((await call('POST', '/goals', { text: 'x', projects: ['zz'] })).status, 400);
+  assert.equal((await call('POST', '/goals', { text: 'x', projects: ['gw'], period: 'month' })).status, 400);
+  const goalNow = async (id) => (await call('GET', '/goals')).body.find((g) => g.id === id);
+
+  // Review first: the plan (one task per project; tasks for other projects are dropped), then start part of it.
+  const g = (await call('POST', '/goals', { text: 'Ship SSO login #bogus #more', projects: ['gw', 'ga'], period: 'day', review: true })).body;
+  assert.equal(g.status, 'planning');
+  assert.ok(g.due && new Date(g.due).getHours() === 23);
+  const planned = await waitFor(async () => ((await goalNow(g.id)).status === 'review' ? goalNow(g.id) : null), 15000, 'plan ready');
+  assert.deepEqual(planned.plan.map((t) => t.project), ['gw', 'ga']);
+  const started = (await call('POST', `/goals/${g.id}/approve`, { tasks: [planned.plan[0]] })).body;
+  assert.equal(started.status, 'running');
+  assert.equal(started.items.length, 1);
+  const item = (await call('GET', '/backlog')).body.items.find((i) => i.id === started.items[0]);
+  assert.equal(item.goalId, g.id);
+  assert.equal(item.projectName, 'goal-web');
+  assert.equal((await goalNow(g.id)).counts.total, 1);
+
+  // Its task finishes: the check finds the docs missing and queues them; once those are done, the goal is done.
+  await waitFor(async () => (await call('GET', '/backlog')).body.items.find((i) => i.id === item.id).agentId, 15000, 'agent started');
+  await call('POST', `/backlog/${item.id}/accept`);
+  const more = await waitFor(async () => ((await goalNow(g.id)).items.length === 2 ? goalNow(g.id) : null), 15000, 'a task for what is missing');
+  assert.equal(more.checks[0].met, false);
+  assert.equal(more.checks[0].reason, 'The docs are missing');
+  assert.equal(more.counts.completed, 1);
+  const extra = (await call('GET', '/backlog')).body.items.find((i) => i.id === more.items[1]);
+  assert.match(extra.title, /^Finish the rest: the docs/);
+  await call('POST', `/backlog/${extra.id}/accept`);
+  const done = await waitFor(async () => ((await goalNow(g.id)).status === 'done' ? goalNow(g.id) : null), 15000, 'goal done');
+  assert.deepEqual([done.counts.completed, done.counts.pending, done.counts.followUps], [2, 0, 0]);
+  assert.equal(done.checks.at(-1).met, true);
+  const md = (await call('GET', `/goals/${g.id}/summary`)).body.markdown;
+  assert.match(md, /^# Goal: Ship SSO login/);
+  assert.match(md, /2 completed, 0 pending, 0 follow-ups · done/);
+  assert.match(md, /## Completed\n- Do the gw part of: Ship SSO login.*\(goal-web\)/);
+
+  // Straight to work (no review), then stopped: its queued tasks are cancelled; then removed.
+  await call('POST', '/backlog/settings', { autoRun: false });
+  try {
+    const g2 = (await call('POST', '/goals', { text: 'Add pagination', projects: ['ga'], period: 'none' })).body;
+    assert.equal(g2.due, null);
+    const running = await waitFor(async () => ((await goalNow(g2.id)).status === 'running' ? goalNow(g2.id) : null), 15000, 'queued');
+    assert.equal(running.summary.pending[0].state, 'queued');
+    assert.equal((await call('DELETE', `/goals/${g2.id}`)).status, 409);
+    assert.equal((await call('POST', `/goals/${g2.id}/stop`)).body.status, 'stopped');
+    assert.equal((await call('GET', '/backlog')).body.items.find((i) => i.id === running.items[0]).status, 'cancelled');
+    assert.equal((await call('DELETE', `/goals/${g2.id}`)).status, 200);
+  } finally {
+    await call('POST', '/backlog/settings', { autoRun: true });
+  }
+});
