@@ -4214,17 +4214,18 @@ test('Close all closes every open session but the busy ones (unless asked) and t
   assert.ok(Date.parse((await call('POST', `/agents/${made[0].id}/reminder`, { action: 'later' })).body.reminder.laterUntil) > Date.now());
   assert.ok((await call('POST', `/agents/${made[0].id}/reminder`, { action: 'dismiss' })).body.reminder.dismissedAt);
 
+  // Each closes, or is left open as working (an agent can turn busy at any moment); the rest are closed.
   const r = (await call('POST', '/agents/close-all', {})).body;
-  for (const a of made) assert.ok(r.closed.some((x) => x.id === a.id), `${a.name} closed`);
+  for (const a of made) assert.ok(r.closed.some((x) => x.id === a.id) || r.working.some((x) => x.id === a.id), `${a.name} closed or working`);
   const all = (await call('GET', '/agents')).body;
   assert.deepEqual(all.filter((a) => a.runtime.running && a.kind !== 'assistant' && !r.working.some((w) => w.id === a.id)).map((a) => a.name), []);
+  // With working: the busy ones close too; then nothing but the assistant is open.
+  assert.deepEqual((await call('POST', '/agents/close-all', { working: true })).body.working, []);
   for (const a of made) {
     const now = await agentNow(a.id);
     assert.equal(now.runtime.running, false);
     assert.equal(now.desired, 'stopped');
     assert.equal(now.followUp, null, 'closed by you: no reminder');
   }
-  // With working: the busy ones close too; then nothing but the assistant is open.
-  assert.deepEqual((await call('POST', '/agents/close-all', { working: true })).body.working, []);
   assert.deepEqual((await call('GET', '/agents')).body.filter((a) => a.runtime.running && a.kind !== 'assistant').map((a) => a.name), []);
 });
