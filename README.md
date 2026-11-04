@@ -319,7 +319,8 @@ How it behaves:
 Every agent has a priority, **P0** (urgent) to **P3** (low). **P2** is the default.
 
 - **Look.** P0 shows a solid red chip and a red bar on the agent. P1 shows a red outline chip, and P3 a muted chip. P2 shows nothing, to keep the list calm.
-- **Ordering.** Within a project, agents sort by priority, then needs-input, then running. Projects holding a P0 or P1 agent move to the top and show the chip in their header.
+- **Ordering.** In the **By project** order, agents within a project sort by priority, then needs-input, then running. Projects holding a P0 or P1 agent move to the top and show the chip in their header.
+- **Order.** The list starts with the agents created or used most recently on top: one list, each agent with its project. A new agent starts at the top; after that, you or it working in it moves it up (typing, its conversation, its brief); a restart alone doesn't. Above the list, switch to **Running first** (running agents on top, most recently used first, then the rest) or **By project** (the grouping described here). Each browser remembers its choice.
 - **Setting it.** Use the selector next to the agent's name, the New agents dialog, `add --priority P1`, or `agentmgr priority <agent> P0`.
 - **Backlog.** Items use the same P0–P3 scale and pass it on to their agents.
 - **Slack.** Alerts are tagged `[P0]` / `[P1]`.
@@ -531,8 +532,10 @@ Autopilot takes a project's finished items the rest of the way when the [review 
 
 What it does with work that isn't ready:
 
-- **Not ready, for a concrete reason** (failing CI, acceptance criteria not met, barely verified): the item goes back to the same agent with those reasons. This happens twice at most; after that it waits for you.
+- **Not ready, for a concrete reason** (failing CI, acceptance criteria not met, barely verified): the item goes back to the same agent with its scorecard, as [**✨ Improve**](#review-changes) sends it: the low scores with why, the criteria not met, where a reviewer would look. This happens three times at most (`"autopilot": { "rounds": 3 }`); after that it waits for you.
 - **Look at these first, a failed step, or a closed pull request:** autopilot stops and it waits for you in the **Inbox** ("Autopilot held"), saying why. You can **Review changes**, **Ship it** (go ahead anyway), or **Send back** with a note.
+
+**Ship at a score.** Next to the level, choose when it ships: **when ready** (the scorecard says *Ready to approve*), or **at 80+**, **85+**, **90+** or **95+** (`agentmgr backlog autopilot <project> merge --target 85`; `--target none` goes back to when ready; a default for all projects goes in config.json as `"autopilot": { "target": 85 }`). With a score set, work that isn't there yet, *Look at these first* included, goes back to its agent to improve, and is scored again when the agent is done. It ships once the scorecard says ready and rates it at least the target. It waits for you when the tries are used up, or earlier when a try raised the score by less than 3 points, since more of the same won't get there. The item shows the scores so far (*scores 72 → 81 → 87*).
 
 An item whose pull request merges is done. Each item shows where autopilot stands ("pull request open #12", "waiting for checks to merge", "sent back to the agent"). **Ship it** is also on every item in review, so you can ship one by hand with autopilot off. Plugins can still refuse the commit, the pull request or the merge (`agent.commit`, `agent.pr`, `agent.merge`).
 

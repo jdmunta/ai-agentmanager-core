@@ -1375,11 +1375,78 @@ test('transcripts: the tool call still waiting for its result is what a prompt a
   assert.equal(scanActivity(file, state).calls.size, 0);
 });
 
+test('autopilot with a target score: work goes back until it is ready at the target, and stops when it stops improving', async () => {
+  const { EventEmitter } = await import('node:events');
+  const { Autopilot } = await import('../src/autopilot.js');
+  const { improveMessage } = await import('../src/scorecard.js');
+  const calls = [];
+  const card = (recommendation, overall) => ({ data: { recommendation, overall, reasons: [], scores: { tests: { score: 60, why: 'thin', notes: [] } }, criteria: [], look: [] }, diffHash: 'd1' });
+  const agent = { id: 'ag', prs: {}, docs: {}, landing: { sent: {} } };
+  const manager = Object.assign(new EventEmitter(), {
+    view: () => ({ runtime: { busy: false } }),
+    refresh: async () => {},
+    improve: (id, { send }) => send(improveMessage(agent.docs.scorecard.data)),
+  });
+  const it = { id: 'i1', title: 'Add the thing', projectKey: 'p', status: 'review', agentId: 'ag', reviewAt: 't0' };
+  const backlog = Object.assign(new EventEmitter(), {
+    items: () => [it],
+    get: () => it,
+    changed: () => {},
+    autopilotFor: () => 'pr',
+    targetFor: () => 85,
+    reopen: (id, { note }) => ((it.status = 'active'), calls.push(note)),
+  });
+  const review = { get: async () => ({ files: [{ file: 'a.js' }], diffHash: 'd1' }), commit: async () => calls.push('commit'), pr: async () => (calls.push('pr'), { url: 'https://github.com/o/r/pull/9' }) };
+  const ap = new Autopilot({ manager, store: { get: () => agent }, backlog, review, landing: {}, log: () => {} });
+  ap.close();
+  // One round of review per score: the agent's next "done" brings the item back to review.
+  let round = 0;
+  const review1 = async (rec, overall) => {
+    Object.assign(it, { status: 'review', reviewAt: `t${++round}` });
+    agent.docs.scorecard = card(rec, overall);
+    await ap.tick();
+  };
+  try {
+    // Ready, but under the target: back to the agent with its scorecard and the target.
+    await review1('ready', 82);
+    assert.equal(calls.length, 1);
+    assert.match(calls[0], /^Autopilot: this ships when the review scorecard says ready and rates it 85\/100 or more\./);
+    assert.match(calls[0], /rates your changes 82\/100[\s\S]*Tests 60\/100: thin/);
+    assert.deepEqual([it.autopilot.state, it.autopilot.scores, it.autopilot.note], ['returned', [82], '82/100, ships at 85']);
+    // "Look at these first" also goes back with a target (instead of waiting for you); ready at 88 ships.
+    await review1('look', 86);
+    await review1('ready', 89);
+    assert.deepEqual(calls.slice(2), ['commit', 'pr']);
+    assert.equal(it.autopilot.state, 'pr');
+
+    // A try that barely moves the score: it stops and waits for you.
+    calls.length = 0;
+    Object.assign(it, { autopilot: undefined });
+    await review1('look', 70);
+    await review1('look', 72);
+    assert.equal(calls.length, 1);
+    assert.equal(it.autopilot.state, 'held');
+    assert.equal(it.autopilot.note, 'Stopped improving at 72/100 (was 70 before the last try; ships at 85).');
+    assert.equal(ap.inbox().length, 1);
+
+    // Improving, but out of tries: it waits for you with where it got to.
+    calls.length = 0;
+    Object.assign(it, { autopilot: undefined });
+    for (const n of [60, 66, 74, 80]) await review1('look', n);
+    assert.equal(calls.length, 3);
+    assert.deepEqual(it.autopilot.scores, [60, 66, 74]);
+    assert.equal(it.autopilot.note, '80/100 after 3 tries; ships at 85.');
+  } finally {
+    ap.close();
+  }
+});
+
 test('autopilot: ready work becomes a merged pull request, not-ready work goes back, the rest waits for you', async () => {
   const { EventEmitter } = await import('node:events');
-  const { Autopilot, returnMessage } = await import('../src/autopilot.js');
+  const { Autopilot } = await import('../src/autopilot.js');
+  const { improveMessage } = await import('../src/scorecard.js');
   const calls = [];
-  const card = (recommendation, diffHash = 'd1', extra = {}) => ({ data: { recommendation, overall: 70, reasons: recommendation === 'not_ready' ? ['CI is failing'] : [], criteria: [], look: [{ file: 'a.js' }], ...extra }, diffHash });
+  const card = (recommendation, diffHash = 'd1', extra = {}) => ({ data: { recommendation, overall: 70, reasons: recommendation === 'not_ready' ? ['CI is failing'] : [], scores: {}, criteria: [], look: [{ file: 'a.js', reason: 'risky' }], ...extra }, diffHash });
   const agent = { id: 'ag', prs: {}, docs: {}, landing: { sent: {} } };
   const manager = Object.assign(new EventEmitter(), {
     busy: false,
@@ -1389,15 +1456,18 @@ test('autopilot: ready work becomes a merged pull request, not-ready work goes b
       agent.docs.scorecard = manager.nextCard;
     },
     refresh: async () => {},
+    improve: (id, { send }) => send(improveMessage(agent.docs.scorecard.data)),
   });
   const store = { get: (id) => (id === 'ag' ? agent : null) };
   let level = 'merge';
+  let target = null;
   const it = { id: 'i1', title: 'Add the thing\nmore', projectKey: 'p', status: 'review', agentId: 'ag', reviewAt: 't1' };
   const backlog = Object.assign(new EventEmitter(), {
     items: () => [it],
     get: () => it,
     changed: () => {},
     autopilotFor: () => level,
+    targetFor: () => target,
     accept: () => ((it.status = 'done'), calls.push('accept')),
     reopen: (id, { note }) => ((it.status = 'active'), calls.push(`reopen:${note.split('\n')[0]}`)),
   });
@@ -1436,27 +1506,28 @@ test('autopilot: ready work becomes a merged pull request, not-ready work goes b
     assert.equal(it.status, 'done');
     assert.equal(it.autopilot.state, 'merged');
 
-    // A new item, not ready: back to the agent with the reasons, at most twice; then it waits for you.
+    // A new item, not ready: back to the agent with its scorecard, at most three times; then it waits for you.
     Object.assign(it, { status: 'review', reviewAt: 't2', autopilot: undefined });
     agent.prs = {};
     agent.docs.scorecard = card('not_ready');
     calls.length = 0;
-    for (const round of ['t3', 't4']) {
+    for (const round of ['t3', 't4', 't4b']) {
       await ap.tick();
       Object.assign(it, { status: 'review', reviewAt: round });
     }
-    assert.deepEqual(calls, ["reopen:Autopilot: the review scorecard says this isn't ready yet: CI is failing.", "reopen:Autopilot: the review scorecard says this isn't ready yet: CI is failing."]);
+    assert.equal(calls.length, 3);
+    assert.ok(calls.every((c) => c === "reopen:Autopilot: the review scorecard says this isn't ready yet."), calls.join('|'));
     await ap.tick();
     assert.equal(it.autopilot.state, 'held');
-    assert.match(it.autopilot.note, /Still not ready after 2 tries: CI is failing/);
+    assert.match(it.autopilot.note, /Still not ready after 3 tries: CI is failing/);
     assert.equal(ap.inbox().length, 1);
     assert.equal(ap.inbox()[0].kind, 'autopilot');
     // Held: nothing more this round. Ship it goes ahead anyway.
     await ap.tick();
-    assert.equal(calls.length, 2);
+    assert.equal(calls.length, 3);
     ap.shipNow('i1');
     await ap.tick();
-    assert.deepEqual(calls.slice(2), ['commit:Add the thing', 'pr']);
+    assert.deepEqual(calls.slice(3), ['commit:Add the thing', 'pr']);
     assert.equal(ap.inbox().length, 0);
 
     // "Look at these first", with autopilot at "pr": waits for you, naming where to look.
@@ -1482,7 +1553,6 @@ test('autopilot: ready work becomes a merged pull request, not-ready work goes b
     await ap.tick();
     assert.deepEqual(calls, ['score', 'commit:Add the thing', 'pr']);
     assert.equal(it.autopilot.state, 'pr', 'at "pr" it stops at the pull request');
-    assert.match(returnMessage(card('not_ready', 'x', { criteria: [{ criterion: 'Works offline', status: 'not_met', evidence: 'no cache' }] }).data), /- Works offline \(no cache\)/);
   } finally {
     ap.close();
   }

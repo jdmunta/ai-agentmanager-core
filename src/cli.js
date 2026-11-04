@@ -1286,13 +1286,13 @@ export async function main(argv) {
     for (const it of items) {
       if (it.projectKey !== last) {
         const p = proj[it.projectKey];
-        const ap = p?.autopilot && p.autopilot !== 'off' ? `, autopilot: ${p.autopilot === 'merge' ? 'merge' : 'open PRs'}` : '';
+        const ap = p?.autopilot && p.autopilot !== 'off' ? `, autopilot: ${p.autopilot === 'merge' ? 'merge' : 'open PRs'}${p.target ? ` at ${p.target}+` : ''}` : '';
         console.log(`\n${bold(it.projectName)} ${dim(`(${p?.limit ?? v.defaultLimit} at a time${ap})`)}`);
         last = it.projectKey;
       }
       const agent = it.agent ? dim(` → ${it.agent.name} (${it.agent.id})${it.agent.briefStatus ? ` brief: ${it.agent.briefStatus}` : ''}`) : '';
       console.log(`  ${it.id}  P${it.priority}  ${(ST[it.status] ?? it.status).padEnd(18)} ${truncate(it.title, 60)}${agent}`);
-      if (it.status === 'review' && it.autopilot?.state) console.log(dim(`        autopilot: ${it.autopilot.state}${it.autopilot.pr ? ` ${it.autopilot.pr}` : ''}${it.autopilot.note ? `: ${it.autopilot.note}` : ''}`));
+      if (it.status === 'review' && it.autopilot?.state) console.log(dim(`        autopilot: ${it.autopilot.state}${it.autopilot.pr ? ` ${it.autopilot.pr}` : ''}${it.autopilot.note ? `: ${it.autopilot.note}` : ''}${it.autopilot.scores?.length ? ` (scores ${it.autopilot.scores.join(' → ')})` : ''}`));
     }
   };
   bl.command('ls')
@@ -1384,9 +1384,10 @@ export async function main(argv) {
     .description("Take a project's finished items on by themselves when the review scorecard says ready: off, pr (open the pull request) or merge (and merge it once checks pass)")
     .argument('<project>', 'project name as shown in "backlog ls"')
     .argument('<level>', 'off, pr or merge')
-    .action(async (project, level) => {
+    .option('--target <score>', 'ship only at this review score or more (50-100), sending the work back to improve until then; "none" ships when ready')
+    .action(async (project, level, opts) => {
       await daemon();
-      printBacklog(await api('POST', '/backlog/settings', { project, autopilot: level }));
+      printBacklog(await api('POST', '/backlog/settings', { project, autopilot: level, ...(opts.target !== undefined ? { target: opts.target } : {}) }));
     });
   itemCmd('ship', 'Go ahead with an item autopilot held: open its pull request (and merge, at the merge level)', 'ship');
   bl.command('pause')
