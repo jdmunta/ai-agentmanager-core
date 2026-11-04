@@ -58,14 +58,14 @@ const saveRecent = () => {
     localStorage.setItem('agentmgr.recentDays', String(recent.days));
   } catch {}
 };
-// How the agents list is ordered: by project (grouped), recently used, or running first (one list each).
-const ORDERS = ['project', 'recent', 'running'];
+// How the agents list is ordered: recently used (the default) or running first, one list each; or grouped by project.
+const ORDERS = ['recent', 'running', 'project'];
 let listOrder = (() => {
   try {
     const v = localStorage.getItem('agentmgr.listOrder');
-    return ORDERS.includes(v) ? v : 'project';
+    return ORDERS.includes(v) ? v : 'recent';
   } catch {
-    return 'project';
+    return 'recent';
   }
 })();
 
@@ -3501,7 +3501,7 @@ $('#filter').addEventListener('input', (e) => {
 });
 
 $('#list-order').addEventListener('change', (e) => {
-  listOrder = ORDERS.includes(e.target.value) ? e.target.value : 'project';
+  listOrder = ORDERS.includes(e.target.value) ? e.target.value : 'recent';
   try {
     localStorage.setItem('agentmgr.listOrder', listOrder);
   } catch {}

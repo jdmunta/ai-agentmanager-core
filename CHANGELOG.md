@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- **Order the agents list by recent use.** Above the list, choose **By project** (as before), **Recently used** (one list, most recently used on top) or **Running first** (running agents on top, then the rest). Each browser remembers it.
+- **The agents list puts the most recently created or used agents on top.** It's one list now, each agent tagged with its project. Above the list, switch to **Running first** (running agents on top, then the rest) or **By project** (the grouped view as before). Each browser remembers the choice.
 
 ## 1.17.0 (2026-11-03)
 
