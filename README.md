@@ -75,7 +75,7 @@ Claude Code on its own, including its built-in ways to run work in parallel, is 
 - **Keeping up without reading transcripts:** a brief per agent (result, problem, fix, checks) and one inbox for every prompt and question.
 - **From anywhere:** your phone, another computer, or several machines through the hub.
 
-**Trying it costs little.** It runs the same `claude` you already use, with your plan and your repo's `CLAUDE.md` and skills. Sessions you started with `claude` in a terminal can be continued in it (**Import** above the agent list), and you can go back to a plain terminal any time with `claude --resume`.
+**Trying it costs little.** It runs the same `claude` you already use, with your plan and your repo's `CLAUDE.md` and skills. Sessions you started with `claude` in a terminal or in the Claude desktop app can be continued in it (**Import** above the agent list), and you can go back any time: to a plain terminal with `claude --resume`, or to the desktop app with **Open in Claude desktop**.
 
 ## Install
 
@@ -235,11 +235,17 @@ Every agent gets **its own worktree and its own branch** (`agent/<name>-<id>`) o
 - **No upstream.** Agent branches are created without an upstream, so Claude's first `git push -u origin <branch>` sets the right one. They never accidentally track `origin/main`.
 - **Where it shows.** The agent shows **Branched from** with the ref and commit it started at.
 
-## Continue sessions started in a terminal
+## Continue sessions started in a terminal or the Claude desktop app
 
-**Import** (next to **Save now** in the agent list) lists the Claude Code sessions you started yourself with `claude` in a terminal on this machine, from the last 7, 30 or 90 days: grouped by folder, with title, first and last ask, branch, size and last activity. Headless runs (`claude -p`, the SDK) and AI Agent Manager's own agents are left out. Each one you pick becomes an agent in the same folder that continues the same conversation (`--resume`), with the brief, inbox, PRs and usage tracked from then on.
+**Import** (next to **Save now** in the agent list) lists the Claude Code sessions you started yourself on this machine, from the last 7, 30 or 90 days: with `claude` in a terminal, in the Claude desktop app's Code tab (marked **Claude desktop**, with its title there), or in an editor. They're grouped by folder, with title, first and last ask, branch, size and last activity. Headless runs (`claude -p`, the SDK, built agents) and AI Agent Manager's own agents are left out. Each one you pick becomes an agent in the same folder that continues the same conversation (`--resume`), with the brief, inbox, PRs and usage tracked from then on.
 
-A session still open in a terminal is marked **open in a terminal** (a running `claude` names it) or **maybe open** (a `claude` runs in that folder and the session was active minutes ago). Two places writing one conversation would mix it up, so those continue as a **copy** under a new session ID and the terminal keeps the original. For the same reason, an agent that follows a `/clear` to a new session never picks up a headless run or a session a terminal has open in its folder.
+A session still open in a terminal or the desktop app is marked **open in a terminal** / **open in the desktop app** (a running `claude` names it) or **maybe open** (a `claude` runs in that folder and the session was active minutes ago). Two places writing one conversation would mix it up, so those continue as a **copy** under a new session ID and the terminal keeps the original. For the same reason, an agent that follows a `/clear` to a new session never picks up a headless run or a session a terminal has open in its folder.
+
+### Open an agent in the Claude desktop app
+
+**Open in Claude desktop** on a Claude agent (or `agentmgr desktop <agent>`) continues its conversation in the Claude desktop app, using Claude Code's own hand-off (`claude --desktop --resume`). Its session here closes first, and until you resume it here, messages for it (yours, Autopilot's, Landing's) wait instead of starting a second copy. **Resume** picks up what was said in the desktop app, since it's the same session; close it in the desktop app first. Needs macOS or Windows and Claude Code signed in with a Claude subscription; when Claude Code refuses, the reason is shown. Agents in a container, and agents moved to another machine, can't be opened there.
+
+With Remote Control on (`"remoteControlAtStartup": true` in `~/.claude/settings.json`), running agents also show in the Claude apps while they run, as live sessions.
 
 ## Restarts and reboots
 

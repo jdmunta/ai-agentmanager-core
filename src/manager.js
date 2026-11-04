@@ -955,6 +955,7 @@ export class AgentManager extends EventEmitter {
     if (!agent.workdir || !fs.existsSync(agent.workdir)) {
       throw Object.assign(new Error(`Working folder ${agent.workdir} no longer exists`), { status: 409 });
     }
+    if (agent.desktop) this.patch(agent.id, { desktop: null }); // continued here again
 
     if (sessionId) {
       if (!agent.sessions.some((s) => s.id === sessionId)) {
@@ -1763,9 +1764,52 @@ export class AgentManager extends EventEmitter {
     return this.view(this.store.get(agent.id));
   }
 
+  /**
+   * Continue a Claude agent's conversation in the Claude desktop app (`claude --desktop --resume`):
+   * its session here is closed first, and it waits until you resume it here, where it picks up
+   * what was said in the desktop app (the same session).
+   */
+  async openInDesktop(ref) {
+    const agent = this.mustGet(ref);
+    const err = (status, message) => Object.assign(new Error(message), { status });
+    if ((agent.engine ?? DEFAULT_ENGINE) !== 'claude') throw err(409, 'Only Claude Code sessions open in the Claude desktop app');
+    if (agent.isolation === 'container') throw err(409, 'Its session runs in a container; the desktop app cannot reach it');
+    if (agent.movedTo) throw err(409, `${agent.name} moved to ${agent.movedTo.machine}; open it in the desktop app there`);
+    if (!agent.sessionId) throw err(409, 'It has no session yet: start it first');
+    if (!agent.workdir || !fs.existsSync(agent.workdir)) throw err(409, `Working folder ${agent.workdir} no longer exists`);
+    if (this.runtimes.get(agent.id)?.pty) await this.stop(agent.id);
+    const args = [...(this.config.claudeArgs ?? []), '--desktop', '--resume', agent.sessionId];
+    // In a terminal of its own: Claude Code refuses --desktop when its output isn't one.
+    const out = await new Promise((resolve) => {
+      let child;
+      try {
+        child = pty.spawn(this.config.claudeBin, args, { name: 'xterm-256color', cols: 120, rows: 30, cwd: agent.workdir, env: { ...process.env, FORCE_COLOR: '0' } });
+      } catch (e) {
+        return resolve({ code: -1, text: e.message });
+      }
+      let text = '';
+      child.onData((d) => (text = (text + d).slice(-4000)));
+      const timer = setTimeout(() => {
+        child.kill();
+        resolve({ code: null, text });
+      }, 30_000);
+      child.onExit(({ exitCode }) => {
+        clearTimeout(timer);
+        resolve({ code: exitCode, text });
+      });
+    });
+    if (out.code !== 0) {
+      const why = out.text.replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '').replace(/\r/g, '').trim().split('\n').filter(Boolean).slice(-3).join(' ') || (out.code === null ? 'it did not finish in 30 seconds' : `exit code ${out.code}`);
+      throw err(502, `Couldn't open it in the Claude desktop app: ${why}`);
+    }
+    this.patch(agent.id, { desktop: { at: now(), sessionId: agent.sessionId } });
+    this.changed(this.store.get(agent.id));
+    return this.view(this.store.get(agent.id));
+  }
+
   // ------------------------------------------------- sessions started elsewhere
 
-  /** Claude Code sessions started outside AI Agent Manager (in a terminal), to continue here. */
+  /** Claude Code sessions started outside AI Agent Manager (in a terminal or the Claude desktop app), to continue here. */
   scanSessions({ days = 30 } = {}) {
     const known = new Set(this.store.list().flatMap((a) => a.sessions.map((x) => x.id)));
     return scanClaudeSessions({ days: Math.max(1, Math.min(365, Number(days) || 30)), known, excludeDir: paths.home });
@@ -1787,7 +1831,7 @@ export class AgentManager extends EventEmitter {
         continue;
       }
       if (s.inUse && !copy) {
-        out.push({ sessionId: s.sessionId, error: 'Still open in a terminal: close it there first, or continue a copy' });
+        out.push({ sessionId: s.sessionId, error: `Still open in ${s.source === 'desktop' ? 'the Claude desktop app' : 'a terminal'}: close it there first, or continue a copy` });
         continue;
       }
       let sessionId = s.sessionId;
@@ -1803,7 +1847,7 @@ export class AgentManager extends EventEmitter {
         engine: 'claude',
         start,
         sessionId,
-        imported: { from: 'terminal', sessionId: s.sessionId, copy: sessionId !== s.sessionId, at: now() },
+        imported: { from: s.source === 'desktop' ? 'desktop' : 'terminal', sessionId: s.sessionId, copy: sessionId !== s.sessionId, at: now() },
       });
       out.push({ sessionId: s.sessionId, agentId: agent.id, name: agent.name });
     }
@@ -2474,7 +2518,8 @@ export class AgentManager extends EventEmitter {
     this.plugins.emit('agent.message', { agent: this.auditView(agent), text, source });
     if (!this.outbox.has(agent.id)) this.outbox.set(agent.id, []);
     this.outbox.get(agent.id).push({ text, source, at: now() });
-    if (!this.runtimes.get(agent.id)?.pty && agent.workdir && agent.status !== 'preparing') this.start(agent.id);
+    // In the Claude desktop app: it waits for Resume here (two places writing one conversation mix it up).
+    if (!this.runtimes.get(agent.id)?.pty && agent.workdir && agent.status !== 'preparing' && !agent.desktop) this.start(agent.id);
     this.changed(agent);
     return this.view(this.store.get(agent.id));
   }

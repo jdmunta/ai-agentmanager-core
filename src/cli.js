@@ -969,6 +969,17 @@ export async function main(argv) {
     });
 
   program
+    .command('desktop')
+    .description('Continue a Claude agent in the Claude desktop app (its session here closes; resume it here to pick up what was said there)')
+    .argument('<agent>')
+    .action(async (ref) => {
+      await daemon();
+      const a = await resolveAgent(ref);
+      await api('POST', `/agents/${a.id}/desktop`);
+      console.log(`${green('✓')} ${a.name} opened in the Claude desktop app; continue it here with: agentmgr start ${a.id}`);
+    });
+
+  program
     .command('tell')
     .description("Send a message into an agent's session (typed in when it is idle; resumes it if closed)")
     .argument('<agent>')

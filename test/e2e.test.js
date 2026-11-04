@@ -17,6 +17,7 @@ process.env.AGENTMGR_HOME = home;
 process.env.AGENTMGR_PLUGINS = path.join(here, 'fixtures', 'test-plugin.js');
 process.env.AGENTMGR_PORT = String(port);
 process.env.CLAUDE_CONFIG_DIR = path.join(home, 'claude');
+process.env.AGENTMGR_CLAUDE_DESKTOP_DIR = path.join(home, 'claude-desktop'); // never the real desktop app's
 process.env.FAKE_CLAUDE_LOG = claudeLog;
 process.env.AGENTMGR_NO_GH = '1';
 process.env.AGENTMGR_REMOTE = '0'; // the remote-access test turns it on explicitly
@@ -1739,6 +1740,40 @@ test('project shortcuts: auto-assigned, "@cc"-style use fills the repo, rename, 
 const gitc = (cwd, ...args) => execFileSync('git', ['-c', 'commit.gpgsign=false', '-c', 'user.email=t@t', '-c', 'user.name=t', ...args], { cwd }).toString().trim();
 const runningAgent = (id) => waitFor(async () => ((await agentNow(id)).status === 'running' ? agentNow(id) : null), 20000, `agent ${id} running`);
 
+test('Open in Claude desktop: its session closes and opens in the desktop app; messages wait until it is resumed here', async () => {
+  const [a] = (await call('POST', '/agents', { intent: 'Hand me to the desktop app' })).body;
+  const ready = await runningAgent(a.id);
+  const opened = await call('POST', `/agents/${a.id}/desktop`);
+  assert.equal(opened.status, 200, JSON.stringify(opened.body));
+  const handoff = launches().filter((l) => l.desktop).at(-1);
+  assert.deepEqual(handoff.args.slice(-3), ['--desktop', '--resume', ready.sessionId]);
+  assert.equal(fs.realpathSync(handoff.cwd), fs.realpathSync(ready.workdir));
+  let now = await agentNow(a.id);
+  assert.equal(now.runtime.running, false, 'closed here first');
+  assert.equal(now.desktop.sessionId, ready.sessionId);
+  // A message waits instead of starting a second copy of the conversation here.
+  await call('POST', `/agents/${a.id}/tell`, { text: 'Also add a test' });
+  await new Promise((r) => setTimeout(r, 500));
+  now = await agentNow(a.id);
+  assert.deepEqual([now.runtime.running, now.outbox], [false, 1]);
+  // Resumed here: the same session, and the hand-off is over.
+  await call('POST', `/agents/${a.id}/start`);
+  now = await runningAgent(a.id);
+  assert.equal(now.desktop, null);
+  assert.equal(now.sessionId, ready.sessionId);
+  // Claude Code refusing (an API-key sign-in, say) comes back as the reason.
+  process.env.FAKE_DESKTOP_FAIL = 'Claude Desktop requires a Claude subscription';
+  try {
+    const no = await call('POST', `/agents/${a.id}/desktop`);
+    assert.equal(no.status, 502);
+    assert.match(no.body.error, /requires a Claude subscription/);
+    assert.equal((await agentNow(a.id)).desktop, null);
+  } finally {
+    delete process.env.FAKE_DESKTOP_FAIL;
+  }
+  await call('DELETE', `/agents/${a.id}`);
+});
+
 test('tell: a message is typed into the session once the agent is idle', async () => {
   const [a] = (await call('POST', '/agents', { intent: 'Tell me things' })).body;
   await runningAgent(a.id);
@@ -2062,7 +2097,7 @@ test('live browser tabs: a real browser on this machine, streamed; clicks and ty
   }
 });
 
-test('terminal sessions: scanned (interactive ones only), continued as agents that resume the same conversation', async () => {
+test('terminal and desktop app sessions: scanned (conversations only), continued as agents that resume the same conversation', async () => {
   const { transcriptPath } = await import('../src/tracker.js');
   // Outside AI Agent Manager's home, like a project folder of your own.
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'my-terminal-project-')));
@@ -2080,8 +2115,27 @@ test('terminal sessions: scanned (interactive ones only), continued as agents th
   // A headless one-off (claude -p) isn't a conversation to continue.
   write('99999999-2222-4333-8444-555555555555', [{ type: 'user', cwd: dir, entrypoint: 'sdk-cli', message: { role: 'user', content: 'Summarize this' } }]);
 
+  // Started in the Claude desktop app: a program's transcript, named in the app's list of sessions.
+  const dsid = '77777777-2222-4333-8444-555555555555';
+  write(dsid, [{ type: 'user', cwd: dir, entrypoint: 'sdk-cli', message: { role: 'user', content: 'Fix the flaky date test' } }]);
+  const rec = path.join(home, 'claude-desktop', 'claude-code-sessions', 'acct', 'org', 'local_abc.json');
+  fs.mkdirSync(path.dirname(rec), { recursive: true });
+  fs.writeFileSync(rec, JSON.stringify({ sessionId: 'local_abc', cliSessionId: dsid, cwd: dir, title: 'Flaky date test', isArchived: false }));
+  // One from an editor is a conversation too; a program's runs aren't, however many asks they have.
+  write('88888888-2222-4333-8444-555555555555', [{ type: 'user', cwd: dir, entrypoint: 'claude-vscode', message: { role: 'user', content: 'Rename the config loader' } }]);
+  write('66666666-2222-4333-8444-555555555555', [
+    { type: 'user', cwd: dir, entrypoint: 'sdk-ts', message: { role: 'user', content: 'Your goal: summarize each input' } },
+    { type: 'user', cwd: dir, entrypoint: 'sdk-ts', message: { role: 'user', content: 'New input: the release notes' } },
+  ]);
+
   const found = (await call('GET', '/sessions/scan?days=7')).body;
   const s = found.find((x) => x.sessionId === sid);
+  assert.equal(s.source, 'terminal');
+  const d = found.find((x) => x.sessionId === dsid);
+  assert.ok(d, 'the desktop app session is listed');
+  assert.deepEqual([d.source, d.title], ['desktop', 'Flaky date test']);
+  assert.equal(found.find((x) => x.sessionId.startsWith('88888888'))?.source, 'editor');
+  assert.ok(!found.some((x) => x.sessionId.startsWith('66666666')), "a program's runs are left out");
   assert.ok(s, 'the terminal session is listed');
   assert.equal(s.title, 'CSV export for reports');
   assert.equal(s.branch, 'feature/x');
@@ -2099,6 +2153,9 @@ test('terminal sessions: scanned (interactive ones only), continued as agents th
   assert.ok(launch.args.includes('--resume'), 'continues the same conversation');
   assert.ok(!(await call('GET', '/sessions/scan?days=7')).body.some((x) => x.sessionId === sid), 'now an agent: no longer offered');
   assert.match((await call('POST', '/sessions/import', { sessions: [sid] })).body[0].error, /already/);
+  const [rd] = (await call('POST', '/sessions/import', { sessions: [dsid], start: false })).body;
+  assert.equal((await agentNow(rd.agentId)).imported.from, 'desktop');
+  await call('DELETE', `/agents/${rd.agentId}`);
   await call('DELETE', `/agents/${r.agentId}`);
   fs.rmSync(dir, { recursive: true, force: true });
 });
