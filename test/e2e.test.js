@@ -4195,3 +4195,19 @@ test('hub move: an agent continues on another machine with its conversation, bra
     await hub.close?.();
   }
 });
+
+test('work record: what the agents got done, appended to a CSV in agentmgr home, with a summary to copy', async () => {
+  const v = (await call('GET', '/worklog?days=0')).body;
+  assert.equal(v.files.events, path.join(home, 'worklog.csv'));
+  assert.equal(v.files.weekly, path.join(home, 'worklog-weekly.csv'));
+  for (const k of ['prs_opened', 'prs_merged', 'bugs_fixed', 'issues_filed', 'agents_finished']) assert.equal(typeof v.totals[k], 'number');
+  // Earlier tests merged pull requests (autopilot, landing): they're in the record.
+  assert.ok(v.totals.prs_merged >= 1, JSON.stringify(v.totals));
+  assert.ok(v.events.some((e) => e.event === 'pr_merged' && e.link));
+  const res = await fetch(`${base}/api/worklog/worklog.csv`, { headers: { 'x-agentmgr': '1' } });
+  assert.equal(res.status, 200);
+  const csv = await res.text();
+  assert.ok(csv.startsWith('date,event,project,agent,agent_id,title,link,bugs,engine,model,cost_usd,hours,by\n'));
+  assert.equal(csv, fs.readFileSync(v.files.events, 'utf8'));
+  assert.match((await call('GET', '/worklog/summary?days=0')).body.markdown, /^# Work record.*\n- Pull requests: \d+ merged/);
+});

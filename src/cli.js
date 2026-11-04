@@ -616,6 +616,25 @@ export async function main(argv) {
     });
 
   program
+    .command('worklog')
+    .description('Work record: pull requests opened and merged, bugs fixed, issues filed, agents finished; also appended to ~/.agentmanager/worklog.csv')
+    .option('-d, --days <n>', 'the last n days (0: all time)', '30')
+    .option('--summary', 'print the period as Markdown, for a review or status update')
+    .option('--json', 'print JSON')
+    .action(async (opts) => {
+      await daemon();
+      if (opts.summary) return console.log((await api('GET', `/worklog/summary?days=${Number(opts.days) || 0}`)).markdown);
+      const v = await api('GET', `/worklog?days=${Number(opts.days) || 0}`);
+      if (opts.json) return console.log(JSON.stringify(v, null, 2));
+      const t = v.totals;
+      console.log(bold(`Work record, ${v.days ? `last ${v.days} days` : 'all time'}`));
+      console.log(`  PRs merged ${bold(t.prs_merged)}  opened ${t.prs_opened}${t.prs_closed ? `  closed ${t.prs_closed}` : ''}${t.merge_rate != null ? `  merge rate ${Math.round(t.merge_rate * 100)}%` : ''}${t.median_hours_to_merge != null ? `  median ${t.median_hours_to_merge} h to merge` : ''}`);
+      console.log(`  bugs fixed ${bold(t.bugs_fixed)}  issues filed ${t.issues_filed}  agents finished ${t.agents_finished}`);
+      for (const e of v.events.slice(0, 15)) console.log(dim(`  ${e.date.slice(0, 10)}  ${e.event.replace('_', ' ').padEnd(14)} ${truncate(e.title, 60)}${e.link ? `  ${e.link}` : ''}`));
+      console.log(dim(`\n  ${v.files.events}\n  ${v.files.weekly}`));
+    });
+
+  program
     .command('stats')
     .description('Results across agents: merge rate, time to a first PR and to merge, cost per merged PR, by engine and model')
     .option('-d, --days <n>', 'agents created in the last n days (0: all)', '30')

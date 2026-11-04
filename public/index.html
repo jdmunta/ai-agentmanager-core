@@ -45,6 +45,7 @@
               <span id="me-where" class="hint"></span>
             </div>
             <button role="menuitem" id="settings-btn">Settings…</button>
+            <button role="menuitem" id="worklog-btn" title="What your agents got done: pull requests, bugs fixed, issues filed; kept in a spreadsheet for reviews">Work record…</button>
             <button role="menuitem" id="cleanup-btn" title="Close agents idle for a while, and delete old closed ones">Clean up…</button>
             <button role="menuitem" id="alerts-btn" class="local-only" title="Slack alerts when an agent needs you">Alerts…</button>
             <button role="menuitem" id="remote-btn" class="local-only" title="Open AI Agent Manager from your phone">Remote access…</button>
@@ -684,6 +685,21 @@
           <span class="spacer"></span>
           <button type="button" id="spend-close" class="ghost">Close</button>
           <button class="primary">Save limits</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="worklog-dialog">
+      <form method="dialog" class="alerts-body">
+        <h2>Work record <select id="worklog-days" class="inline-select"><option value="7">last 7 days</option><option value="30" selected>last 30 days</option><option value="90">last 90 days</option><option value="365">last year</option><option value="0">all time</option></select></h2>
+        <div id="worklog-body"></div>
+        <p id="worklog-files" class="hint"></p>
+        <div class="dialog-actions">
+          <button type="button" id="worklog-copy" title="The period's totals and what was merged, fixed and filed, with links, as Markdown for a review or status update">Copy summary</button>
+          <button type="button" id="worklog-csv" class="ghost">Download events</button>
+          <button type="button" id="worklog-weekly" class="ghost">Download weekly</button>
+          <span class="spacer"></span>
+          <button type="button" id="worklog-close" class="ghost">Close</button>
         </div>
       </form>
     </dialog>

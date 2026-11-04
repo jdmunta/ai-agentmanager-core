@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Work record.** What your agents got done is appended, as it happens, to `~/.agentmanager/worklog.csv`: pull requests opened, merged and closed, bugs fixed, issues filed and agents finished, with dates, links and costs. A weekly summary goes to `worklog-weekly.csv`. **Work record…** in the menu shows a period's totals, the weeks and the events, with **Copy summary** (Markdown for a review) and the files to download; `agentmgr worklog`. Agents now list issues they open as `- Filed:` lines in their brief.
+
 ## 1.17.0 (2026-11-03)
 
 - **Sessions go both ways with the Claude desktop app.** **Open in Claude desktop** on a Claude agent (and `agentmgr desktop <agent>`) continues its conversation in the desktop app through Claude Code's `claude --desktop --resume`. The agent's session here closes first, messages for it wait until you resume it here, and **Resume** picks up what was said in the desktop app. **Import** now lists sessions started in the desktop app's Code tab (marked **Claude desktop**, with their title there) and in editors. Before, it only listed sessions started from a terminal. A session open in the desktop app is protected like one open in a terminal: close it there, or continue a copy.
