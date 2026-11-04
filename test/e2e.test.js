@@ -1159,6 +1159,10 @@ test('autopilot: a finished backlog item the scorecard calls ready is committed,
     assert.equal((await call('POST', '/backlog/settings', { project: 'AP', autopilot: 'bogus' })).status, 400);
     const v = (await call('POST', '/backlog/settings', { project: 'AP', autopilot: 'merge' })).body;
     assert.equal(v.projects.find((p) => p.name === 'AP').autopilot, 'merge');
+    assert.equal(v.projects.find((p) => p.name === 'AP').target, null);
+    assert.equal((await call('POST', '/backlog/settings', { project: 'AP', target: 30 })).status, 400);
+    assert.equal((await call('POST', '/backlog/settings', { project: 'AP', target: 90 })).body.projects.find((p) => p.name === 'AP').target, 90);
+    assert.equal((await call('POST', '/backlog/settings', { project: 'AP', target: null })).body.projects.find((p) => p.name === 'AP').target, null);
     // Scored ready (a docs change: nothing to cap), committed, pushed and opened.
     await waitFor(async () => (await item(it.id)).autopilot?.pr, 20000, 'pull request opened');
     const create = gh().find((c) => c[0] === 'pr' && c[1] === 'create');

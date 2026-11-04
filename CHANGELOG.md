@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- **Autopilot ships at a score.** Per project, choose when autopilot ships: when the scorecard says ready, as before, or at 80+, 85+, 90+ or 95+ (`agentmgr backlog autopilot <project> merge --target 85`). With a score set, work that isn't there yet, *Look at these first* included, goes back to its agent with its scorecard to improve, and ships once it's ready at the target. It waits for you when the tries run out (3) or when a try raised the score by less than 3 points. Items show their scores so far (*72 → 81 → 87*).
+- Autopilot sends not-ready work back with the full scorecard, as **✨ Improve** does, instead of only the reasons, and up to three times instead of two (`"autopilot": { "rounds": 3 }`).
+
 ## 1.17.0 (2026-11-03)
 
 - **Sessions go both ways with the Claude desktop app.** **Open in Claude desktop** on a Claude agent (and `agentmgr desktop <agent>`) continues its conversation in the desktop app through Claude Code's `claude --desktop --resume`. The agent's session here closes first, messages for it wait until you resume it here, and **Resume** picks up what was said in the desktop app. **Import** now lists sessions started in the desktop app's Code tab (marked **Claude desktop**, with their title there) and in editors. Before, it only listed sessions started from a terminal. A session open in the desktop app is protected like one open in a terminal: close it there, or continue a copy.
