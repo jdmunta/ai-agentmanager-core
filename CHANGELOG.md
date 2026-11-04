@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Sessions go both ways with the Claude desktop app.** **Open in Claude desktop** on a Claude agent (and `agentmgr desktop <agent>`) continues its conversation in the desktop app through Claude Code's `claude --desktop --resume`. The agent's session here closes first, messages for it wait until you resume it here, and **Resume** picks up what was said in the desktop app. **Import** now lists sessions started in the desktop app's Code tab (marked **Claude desktop**, with their title there) and in editors. Before, it only listed sessions started from a terminal. A session open in the desktop app is protected like one open in a terminal: close it there, or continue a copy.
+
 ## 1.16.0 (2026-11-03)
 
 - **Faster typing and switching with many agents:** the page no longer redraws everything on every agent update. Updates are drawn once per frame, only the views they touch are redrawn (another agent's update leaves the open agent's details and terminal alone), and lists change only the cards that changed. With 40 busy agents, the page's redraw work went from about 870 ms to 35 ms per 10 seconds. Add `?perf` to the address to see how long redraws take.

@@ -6,6 +6,20 @@ import path from 'node:path';
 import { transcriptPath } from '../src/tracker.js';
 
 const args = process.argv.slice(2);
+if (args.includes('--desktop')) {
+  // Hand-off to the Claude desktop app: recorded; FAKE_DESKTOP_FAIL makes it refuse like Claude Code does.
+  fs.appendFileSync(process.env.FAKE_CLAUDE_LOG, JSON.stringify({ cwd: process.cwd(), args, desktop: true }) + '\n');
+  if (!process.stdout.isTTY) {
+    process.stderr.write("--desktop opens the Claude Desktop app and can't run non-interactively (redirected output).\n");
+    process.exit(1);
+  }
+  if (process.env.FAKE_DESKTOP_FAIL) {
+    process.stderr.write(`${process.env.FAKE_DESKTOP_FAIL}\n`);
+    process.exit(1);
+  }
+  process.stdout.write('Opening in Claude Desktop…\n');
+  process.exit(0);
+}
 if (args.includes('-p')) {
   // Explain: a one-shot call that must have no tools and no MCP servers.
   let input = '';

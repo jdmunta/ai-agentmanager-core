@@ -834,7 +834,7 @@ function renderList() {
   $('#counts').innerHTML = agents.size
     ? `<span title="Projects">${projects} project${projects === 1 ? '' : 's'}</span><span>${agents.size} agents</span><span>${running} running</span>
        ${waiting ? `<span class="fail">${waiting} need${waiting === 1 ? 's' : ''} input</span>` : ''}
-       <span class="spacer"></span><button class="link" id="import-btn" title="Continue Claude sessions you started in a terminal on this machine">Import</button><button class="link" id="flush-btn" title="Save session IDs, terminal scrollback and state to disk now (also automatic every 30s)">Save now</button>`
+       <span class="spacer"></span><button class="link" id="import-btn" title="Continue Claude sessions you started in a terminal or the Claude desktop app on this machine">Import</button><button class="link" id="flush-btn" title="Save session IDs, terminal scrollback and state to disk now (also automatic every 30s)">Save now</button>`
     : '';
 
   // Every agent a project has, also the ones a filter hides.
@@ -1843,6 +1843,7 @@ function renderDetail() {
             ? ''
             : `<button data-act="start" ${a.status === 'preparing' ? 'disabled' : ''}>Resume in background</button>`}
         <button data-act="fresh" ${running || a.status === 'preparing' ? 'disabled' : ''} title="Start over with a new session ID (old ones are kept)">New session</button>
+        ${(a.engine ?? 'claude') === 'claude' && a.isolation !== 'container' && !a.movedTo && !REMOTE ? `<button data-act="desktop" ${a.sessionId && a.workdir && a.status !== 'preparing' ? '' : 'disabled'} title="Continue this conversation in the Claude desktop app. Its session here closes; Resume here later picks up what was said there">Open in Claude desktop</button>` : ''}
         <button data-act="shell" ${a.workdir && a.status !== 'preparing' ? '' : 'disabled'} title="A separate terminal in this agent's folder for running commands by hand">Open shell</button>
         ${noRepo(a) ? '' : `<button data-act="changes" ${a.workdir && a.status !== 'preparing' ? '' : 'disabled'} title="Read its changes, comment on lines for the agent, commit and open a pull request">Review changes${a.git?.dirtyFiles ? ` <span class="count">${a.git.dirtyFiles}</span>` : ''}</button>`}
         <button data-act="fork" ${a.workdir && a.git?.branch ? '' : 'disabled'} title="A new agent with this one's code and conversation, in its own worktree, to try another approach">Fork</button>
@@ -1859,6 +1860,7 @@ function renderDetail() {
         ${it.status === 'review' ? `<span class="spacer"></span><button class="small primary" data-backlog-accept="${it.id}">Accept</button> <button class="small" data-backlog-reopen="${it.id}">Reopen</button>` : ''}</div>`;
     })()}
     ${a.error ? `<div class="error-box">${esc(a.error)}</div>` : ''}
+    ${a.desktop && !running ? `<p class="hint">Continued in the <b>Claude desktop app</b> ${ago(a.desktop.at)}. Messages for it wait here; <b>Resume</b> picks up what was said there (close it in the desktop app first).</p>` : ''}
     ${a.movedTo ? `<p class="hint">Moved to <b>${esc(a.movedTo.machine)}</b> ${ago(a.movedTo.at)}: it continues there with the same conversation and work. This copy stays closed; delete it when you no longer need its folder.</p>` : ''}
     ${a.movedFrom ? `<p class="hint">Moved here from <b>${esc(a.movedFrom.machine ?? 'another machine')}</b> ${ago(a.movedFrom.at)}, with its conversation and uncommitted work.</p>` : ''}
     ${!running && a.closedBy === 'cap' ? `<p class="hint">Closed ${ago(a.closedAt)} to stay under the limit on open agents (Settings), as the one idle longest. Resume it any time${a.keep ? '' : ', or mark it Keep'}.</p>` : ''}
@@ -2765,7 +2767,8 @@ function renderImport() {
               (s) => `<label class="import-row ${s.exists ? '' : 'off'}">
               <input type="checkbox" data-sid="${s.sessionId}" ${importPicked.has(s.sessionId) ? 'checked' : ''} ${s.exists ? '' : 'disabled'}>
               <span class="import-main"><b>${esc(s.title || s.firstAsk.slice(0, 80))}</b>
-                ${s.inUse ? `<span class="tag warn" title="${s.inUse === 'open' ? 'A claude process in a terminal has this session open' : 'A claude process runs in this folder and the session was active minutes ago'}">${s.inUse === 'open' ? 'open in a terminal' : 'maybe open in a terminal'}</span>` : ''}
+                ${s.source === 'desktop' ? `<span class="tag" title="Started in the Claude desktop app${s.archived ? '; archived there' : ''}">Claude desktop${s.archived ? ' · archived' : ''}</span>` : s.source === 'editor' ? '<span class="tag" title="Started in an editor (VS Code, JetBrains)">editor</span>' : ''}
+                ${s.inUse ? `<span class="tag warn" title="${s.inUse === 'open' ? 'A claude process has this session open' : 'A claude process runs in this folder and the session was active minutes ago'}">${s.inUse === 'open' ? 'open' : 'maybe open'} ${s.source === 'desktop' ? 'in the desktop app' : 'in a terminal'}</span>` : ''}
                 <span class="hint">${s.title ? `${esc(s.firstAsk.slice(0, 120))}${s.lastAsk ? ` … last: ${esc(s.lastAsk.slice(0, 80))}` : ''}` : s.lastAsk ? `last: ${esc(s.lastAsk.slice(0, 100))}` : ''}</span>
                 <span class="hint">${ago(s.lastActivity)}${s.branch ? ` · ⎇ ${esc(s.branch)}` : ''} · ${Math.max(1, Math.round(s.bytes / 1024))} KB · <code>${s.sessionId.slice(0, 8)}</code></span>
               </span></label>`,
@@ -2773,13 +2776,13 @@ function renderImport() {
             .join('')}</div>`,
         )
         .join('')
-    : `<p class="hint">${importSessions.length ? 'Nothing matches.' : 'No Claude sessions started in a terminal in this period (AI Agent Manager\'s own agents are left out).'}</p>`;
+    : `<p class="hint">${importSessions.length ? 'Nothing matches.' : 'No Claude sessions started in a terminal or the Claude desktop app in this period (AI Agent Manager\'s own agents are left out).'}</p>`;
   const picked = importSessions.filter((s) => importPicked.has(s.sessionId));
   const open = picked.filter((s) => s.inUse).length;
   Object.assign($('#import-go'), {
     disabled: !picked.length,
     textContent: picked.length ? `Continue ${picked.length} session${picked.length > 1 ? 's' : ''}${open ? ` (${open} as a copy)` : ''}` : 'Continue',
-    title: open ? 'Sessions still open in a terminal continue as a copy, so the terminal keeps the original' : '',
+    title: open ? 'Sessions still open in a terminal or the desktop app continue as a copy, so the original stays there' : '',
   });
 }
 $('#import-list').addEventListener('change', (e) => {
@@ -3409,6 +3412,14 @@ $('#detail-body').addEventListener('click', async (e) => {
       act(async () => {
         upsert(await api('POST', `/agents/${a.id}/start`, { fresh: true }));
         term.open(a.id);
+      });
+      break;
+    case 'desktop':
+      btn.disabled = true;
+      btn.textContent = 'Opening…';
+      act(async () => upsert(await api('POST', `/agents/${a.id}/desktop`)), 'Opened in the Claude desktop app; Resume here picks it back up').finally(() => {
+        btn.disabled = false;
+        btn.textContent = 'Open in Claude desktop';
       });
       break;
     case 'stop':

@@ -1,5 +1,5 @@
-// Claude Code sessions started outside AI Agent Manager (a plain `claude` in a terminal), so they
-// can be continued here. Claude Code keeps each session as ~/.claude/projects/<cwd>/<id>.jsonl;
+// Claude Code sessions started outside AI Agent Manager (a plain `claude` in a terminal, or the
+// Claude desktop app's Code tab), so they can be continued here. Claude Code keeps each session as ~/.claude/projects/<cwd>/<id>.jsonl;
 // the start and end of each file say where it ran, its title, branch and first ask.
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -14,6 +14,46 @@ const encode = (p) => {
   } catch {}
   return real.replace(/[^a-zA-Z0-9]/g, '-');
 };
+
+/** Where the Claude desktop app keeps its data (its list of Code sessions is under it). */
+const desktopDir = () =>
+  process.env.AGENTMGR_CLAUDE_DESKTOP_DIR ||
+  (process.platform === 'darwin'
+    ? path.join(os.homedir(), 'Library', 'Application Support', 'Claude')
+    : process.platform === 'win32'
+      ? path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), 'Claude')
+      : path.join(os.homedir(), '.config', 'Claude'));
+
+/**
+ * The Claude desktop app's Code sessions on this computer, by Claude Code session ID: its title
+ * and whether it's archived. Read from the app's own records (claude-code-sessions/<account>/<org>/
+ * local_*.json, each naming its `cliSessionId`); an app that keeps them elsewhere gives none, and
+ * its sessions are still found by their transcripts.
+ */
+export function desktopSessions() {
+  const out = new Map();
+  const root = path.join(desktopDir(), 'claude-code-sessions');
+  const walk = (dir, depth) => {
+    let entries = [];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      const p = path.join(dir, e.name);
+      if (e.isDirectory() && depth < 3) walk(p, depth + 1);
+      else if (e.isFile() && /^local_.*\.json$/.test(e.name)) {
+        try {
+          const r = JSON.parse(fs.readFileSync(p, 'utf8'));
+          if (typeof r.cliSessionId === 'string') out.set(r.cliSessionId, { title: typeof r.title === 'string' ? r.title : null, archived: Boolean(r.isArchived) });
+        } catch {}
+      }
+    }
+  };
+  walk(root, 0);
+  return out;
+}
 
 /** The first and last `bytes` of a file as JSON records (partial lines dropped). */
 function edges(file, size, bytes = 96 * 1024) {
@@ -84,7 +124,7 @@ export function runningClaude() {
 }
 
 /**
- * Interactive Claude Code sessions from the last `days`, newest first, leaving out `known`
+ * Interactive Claude Code sessions from the last `days` (terminal and Claude desktop app), newest first, leaving out `known`
  * session IDs (AI Agent Manager's own) and anything run under `excludeDir` (its one-off calls and
  * workspaces). inUse: "open" when a running claude names the session, "maybe" when one runs in
  * its folder and the session was active in the last 10 minutes.
@@ -121,6 +161,7 @@ export function scanClaudeSessions({ days = 30, known = new Set(), excludeDir, l
   }
   files.sort((a, b) => b.mtimeMs - a.mtimeMs);
   const running = runningClaude();
+  const desktop = desktopSessions();
   const out = [];
   for (const f of files.slice(0, limit)) {
     let recs;
@@ -132,10 +173,15 @@ export function scanClaudeSessions({ days = 30, known = new Set(), excludeDir, l
     const all = [...recs.head, ...recs.tail];
     const withCwd = all.find((r) => r.cwd);
     if (!withCwd) continue;
-    // Headless runs (claude -p, the SDK) aren't conversations to continue.
-    if (all.some((r) => r.entrypoint && r.entrypoint !== 'cli')) continue;
     const firstAsk = recs.head.map(typed).find(Boolean);
     if (!firstAsk) continue;
+    // Where it was started: a terminal (`cli`), the Claude desktop app (in its list of sessions, or
+    // saying so), an editor, or a program (claude -p, the SDK, built agents), whose runs aren't
+    // conversations to continue.
+    const app = desktop.get(f.id);
+    const entry = all.find((r) => r.entrypoint)?.entrypoint ?? 'cli';
+    const source = app || /desktop/i.test(entry) ? 'desktop' : entry === 'cli' ? 'terminal' : /vscode|jetbrains|ide/i.test(entry) ? 'editor' : null;
+    if (!source) continue;
     const cwd = withCwd.cwd;
     if (excludeDir && (cwd === excludeDir || cwd.startsWith(`${excludeDir}/`))) continue;
     const last = (type, key) => [...all].reverse().find((r) => r.type === type && r[key])?.[key];
@@ -147,7 +193,9 @@ export function scanClaudeSessions({ days = 30, known = new Set(), excludeDir, l
       sessionId: f.id,
       cwd,
       exists: fs.existsSync(cwd),
-      title: last('custom-title', 'customTitle') || last('agent-name', 'agentName') || last('ai-title', 'aiTitle') || last('summary', 'summary') || null,
+      source,
+      archived: app?.archived || undefined,
+      title: app?.title || last('custom-title', 'customTitle') || last('agent-name', 'agentName') || last('ai-title', 'aiTitle') || last('summary', 'summary') || null,
       firstAsk: firstAsk.slice(0, 300),
       lastAsk: lastAsk && lastAsk !== firstAsk ? lastAsk.slice(0, 300) : null,
       branch: branch === 'HEAD' ? null : branch,
