@@ -536,6 +536,22 @@ What it does with work that isn't ready:
 
 An item whose pull request merges is done. Each item shows where autopilot stands ("pull request open #12", "waiting for checks to merge", "sent back to the agent"). **Ship it** is also on every item in review, so you can ship one by hand with autopilot off. Plugins can still refuse the commit, the pull request or the merge (`agent.commit`, `agent.pr`, `agent.merge`).
 
+### Goals
+
+A goal is a work order for an outcome, not a task: *"This week: users can sign in with SSO on web, and the API paginates /orders, both with tests."* **+ Goal** at the top of the Backlog tab (or `agentmgr goal add "…" -p web,api`) takes the outcome, when it's due (**today**, **this week** or **no deadline**) and the projects it spans.
+
+1. **Planned.** A model breaks the outcome into tasks, one agent each, each in one of the goal's projects, at most 12. With **Show me the plan before agents start** (`--review`) you see the plan first, untick what you don't want and **Start**; otherwise it starts right away.
+2. **Worked.** The tasks go to the backlog, tagged with the goal. The backlog's limits start the agents, and where a project's [autopilot](#autopilot) is on, finished work is opened as a pull request (and merged) by itself.
+3. **Checked.** When every task is finished, the model compares the outcome with what each task delivered (its brief's results and pull requests). Whatever is still missing is queued as new tasks, for up to 2 more rounds; then the goal is done.
+
+Each goal's card shows how far it got and keeps three lists current:
+
+- **Completed:** finished tasks, with their pull requests.
+- **Pending:** tasks queued, being worked on, or with autopilot.
+- **Follow-ups:** what needs you, with the reason. That covers blocked tasks, work autopilot held, work waiting for your review (autopilot off), and agents that need input, asked a question, seem stuck or went quiet.
+
+**Copy summary** (`agentmgr goal show <id>`) gives the same as Markdown for a stand-up or status update. A goal past its due date shows as overdue, with **Carry over to tomorrow / next week**. **Stop** cancels its queued tasks; agents already working go on as ordinary backlog items. `agentmgr goal ls | approve | replan | extend | stop | rm`.
+
 ## Playbooks
 
 Saved requests you run again: **Backlog → Playbooks**, **Save as playbook…** in New agents, or `agentmgr playbook`. A playbook is a request, the projects to run it in (one agent each), and optionally a model, permission mode, priority and schedule:

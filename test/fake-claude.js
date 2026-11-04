@@ -54,6 +54,22 @@ if (args.includes('-p')) {
           : { conflict: false, confidence: 0.9, reason: 'Unrelated changes', mergeFirst: '', orderReason: '', adviceA: '', adviceB: '' },
       );
     }
+    if (input.startsWith('You plan a work order')) {
+      // Goals: one task per project listed; "#bogus" also asks for a project that isn't one of them.
+      const projects = [...section('projects').matchAll(/^- ([^:]+):/gm)].map((m) => m[1]);
+      const outcome = input.match(/<outcome[^>]*>\n([\s\S]*?)\n<\/outcome>/)?.[1] ?? '';
+      const tasks = projects.map((p) => ({ project: p, title: `Do the ${p} part of: ${outcome.split('\n')[0]}` }));
+      if (outcome.includes('#bogus')) tasks.push({ project: 'nope', title: 'Not a project' });
+      return json({ tasks, note: 'One task per project' });
+    }
+    if (input.startsWith('You check a work order')) {
+      // "#more" in the outcome: one more task the first time, then met.
+      const outcome = input.match(/<outcome[^>]*>\n([\s\S]*?)\n<\/outcome>/)?.[1] ?? '';
+      const done = input.match(/<done>\n([\s\S]*?)\n<\/done>/)?.[1] ?? '';
+      const project = input.match(/<projects>\n- ([^:]+):/)?.[1];
+      if (outcome.includes('#more') && !done.includes('Finish the rest')) return json({ met: false, reason: 'The docs are missing', tasks: [{ project, title: 'Finish the rest: the docs' }] });
+      return json({ met: true, reason: 'Every part was delivered', tasks: [] });
+    }
     if (input.startsWith('You schedule a backlog')) {
       const items = [...section('queued').matchAll(/^- (\S+) \[P\d\] \([^)]*\) (.+)$/gm)].map((m) => ({ id: m[1], title: m[2] }));
       const build = items.find((i) => i.title.startsWith('Build'));

@@ -1549,3 +1549,20 @@ test('repeats: requests you keep making are offered as a playbook, with what cha
   assert.deepEqual(new Repeats({ file: path.join(tmp(), 'x.json'), enabled: false }).view().suggestions, []);
   assert.ok(events.length >= 5);
 });
+
+test('goals: due at the end of today or this week; the planner sees the outcome, the projects and what was done', async () => {
+  const { dueFor, planPrompt } = await import('../src/goals.js');
+  const wed = new Date(2026, 10, 4, 10, 0).getTime(); // a Wednesday
+  const d = new Date(dueFor('day', wed));
+  assert.deepEqual([d.getDate(), d.getHours(), d.getMinutes()], [4, 23, 59]);
+  const w = new Date(dueFor('week', wed));
+  assert.deepEqual([w.getDay(), w.getDate(), w.getHours()], [0, 8, 23]);
+  assert.equal(new Date(dueFor('week', new Date(2026, 10, 8, 12).getTime())).getDate(), 8, 'on Sunday: that day');
+  assert.equal(dueFor('none', wed), null);
+  const p = planPrompt({ text: 'Ship it', projects: [{ shortcut: 'web', name: 'web', repo: 'github.com/o/web' }], due: '2026-11-08' });
+  assert.match(p, /^You plan a work order/);
+  assert.match(p, /<outcome due="2026-11-08">\nShip it\n<\/outcome>\n<projects>\n- web: web \(github.com\/o\/web\)\n<\/projects>/);
+  const c = planPrompt({ text: 'Ship it', projects: [], round: 1, done: [{ project: 'web', title: 'Do A', outcome: 'done', delivered: ['the fix'], prs: ['https://github.com/o/web/pull/1 (merged)'] }] });
+  assert.match(c, /^You check a work order/);
+  assert.match(c, /- \(web\) Do A\n  outcome: done\n  delivered: the fix\n  pull requests: https:\/\/github.com\/o\/web\/pull\/1 \(merged\)/);
+});
