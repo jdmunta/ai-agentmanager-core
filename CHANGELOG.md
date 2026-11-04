@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.18.0 (2026-11-04)
 
 - **Goals.** Give an outcome for today, this week or no deadline, across one or more projects (**+ Goal** in the Backlog tab, or `agentmgr goal add`). It's planned into tasks, one agent each, which go to the backlog and run until done; autopilot ships them where it's on. When all are finished, the outcome is checked against what was delivered and what's missing is queued, for up to 2 more rounds. Each goal keeps **completed**, **pending** and **follow-ups** current, with **Copy summary**, **Carry over** when overdue, and an optional look at the plan before agents start.
 - **Work record.** What your agents got done is appended, as it happens, to `~/.agentmanager/worklog.csv`: pull requests opened, merged and closed, bugs fixed, issues filed and agents finished, with dates, links and costs. A weekly summary goes to `worklog-weekly.csv`. **Work record…** in the menu shows a period's totals, the weeks and the events, with **Copy summary** (Markdown for a review) and the files to download; `agentmgr worklog`. Agents now list issues they open as `- Filed:` lines in their brief.
