@@ -320,6 +320,7 @@ Every agent has a priority, **P0** (urgent) to **P3** (low). **P2** is the defau
 
 - **Look.** P0 shows a solid red chip and a red bar on the agent. P1 shows a red outline chip, and P3 a muted chip. P2 shows nothing, to keep the list calm.
 - **Ordering.** Within a project, agents sort by priority, then needs-input, then running. Projects holding a P0 or P1 agent move to the top and show the chip in their header.
+- **Order.** Above the list, choose **By project** (the grouping above), **Recently used** (one list, the agents you or they last worked in on top, each with its project) or **Running first** (running agents on top, most recently used first, then the rest). Each browser remembers its choice.
 - **Setting it.** Use the selector next to the agent's name, the New agents dialog, `add --priority P1`, or `agentmgr priority <agent> P0`.
 - **Backlog.** Items use the same P0–P3 scale and pass it on to their agents.
 - **Slack.** Alerts are tagged `[P0]` / `[P1]`.

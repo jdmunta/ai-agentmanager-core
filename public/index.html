@@ -74,6 +74,11 @@
             </label>
             <input type="number" id="recent-days" min="1" max="3650" value="7" aria-label="Days"> days
             <span class="spacer"></span><span id="recent-hidden"></span>
+            <select id="list-order" aria-label="Order" title="By project: grouped, busiest and most urgent first. Recently used: one list, the agents you or they last worked in on top. Running first: running agents on top, most recently used first, then the rest.">
+              <option value="project">By project</option>
+              <option value="recent">Recently used</option>
+              <option value="running">Running first</option>
+            </select>
           </div>
           <ul id="agent-list" class="agent-list" aria-label="Agents"></ul>
         </div>
