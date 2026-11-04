@@ -58,6 +58,16 @@ const saveRecent = () => {
     localStorage.setItem('agentmgr.recentDays', String(recent.days));
   } catch {}
 };
+// How the agents list is ordered: recently used (the default) or running first, one list each; or grouped by project.
+const ORDERS = ['recent', 'running', 'project'];
+let listOrder = (() => {
+  try {
+    const v = localStorage.getItem('agentmgr.listOrder');
+    return ORDERS.includes(v) ? v : 'recent';
+  } catch {
+    return 'recent';
+  }
+})();
 
 // ------------------------------------------------------------------ helpers
 
@@ -730,15 +740,18 @@ const prioChip = (p, { always = false } = {}) =>
 
 const noRepo = (a) => a.kind === 'general' || a.kind === 'assistant';
 
-function agentItem(a) {
+function agentItem(a, { project = false } = {}) {
   const st = statusOf(a);
   const idle = !isActive(a);
+  const p = project && a.projectInfo && !['other', 'general', 'assistant'].includes(a.projectInfo.key) ? a.projectInfo : null;
   return `<li data-id="${a.id}" ${a.kind === 'general' || a.kind === 'assistant' ? '' : 'draggable="true" '}class="agent pr${a.priority ?? 2} ${a.id === selectedId ? 'selected' : ''} ${idle ? 'idle' : ''}">
     <div class="line1">${prioChip(a.priority ?? 2)}${a.results?.outcome === 'blocked' ? '<span class="outcome-mark" title="Blocked">⛔</span>' : a.results?.outcome === 'done' ? '<span class="outcome-mark" title="Done">✅</span>' : ''}<span class="name">${esc(a.name)}</span>${flags(a)}<span class="pill ${st}">${pillText(st)}</span></div>
     <div class="intent" title="${esc(describeTitle(a) ?? '')}">${a.builds ? `<span class="tag assistant" title="Develops the agent ${esc(a.builds.name)} (Built tab)">⚙ builds agent</span> ` : ''}${a.kind === 'general' ? '<span class="tag">general</span> ' : a.kind === 'assistant' ? '<span class="tag assistant">assistant</span> ' : a.startedBy ? '<span class="tag assistant" title="Started by the assistant">🤖 by assistant</span> ' : a.trigger ? `<span class="tag assistant" title="Started from ${a.trigger.source === 'github' ? 'a labeled GitHub issue' : 'the webhook'}${a.trigger.url ? `: ${esc(a.trigger.url)}` : ''}">⚡ ${a.trigger.source === 'github' ? 'GitHub' : 'webhook'}</span> ` : a.playbook ? `<span class="tag assistant" title="Started by the playbook ${esc(a.playbook.name)}">▶ ${esc(a.playbook.name)}</span> ` : ''}${a.engine && a.engine !== 'claude' ? `<span class="tag engine">${esc(ENGINE_LABEL[a.engine] ?? a.engine)}</span> ` : ''}${a.isolation === 'container' ? '<span class="tag engine" title="Runs in its own Docker container: it sees only its own folder">📦 container</span> ' : ''}${esc(describe(a) || (a.kind === 'assistant' ? 'Finds new work and starts agents for it' : 'General session'))}</div>
     ${a.status === 'preparing' && a.progress ? `<div class="progress-line">${esc(progressText(a.progress))}</div>` : ''}
     <div class="meta">
       <span class="mono">${a.id}</span>
+      ${p ? `<span class="tag proj" title="Project: ${esc(p.full || p.name)}">${esc(p.shortcut || p.name)}</span>` : ''}
+      ${!idle && project && a.activeAt ? `<span title="Last used">${ago(a.activeAt)}</span>` : ''}
       ${idle && a.activeAt ? `<span title="Idle: no work and no input from you for over a day">💤 ${ago(a.activeAt)}</span>` : ''}
       ${a.git?.branch ? `<span class="branch" title="${esc(a.git.branch)}">⎇ ${esc(a.git.branch)}</span>` : ''}
       ${a.prs.length ? `<span>${a.prs.length} PR</span>` : ''}
@@ -804,6 +817,13 @@ function projectGroups(list) {
   );
 }
 
+/** One list, most recently used first (Running first: the running agents, then the rest). */
+const usedAt = (a) => a.activeAt ?? a.createdAt ?? '';
+function orderedAgents(list) {
+  const top = (a) => (listOrder === 'running' && !a.runtime.running ? 1 : 0);
+  return [...list].sort((a, b) => top(a) - top(b) || usedAt(b).localeCompare(usedAt(a)));
+}
+
 function renderList() {
   if (dragging) return void (listStale = true);
   const waiting = [...agents.values()].filter((a) => a.runtime.attention).length;
@@ -841,6 +861,8 @@ function renderList() {
   const totals = new Map();
   for (const a of all) totals.set(a.projectInfo?.key ?? 'other', (totals.get(a.projectInfo?.key ?? 'other') ?? 0) + 1);
 
+  $('#list-order').value = listOrder;
+  if (listOrder !== 'project') return void morph($('#agent-list'), orderedAgents(shown).map((a) => agentItem(a, { project: true })).join(''));
   morph($('#agent-list'), projectGroups(shown)
     .map((g) => {
       const total = totals.get(g.key) ?? g.agents.length;
@@ -3478,6 +3500,13 @@ $('#filter').addEventListener('input', (e) => {
   renderList();
 });
 
+$('#list-order').addEventListener('change', (e) => {
+  listOrder = ORDERS.includes(e.target.value) ? e.target.value : 'recent';
+  try {
+    localStorage.setItem('agentmgr.listOrder', listOrder);
+  } catch {}
+  renderList();
+});
 $('#recent-days').value = recent.days;
 $('#recent-on').addEventListener('change', (e) => {
   recent.on = e.target.checked;
