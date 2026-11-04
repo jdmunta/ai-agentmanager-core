@@ -21,6 +21,7 @@ export class Backlog extends EventEmitter {
     store.data.backlog ??= { items: {}, limits: {}, autoRun: true };
     this.data = store.data.backlog;
     this.data.autopilot ??= {};
+    this.data.targets ??= {};
     this.dispatching = false;
     this.plan = null; // the AI judge's dispatch plan: { hash, data, pending }
 
@@ -44,6 +45,12 @@ export class Backlog extends EventEmitter {
   autopilotFor(projectKey) {
     const level = this.data.autopilot[projectKey] ?? this.config.autopilot?.level;
     return AUTOPILOT_LEVELS.includes(level) ? level : 'off';
+  }
+
+  /** The score autopilot ships at (50-100), or null: whenever the scorecard says ready. */
+  targetFor(projectKey) {
+    const n = Number(this.data.targets[projectKey] ?? this.config.autopilot?.target);
+    return n >= 50 && n <= 100 ? n : null;
   }
 
   items() {
@@ -71,7 +78,7 @@ export class Backlog extends EventEmitter {
     const projects = {};
     for (const it of items) {
       const shortcut = Object.values(this.store.data.projects ?? {}).find((x) => x.key === it.projectKey)?.shortcut ?? null;
-      const p = (projects[it.projectKey] ??= { key: it.projectKey, name: it.projectName, shortcut, limit: this.limitFor(it.projectKey), autopilot: this.autopilotFor(it.projectKey), counts: {} });
+      const p = (projects[it.projectKey] ??= { key: it.projectKey, name: it.projectName, shortcut, limit: this.limitFor(it.projectKey), autopilot: this.autopilotFor(it.projectKey), target: this.targetFor(it.projectKey), counts: {} });
       p.counts[it.status] = (p.counts[it.status] ?? 0) + 1;
     }
     return {
@@ -188,7 +195,7 @@ export class Backlog extends EventEmitter {
     return { id };
   }
 
-  settings({ autoRun, limits, project, limit, autopilot } = {}) {
+  settings({ autoRun, limits, project, limit, autopilot, target } = {}) {
     if (typeof autoRun === 'boolean') this.data.autoRun = autoRun;
     if (limits && typeof limits === 'object') Object.assign(this.data.limits, limits);
     const key =
@@ -198,6 +205,11 @@ export class Backlog extends EventEmitter {
     if (key && autopilot !== undefined) {
       if (!AUTOPILOT_LEVELS.includes(autopilot)) throw err(400, `autopilot must be one of ${AUTOPILOT_LEVELS.join(', ')}`);
       this.data.autopilot[key] = autopilot;
+    }
+    if (key && target !== undefined) {
+      const n = target === null || target === '' || target === 'none' ? 0 : Number(target);
+      if (!(n === 0 || (n >= 50 && n <= 100))) throw err(400, 'target must be 50-100, or none');
+      this.data.targets[key] = n; // 0: none, even with a default in config.json
     }
     if (key && limit !== undefined) {
       const n = Number(limit);

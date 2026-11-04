@@ -354,6 +354,7 @@ Some notes.
     outcome: 'partial',
     delivered: ['PR https://github.com/a/b/pull/9', 'design doc'],
     blockers: ['QA environment (needs: QE)'],
+    filed: [],
     notes: 'Some notes.',
   });
 });
@@ -1375,11 +1376,78 @@ test('transcripts: the tool call still waiting for its result is what a prompt a
   assert.equal(scanActivity(file, state).calls.size, 0);
 });
 
+test('autopilot with a target score: work goes back until it is ready at the target, and stops when it stops improving', async () => {
+  const { EventEmitter } = await import('node:events');
+  const { Autopilot } = await import('../src/autopilot.js');
+  const { improveMessage } = await import('../src/scorecard.js');
+  const calls = [];
+  const card = (recommendation, overall) => ({ data: { recommendation, overall, reasons: [], scores: { tests: { score: 60, why: 'thin', notes: [] } }, criteria: [], look: [] }, diffHash: 'd1' });
+  const agent = { id: 'ag', prs: {}, docs: {}, landing: { sent: {} } };
+  const manager = Object.assign(new EventEmitter(), {
+    view: () => ({ runtime: { busy: false } }),
+    refresh: async () => {},
+    improve: (id, { send }) => send(improveMessage(agent.docs.scorecard.data)),
+  });
+  const it = { id: 'i1', title: 'Add the thing', projectKey: 'p', status: 'review', agentId: 'ag', reviewAt: 't0' };
+  const backlog = Object.assign(new EventEmitter(), {
+    items: () => [it],
+    get: () => it,
+    changed: () => {},
+    autopilotFor: () => 'pr',
+    targetFor: () => 85,
+    reopen: (id, { note }) => ((it.status = 'active'), calls.push(note)),
+  });
+  const review = { get: async () => ({ files: [{ file: 'a.js' }], diffHash: 'd1' }), commit: async () => calls.push('commit'), pr: async () => (calls.push('pr'), { url: 'https://github.com/o/r/pull/9' }) };
+  const ap = new Autopilot({ manager, store: { get: () => agent }, backlog, review, landing: {}, log: () => {} });
+  ap.close();
+  // One round of review per score: the agent's next "done" brings the item back to review.
+  let round = 0;
+  const review1 = async (rec, overall) => {
+    Object.assign(it, { status: 'review', reviewAt: `t${++round}` });
+    agent.docs.scorecard = card(rec, overall);
+    await ap.tick();
+  };
+  try {
+    // Ready, but under the target: back to the agent with its scorecard and the target.
+    await review1('ready', 82);
+    assert.equal(calls.length, 1);
+    assert.match(calls[0], /^Autopilot: this ships when the review scorecard says ready and rates it 85\/100 or more\./);
+    assert.match(calls[0], /rates your changes 82\/100[\s\S]*Tests 60\/100: thin/);
+    assert.deepEqual([it.autopilot.state, it.autopilot.scores, it.autopilot.note], ['returned', [82], '82/100, ships at 85']);
+    // "Look at these first" also goes back with a target (instead of waiting for you); ready at 88 ships.
+    await review1('look', 86);
+    await review1('ready', 89);
+    assert.deepEqual(calls.slice(2), ['commit', 'pr']);
+    assert.equal(it.autopilot.state, 'pr');
+
+    // A try that barely moves the score: it stops and waits for you.
+    calls.length = 0;
+    Object.assign(it, { autopilot: undefined });
+    await review1('look', 70);
+    await review1('look', 72);
+    assert.equal(calls.length, 1);
+    assert.equal(it.autopilot.state, 'held');
+    assert.equal(it.autopilot.note, 'Stopped improving at 72/100 (was 70 before the last try; ships at 85).');
+    assert.equal(ap.inbox().length, 1);
+
+    // Improving, but out of tries: it waits for you with where it got to.
+    calls.length = 0;
+    Object.assign(it, { autopilot: undefined });
+    for (const n of [60, 66, 74, 80]) await review1('look', n);
+    assert.equal(calls.length, 3);
+    assert.deepEqual(it.autopilot.scores, [60, 66, 74]);
+    assert.equal(it.autopilot.note, '80/100 after 3 tries; ships at 85.');
+  } finally {
+    ap.close();
+  }
+});
+
 test('autopilot: ready work becomes a merged pull request, not-ready work goes back, the rest waits for you', async () => {
   const { EventEmitter } = await import('node:events');
-  const { Autopilot, returnMessage } = await import('../src/autopilot.js');
+  const { Autopilot } = await import('../src/autopilot.js');
+  const { improveMessage } = await import('../src/scorecard.js');
   const calls = [];
-  const card = (recommendation, diffHash = 'd1', extra = {}) => ({ data: { recommendation, overall: 70, reasons: recommendation === 'not_ready' ? ['CI is failing'] : [], criteria: [], look: [{ file: 'a.js' }], ...extra }, diffHash });
+  const card = (recommendation, diffHash = 'd1', extra = {}) => ({ data: { recommendation, overall: 70, reasons: recommendation === 'not_ready' ? ['CI is failing'] : [], scores: {}, criteria: [], look: [{ file: 'a.js', reason: 'risky' }], ...extra }, diffHash });
   const agent = { id: 'ag', prs: {}, docs: {}, landing: { sent: {} } };
   const manager = Object.assign(new EventEmitter(), {
     busy: false,
@@ -1389,15 +1457,18 @@ test('autopilot: ready work becomes a merged pull request, not-ready work goes b
       agent.docs.scorecard = manager.nextCard;
     },
     refresh: async () => {},
+    improve: (id, { send }) => send(improveMessage(agent.docs.scorecard.data)),
   });
   const store = { get: (id) => (id === 'ag' ? agent : null) };
   let level = 'merge';
+  let target = null;
   const it = { id: 'i1', title: 'Add the thing\nmore', projectKey: 'p', status: 'review', agentId: 'ag', reviewAt: 't1' };
   const backlog = Object.assign(new EventEmitter(), {
     items: () => [it],
     get: () => it,
     changed: () => {},
     autopilotFor: () => level,
+    targetFor: () => target,
     accept: () => ((it.status = 'done'), calls.push('accept')),
     reopen: (id, { note }) => ((it.status = 'active'), calls.push(`reopen:${note.split('\n')[0]}`)),
   });
@@ -1436,27 +1507,28 @@ test('autopilot: ready work becomes a merged pull request, not-ready work goes b
     assert.equal(it.status, 'done');
     assert.equal(it.autopilot.state, 'merged');
 
-    // A new item, not ready: back to the agent with the reasons, at most twice; then it waits for you.
+    // A new item, not ready: back to the agent with its scorecard, at most three times; then it waits for you.
     Object.assign(it, { status: 'review', reviewAt: 't2', autopilot: undefined });
     agent.prs = {};
     agent.docs.scorecard = card('not_ready');
     calls.length = 0;
-    for (const round of ['t3', 't4']) {
+    for (const round of ['t3', 't4', 't4b']) {
       await ap.tick();
       Object.assign(it, { status: 'review', reviewAt: round });
     }
-    assert.deepEqual(calls, ["reopen:Autopilot: the review scorecard says this isn't ready yet: CI is failing.", "reopen:Autopilot: the review scorecard says this isn't ready yet: CI is failing."]);
+    assert.equal(calls.length, 3);
+    assert.ok(calls.every((c) => c === "reopen:Autopilot: the review scorecard says this isn't ready yet."), calls.join('|'));
     await ap.tick();
     assert.equal(it.autopilot.state, 'held');
-    assert.match(it.autopilot.note, /Still not ready after 2 tries: CI is failing/);
+    assert.match(it.autopilot.note, /Still not ready after 3 tries: CI is failing/);
     assert.equal(ap.inbox().length, 1);
     assert.equal(ap.inbox()[0].kind, 'autopilot');
     // Held: nothing more this round. Ship it goes ahead anyway.
     await ap.tick();
-    assert.equal(calls.length, 2);
+    assert.equal(calls.length, 3);
     ap.shipNow('i1');
     await ap.tick();
-    assert.deepEqual(calls.slice(2), ['commit:Add the thing', 'pr']);
+    assert.deepEqual(calls.slice(3), ['commit:Add the thing', 'pr']);
     assert.equal(ap.inbox().length, 0);
 
     // "Look at these first", with autopilot at "pr": waits for you, naming where to look.
@@ -1482,7 +1554,6 @@ test('autopilot: ready work becomes a merged pull request, not-ready work goes b
     await ap.tick();
     assert.deepEqual(calls, ['score', 'commit:Add the thing', 'pr']);
     assert.equal(it.autopilot.state, 'pr', 'at "pr" it stops at the pull request');
-    assert.match(returnMessage(card('not_ready', 'x', { criteria: [{ criterion: 'Works offline', status: 'not_met', evidence: 'no cache' }] }).data), /- Works offline \(no cache\)/);
   } finally {
     ap.close();
   }
@@ -1548,6 +1619,105 @@ test('repeats: requests you keep making are offered as a playbook, with what cha
   assert.throws(() => r.dismiss('nope'), /No such suggestion/);
   assert.deepEqual(new Repeats({ file: path.join(tmp(), 'x.json'), enabled: false }).view().suggestions, []);
   assert.ok(events.length >= 5);
+});
+
+test('reminders: a recent agent gone quiet gets a follow-up, a finished open one a close, others none', async () => {
+  const { reminderFor, reminderSettings } = await import('../src/reminders.js');
+  const s = reminderSettings({});
+  const t = Date.parse('2026-11-04T12:00:00Z');
+  const ago = (h) => new Date(t - h * 3_600_000).toISOString();
+  const agent = (extra = {}) => ({ id: 'a', kind: 'task', status: 'running', sessionId: 's', activeAt: ago(3), runtime: { running: true }, results: { outcome: 'in progress', blockers: [] }, prs: [], ...extra });
+  // Open and not finished, quiet 3 hours: follow up, with what's left.
+  assert.deepEqual(reminderFor(agent({ git: { dirtyFiles: 2 } }), s, t), { kind: 'followup', title: 'Quiet for 3 hours and not finished', detail: '2 files changed, not committed', since: ago(3) });
+  assert.equal(reminderFor(agent({ results: { outcome: 'blocked', blockers: [{ text: 'needs a token' }] } }), s, t).detail, 'Blocked: needs a token');
+  assert.equal(reminderFor(agent({ prs: [{ url: 'https://github.com/o/r/pull/4', state: 'OPEN', land: 'fix' }] }), s, t).detail, 'Pull request #4 is open and needs fixes');
+  // Finished, or its pull request merged, with the session open: close it.
+  assert.equal(reminderFor(agent({ results: { outcome: 'done' } }), s, t).kind, 'close');
+  assert.match(reminderFor(agent({ prs: [{ state: 'MERGED' }] }), s, t).title, /^Its pull request merged and quiet for 3 hours/);
+  // Not yet quiet long enough, too old, working, waiting on you, the assistant: nothing.
+  for (const a of [agent({ activeAt: ago(1) }), agent({ activeAt: ago(80) }), agent({ runtime: { running: true, busy: true } }), agent({ runtime: { running: true, attention: 'permission' } }), agent({ kind: 'assistant' })]) assert.equal(reminderFor(a, s, t), null);
+  // Closed: by itself or the cap, not finished, resumable: follow up. Closed by you, or finished: nothing.
+  const closed = (extra) => agent({ runtime: { running: false }, ...extra });
+  assert.deepEqual([reminderFor(closed({ status: 'exited' }), s, t).title, reminderFor(closed({ status: 'exited' }), s, t).closed], ['Not finished, and its session ended', true]);
+  assert.equal(reminderFor(closed({ status: 'stopped', closedBy: 'cap' }), s, t).title, 'Not finished, and closed by the session cap');
+  assert.equal(reminderFor(closed({ status: 'stopped', closedBy: null }), s, t), null);
+  assert.equal(reminderFor(closed({ status: 'exited', results: { outcome: 'done' } }), s, t), null);
+  // Later hides it for a while; Not needed until the agent is used again.
+  assert.equal(reminderFor(agent({ reminder: { laterUntil: ago(-1) } }), s, t), null);
+  assert.ok(reminderFor(agent({ reminder: { laterUntil: ago(1) } }), s, t));
+  assert.equal(reminderFor(agent({ reminder: { dismissedAt: ago(3) } }), s, t), null);
+  assert.ok(reminderFor(agent({ activeAt: ago(2.5), reminder: { dismissedAt: ago(3) } }), s, t));
+  // Settings: off, or other hours.
+  assert.equal(reminderFor(agent(), reminderSettings({ reminders: { enabled: false } }), t), null);
+  assert.equal(reminderFor(agent(), reminderSettings({ reminders: { quietHours: 4 } }), t), null);
+});
+
+test('work record: events from what agents did, appended once to a CSV, with a row per finished week', async () => {
+  const { EventEmitter } = await import('node:events');
+  const { WorkLog, agentEvents, summaryMarkdown, csvField, weekStart } = await import('../src/worklog.js');
+  const { parseBrief } = await import('../src/brief.js');
+  assert.equal(csvField('a, "b"\nc'), '"a, ""b""\nc"');
+  // "Filed:" lines in the brief's Results.
+  const brief = parseBrief('# Fix login\n## Results\nOutcome: done\n- Delivered: the fix\n- Filed: https://github.com/o/r/issues/9 Token refresh races on resume\n- Filed: [ABC-7](https://jira.example.com/browse/ABC-7) flaky e2e');
+  assert.deepEqual(brief.results.filed, ['https://github.com/o/r/issues/9 Token refresh races on resume', '[ABC-7](https://jira.example.com/browse/ABC-7) flaky e2e']);
+  const agent = {
+    id: 'a1', name: 'fix-login', intent: 'Fix ABC-1 login\nmore', createdAt: '2026-10-26T09:00:00Z', engine: 'claude',
+    prs: {
+      p1: { url: 'https://github.com/o/r/pull/1', title: 'Fix login', state: 'MERGED', openedAt: '2026-10-27T10:00:00Z', mergedAt: '2026-10-28T10:00:00Z' },
+      p2: { url: 'https://github.com/o/r/pull/2', title: 'Try B', state: 'CLOSED', openedAt: '2026-10-27T11:00:00Z' },
+      m: { url: 'https://github.com/x/y/pull/5', state: 'MERGED', source: 'mentioned' },
+    },
+    bugs: { 'ABC-1': { key: 'ABC-1', url: 'https://jira.example.com/browse/ABC-1', title: 'Login fails' } },
+    brief: { status: 'done', updatedAt: '2026-10-28T11:00:00Z', results: brief.results },
+    sessions: [{ cost: { usd: 1.5 } }],
+  };
+  const ev = agentEvents(agent);
+  assert.deepEqual(ev.map((e) => e.event), ['pr_opened', 'pr_merged', 'pr_opened', 'pr_closed', 'bug_fixed', 'issue_filed', 'issue_filed', 'agent_finished']);
+  assert.equal(ev[1].hours, 24);
+  assert.deepEqual([ev[4].title, ev[4].at], ['ABC-1 Login fails', '2026-10-28T10:00:00.000Z']);
+  assert.deepEqual([ev[5].link, ev[5].title], ['https://github.com/o/r/issues/9', 'Token refresh races on resume']);
+  assert.deepEqual([ev[6].link, ev[6].title], ['https://jira.example.com/browse/ABC-7', 'ABC-7 flaky e2e']);
+  assert.deepEqual([ev[7].title, ev[7].cost, ev[7].hours], ['Fix ABC-1 login', 1.5, 50]);
+  assert.deepEqual(agentEvents({ ...agent, kind: 'assistant' }), []);
+
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'worklog-'));
+  // A second agent on the same pull request: it's recorded once.
+  const agents = [agent, { id: 'a2', name: 'same-pr', createdAt: agent.createdAt, prs: { p1: { ...agent.prs.p1 } } }];
+  const manager = Object.assign(new EventEmitter(), { view: () => ({ projectInfo: { name: 'web' } }) });
+  const store = { data: { spend: { days: { '2026-10-27': { total: 2 }, '2026-10-28': { total: 1.25 } } } }, list: () => agents, save: () => {} };
+  const wl = new WorkLog({ manager, store, config: { worklog: { dir }, worklogFirstMs: 3_600_000 }, who: Promise.resolve('Pat'), log: () => {} });
+  try {
+    const t = Date.parse('2026-11-04T12:00:00Z');
+    // First run: the history so far, in date order, and the weeks that ended (the week of 26 Oct).
+    assert.deepEqual(await wl.record(t), { added: 8, weeks: 1 });
+    const rows = fs.readFileSync(path.join(dir, 'worklog.csv'), 'utf8').trim().split('\n');
+    assert.equal(rows[0], 'date,event,project,agent,agent_id,title,link,bugs,engine,model,cost_usd,hours,by');
+    assert.equal(rows.length, 9);
+    assert.match(rows[1], /^2026-10-27T10:00:00.000Z,pr_opened,web,fix-login,a1,Fix login,https:\/\/github.com\/o\/r\/pull\/1,ABC-1,claude,,,25,Pat$/);
+    assert.ok(rows.slice(1).every((r, i, a) => i === 0 || r.slice(0, 24) >= a[i - 1].slice(0, 24) || r.includes('issue_filed') || r.includes('pr_closed')));
+    const weekly = fs.readFileSync(path.join(dir, 'worklog-weekly.csv'), 'utf8').trim().split('\n');
+    assert.equal(weekly[0], 'week_start,week_end,prs_opened,prs_merged,prs_closed,merge_rate,bugs_fixed,issues_filed,agents_finished,median_hours_to_merge,cost_usd');
+    assert.deepEqual(weekly.slice(1), ['2026-10-26,2026-11-01,2,1,0,1,1,0,1,24,3.25']);
+    // Nothing new: nothing appended. A new merge: one row; next week: one more weekly row.
+    assert.deepEqual(await wl.record(t), { added: 0, weeks: 0 });
+    agent.prs.p3 = { url: 'https://github.com/o/r/pull/3', title: 'Follow-up', state: 'MERGED', openedAt: '2026-11-03T09:00:00Z', mergedAt: '2026-11-04T09:00:00Z' };
+    assert.deepEqual(await wl.record(t), { added: 2, weeks: 0 });
+    assert.deepEqual(await wl.record(t + 7 * 86_400_000), { added: 0, weeks: 1 });
+    assert.equal(fs.readFileSync(path.join(dir, 'worklog.csv'), 'utf8').trim().split('\n').length, 11);
+    // The view: a period's totals and events; and the Markdown summary.
+    const v = wl.view({ days: 30, t });
+    assert.deepEqual([v.totals.prs_merged, v.totals.prs_opened, v.totals.bugs_fixed, v.totals.issues_filed, v.totals.agents_finished], [2, 3, 1, 2, 1]);
+    assert.equal(v.weeks[0].week_start, '2026-11-02');
+    assert.equal(v.weeks[0].current, true);
+    const md = summaryMarkdown(v, { who: 'Pat' });
+    assert.match(md, /^# Work record: Pat, the last 30 days/);
+    assert.match(md, /- \[Fix login\]\(https:\/\/github.com\/o\/r\/pull\/1\) \(web\), 2026-10-28/);
+    assert.match(md, /## Bugs fixed\n- \[ABC-1 Login fails\]/);
+    assert.equal(new Date(weekStart(t)).getDay(), 1);
+  } finally {
+    wl.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('goals: due at the end of today or this week; the planner sees the outcome, the projects and what was done', async () => {

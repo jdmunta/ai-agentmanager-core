@@ -5,30 +5,25 @@
 //   merge - and the pull request is merged once its checks pass and GitHub allows it (a branch that
 //           fell behind is brought up to date first; failing checks go back to the agent through Landing).
 // Work the scorecard finds not ready for a concrete reason (failing CI, criteria not met, barely
-// verified) goes back to the agent with those reasons, a couple of times at most. Anything else
-// ("look at these first", a failed step, a closed pull request) waits for you in the inbox, with
-// Ship it to go ahead anyway. An item whose pull request merges is done.
-import { RECOMMENDATION } from './scorecard.js';
+// verified) goes back to the agent with its scorecard (as Improve does), a few times at most. With a
+// target score set for the project, work also goes back until it is ready and scores at least that,
+// and stops early once a round no longer raises the score. Anything else ("look at these first"
+// without a target, a failed step, a closed pull request) waits for you in the inbox, with Ship it to
+// go ahead anyway. An item whose pull request merges is done.
 import { landState } from './tracker.js';
 
 export const AUTOPILOT_LEVELS = ['off', 'pr', 'merge'];
 export const AUTOPILOT_LABEL = { off: 'Off', pr: 'Open pull requests', merge: 'Merge' };
-const RETURNS = 2; // times not-ready work goes back to the agent before it waits for you
+const ROUNDS = 3; // times work goes back to the agent before it waits for you
+const MIN_GAIN = 3; // with a target: a round that raised the score less than this stops the rounds
 
 const now = () => new Date().toISOString();
 const err = (status, message) => Object.assign(new Error(message), { status });
 
-/** The message that sends not-ready work back to its agent. */
-export function returnMessage(sc) {
-  const reasons = sc.reasons?.length ? sc.reasons.join('; ') : RECOMMENDATION[sc.recommendation];
-  const notMet = (sc.criteria ?? []).filter((c) => c.status === 'not_met').map((c) => `- ${c.criterion}${c.evidence ? ` (${c.evidence})` : ''}`);
-  return [`Autopilot: the review scorecard says this isn't ready yet: ${reasons}.`, notMet.length ? `Acceptance criteria not met:\n${notMet.join('\n')}` : '', 'Fix these and make sure the checks pass'].filter(Boolean).join('\n\n');
-}
-
 export class Autopilot {
   constructor({ manager, store, backlog, review, landing, config = {}, log = (m) => console.log(`[agentmgr] ${m}`) }) {
     Object.assign(this, { manager, store, backlog, review, landing, config, log });
-    this.returns = config.autopilot?.returns ?? RETURNS;
+    this.rounds = config.autopilot?.rounds ?? config.autopilot?.returns ?? ROUNDS;
     this.working = new Set(); // item ids with a step in progress
     this.queued = null;
     this.kick = () => this.schedule();
@@ -118,13 +113,27 @@ export class Autopilot {
       return this.schedule();
     }
     const sc = card.data;
-    if (sc.recommendation === 'ready') return this.ship(it, agent, level);
-    if (sc.recommendation === 'not_ready' && (ap.returns ?? 0) < this.returns) {
-      this.note(it, { state: 'returned', returns: (ap.returns ?? 0) + 1, note: sc.reasons.join('; ') });
-      this.backlog.reopen(it.id, { note: returnMessage(sc) });
+    const target = this.backlog.targetFor(it.projectKey);
+    const score = sc.overall ?? 0;
+    if (sc.recommendation === 'ready' && (!target || score >= target)) return this.ship(it, agent, level);
+    const rounds = ap.returns ?? 0;
+    const last = ap.scores?.at(-1); // the score when it last went back
+    const stalled = target && last != null && score - last < MIN_GAIN;
+    if ((target || sc.recommendation === 'not_ready') && rounds < this.rounds && !stalled) {
+      this.note(it, { state: 'returned', returns: rounds + 1, scores: [...(ap.scores ?? []), sc.overall], note: target ? `${sc.overall ?? '?'}/100, ships at ${target}` : sc.reasons.join('; ') });
+      const why = target ? `this ships when the review scorecard says ready and rates it ${target}/100 or more` : "the review scorecard says this isn't ready yet";
+      this.manager.improve(agent.id, { send: (text) => this.backlog.reopen(it.id, { note: `Autopilot: ${why}.\n\n${text}` }) });
       return;
     }
-    const why = sc.recommendation === 'look' ? `The scorecard says to look first (${sc.overall ?? '?'}/100)${sc.look?.length ? `: ${sc.look.map((l) => l.file).join(', ')}` : ''}.` : `Still not ready after ${ap.returns ?? 0} tr${ap.returns === 1 ? 'y' : 'ies'}: ${sc.reasons.join('; ')}.`;
+    const tries = `${rounds} tr${rounds === 1 ? 'y' : 'ies'}`;
+    const reasons = sc.reasons.length ? `: ${sc.reasons.join('; ')}` : '';
+    const why = stalled
+      ? `Stopped improving at ${sc.overall ?? '?'}/100 (was ${last} before the last try; ships at ${target})${reasons}.`
+      : target
+        ? `${sc.overall ?? '?'}/100 after ${tries}; ships at ${target}${reasons}.`
+        : sc.recommendation === 'look'
+          ? `The scorecard says to look first (${sc.overall ?? '?'}/100)${sc.look?.length ? `: ${sc.look.map((l) => l.file).join(', ')}` : ''}.`
+          : `Still not ready after ${tries}${reasons}.`;
     this.hold(it, why);
   }
 

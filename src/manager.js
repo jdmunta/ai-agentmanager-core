@@ -101,6 +101,7 @@ import { spawn } from 'node:child_process';
 import * as git from './git.js';
 import { parseDiff } from '../public/review.js';
 import { issueSummary, leadingIssue, wordsAfterLink } from './jira.js';
+import { reminderFor, reminderSettings } from './reminders.js';
 import { combine, facts as scoreFacts, improveMessage, scorecardMarkdown, scorecardPrompt } from './scorecard.js';
 import { CONTAINER_ENGINES, claudeToken, containerName, containerRunning, engineMounts, gitCommonDir, removeContainer, runArgs, stopContainer } from './container.js';
 import { conflictMessage, findConflicts, related, repoKey, summarize as summarizeConflicts } from './conflicts.js';
@@ -349,7 +350,7 @@ export class AgentManager extends EventEmitter {
     usage.io = usage.input + usage.output;
     const costs = (agent.sessions ?? []).map((s) => s.cost?.usd).filter((c) => c != null);
     const prs = Object.values(agent.prs ?? {});
-    return {
+    const v = {
       ...agent,
       // Intent, spec and plan files that exist, with when each changed (task agents).
       ...(NO_REPO.has(agent.kind) ? {} : { specDocs: specDocsInfo(agent.id) }),
@@ -381,6 +382,9 @@ export class AgentManager extends EventEmitter {
         prompt: rt?.pty && !rt.busy && rt.attention ? this.promptView(agent, rt) : null,
       },
     };
+    // A recent agent gone quiet: follow up on it, or close its finished session (reminders.js).
+    v.followUp = reminderFor(v, reminderSettings(this.config));
+    return v;
   }
 
   /**
@@ -1302,6 +1306,32 @@ export class AgentManager extends EventEmitter {
         rt.pty?.kill('SIGKILL');
       }, timeoutMs);
     });
+  }
+
+  /**
+   * Close every open agent session (not the assistant's), from one button. Agents working right
+   * now are left open unless `working`; they're returned so the person can decide.
+   */
+  async closeAll({ working = false } = {}) {
+    const open = this.store.list().filter((a) => a.kind !== 'assistant' && this.runtimes.get(a.id)?.pty);
+    const busy = (a) => this.runtimes.get(a.id)?.busy;
+    const close = open.filter((a) => working || !busy(a));
+    const results = await Promise.allSettled(close.map((a) => this.stop(a.id)));
+    const failed = close.filter((a, i) => results[i].status === 'rejected').map((a) => ({ id: a.id, name: a.name }));
+    return {
+      closed: close.filter((a, i) => results[i].status === 'fulfilled').map((a) => ({ id: a.id, name: a.name })),
+      failed,
+      working: open.filter((a) => !working && busy(a)).map((a) => ({ id: a.id, name: a.name })),
+    };
+  }
+
+  /** A reminder's "Later" (hidden for a few hours) or "Not needed" (hidden until the agent is used again). */
+  remind(ref, action) {
+    const agent = this.mustGet(ref);
+    const v = this.view(agent);
+    if (action === 'later') return this.view(this.patch(agent.id, { reminder: { ...agent.reminder, laterUntil: new Date(Date.now() + reminderSettings(this.config).laterHours * 3_600_000).toISOString() } }));
+    if (action === 'dismiss') return this.view(this.patch(agent.id, { reminder: { ...agent.reminder, dismissedAt: v.activeAt ?? now() } }));
+    throw Object.assign(new Error('action must be later or dismiss'), { status: 400 });
   }
 
   /** Daemon shutdown: close everything but remember which agents should come back. */
@@ -2934,6 +2964,7 @@ export class AgentManager extends EventEmitter {
       if (agent.aiReview?.verdict && !agent.aiReview.seen) {
         items.push({ ...base, kind: 'review', key: `review:${agent.id}`, title: agent.aiReview.summary, review: agent.aiReview, at: agent.aiReview.at });
       }
+      if (v.followUp) items.push({ ...base, kind: 'reminder', key: `reminder:${agent.id}`, title: v.followUp.title, reminder: v.followUp, at: v.followUp.since });
       for (const f of v.stuck) items.push({ ...base, kind: 'stuck', key: `stuck:${agent.id}:${f.key}`, title: f.title, finding: f, at: f.since });
       for (const g of v.conflicts) {
         // One entry per pair, on the agent that should rebase.
@@ -2945,7 +2976,7 @@ export class AgentManager extends EventEmitter {
     for (const r of this.rules.view().suggestions) items.push({ kind: 'rule', key: `rule:${r.repo}:${r.rule}`, title: `Always allow ${r.label}?`, priority: 2, ...r });
     // Others' items (autopilot's held backlog work).
     for (const source of this.inboxSources) items.push(...source());
-    const order = { prompt: 0, waiting: 1, question: 1, rule: 2, review: 2, autopilot: 2, stuck: 3, conflict: 4, repeat: 5 };
+    const order = { prompt: 0, waiting: 1, question: 1, rule: 2, review: 2, autopilot: 2, stuck: 3, conflict: 4, reminder: 5, repeat: 5 };
     return items.sort((a, b) => order[a.kind] - order[b.kind] || a.priority - b.priority);
   }
 

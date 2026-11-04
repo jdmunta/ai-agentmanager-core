@@ -45,6 +45,7 @@
               <span id="me-where" class="hint"></span>
             </div>
             <button role="menuitem" id="settings-btn">Settings…</button>
+            <button role="menuitem" id="worklog-btn" title="What your agents got done: pull requests, bugs fixed, issues filed; kept in a spreadsheet for reviews">Work record…</button>
             <button role="menuitem" id="cleanup-btn" title="Close agents idle for a while, and delete old closed ones">Clean up…</button>
             <button role="menuitem" id="alerts-btn" class="local-only" title="Slack alerts when an agent needs you">Alerts…</button>
             <button role="menuitem" id="remote-btn" class="local-only" title="Open AI Agent Manager from your phone">Remote access…</button>
@@ -74,6 +75,11 @@
             </label>
             <input type="number" id="recent-days" min="1" max="3650" value="7" aria-label="Days"> days
             <span class="spacer"></span><span id="recent-hidden"></span>
+            <select id="list-order" aria-label="Order" title="Recently used: one list, the agents created or worked in most recently on top. Running first: running agents on top, most recently used first, then the rest. By project: grouped, busiest and most urgent first.">
+              <option value="recent">Recently used</option>
+              <option value="running">Running first</option>
+              <option value="project">By project</option>
+            </select>
           </div>
           <ul id="agent-list" class="agent-list" aria-label="Agents"></ul>
         </div>
@@ -703,6 +709,21 @@
         <label class="check"><input type="checkbox" name="review"> Show me the plan before agents start</label>
         <p id="goal-error" class="error" hidden></p>
         <div class="dialog-actions"><span class="spacer"></span><button type="button" id="goal-cancel" class="ghost">Cancel</button><button class="primary">Plan and start</button></div>
+      </form>
+    </dialog>
+
+    <dialog id="worklog-dialog">
+      <form method="dialog" class="alerts-body">
+        <h2>Work record <select id="worklog-days" class="inline-select"><option value="7">last 7 days</option><option value="30" selected>last 30 days</option><option value="90">last 90 days</option><option value="365">last year</option><option value="0">all time</option></select></h2>
+        <div id="worklog-body"></div>
+        <p id="worklog-files" class="hint"></p>
+        <div class="dialog-actions">
+          <button type="button" id="worklog-copy" title="The period's totals and what was merged, fixed and filed, with links, as Markdown for a review or status update">Copy summary</button>
+          <button type="button" id="worklog-csv" class="ghost">Download events</button>
+          <button type="button" id="worklog-weekly" class="ghost">Download weekly</button>
+          <span class="spacer"></span>
+          <button type="button" id="worklog-close" class="ghost">Close</button>
+        </div>
       </form>
     </dialog>
 

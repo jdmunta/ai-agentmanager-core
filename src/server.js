@@ -25,6 +25,7 @@ import { Playbooks } from './playbooks.js';
 import { Repeats } from './repeats.js';
 import { Updates } from './update.js';
 import { identity } from './identity.js';
+import { WorkLog, summaryMarkdown } from './worklog.js';
 import { Studio } from './studio.js';
 import { Memory } from './memory.js';
 import { doctor } from './doctor.js';
@@ -98,6 +99,9 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
   manager.inboxSources.push(() => autopilot.inbox());
   // Daily or weekly goals across projects, planned into backlog tasks and seen through (goals.js).
   const goals = new Goals({ manager, store, backlog, config });
+  // What agents got done, appended to a CSV for reviews (worklog.js).
+  const me = identity().then((i) => i.display, () => '');
+  const worklog = new WorkLog({ manager, store, config, who: me });
   const assistant = new Assistant({ manager, store, config });
   // Alerts link to the phone address when remote access is on, else the local UI.
   const notifier = new Notifier({
@@ -419,6 +423,8 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
   );
   api.post('/agents/:id/start', wrap((req) => manager.start(req.params.id, req.body ?? {})));
   api.post('/agents/:id/stop', wrap((req) => manager.stop(req.params.id)));
+  api.post('/agents/close-all', wrap((req) => manager.closeAll({ working: Boolean(req.body?.working) })));
+  api.post('/agents/:id/reminder', wrap((req) => manager.remind(req.params.id, req.body?.action)));
   api.post('/agents/:id/desktop', wrap((req) => manager.openInDesktop(req.params.id)));
   api.post('/agents/:id/refresh', wrap((req) => manager.refresh(req.params.id, { withPrs: true })));
   api.post('/agents/:id/links', wrap((req) => manager.addLink(req.params.id, req.body ?? {})));
@@ -699,6 +705,19 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
   api.get('/repeats', wrap(() => repeats.view()));
   api.post('/repeats/dismiss', wrap((req) => repeats.dismiss(String(req.body?.key ?? ''))));
   api.post('/playbooks/:id/run', wrap((req) => playbooks.run(req.params.id, { vars: req.body?.vars ?? {} })));
+  api.get('/worklog', wrap(async (req) => (await worklog.record(), worklog.view({ days: Number(req.query.days ?? 30) || 0 }))));
+  api.get('/worklog/summary', wrap(async (req) => {
+    await worklog.record();
+    return { markdown: summaryMarkdown(worklog.view({ days: Number(req.query.days ?? 30) || 0 }), { who: await me }) };
+  }));
+  for (const [name, which] of [['worklog.csv', 'events'], ['worklog-weekly.csv', 'weekly']]) {
+    api.get(`/worklog/${name}`, async (req, res) => {
+      await worklog.record().catch(() => {});
+      const file = worklog.files[which];
+      if (!fs.existsSync(file)) return res.status(404).json({ error: 'Nothing recorded yet' });
+      res.download(file, name);
+    });
+  }
   api.get('/stats', wrap((req) => {
     const days = req.query.days === undefined ? 30 : Math.max(0, Math.min(3650, Math.floor(Number(req.query.days)) || 0));
     return stats(store.list(), { days, projectOf: (a) => manager.projectInfo(a)?.name ?? null });
@@ -1102,6 +1121,7 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
     landing.close();
     autopilot.close();
     goals.close();
+    worklog.close();
     triggers.close();
     budgets.close();
     playbooks.close();
