@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Design docs, written automatically.** Once its plan is settled, a task agent writes a short design doc and publishes it as a claude.ai Artifact; the link goes in its brief. The doc covers a summary, the architecture, the design, the data flow and the decisions and risks, with at most three small diagrams and no repeats of the spec or plan. When the work is done, the agent brings it up to date at the same link. It's on by default; untick **Design doc** on the new-agent form, use `agentmgr add --no-design-doc`, or set `"designDoc": false`. View it under **Design doc** next to Intent · Spec · Plan; it's also folded into the pull request description.
+- **Publish to Google Drive.** One button (or `agentmgr publish <agent>`) puts all of an agent's documents in a Google Drive folder, one Google Doc each: the brief, intent, spec, plan, design doc and any documents written. It goes through your Claude account's Google Drive connector. Publishing again replaces them with the latest, moving the earlier ones to the trash.
 - A live browser tab you open always shows the page: when the page is holding still and Chrome sends no picture, a screenshot is taken instead of leaving the view blank. Its title is fresh too.
 
 ## 1.18.2 (2026-11-05)

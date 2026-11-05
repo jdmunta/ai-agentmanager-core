@@ -668,7 +668,9 @@ export const INTENT_FILE = 'INTENT.md';
 export const SPEC_FILE = 'SPEC.md';
 export const intentPath = (agentId) => path.join(briefDir(agentId), INTENT_FILE);
 export const specPath = (agentId) => path.join(briefDir(agentId), SPEC_FILE);
-export const SPEC_DOCS = { intent: intentPath, spec: specPath, plan: planPath };
+export const DESIGN_FILE = 'DESIGN.md';
+export const designPath = (agentId) => path.join(briefDir(agentId), DESIGN_FILE);
+export const SPEC_DOCS = { intent: intentPath, spec: specPath, plan: planPath, designdoc: designPath };
 
 /** INTENT.md: the request as given, and where it came from. */
 export function intentMarkdown(agent) {
@@ -698,7 +700,31 @@ export const specPrompt = (specFile, planFile, { withPlan = true } = {}) =>
     : 'Keep it current if the requirements change (say why). ') +
   'Both files are outside the repository: never copy them into the repo or commit them.';
 
-/** One of the three (intent, spec, plan): its Markdown and when it changed, or null. */
+/**
+ * The agent's instructions for DESIGN.md: a short design doc once the plan is settled, published as a
+ * claude.ai Artifact with the agent's own tool, and brought up to date when it's done. (Google Drive
+ * is the person's choice: Publish to Google Drive takes all the agent's documents there.)
+ */
+export const designDocPrompt = (file, { afterApproval = false } = {}) =>
+  `Once your plan is settled${afterApproval ? ' and approved' : ''}, before most of the code changes, write a design doc to ${file} (Markdown) and publish it. ` +
+  'Keep it precise and simple, about 300-700 words: architecture, design and data flow only. Do not repeat the spec, plan or brief, ' +
+  'and no filler, history or restated requirements. Use these sections:\n' +
+  '# Design: <short name>\n## Summary\nTwo or three sentences: what is built and the key decision.\n' +
+  '## Architecture\nOne ```mermaid flowchart of the components and how they connect, with what this work adds or changes marked; then a few bullets.\n' +
+  '## Design\nThe components, interfaces and data that change, as short bullets. Add one classDiagram or erDiagram only if types or data change in a way bullets cannot show.\n' +
+  '## Data flow\nOne ```mermaid flowchart LR or sequenceDiagram of the main path.\n' +
+  '## Decisions and risks\nBullets: what was chosen over what and why; the main risks.\n' +
+  'Diagrams: valid Mermaid, at most about 12 nodes each, short labels (quote labels with punctuation).\n' +
+  'Always write and publish it, even for a small or one-line change (then keep it short); this is not optional and not your call to skip. ' +
+  'Publish it without asking, and without waiting for the user, as a claude.ai Artifact with your Artifact tool: a page that renders ' +
+  'the Markdown and draws the Mermaid diagrams. Then add its link to the References section of your brief (add the section if it is not there): ' +
+  '"- **Design page**: [Artifact](<url>)". Do not publish it anywhere else; the user publishes to Google Drive from AI Agent Manager.\n' +
+  `When the work is done, before you set the brief's status to done, bring ${file} up to date with what was actually built (same length limits) ` +
+  'and republish the Artifact to the same URL. If the Artifact tool is missing or fails, say so in one line instead of the link ' +
+  '("- **Design page**: not published: <why>"; only for a missing or failing tool, never because the change is small) and carry on; never hold up the task for it. ' +
+  'The file is outside the repository: never copy it into the repo or commit it.';
+
+/** One of the agent's files (intent, spec, plan, design doc): its Markdown and when it changed, or null. */
 export function readSpecDoc(agentId, name) {
   const file = SPEC_DOCS[name]?.(agentId);
   if (!file) return null;
@@ -721,17 +747,17 @@ export function specDocsInfo(agentId) {
   return out;
 }
 
-/** The pull request description's sections: the intent in full, the spec and plan folded. */
+/** The pull request description's sections: the intent in full, the spec, plan and design doc folded. */
 export function prSections(agentId, read = (n) => readSpecDoc(agentId, n)?.markdown) {
   const doc = (n) => read(n)?.trim();
   // Demote the files' own headings under the description's.
-  const demote = (md) => md.replace(/^(#{1,4}) /gm, '#$1 ').replace(/^## (Intent|Spec|Plan): .*\n+/m, '');
+  const demote = (md) => md.replace(/^(#{1,4}) /gm, '#$1 ').replace(/^## (Intent|Spec|Plan|Design): .*\n+/m, '');
   const parts = [];
   const intent = doc('intent');
   if (intent) parts.push('## Intent', '', demote(intent), '');
-  for (const [name, label] of [['spec', 'Spec'], ['plan', 'Plan']]) {
+  for (const [name, label] of [['spec', 'Spec'], ['plan', 'Plan'], ['designdoc', 'Design']]) {
     const md = doc(name);
     if (md) parts.push(`<details><summary><b>${label}</b></summary>`, '', demote(md), '', '</details>', '');
   }
-  return parts.length ? [...parts, '<sub>Intent, spec and plan kept by AI Agent Manager.</sub>'].join('\n') : '';
+  return parts.length ? [...parts, `<sub>Intent, spec${doc('designdoc') ? ', plan and design doc' : ' and plan'} kept by AI Agent Manager.</sub>`].join('\n') : '';
 }

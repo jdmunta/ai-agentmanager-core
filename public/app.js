@@ -310,9 +310,9 @@ const INSIGHT_ICONS = { why: '🎯', what: '📦', how: '🛠', now: '📍' };
 const DOCS = { analysis: 'Analysis', design: 'Design', flow: 'Flow', proposal: 'Proposal', humanai: 'Human vs AI', diagrams: 'Diagrams', scorecard: 'Scorecard' };
 // Optional extras that "Write all" leaves out.
 const DOC_EXTRAS = new Set(['diagrams', 'scorecard']);
-const DOC_TITLES = { ...DOCS, plan: 'Plan', intent: 'Intent', spec: 'Spec' };
+const DOC_TITLES = { ...DOCS, plan: 'Plan', intent: 'Intent', spec: 'Spec', designdoc: 'Design doc' };
 // The agent's intent, spec and plan files (read from the daemon when opened; kept here by agent and kind).
-const SPEC_KINDS = { intent: 'Intent', spec: 'Spec', plan: 'Plan' };
+const SPEC_KINDS = { intent: 'Intent', spec: 'Spec', plan: 'Plan', designdoc: 'Design doc' };
 const specCache = new Map(); // "<agent>:<kind>" -> { markdown, at }
 const isSpecKind = (a, kind) => Boolean(SPEC_KINDS[kind]) && !(kind === 'plan' && a?.planReview);
 async function loadSpec(agentId, kind) {
@@ -392,16 +392,26 @@ function docButtons(a) {
       return `<button class="small doc-btn ${d?.markdown ? 'has' : ''}" data-doc="${k}" ${d?.pending ? 'disabled' : ''}
         title="${k === 'scorecard' ? (d?.markdown ? `Open the review scorecard: ${d.data?.overall ?? '—'}/100` : 'Score the changes for review: intent, spec, scope, plan, tests and safety, with an overall readiness and where to look') : k === 'diagrams' ? (d?.markdown ? `Open the diagrams${stale ? ' (the brief changed since)' : ''}` : 'Draw the problem and its solution for a quick grasp: architecture, design, data flow (animated) and the key interaction, diagrams only. Built from the documents already written and the agent\'s work') : d?.markdown ? `Open the ${label.toLowerCase()} document${stale ? ' (the brief changed since)' : ''}` : `Write a ${label.toLowerCase()} document for stakeholders`}">${d?.pending ? `${label}…` : label}${d?.markdown ? (stale ? ' •' : ' ✓') : ''}</button>`;
     })
-    .join('')}</span>${specButtons(a)}`;
+    .join('')}</span>${specButtons(a)}${driveButton(a)}`;
+}
+
+/** Publish to Google Drive: all the agent's documents, one Google Doc each, in one folder (again: replaced). */
+function driveButton(a) {
+  if (!a.specDocs) return '';
+  const d = a.drive ?? {};
+  const n = Object.keys(d.files ?? {}).length;
+  const tip = 'Put all of this agent\'s documents (brief, intent, spec, plan, design doc and any documents written) in a Google Drive folder, one Google Doc each, through the Google Drive connector of your Claude account. Publishing again replaces them with the latest (the earlier ones go to the trash)';
+  return `<span class="doc-buttons drive-buttons">${d.folderUrl ? `<a class="small doc-btn has" href="${esc(d.folderUrl)}" target="_blank" rel="noopener" title="${n} document${n === 1 ? '' : 's'} published ${ago(d.at)}">Google Drive ↗</a>` : ''}<button class="small doc-btn" data-act="drive" ${d.pending ? 'disabled' : ''} title="${esc(tip)}">${d.pending ? 'Publishing…' : d.folderUrl ? 'Publish again' : 'Publish to Google Drive'}</button>${d.error && !d.pending ? `<span class="hint error" title="${esc(d.error)}">Publish: ${esc(d.error.slice(0, 80))}</span>` : ''}</span>`;
 }
 
 /** Intent · Spec · Plan: the files kept for reviewers (and put in the pull request's description). */
 function specButtons(a) {
   if (!a.specDocs) return '';
   return `<span class="doc-buttons spec-buttons" title="For reviewers, people and agents: what was asked, what done means, and the plan. Push & open PR puts them in the description">${Object.entries(SPEC_KINDS)
+    .filter(([k]) => k !== 'designdoc' || a.designDoc || a.specDocs.designdoc)
     .map(([k, label]) => {
       const at = a.specDocs[k] ?? (k === 'plan' ? a.planReview?.updatedAt : null);
-      return `<button class="small doc-btn ${at ? 'has' : ''}" data-doc="${k}" title="${at ? `Open ${label} (updated ${ago(at)})` : k === 'intent' ? 'Written when the agent is created' : `The agent writes it ${k === 'spec' ? 'before changing code' : 'and keeps it current'}`}">${label}${at ? ' ✓' : ''}</button>`;
+      return `<button class="small doc-btn ${at ? 'has' : ''}" data-doc="${k}" title="${at ? `Open ${label} (updated ${ago(at)})` : k === 'intent' ? 'Written when the agent is created' : k === 'designdoc' ? 'The agent writes it once its plan is settled, publishes it as an Artifact (the link is in its brief) and updates it when done' : `The agent writes it ${k === 'spec' ? 'before changing code' : 'and keeps it current'}`}">${label}${at ? ' ✓' : ''}</button>`;
     })
     .join('')}</span>`;
 }
@@ -425,7 +435,7 @@ function renderDocDialog() {
   } else if (d?.error) body.innerHTML = `<p class="error">Couldn't write it: ${esc(d.error)}</p>`;
   else if (plan && !d?.markdown) body.innerHTML = '<p class="hint">The agent is investigating and hasn\'t written its plan yet. You\'ll see it here (and in the inbox) when it has.</p>';
   else if (specKind && !d?.loaded) body.innerHTML = '<p class="hint">Loading…</p>';
-  else if (specKind && !d?.markdown) body.innerHTML = `<p class="hint">${docView.kind === 'intent' ? 'No intent file for this agent (agents created before 1.9 have none).' : `The agent hasn't written its ${label.toLowerCase()} yet. It writes ${docView.kind === 'spec' ? 'the spec before changing code' : 'the plan and keeps it current'}.`}</p>`;
+  else if (specKind && !d?.markdown) body.innerHTML = `<p class="hint">${docView.kind === 'intent' ? 'No intent file for this agent (agents created before 1.9 have none).' : `The agent hasn't written its ${label.toLowerCase()} yet. It writes ${docView.kind === 'spec' ? 'the spec before changing code' : docView.kind === 'designdoc' ? 'the design doc once its plan is settled and publishes it as an Artifact' : 'the plan and keeps it current'}.`}</p>`;
   else if (d?.markdown) {
     // The scorecard's Improve button follows the agent being improved.
     const version = docView.kind === 'scorecard' ? `${d.at}:${Boolean(a.improving)}` : d.at;
@@ -3484,6 +3494,14 @@ $('#detail-body').addEventListener('click', async (e) => {
       btn.textContent = 'Reviewing…';
       act(async () => upsert(await api('POST', `/agents/${a.id}/review`)));
       break;
+    case 'drive':
+      btn.disabled = true;
+      btn.textContent = 'Publishing…';
+      act(async () => {
+        upsert(await api('POST', `/agents/${a.id}/drive`));
+        toast('Publishing to Google Drive: the documents appear in its folder in a minute or two');
+      });
+      break;
     case 'explain':
       btn.disabled = true;
       btn.textContent = 'Explaining…';
@@ -3795,6 +3813,7 @@ $('#new-form').addEventListener('submit', async (e) => {
         ...containerChoice(e.target),
         plan: Boolean(f.get('plan')),
         planReview: Boolean(f.get('planReview')),
+        designDoc: Boolean(f.get('designDoc')),
         priority: Number(f.get('priority')),
       });
       dialog.close();
@@ -3823,6 +3842,7 @@ $('#new-form').addEventListener('submit', async (e) => {
       project: f.get('project') || undefined,
       plan: Boolean(f.get('plan')),
       planReview: Boolean(f.get('planReview')),
+      designDoc: Boolean(f.get('designDoc')),
       start: Boolean(f.get('start')),
       ...containerChoice(e.target),
     });

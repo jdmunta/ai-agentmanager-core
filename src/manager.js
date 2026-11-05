@@ -37,6 +37,8 @@ import {
   specPrompt,
   planPath,
   planReviewPrompt,
+  designPath,
+  designDocPrompt,
 } from './brief.js';
 
 // One-off summaries / documents built from an agent's live context.
@@ -116,6 +118,7 @@ import { learnCommand, memoryKey, memoryPrompt, memoryText } from './memory.js';
 import { Rules, describeTool } from './rules.js';
 import { runningClaude, scanClaudeSessions } from './sessions.js';
 import { builderAllowedTools, builderPrompt } from './builder.js';
+import { DRIVE_DOCS, DRIVE_TOOLS, docUrl, driveHtml, drivePrompt, folderUrl, parseDrive } from './drive.js';
 import {
   bugFromRef,
   extractRefs,
@@ -596,6 +599,7 @@ export class AgentManager extends EventEmitter {
     start = true,
     plan = false,
     planReview,
+    designDoc,
     project,
     priority,
     workspace,
@@ -680,6 +684,8 @@ export class AgentManager extends EventEmitter {
       // Review the implementation plan before the agent implements it: null = no review.
       // Team members get their review from the team instead.
       planReview: !general && !team && !builds && (planReview ?? this.config.planReview ?? false) ? { status: 'writing' } : null,
+      // Write and publish a design doc (Google Doc + Artifact) after the plan, updated at the end.
+      designDoc: !general && !team && !builds && Boolean(designDoc ?? this.config.designDoc ?? true),
       status: 'preparing',
       desired: start ? 'running' : 'stopped',
       error: null,
@@ -753,7 +759,7 @@ export class AgentManager extends EventEmitter {
   /** One of an agent's intent, spec and plan files. */
   specDoc(ref, name) {
     const agent = this.mustGet(ref);
-    if (!['intent', 'spec', 'plan'].includes(name)) throw Object.assign(new Error('Unknown file (intent, spec or plan)'), { status: 400 });
+    if (!['intent', 'spec', 'plan', 'designdoc'].includes(name)) throw Object.assign(new Error('Unknown file (intent, spec, plan or designdoc)'), { status: 400 });
     return readSpecDoc(agent.id, name) ?? { name, markdown: null };
   }
 
@@ -1070,6 +1076,12 @@ export class AgentManager extends EventEmitter {
       const file = path.join(fs.realpathSync(briefDir(agent.id)), path.basename(planPath(agent.id)));
       writableDir ??= path.dirname(file);
       prompts.push(agent.planReview.status === 'approved' ? planApprovedPrompt(file) : planReviewPrompt(file));
+    }
+    if (agent.designDoc && task && !planning) {
+      fs.mkdirSync(briefDir(agent.id), { recursive: true });
+      const file = path.join(fs.realpathSync(briefDir(agent.id)), path.basename(designPath(agent.id)));
+      writableDir ??= path.dirname(file);
+      prompts.push(designDocPrompt(file, { afterApproval: Boolean(agent.planReview) }));
     }
     if (planning) prompts.push(planningPrompt(agent));
     // What earlier agents learned in this repo, and the one command to add to it.
@@ -2242,11 +2254,14 @@ export class AgentManager extends EventEmitter {
   }
 
   /** One tool-less, read-only call to an engine; resolves to its text output. */
-  oneShot(agent, text, { engine, model, timeoutMs = 300_000 }) {
+  oneShot(agent, text, { engine, model, timeoutMs = 300_000, tools }) {
     // Some engines take the prompt as an argument instead of on stdin, and some need their extra
-    // arguments after a subcommand (oneShotExtra: they place them).
+    // arguments after a subcommand (oneShotExtra: they place them). `tools`: Claude Code only, a
+    // call that may use just these connector tools (and none of its own).
     const extra = engine.extraArgs(this.config);
-    const args = engine.oneShotExtra ? engine.oneShotArgs(this.config, { model, prompt: text, extra }) : [...extra, ...engine.oneShotArgs(this.config, { model, prompt: text })];
+    const args = tools
+      ? [...extra, ...engine.connectorArgs(this.config, { model, tools })]
+      : engine.oneShotExtra ? engine.oneShotArgs(this.config, { model, prompt: text, extra }) : [...extra, ...engine.oneShotArgs(this.config, { model, prompt: text })];
     return new Promise((resolve, reject) => {
       const child = spawn(engine.bin(this.config), args, { cwd: paths.home, env: this.childEnv(agent), stdio: ['pipe', 'pipe', 'pipe'] });
       let out = '';
@@ -2349,12 +2364,59 @@ export class AgentManager extends EventEmitter {
     return this.view(this.patch(agent.id, { improving: { from: doc.data.overall, at: now(), briefAt: agent.brief?.updatedAt ?? null } }));
   }
 
+  /** Every document this agent has, for publishing: its brief and files, then the documents written for it. */
+  driveDocuments(agent) {
+    const file = (name) => readSpecDoc(agent.id, name)?.markdown;
+    const md = {
+      brief: fs.existsSync(briefPath(agent.id)) ? fs.readFileSync(briefPath(agent.id), 'utf8') : null,
+      intent: file('intent'),
+      spec: file('spec'),
+      plan: file('plan') ?? agent.planReview?.markdown,
+      designdoc: file('designdoc'),
+    };
+    return DRIVE_DOCS.map(([key, label]) => ({ key, label, markdown: (md[key] ?? (key in md ? null : agent.docs?.[key]?.markdown))?.trim() })).filter((d) => d.markdown);
+  }
+
+  /**
+   * Publish all of an agent's documents to Google Drive (one folder, one Google Doc each) through the
+   * Google Drive connector of the Claude account. Again: new versions, the earlier ones to the trash.
+   * Returns at once; the result (or error) lands on the agent as `drive`.
+   */
+  publishToDrive(ref) {
+    const agent = this.mustGet(ref);
+    if (NO_REPO.has(agent.kind)) throw Object.assign(new Error('Only task agents have documents to publish'), { status: 400 });
+    if (agent.drive?.pending) return this.view(agent);
+    const docs = this.driveDocuments(agent);
+    if (!docs.length) throw Object.assign(new Error('Nothing written yet: no brief, spec, plan or documents to publish'), { status: 409 });
+    this.patch(agent.id, { drive: { ...agent.drive, pending: true, error: null } });
+    (async () => {
+      const prev = this.store.get(agent.id)?.drive ?? {};
+      const designPage = agent.brief?.references?.find((r) => /design page/i.test(r.label))?.url ?? null;
+      const sent = docs.map((d) => ({ key: d.key, title: `${d.label}: ${agent.name}`, html: driveHtml(`${d.label}: ${agent.name}`, d.markdown, { designPage }) }));
+      const trash = sent.filter((d) => prev.files?.[d.key]?.id).map((d) => ({ key: d.key, id: prev.files[d.key].id }));
+      const prompt = drivePrompt({ folderTitle: `${agent.name} (AI Agent Manager)`, folderId: prev.folderId ?? null, docs: sent, trash });
+      const reply = await this.oneShot(agent, prompt, { engine: engineOf('claude'), tools: DRIVE_TOOLS, timeoutMs: 600_000 });
+      const r = parseDrive(reply, sent.map((d) => d.key));
+      if (!r.folderId || !Object.keys(r.files).length) throw new Error(r.errors[0] ?? 'Google Drive returned no documents (is the Google Drive connector linked to your Claude account?)');
+      const at = now();
+      const files = { ...(r.folderId === prev.folderId ? prev.files : {}) };
+      for (const d of sent) if (r.files[d.key]) files[d.key] = { id: r.files[d.key], url: docUrl(r.files[d.key]), title: d.title, at };
+      const cur = this.store.get(agent.id);
+      if (cur) this.patch(agent.id, { drive: { pending: false, error: r.errors.length ? r.errors.join('; ') : null, at, folderId: r.folderId, folderUrl: folderUrl(r.folderId), files, trashed: r.trashed.length } });
+    })().catch((e) => {
+      const cur = this.store.get(agent.id);
+      if (cur) this.patch(agent.id, { drive: { ...cur.drive, pending: false, error: e.message } });
+    });
+    return this.view(this.store.get(agent.id));
+  }
+
   /** Diagrams only: the problem and its solution drawn from the documents already written and the live context. */
   async runDiagrams(agent, ctx) {
     const cur0 = this.store.get(agent.id) ?? agent;
     const written = [
       ...['analysis', 'design', 'flow', 'proposal'].map((k) => [DOC_KINDS[k].title, cur0.docs?.[k]?.markdown]),
       ['Implementation plan', cur0.planReview?.markdown],
+      ['Design doc', readSpecDoc(agent.id, 'designdoc')?.markdown],
       ['Explanation', cur0.explanation?.markdown],
     ].filter(([, md]) => md);
     const documents = written.map(([title, md]) => `<document title="${title}">\n${md.slice(0, 12_000)}\n</document>`).join('\n');

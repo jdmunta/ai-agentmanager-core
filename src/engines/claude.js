@@ -112,6 +112,13 @@ export default {
     return args;
   },
 
+  /** A one-shot call that may use only these connector (MCP) tools: none of Claude Code's own. */
+  connectorArgs: (config, { model, tools } = {}) => {
+    const args = ['-p', '--tools', '', '--allowedTools', tools.join(','), '--no-session-persistence', '--output-format', 'text'];
+    if (model) args.push('--model', model);
+    return args;
+  },
+
   /** Variables a nested Claude session would otherwise inherit from a parent one. */
   stripEnv: ['CLAUDECODE', 'CLAUDE_CODE_CHILD_SESSION', 'CLAUDE_CODE_ENTRYPOINT'],
 };

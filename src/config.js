@@ -65,6 +65,9 @@ const DEFAULTS = {
   // A planning session moves into the repo by itself once Claude has been idle this
   // long (and, with its terminal open, you haven't typed for 15 seconds).
   handoffIdleSec: 5,
+  // Task agents write a short design doc once their plan is settled and publish it as a claude.ai
+  // Artifact, updated when the work is done. Per agent: designDoc. (Publish to Google Drive is a button.)
+  designDoc: true,
   // The AI judge (stuck, idle screens, reviews); see JUDGE_DEFAULTS in judge.js for every field.
   judge: { enabled: true },
   // Clean up old agents: "close-delete", "close" (delete by hand), "manual" or "off"; see cleanup.js.

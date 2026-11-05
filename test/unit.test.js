@@ -1209,6 +1209,44 @@ test('pr description: the intent in full, the spec and plan folded, their own he
   assert.match(out, /^## Intent\n\n### Request\n\nDo it/);
   assert.match(out, /<details><summary><b>Spec<\/b><\/summary>\n\n### Requirements\n- a\n\n<\/details>/);
   assert.doesNotMatch(out, /Plan/, 'no plan written');
+  const withDesign = prSections('x', (n) => ({ ...files, designdoc: '# Design: x\n## Summary\nA switch.\n' })[n]);
+  assert.match(withDesign, /<details><summary><b>Design<\/b><\/summary>\n\n### Summary\nA switch\.\n\n<\/details>/);
+  assert.match(withDesign, /Intent, spec, plan and design doc kept/);
+});
+
+test('design doc instructions: short, three diagrams at most, published as an Artifact, updated when done', async () => {
+  const { designDocPrompt } = await import('../src/brief.js');
+  const p = designDocPrompt('/b/DESIGN.md');
+  for (const h of ['## Summary', '## Architecture', '## Design', '## Data flow', '## Decisions and risks']) assert.ok(p.includes(h), h);
+  assert.match(p, /300-700 words/);
+  assert.match(p, /Do not repeat the spec, plan or brief/);
+  assert.match(p, /Artifact tool/);
+  assert.match(p, /\*\*Design page\*\*: \[Artifact\]/);
+  assert.doesNotMatch(p, /Google Drive tool/, 'Google Drive is the Publish button, not the agent');
+  assert.match(p, /never hold up the task/);
+  assert.doesNotMatch(p, /and approved/);
+  assert.match(designDocPrompt('/b/DESIGN.md', { afterApproval: true }), /settled and approved/);
+  assert.match(p, /Always write and publish it, even for a small or one-line change/, 'small tasks do not skip the Artifact');
+  assert.match(p, /never because the change is small/);
+});
+
+test('google drive: HTML for conversion, the publish instructions, and only sane ids from the reply', async () => {
+  const { driveHtml, drivePrompt, parseDrive } = await import('../src/drive.js');
+  const html = driveHtml('Design: x <y>', '# Design: x\n```mermaid\nflowchart LR\n  A-->B\n```\n', { designPage: 'https://claude.ai/artifact/1' });
+  assert.match(html, /<title>Design: x &lt;y&gt;<\/title>/);
+  assert.match(html, /<h1>Design: x<\/h1>/);
+  assert.match(html, /drawn in AI Agent Manager or on the <a href="https:\/\/claude.ai\/artifact\/1">design page<\/a>/);
+  assert.doesNotMatch(driveHtml('Spec', '# Spec\n- a\n'), /Diagrams are/);
+  const first = drivePrompt({ folderTitle: 'x (AI Agent Manager)', folderId: null, docs: [{ key: 'spec', title: 'Spec: x', html: '<p>s</p>' }], trash: [] });
+  assert.match(first, /create one with create_file: no content, mime type application\/vnd.google-apps.folder/);
+  assert.match(first, /<document key="spec" title="Spec: x">\n<p>s<\/p>\n<\/document>/);
+  assert.match(first, /no earlier versions/);
+  const again = drivePrompt({ folderTitle: 'x', folderId: 'F1', docs: [], trash: [{ key: 'spec', id: 'old-1' }] });
+  assert.match(again, /existing folder with id "F1"/);
+  assert.match(again, /   - spec: old-1/);
+  const r = parseDrive('Done!\n{"folderId":"F1abcdef","files":[{"key":"spec","id":"D1abcdef"},{"key":"evil","id":"D2abcdef"},{"key":"plan","id":"bad id!"}],"trashed":["old-1x","../x"],"errors":["plan failed"]}', ['spec', 'plan']);
+  assert.deepEqual(r, { folderId: 'F1abcdef', files: { spec: 'D1abcdef' }, trashed: ['old-1x'], errors: ['plan failed'] });
+  assert.throws(() => parseDrive('I could not do it', ['spec']), /No result/);
 });
 
 test('scorecard: Improve tells the agent its low scores (lowest first), the criteria not met or verified and where to look', async () => {
