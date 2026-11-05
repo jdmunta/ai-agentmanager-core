@@ -1226,6 +1226,8 @@ test('design doc instructions: short, three diagrams at most, published as an Ar
   assert.match(p, /never hold up the task/);
   assert.doesNotMatch(p, /and approved/);
   assert.match(designDocPrompt('/b/DESIGN.md', { afterApproval: true }), /settled and approved/);
+  assert.match(p, /Always write and publish it, even for a small or one-line change/, 'small tasks do not skip the Artifact');
+  assert.match(p, /never because the change is small/);
 });
 
 test('google drive: HTML for conversion, the publish instructions, and only sane ids from the reply', async () => {

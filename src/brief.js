@@ -715,12 +715,13 @@ export const designDocPrompt = (file, { afterApproval = false } = {}) =>
   '## Data flow\nOne ```mermaid flowchart LR or sequenceDiagram of the main path.\n' +
   '## Decisions and risks\nBullets: what was chosen over what and why; the main risks.\n' +
   'Diagrams: valid Mermaid, at most about 12 nodes each, short labels (quote labels with punctuation).\n' +
+  'Always write and publish it, even for a small or one-line change (then keep it short); this is not optional and not your call to skip. ' +
   'Publish it without asking, and without waiting for the user, as a claude.ai Artifact with your Artifact tool: a page that renders ' +
   'the Markdown and draws the Mermaid diagrams. Then add its link to the References section of your brief (add the section if it is not there): ' +
   '"- **Design page**: [Artifact](<url>)". Do not publish it anywhere else; the user publishes to Google Drive from AI Agent Manager.\n' +
   `When the work is done, before you set the brief's status to done, bring ${file} up to date with what was actually built (same length limits) ` +
   'and republish the Artifact to the same URL. If the Artifact tool is missing or fails, say so in one line instead of the link ' +
-  '("- **Design page**: not published: <why>") and carry on; never hold up the task for it. ' +
+  '("- **Design page**: not published: <why>"; only for a missing or failing tool, never because the change is small) and carry on; never hold up the task for it. ' +
   'The file is outside the repository: never copy it into the repo or commit it.';
 
 /** One of the agent's files (intent, spec, plan, design doc): its Markdown and when it changed, or null. */
