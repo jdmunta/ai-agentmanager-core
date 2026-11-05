@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- **Show one project's agents.** A project picker above the agents list shows only that project's agents (**All projects** for everyone). Each browser remembers it.
+- **Newest first** orders the agents list by creation date, the newest on top.
+
 ## 1.18.1 (2026-11-04)
 
 - **Planning moves into the repo by itself once it's cloned**, even with its terminal open: no more waiting for **Continue in repo**. It still waits until Claude is idle and you haven't typed for 15 seconds, so nothing is cut off. **Continue in repo** still moves it right away.
