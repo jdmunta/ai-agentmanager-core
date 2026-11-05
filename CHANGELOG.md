@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- A live browser tab you open always shows the page: when the page is holding still and Chrome sends no picture, a screenshot is taken instead of leaving the view blank. Its title is fresh too.
+
 ## 1.18.2 (2026-11-05)
 
 - **Show one project's agents.** A project picker above the agents list shows only that project's agents (**All projects** for everyone). Each browser remembers it.
