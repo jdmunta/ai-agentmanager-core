@@ -407,12 +407,28 @@ export class LiveBrowser extends EventEmitter {
     client.send({ t: 'state', url: tab.url, title: tab.title, viewport: tab.viewport });
     if (tab.frame) client.send(tab.frame);
     // Restart the stream so the newcomer gets a fresh frame (Chrome only sends on changes).
+    const asked = Date.now();
     await this.cast(tab, true).catch(() => {});
+    this.refresh(tab).catch(() => {}); // the title may have changed while nobody watched
+    this.firstFrame(tab, client, asked);
     return () => {
       tab.clients.delete(client);
       tab.lastSeen = Date.now();
       if (!tab.clients.size) this.cast(tab, false).catch(() => {});
     };
+  }
+
+  /**
+   * A page holding still may never paint for the restarted stream (slow machines,
+   * a tab in the background): if no frame came, take one, retrying while it loads.
+   */
+  firstFrame(tab, client, asked, tries = 3) {
+    setTimeout(() => {
+      if (!tab.clients.has(client) || (tab.frameAt ?? 0) >= asked) return;
+      this.sharpen(tab).catch(() => {}).finally(() => {
+        if (tries > 1) this.firstFrame(tab, client, asked, tries - 1);
+      });
+    }, 1000);
   }
 
   push(tab, msg) {
@@ -557,6 +573,7 @@ export class LiveBrowser extends EventEmitter {
       if (Date.now() - (tab.sharpenedAt ?? 0) < 400) return;
       const m = params.metadata;
       tab.frame = { t: 'frame', d: params.data, w: m.deviceWidth, h: m.deviceHeight };
+      tab.frameAt = Date.now();
       this.push(tab, tab.frame);
       // Moving frames are compressed for speed; once the page holds still, send a sharp one.
       clearTimeout(tab.sharpen);
@@ -611,6 +628,7 @@ export class LiveBrowser extends EventEmitter {
     const { data } = await this.cdp.send('Page.captureScreenshot', { format: 'jpeg', quality: 90 }, tab.sessionId);
     tab.sharpenedAt = Date.now();
     tab.frame = { t: 'frame', d: data, w: tab.viewport.width, h: tab.viewport.height, sharp: true };
+    tab.frameAt = Date.now();
     this.push(tab, tab.frame);
   }
 
