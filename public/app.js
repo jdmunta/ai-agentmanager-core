@@ -60,14 +60,22 @@ const saveRecent = () => {
     localStorage.setItem('agentmgr.recentDays', String(recent.days));
   } catch {}
 };
-// How the agents list is ordered: recently used (the default) or running first, one list each; or grouped by project.
-const ORDERS = ['recent', 'running', 'project'];
+// How the agents list is ordered: recently used (the default), running first or newest first, one list each; or grouped by project.
+const ORDERS = ['recent', 'running', 'created', 'project'];
 let listOrder = (() => {
   try {
     const v = localStorage.getItem('agentmgr.listOrder');
     return ORDERS.includes(v) ? v : 'recent';
   } catch {
     return 'recent';
+  }
+})();
+// Show only one project's agents ('' = every project).
+let listProject = (() => {
+  try {
+    return localStorage.getItem('agentmgr.listProject') ?? '';
+  } catch {
+    return '';
   }
 })();
 
@@ -821,11 +829,26 @@ function projectGroups(list) {
   );
 }
 
-/** One list, most recently used first (Running first: the running agents, then the rest). */
+/** One list, most recently used first (Running first: the running agents, then the rest; Newest first: by creation). */
 const usedAt = (a) => a.activeAt ?? a.createdAt ?? '';
 function orderedAgents(list) {
   const top = (a) => (listOrder === 'running' && !a.runtime.running ? 1 : 0);
-  return [...list].sort((a, b) => top(a) - top(b) || usedAt(b).localeCompare(usedAt(a)));
+  const at = listOrder === 'created' ? (a) => a.createdAt ?? '' : usedAt;
+  return [...list].sort((a, b) => top(a) - top(b) || at(b).localeCompare(at(a)));
+}
+
+/** The project picker: every project with agents, by name; a project that's gone falls back to all. */
+function renderProjectPicker(all) {
+  const groups = projectGroups(all).sort((a, b) => a.label.localeCompare(b.label));
+  if (listProject && !groups.some((g) => g.key === listProject)) listProject = '';
+  const sel = $('#list-project');
+  sel.hidden = groups.length < 2 && !listProject;
+  const html = `<option value="">All projects</option>${groups.map((g) => `<option value="${esc(g.key)}">${esc(g.label)} (${g.agents.length})</option>`).join('')}`;
+  if (sel.dataset.html !== html) {
+    sel.innerHTML = html;
+    sel.dataset.html = html;
+  }
+  sel.value = listProject;
 }
 
 function renderList() {
@@ -834,8 +857,11 @@ function renderList() {
   document.title = waiting ? `(${waiting}) AI Agent Manager` : 'AI Agent Manager';
   // "@cc" shows one project; any other text also matches shortcuts.
   const at = filterText.startsWith('@') ? filterText.slice(1) : null;
+  renderProjectPicker([...agents.values()]);
   const list = [...agents.values()].filter((a) =>
-    !filterText
+    listProject && (a.projectInfo?.key ?? 'other') !== listProject
+      ? false
+      : !filterText
       ? true
       : at !== null
         ? (a.projectInfo?.shortcut ?? '') === at || (at && (a.projectInfo?.shortcut ?? '').startsWith(at))
@@ -3557,6 +3583,13 @@ $('#list-order').addEventListener('change', (e) => {
   listOrder = ORDERS.includes(e.target.value) ? e.target.value : 'recent';
   try {
     localStorage.setItem('agentmgr.listOrder', listOrder);
+  } catch {}
+  renderList();
+});
+$('#list-project').addEventListener('change', (e) => {
+  listProject = e.target.value;
+  try {
+    localStorage.setItem('agentmgr.listProject', listProject);
   } catch {}
   renderList();
 });
