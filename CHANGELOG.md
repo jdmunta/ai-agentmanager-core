@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.18.2 (2026-11-05)
 
 - **Show one project's agents.** A project picker above the agents list shows only that project's agents (**All projects** for everyone). Each browser remembers it.
 - **Newest first** orders the agents list by creation date, the newest on top.
