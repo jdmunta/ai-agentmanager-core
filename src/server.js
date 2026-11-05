@@ -274,6 +274,8 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
     }),
   );
   api.get('/agents/:id/specs/:name', wrap((req) => manager.specDoc(req.params.id, req.params.name)));
+  // All of an agent's documents to Google Drive (through the Claude account's Google Drive connector).
+  api.post('/agents/:id/drive', wrap((req) => manager.publishToDrive(req.params.id)));
   api.post('/agents/:id/scorecard/post', wrap((req) => review.postScorecard(req.params.id)));
   // Improve: its scorecard goes back to the agent; a backlog item in review is reopened with it.
   api.post(

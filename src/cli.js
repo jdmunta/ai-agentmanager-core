@@ -346,6 +346,7 @@ export async function main(argv) {
     .option('--container', 'run each agent in its own Docker container (see agentmgr sandbox)')
     .option('--no-container', 'run on this computer even if containers are the default')
     .option('--plan', 'while a repo URL clones, plan the task with Claude (moves into the repo when ready)')
+    .option('--no-design-doc', 'no design doc for this agent (on by default: "designDoc" in config.json)')
     .option('--no-start', 'create without launching')
     .option('-a, --attach', 'attach to the agent after launch (single intent only)')
     .action(async (intents, opts, cmd) => {
@@ -372,6 +373,7 @@ export async function main(argv) {
         engine: opts.engine,
         start: opts.start,
         plan: opts.plan,
+        designDoc: cmd.getOptionValueSource('designDoc') === 'cli' ? opts.designDoc : undefined,
       });
       for (const a of created) console.log(`${green('+')} ${bold(a.name)} ${dim(a.id)}  session ${cyan(a.sessionId)}`);
       console.log(dim(`Workspace setup and launch continue in the background. "agentmgr ls" shows status.`));
@@ -2169,6 +2171,30 @@ export async function main(argv) {
       const a = await resolveAgent(ref);
       await api('POST', `/agents/${a.id}/reminder`, { action });
       console.log(`${green('✓')} ${action === 'later' ? 'reminding you later about' : 'no reminder until it is used again for'} ${a.name}`);
+    });
+
+  program
+    .command('publish')
+    .description("Put all of an agent's documents in Google Drive: one folder, one Google Doc each (again: replaced with the latest)")
+    .argument('<agent>')
+    .action(async (ref) => {
+      await daemon();
+      const a = await resolveAgent(ref);
+      await api('POST', `/agents/${a.id}/drive`);
+      process.stdout.write(dim('Publishing to Google Drive (through your Claude account)…'));
+      let d;
+      for (let i = 0; i < 300; i++) {
+        await new Promise((r) => setTimeout(r, 2000));
+        d = (await api('GET', `/agents/${a.id}`)).drive;
+        if (!d?.pending) break;
+        process.stdout.write(dim('.'));
+      }
+      console.log('');
+      if (d?.pending) return console.log(dim('Still publishing; "agentmgr show" has the link when it is done.'));
+      if (!d?.folderUrl) throw new Error(d?.error ?? 'Publishing failed');
+      console.log(`${green('✓')} ${Object.keys(d.files ?? {}).length} document(s) in ${cyan(d.folderUrl)}`);
+      for (const f of Object.values(d.files ?? {})) console.log(`  ${f.title}  ${dim(f.url)}`);
+      if (d.error) console.log(dim(`Note: ${d.error}`));
     });
 
   program

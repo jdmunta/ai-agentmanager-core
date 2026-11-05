@@ -30,6 +30,20 @@ if (args.includes('-p')) {
     const conv = section('conversation');
     // The AI judge: JSON verdicts (see src/judge.js).
     const json = (o) => process.stdout.write(JSON.stringify(o), () => process.exit(0));
+    if (input.startsWith('Publish documents to Google Drive')) {
+      // Only the two Drive tools, none of Claude Code's own; reuse the folder it was given.
+      fs.appendFileSync(process.env.FAKE_CLAUDE_LOG, JSON.stringify({ cwd: process.cwd(), args, publish: true }) + '\n');
+      const tools = args[args.indexOf('--allowedTools') + 1] ?? '';
+      if (args[args.indexOf('--tools') + 1] !== '' || args.includes('--strict-mcp-config') || !/create_file/.test(tools) || !/trash_file/.test(tools)) return json({ errors: ['wrong tools'] });
+      const keys = [...input.matchAll(/<document key="(\w+)" title="[^"]*">/g)].map((m) => m[1]);
+      const n = (input.match(/^   - \w+: (\S+)$/gm) ?? []).length;
+      return json({
+        folderId: input.match(/existing folder with id "([^"]+)"/)?.[1] ?? 'folder-fake-1',
+        files: keys.map((key) => ({ key, id: `doc-${key}-${n}` })),
+        trashed: [...input.matchAll(/^   - \w+: (\S+)$/gm)].map((m) => m[1]),
+        errors: input.includes('#half') ? ['one failed'] : [],
+      });
+    }
     if (input.startsWith('You supervise an AI coding agent for a person.')) {
       if (section('intent').includes('#fine')) return json({ stuck: false, confidence: 0.9, title: 'Converging', diagnosis: 'Each run fails differently', nudge: '' });
       return json({

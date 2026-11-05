@@ -104,7 +104,7 @@ export class Backlog extends EventEmitter {
   // ------------------------------------------------------------ editing
 
   /** Queue one item per title. Options are what an agent would take (repo, dir, base, project, ...). */
-  add(titles, { repo, dir, base, project, worktree, permissionMode, model, plan, planReview, engine, attachments, isolation, priority = 2 } = {}) {
+  add(titles, { repo, dir, base, project, worktree, permissionMode, model, plan, planReview, designDoc, engine, attachments, isolation, priority = 2 } = {}) {
     const list = titles.map((t) => String(t ?? '').trim()).filter(Boolean);
     if (!list.length) throw err(400, 'At least one item is required');
     const pr = parsePriority(priority);
@@ -141,6 +141,7 @@ export class Backlog extends EventEmitter {
         isolation: isolation === undefined ? undefined : isolation || '',
         plan: Boolean(plan),
         planReview: planReview ?? null,
+        designDoc: designDoc ?? null,
         priority: pr,
         order: order + i,
         status: 'queued',
@@ -251,6 +252,7 @@ export class Backlog extends EventEmitter {
       isolation: it.isolation,
       plan: it.plan,
       planReview: it.planReview ?? undefined,
+      designDoc: it.designDoc ?? undefined,
       priority: it.priority,
       name: undefined,
     });
@@ -397,8 +399,8 @@ export class Backlog extends EventEmitter {
     if (it.status !== 'queued') throw err(409, 'Only queued items can be split');
     const titles = (Array.isArray(parts) ? parts : it.aiSplit?.parts ?? []).map((t) => String(t).trim()).filter(Boolean);
     if (titles.length < 2) throw err(400, 'Give at least two parts');
-    const { repo, dir, base, project, worktree, permissionMode, model, plan, planReview, engine, priority } = it;
-    const added = this.add(titles, { repo, dir, base, project, worktree, permissionMode, model, plan, planReview, engine, priority });
+    const { repo, dir, base, project, worktree, permissionMode, model, plan, planReview, designDoc, engine, priority } = it;
+    const added = this.add(titles, { repo, dir, base, project, worktree, permissionMode, model, plan, planReview, designDoc, engine, priority });
     this.manager.judge?.feedback('dispatch', { summary: `split "${it.title}"`, verdict: it.aiSplit ? 'split suggested' : 'not suggested', outcome: 'split it' });
     delete this.data.items[id];
     this.changed();

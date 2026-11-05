@@ -1484,11 +1484,57 @@ test('intent, spec and plan: INTENT.md on create, the agent told to keep SPEC.md
   assert.deepEqual(Object.keys((await agentNow(a.id)).specDocs).sort(), ['intent', 'plan', 'spec']);
   assert.match((await call('GET', `/agents/${a.id}/specs/spec`)).body.markdown, /remembers the choice/);
   assert.equal((await call('GET', `/agents/${a.id}/specs/nope`)).status, 400);
+  // A design doc by default: written after the plan, published as an Artifact, updated when done.
+  assert.equal((await agentNow(a.id)).designDoc, true);
+  assert.ok(sys.includes(`write a design doc to ${path.join(dir, 'DESIGN.md')}`), sys);
+  assert.match(sys, /Artifact tool/);
+  assert.match(sys, /Do not publish it anywhere else/, 'Google Drive is the Publish button');
+  assert.match(sys, /When the work is done.*bring .*DESIGN\.md up to date/);
+  fs.writeFileSync(path.join(dir, 'DESIGN.md'), '# Design: toggle\n## Summary\nA switch.\n');
+  assert.ok((await agentNow(a.id)).specDocs.designdoc);
+  assert.match((await call('GET', `/agents/${a.id}/specs/designdoc`)).body.markdown, /A switch/);
+  // Turned off for one agent: no instructions.
+  const [b] = (await call('POST', '/agents', { intent: 'Fix a typo', designDoc: false })).body;
+  assert.equal(b.designDoc, false);
+  const launchB = await waitFor(() => launches().find((l) => l.args.includes(b.sessionId) && l.args.includes('--append-system-prompt')), 8000, 'launch b');
+  assert.doesNotMatch(launchB.args[launchB.args.indexOf('--append-system-prompt') + 1], /DESIGN\.md/);
+  await call('DELETE', `/agents/${b.id}`);
   // General sessions keep none of this.
   const g = (await call('POST', '/general', {})).body;
   assert.equal(g.specDocs, undefined);
+  assert.equal(g.designDoc, false);
   await call('DELETE', `/agents/${a.id}`);
   await call('DELETE', `/agents/${g.id}`);
+});
+
+test('publish to Google Drive: all the documents, one Google Doc each in one folder, through the Drive connector only; again replaces them', async () => {
+  const [a] = (await call('POST', '/agents', { intent: 'Publish my docs', start: false })).body;
+  const dir = fs.realpathSync(path.join(home, 'briefs', a.id));
+  fs.writeFileSync(path.join(dir, 'SPEC.md'), '# Spec: docs\n## Requirements\n- all of them\n');
+  fs.writeFileSync(path.join(dir, 'DESIGN.md'), '# Design: docs\n## Architecture\n```mermaid\nflowchart LR\n  A --> B\n```\n');
+  const started = await call('POST', `/agents/${a.id}/drive`);
+  assert.equal(started.status, 200);
+  assert.equal(started.body.drive.pending, true);
+  const first = await waitFor(async () => ((await agentNow(a.id)).drive?.pending === false ? (await agentNow(a.id)).drive : null), 15000, 'published');
+  assert.equal(first.error, null);
+  assert.equal(first.folderUrl, 'https://drive.google.com/drive/folders/folder-fake-1');
+  assert.deepEqual(Object.keys(first.files), ['intent', 'spec', 'designdoc'], 'in folder order, only what exists');
+  assert.equal(first.files.spec.url, 'https://docs.google.com/document/d/doc-spec-0/edit');
+  assert.equal(first.files.designdoc.title, 'Design doc: publish-my-docs');
+  const call1 = launches().filter((l) => l.publish).at(-1);
+  assert.equal(call1.args[call1.args.indexOf('--tools') + 1], '', 'none of its own tools');
+  assert.equal(call1.args[call1.args.indexOf('--allowedTools') + 1], 'mcp__claude_ai_Google_Drive__create_file,mcp__claude_ai_Google_Drive__trash_file');
+  // Again: the same folder, new versions, the earlier ones trashed.
+  await call('POST', `/agents/${a.id}/drive`);
+  const again = await waitFor(async () => ((await agentNow(a.id)).drive?.pending === false && (await agentNow(a.id)).drive.at !== first.at ? (await agentNow(a.id)).drive : null), 15000, 'published again');
+  assert.equal(again.folderUrl, first.folderUrl);
+  assert.equal(again.files.spec.id, 'doc-spec-3');
+  assert.equal(again.trashed, 3);
+  // General sessions have nothing to publish.
+  const g = (await call('POST', '/general', {})).body;
+  assert.equal((await call('POST', `/agents/${g.id}/drive`)).status, 400);
+  await call('DELETE', `/agents/${g.id}`);
+  await call('DELETE', `/agents/${a.id}`);
 });
 
 test('scorecard: the changes scored, capped by what was measured, kept with the diff, in the PR and posted on it', async () => {
