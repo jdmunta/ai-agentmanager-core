@@ -506,7 +506,7 @@ test('planning while cloning moves into the repo with the same session', async (
   await call('POST', `/agents/${a.id}/stop`);
 });
 
-test('planning waits for "Continue in repo" while a terminal is attached', async () => {
+test('planning moves into the repo by itself with a terminal attached, after you stop typing', async () => {
   const origin = path.join(home, 'plan-manual.git');
   const [a] = (await call('POST', '/agents', { intent: 'Plan with me', repo: `file://${origin}`, plan: true })).body;
   const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/term/${a.id}`);
@@ -514,11 +514,33 @@ test('planning waits for "Continue in repo" while a terminal is attached', async
   await waitFor(async () => (await agentNow(a.id)).status === 'error', 15000, 'setup error');
   fs.renameSync(makeOrigin('plan-manual-src'), origin);
   await call('POST', `/agents/${a.id}/start`, {});
+  // You just typed: it waits rather than cut you off.
+  ws.send(JSON.stringify({ t: 'i', d: 'half a thought' }));
   const ready = await waitFor(async () => ((await agentNow(a.id)).planning?.ready ? agentNow(a.id) : null), 20000, 'ready flag');
-  await new Promise((r) => setTimeout(r, 2500));
-  assert.equal((await agentNow(a.id)).runtime.planning, true, 'still planning while attached');
+  assert.equal((await agentNow(a.id)).runtime.planning, true, 'still planning right after typing');
   assert.ok(ready.workdir);
 
+  // No click: once the typing pause passes, it moves on its own.
+  await waitFor(
+    () => launches().some((l) => l.cwd === fs.realpathSync(ready.workdir) && l.args.includes('--resume')),
+    30000,
+    'resume in workspace',
+  );
+  await waitFor(async () => (await agentNow(a.id)).status === 'running' && !(await agentNow(a.id)).runtime.planning);
+  ws.close();
+  await call('POST', `/agents/${a.id}/stop`);
+});
+
+test('Continue in repo moves a planning session right away', async () => {
+  const origin = path.join(home, 'plan-now.git');
+  const [a] = (await call('POST', '/agents', { intent: 'Plan now', repo: `file://${origin}`, plan: true })).body;
+  const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/term/${a.id}`);
+  await new Promise((r) => ws.on('open', r));
+  await waitFor(async () => (await agentNow(a.id)).status === 'error', 15000, 'setup error');
+  fs.renameSync(makeOrigin('plan-now-src'), origin);
+  await call('POST', `/agents/${a.id}/start`, {});
+  ws.send(JSON.stringify({ t: 'i', d: 'typing' }));
+  const ready = await waitFor(async () => ((await agentNow(a.id)).planning?.ready ? agentNow(a.id) : null), 20000, 'ready flag');
   const handed = (await call('POST', `/agents/${a.id}/handoff`)).body;
   assert.equal(handed.runtime.planning, false);
   assert.equal(handed.status, 'running');

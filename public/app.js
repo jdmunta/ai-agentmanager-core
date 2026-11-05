@@ -1938,7 +1938,7 @@ function renderDetail() {
       : ''}
     ${a.runtime.planning && a.workdir && a.status !== 'preparing'
       ? `<div class="ready-box">
-          <span>The workspace is ready. The planning session moves into the repo when you leave the terminal, or now:</span>
+          <span>The workspace is ready. The planning session moves into the repo as soon as Claude is idle and you pause typing, or now:</span>
           <button class="primary small" data-act="handoff">Continue in repo</button>
         </div>`
       : ''}
