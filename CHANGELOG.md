@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Planning moves into the repo by itself once it's cloned**, even with its terminal open: no more waiting for **Continue in repo**. It still waits until Claude is idle and you haven't typed for 15 seconds, so nothing is cut off. **Continue in repo** still moves it right away.
+
 ## 1.18.0 (2026-11-04)
 
 - **Goals.** Give an outcome for today, this week or no deadline, across one or more projects (**+ Goal** in the Backlog tab, or `agentmgr goal add`). It's planned into tasks, one agent each, which go to the backlog and run until done; autopilot ships them where it's on. When all are finished, the outcome is checked against what was delivered and what's missing is queued, for up to 2 more rounds. Each goal keeps **completed**, **pending** and **follow-ups** current, with **Copy summary**, **Carry over** when overdue, and an optional look at the plan before agents start.

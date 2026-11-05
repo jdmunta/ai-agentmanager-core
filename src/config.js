@@ -63,7 +63,7 @@ const DEFAULTS = {
   // Pre-accept Claude's "trust this folder" prompt for the folders agents run in.
   trustAgentFolders: true,
   // A planning session moves into the repo by itself once Claude has been idle this
-  // long and no terminal is attached; otherwise it waits for "Continue in repo".
+  // long (and, with its terminal open, you haven't typed for 15 seconds).
   handoffIdleSec: 5,
   // The AI judge (stuck, idle screens, reviews); see JUDGE_DEFAULTS in judge.js for every field.
   judge: { enabled: true },

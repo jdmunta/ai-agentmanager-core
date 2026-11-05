@@ -286,7 +286,7 @@ Cloning a big repo can take a while. Tick **Plan with Claude while the repo clon
 
 1. **Planning.** Claude runs in `~/.agentmanager/planning` with the agent's own session ID. It is told the repo isn't there yet and to clarify the task with you: ask questions, gather requirements, agree on a plan. It doesn't edit files.
 2. **Handoff.** When the workspace is ready, the session's transcript is copied into the repo folder and the same session resumes there (`claude --resume <id>`). Claude gets the message "The repository is ready … continue with the plan we agreed on" and has the whole planning conversation. The session ID doesn't change.
-3. **Timing.** It moves by itself once Claude has been idle for `handoffIdleSec` and no terminal is attached. If you have the terminal open, it waits for **Continue in repo** (or `agentmgr handoff <agent>`), so it never cuts you off mid-sentence.
+3. **Timing.** It moves by itself once the workspace is ready and Claude has been idle for `handoffIdleSec`, with no click needed. If you have the terminal open, it also waits until you haven't typed for 15 seconds, so it never cuts you off mid-sentence. **Continue in repo** (or `agentmgr handoff <agent>`) moves it right away.
 
 If setup fails while you're planning, the planning session keeps running and **Retry setup** tries again.
 

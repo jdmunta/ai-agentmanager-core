@@ -151,6 +151,8 @@ const ANSI = /\x1b(\[[0-9;?<>=]*[ -\/]*[@-~]|\][^\x07\x1b]*(\x07|\x1b\\)|[()][0-
 // When a link is found from several sources, the higher-ranked source is kept.
 const SOURCE_RANK = { manual: 5, intent: 4, session: 3, branch: 2, mentioned: 1 };
 const BUSY_IDLE_MS = 3000;
+// A planning session moves into its ready repo only after this long without you typing in it.
+const HANDOFF_TYPING_MS = 15000;
 // The attention label engines give a tool permission menu (what rules can answer).
 const PERMISSION = 'Permission prompt';
 /** Looser stuck thresholds: candidates the judge looks at before anyone is bothered. */
@@ -1256,16 +1258,19 @@ export class AgentManager extends EventEmitter {
 
   /**
    * Move a planning session into its now-ready workspace. Without `force` it
-   * only does so when nobody is looking at the terminal and Claude is idle, so
-   * it never yanks the session away mid-conversation; otherwise it flags the
-   * agent "ready" and waits for Continue in repo.
+   * waits until Claude is idle and, with a terminal open, you have stopped
+   * typing too, so it never yanks the session away mid-turn or mid-sentence;
+   * until then it flags the agent "ready" (Continue in repo moves it now).
    */
   async maybeHandoff(id, { force = false } = {}) {
     const agent = this.store.get(id);
     const rt = this.runtimes.get(id);
     if (!agent?.workdir || agent.status === 'preparing' || !(rt?.pty && rt.planning)) return agent && this.view(agent);
     const idleMs = (this.config.handoffIdleSec ?? 5) * 1000;
-    const quiet = !rt.clients.size && !rt.busy && Date.now() - (rt.lastOutputAt ?? 0) >= idleMs;
+    const t = Date.now();
+    // Watching the terminal: also wait for a pause in your typing (a half-typed message is lost in the move).
+    const typing = rt.clients.size > 0 && t - (this.inputAt.get(id) ?? 0) < Math.max(idleMs, HANDOFF_TYPING_MS);
+    const quiet = !rt.busy && !typing && t - (rt.lastOutputAt ?? 0) >= idleMs;
     if (!force && !quiet) {
       if (!agent.planning?.ready) this.patch(id, { planning: { ...agent.planning, ready: true } });
       return this.view(agent);
