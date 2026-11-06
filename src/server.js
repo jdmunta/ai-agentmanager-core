@@ -274,6 +274,17 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
     }),
   );
   api.get('/agents/:id/specs/:name', wrap((req) => manager.specDoc(req.params.id, req.params.name)));
+  // The agent's demo page, sandboxed: no access to this page's origin, and nothing loaded from elsewhere.
+  api.get('/agents/:id/demo', (req, res) => {
+    try {
+      const html = manager.demoPage(req.params.id);
+      res.set('Content-Security-Policy', "sandbox allow-scripts allow-forms allow-modals; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:");
+      res.set('X-Content-Type-Options', 'nosniff');
+      res.type('html').send(html);
+    } catch (err) {
+      res.status(err.status || 500).json({ error: err.message });
+    }
+  });
   // All of an agent's documents to Google Drive (through the Claude account's Google Drive connector).
   api.post('/agents/:id/drive', wrap((req) => manager.publishToDrive(req.params.id)));
   api.post('/agents/:id/scorecard/post', wrap((req) => review.postScorecard(req.params.id)));

@@ -40,12 +40,18 @@ export function initLand({ api, esc, toast, agents, $, scoreBadge = () => '', se
     return out.sort((x, y) => (x.a.priority ?? 2) - (y.a.priority ?? 2));
   };
 
+  // Review comments sent to the agent so far, and when last.
+  function commentsHint(c) {
+    if (!c?.count) return '';
+    return ` <span class="hint" title="Last sent ${esc(new Date(c.lastAt).toLocaleString())}">${c.count} review comment${c.count === 1 ? '' : 's'} sent</span>`;
+  }
+
   function rowHtml({ a, pr, land }) {
     const canFix = land === 'fix' || land === 'behind';
     return `<li class="agent land-row" data-agent="${a.id}" data-url="${esc(pr.url)}">
       <div class="line1"><span class="prio p${a.priority ?? 2}">P${a.priority ?? 2}</span>
         <a class="name" href="${esc(pr.url)}" target="_blank" rel="noopener" title="${esc(pr.title ?? pr.url)}">#${esc(pr.number ?? '')} ${esc(pr.title ?? pr.url)}</a></div>
-      <div class="line2"><button class="link" data-land="goto">${esc(a.name)}</button>${a.runtime?.busy ? ' <span class="hint">working</span>' : ''}</div>
+      <div class="line2"><button class="link" data-land="goto">${esc(a.name)}</button>${a.runtime?.busy ? ' <span class="hint">working</span>' : ''}${commentsHint(a.landing?.comments?.[pr.url])}</div>
       <div class="land-chips">${scoreBadge(a.docs?.scorecard, esc)} ${prChips(pr, esc)}</div>
       <div class="bl-actions">
         <button class="small" data-land="review" title="Its diff, line comments for the agent, commit and push">Review</button>
@@ -76,9 +82,10 @@ export function initLand({ api, esc, toast, agents, $, scoreBadge = () => '', se
             return g.length ? `<li class="project open"><div class="project-head bl-head"><span class="pname">${label}</span><span class="pcount">${g.length}</span></div><ul>${g.map(rowHtml).join('')}</ul></li>` : '';
           }).join('')}</ul>`
         : '<p class="hint land-empty">No open pull requests from agents. Open one from <b>Review changes</b> on an agent, or let the agent open it.</p>'}
-      ${s ? `<details class="land-settings"><summary>When checks fail or changes are requested</summary>
+      ${s ? `<details class="land-settings"><summary>When checks fail or reviewers comment</summary>
         <label class="check"><input type="checkbox" data-set="fixChecks" ${s.fixChecks ? 'checked' : ''}> Send failing checks to the agent</label>
         <label class="check"><input type="checkbox" data-set="fixReviews" ${s.fixReviews ? 'checked' : ''}> Send requested changes to the agent</label>
+        <label class="check"><input type="checkbox" data-set="fixComments" ${s.fixComments ? 'checked' : ''}> Send new review comments to the agent while the pull request is open (from the repo's members and review bots)</label>
         <label>At most <input type="number" min="0" max="20" data-set="maxFixes" value="${s.maxFixes}"> times per pull request</label>
         <label>Merge with <select data-set="mergeMethod">${['squash', 'merge', 'rebase'].map((m) => `<option ${m === s.mergeMethod ? 'selected' : ''}>${m}</option>`).join('')}</select></label>
         <label class="check"><input type="checkbox" data-set="deleteBranch" ${s.deleteBranch ? 'checked' : ''}> Delete the branch on GitHub after merging</label>
