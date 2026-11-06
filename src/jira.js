@@ -72,6 +72,78 @@ export function wordsAfterLink(text) {
   return rest.replace(/^[-:–—,\s]+/, '').split('\n')[0].trim().slice(0, 200) || null;
 }
 
+// Statuses that mean the work is over, whatever category a workflow puts them in.
+const FINISHED = /^(closed|done|resolved|integrated|cancell?ed|won'?t (do|fix)|duplicate|rejected)$/i;
+
+/**
+ * Open issues assigned to you on your Jira site (epics too): [{ key, url, summary, status,
+ * category, type, synopsis, updated }]. Needs the site, email and API token from Settings → Jira;
+ * null without them or when Jira can't be reached. Closed and integrated ones are left out.
+ */
+export async function assignedIssues({ jira = loadJira(), fetchImpl = fetch, timeoutMs = 10_000, max = 100 } = {}) {
+  if (!jira.site || !jira.email || !jira.token) return null;
+  const headers = { accept: 'application/json', 'content-type': 'application/json', authorization: `Basic ${Buffer.from(`${jira.email}:${jira.token}`).toString('base64')}` };
+  const body = JSON.stringify({ jql: 'assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC', fields: ['summary', 'status', 'issuetype', 'description', 'updated'], maxResults: max });
+  try {
+    const res = await fetchImpl(`${jira.site}/rest/api/3/search/jql`, { method: 'POST', headers, body, redirect: 'error', signal: AbortSignal.timeout(timeoutMs) });
+    if (!res.ok) return null;
+    const out = [];
+    for (const i of (await res.json())?.issues ?? []) {
+      const f = i?.fields ?? {};
+      const status = typeof f.status?.name === 'string' ? f.status.name.slice(0, 60) : null;
+      if (typeof i.key !== 'string' || !/^[A-Z][A-Z0-9_]+-\d+$/.test(i.key) || (status && FINISHED.test(status))) continue;
+      const synopsis = synopsisOf(f.description);
+      out.push({
+        key: i.key,
+        url: `${jira.site}/browse/${i.key}`,
+        summary: typeof f.summary === 'string' ? f.summary.trim().slice(0, 300) : null,
+        status,
+        category: typeof f.status?.statusCategory?.key === 'string' ? f.status.statusCategory.key : null,
+        type: typeof f.issuetype?.name === 'string' ? f.issuetype.name.slice(0, 40) : null,
+        ...(synopsis ? { synopsis } : {}),
+        updated: typeof f.updated === 'string' ? f.updated : null,
+      });
+    }
+    return out;
+  } catch {
+    return null;
+  }
+}
+
+/** The text of a Jira description: Atlassian document format (API v3), or plain text. */
+export function descriptionText(d) {
+  if (typeof d === 'string') return d;
+  const out = [];
+  const walk = (n) => {
+    if (!n || typeof n !== 'object') return;
+    if (n.type === 'text' && typeof n.text === 'string') out.push(n.text);
+    else if (n.type === 'hardBreak') out.push(' ');
+    // Code is how, not what: left out of the synopsis.
+    if (n.type === 'codeBlock') return;
+    for (const c of Array.isArray(n.content) ? n.content : []) walk(c);
+    if (/^(paragraph|heading|listItem|blockquote|tableCell)$/.test(n.type)) out.push('\n');
+  };
+  walk(d);
+  return out.join('');
+}
+
+/** What an issue is about in a sentence or two, from its description; null when it has none. */
+export function synopsisOf(description, max = 280) {
+  const text = descriptionText(description)
+    .split('\n')
+    .map((l) => l.trim())
+    // Jira's wiki markup and template headings carry no meaning on their own.
+    .filter((l) => l && !/^(h\d\.|\{code|\*?(description|summary|acceptance criteria|steps to reproduce)\*?:?$)/i.test(l))
+    .join(' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!text) return null;
+  if (text.length <= max) return text;
+  const cut = text.slice(0, max);
+  const end = Math.max(cut.lastIndexOf('. '), cut.lastIndexOf('? '), cut.lastIndexOf('! '));
+  return end > max / 3 ? cut.slice(0, end + 1) : `${cut.slice(0, cut.lastIndexOf(' ') > 0 ? cut.lastIndexOf(' ') : max).trim()}…`;
+}
+
 /**
  * The issue's summary, or null when it can't be had (not a site we contact, no access, offline).
  * `fetchImpl` and `allow` are for tests.
@@ -98,13 +170,14 @@ export async function issueFields({ key, site }, { jira = loadJira(), fetchImpl 
   const headers = { accept: 'application/json' };
   if (configured && jira.email && jira.token) headers.authorization = `Basic ${Buffer.from(`${jira.email}:${jira.token}`).toString('base64')}`;
   try {
-    const res = await fetchImpl(`${site}/rest/api/3/issue/${encodeURIComponent(key)}?fields=summary,status`, { headers, redirect: 'error', signal: AbortSignal.timeout(timeoutMs) });
+    const res = await fetchImpl(`${site}/rest/api/3/issue/${encodeURIComponent(key)}?fields=summary,status,description`, { headers, redirect: 'error', signal: AbortSignal.timeout(timeoutMs) });
     if (!res.ok) return null;
     const f = (await res.json())?.fields ?? {};
     const summary = typeof f.summary === 'string' && f.summary.trim() ? f.summary.trim().slice(0, 300) : null;
     const status = typeof f.status?.name === 'string' ? f.status.name.slice(0, 60) : null;
     if (!summary && !status) return null;
-    return { summary, status, category: typeof f.status?.statusCategory?.key === 'string' ? f.status.statusCategory.key : null };
+    const synopsis = synopsisOf(f.description);
+    return { summary, status, category: typeof f.status?.statusCategory?.key === 'string' ? f.status.statusCategory.key : null, ...(synopsis ? { synopsis } : {}) };
   } catch {
     return null;
   }

@@ -2,15 +2,15 @@
 // When an agent needs you it stops on it with its questions beside it, answered by tap (the
 // inbox's own cards) or, when turned on, by voice: what you say is read back and sent on "send".
 
-import { canSpeak, cycleRate, pause, play, rateLabel, resume, stop, now as speaking } from '/speak.js';
+import { canSpeak, chosenVoice, cycleRate, goodVoices, voiceScore, pause, play, rateLabel, resume, setVoice, speakable, stop, now as speaking } from '/speak.js';
 import { choiceFor } from '/voice.js';
 
 const VOICE_KEY = 'agentmgr.standupVoice';
 const PLAY_ID = 'standup';
 const Recognition = typeof window !== 'undefined' ? window.SpeechRecognition || window.webkitSpeechRecognition : null;
 
-// macOS's joke and singing voices: not for a standup.
-const NOVELTY = /^(Albert|Bad News|Bahh|Bells|Boing|Bubbles|Cellos|Deranged|Good News|Hysterical|Jester|Organ|Pipe Organ|Superstar|Trinoids|Whisper|Wobble|Zarvox)\b/i;
+// Agents take turns among this many of the best voices (fewer when fewer sound good).
+const MIXED = 4;
 const hash = (s) => [...String(s)].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7);
 export function initStandup({ api, $, esc, agents, needsFor, needCard, onNeed, toast, openAgent }) {
   const dialog = $('#standup-dialog');
@@ -26,18 +26,29 @@ export function initStandup({ api, $, esc, agents, needsFor, needCard, onNeed, t
     voiceOn = localStorage.getItem(VOICE_KEY) === '1';
   } catch {}
 
-  // Each agent keeps one voice of the page's language; the intro uses the default.
+  // Each agent keeps one of the few best voices here, unless you picked one voice for all; robotic
+  // and novelty voices are never used. The intro uses the best one (or yours).
   let voices = [];
+  let pickable = [];
   const loadVoices = () => {
-    if (!canSpeak()) return;
-    const lang = (navigator.language || 'en').slice(0, 2);
-    voices = speechSynthesis.getVoices().filter((v) => v.lang?.startsWith(lang) && !NOVELTY.test(v.name));
+    voices = goodVoices();
+    pickable = goodVoices({ online: true }).slice(0, 15);
+    if (dialog.open) render();
   };
   if (canSpeak()) {
     loadVoices();
     speechSynthesis.addEventListener?.('voiceschanged', loadVoices);
   }
-  const voiceFor = (id) => (voices.length > 1 ? voices[hash(id) % voices.length] : null);
+  const voiceFor = (id) => {
+    if (chosenVoice()) return null;
+    // Only voices about as good as the best: a mix that includes a poor one sounds worse than one voice.
+    const lang = navigator.language || 'en-US';
+    const top = voices[0] ? voiceScore(voices[0], lang) : 0;
+    const best = voices.slice(0, MIXED).filter((v) => voiceScore(v, lang) >= top - 2);
+    return best.length > 1 ? best[hash(id) % best.length] : null;
+  };
+  // Names as they'd be said: "WEB-41" → "WEB 41", "fix-login-timeout" → "fix login timeout".
+  const sayName = (name) => String(name ?? '').replace(/[-_/]+/g, ' ');
 
   const items = () => latest?.items ?? [];
   const current = () => items()[idx] ?? null;
@@ -106,7 +117,7 @@ export function initStandup({ api, $, esc, agents, needsFor, needCard, onNeed, t
       return play(PLAY_ID, ["That's everything."], {});
     }
     const it = current();
-    const text = it ? `${it.name}. ${it.text}` : latest?.intro ?? '';
+    const text = speakable(it ? `${sayName(it.name)}. ${it.text}` : latest?.intro ?? '');
     state = 'playing';
     render();
     const started = play(PLAY_ID, [{ text, voice: it ? voiceFor(it.agentId) : null }], {
@@ -268,6 +279,10 @@ export function initStandup({ api, $, esc, agents, needsFor, needCard, onNeed, t
         <button class="primary" data-su="play" title="${playingNow ? 'Pause' : 'Play'}" ${canSpeak() ? '' : 'disabled'}>${playingNow ? '⏸' : '▶'}</button>
         <button data-su="next" title="Next" ${idx >= list.length ? 'disabled' : ''}>⏭</button>
         <button class="small" data-su="rate" title="Speed">${esc(rateLabel())}</button>
+        ${pickable.length ? `<select class="small standup-voice-pick" data-su-voice title="Voice: a mix of the best voices here, or one for everything read aloud" aria-label="Voice">
+            <option value="" ${chosenVoice() ? '' : 'selected'}>Best voices</option>
+            ${pickable.map((v) => `<option value="${esc(v.name)}" ${chosenVoice() === v.name ? 'selected' : ''}>${esc(v.name)}${v.localService === false ? ' · online' : ''}</option>`).join('')}
+          </select>` : ''}
         <span class="spacer"></span>
         ${Recognition ? `<label class="check" title="Answer agents by speaking. Your browser may send the audio to its maker to turn it into text."><input type="checkbox" data-su="voice" ${voiceOn ? 'checked' : ''}> Answer by voice</label>` : ''}
       </div>
@@ -309,6 +324,12 @@ export function initStandup({ api, $, esc, agents, needsFor, needCard, onNeed, t
     }
   });
   body.addEventListener('change', async (e) => {
+    if (e.target.dataset.suVoice !== undefined) {
+      setVoice(e.target.value || null);
+      // Hear it right away.
+      if (state !== 'playing') play(PLAY_ID, [`This is how the standup sounds.`], {});
+      return render();
+    }
     if (e.target.dataset.su === 'voice') {
       voiceOn = e.target.checked;
       try {

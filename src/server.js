@@ -297,6 +297,7 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
       const list = (Array.isArray(intents) ? intents : [intent]).map((i) => String(i ?? '').trim()).filter(Boolean);
       // Agents the assistant's own session starts: its limits apply, and they are marked as its.
       const extra = assistant.admit(req.headers['x-agentmgr-agent'], list, opts);
+      if (extra.startedBy) proposed.refuseSetAside(list);
       const created = manager.createMany(list, { ...opts, ...extra });
       if (!extra.startedBy) repeats.record(created.map((a) => ({ text: a.intent, projectKey: projectOf(store.get(a.id) ?? a).key })));
       if (extra.startedBy) {
@@ -786,15 +787,20 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
   api.get('/codemap', wrap((req) => manager.codeMap(req.query.project ? String(req.query.project) : null)));
   // Issues agents work on, for the summary; ?group=you|agent|done and ?format=markdown to paste.
   api.get('/issues', wrap(async (req) => {
-    const v = await manager.issues(proposed.waiting());
+    // ?fresh=1 (the ↻ button) asks Jira again for the issues assigned to you.
+    if (req.query.fresh === '1') manager.assignedAt = 0;
+    const v = await manager.issues(proposed.listed(), proposed.actions);
     const group = req.query.group ? String(req.query.group) : null;
-    const rows = group && group !== 'all' ? v.rows.filter((r) => r.group === group) : v.rows;
+    // "all" is everything still on the list: removed ones only when asked for.
+    const rows = !group ? v.rows : group === 'all' ? v.rows.filter((r) => r.group !== 'removed') : v.rows.filter((r) => r.group === group);
     return req.query.format === 'markdown' ? { markdown: issuesMarkdown(rows) } : { ...v, rows };
   }));
   // Issues proposed for agents (the assistant, when you pick): start the ticked ones, or dismiss them.
   api.post('/issues/proposed', wrap((req) => proposed.add({ ...req.body, by: req.headers['x-agentmgr-agent'] ? 'assistant' : 'you' })));
   api.post('/issues/start', wrap((req) => proposed.start(Array.isArray(req.body?.keys) ? req.body.keys.map(String) : [])));
   api.post('/issues/dismiss', wrap((req) => proposed.dismiss(Array.isArray(req.body?.keys) ? req.body.keys.map(String) : [])));
+  // Your action on issues: assign (starts an agent from the proposal), skip, done, remove, or null to clear.
+  api.post('/issues/action', wrap((req) => proposed.setAction(Array.isArray(req.body?.keys) ? req.body.keys.map(String) : [], req.body?.action ?? null)));
   // Design docs of all agents; the same ?group= and ?format=markdown.
   api.get('/designs', wrap((req) => {
     const v = manager.designs();

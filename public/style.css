@@ -1067,6 +1067,8 @@ kbd { display: inline-block; min-width: 1.6em; padding: 1px 5px; border: 1px sol
 .standup-dialog { width: min(720px, calc(100% - 32px)); max-height: calc(100% - 32px); padding: 16px; }
 .standup-top { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
 .standup-top .spacer, .standup-controls .spacer { flex: 1; }
+.standup-controls .standup-voice-pick { width: auto; max-width: 170px; flex: none; font-size: 12px; padding: 3px 6px; }
+.standup-controls label.check input[type="checkbox"] { width: auto; flex: none; }
 .standup-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
 .standup-chip { font-size: 12px; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--border); background: var(--panel); cursor: pointer; max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .standup-chip.on { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
@@ -1144,6 +1146,14 @@ table.issues td { padding: 7px 10px; border-bottom: 1px solid var(--border); ver
 table.issues tr:last-child td { border-bottom: 0; }
 table.issues .issue-key { font-family: var(--mono); font-weight: 600; white-space: nowrap; }
 table.issues .issue-title { max-width: 360px; color: var(--text); }
+table.issues .issue-synopsis { max-width: 420px; margin-top: 2px; font-size: 12px; color: var(--muted); display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+table.issues .issue-action { width: 1%; white-space: nowrap; }
+table.issues .issue-type { font-size: 10px; font-weight: 600; text-transform: uppercase; padding: 1px 5px; border-radius: 4px; background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); white-space: nowrap; }
+table.issues .issue-action select { width: auto; font-size: 12px; padding: 2px 4px; }
+table.issues select.act-skip { color: var(--yellow); }
+table.issues select.act-done { color: var(--green); }
+table.issues select.act-remove { color: var(--red); }
+table.issues tr.action-skip td:not(.issue-action), table.issues tr.action-remove td:not(.issue-action) { opacity: 0.65; }
 table.issues tr td:first-child { border-left: 3px solid transparent; }
 table.issues tr.stage-review td:first-child, table.issues tr.stage-approved td:first-child { border-left-color: var(--green); }
 table.issues tr.stage-needs td:first-child, table.issues tr.stage-blocked td:first-child { border-left-color: var(--red); }
@@ -1163,7 +1173,7 @@ table.issues .dot.idle { background: var(--muted); }
 @media (max-width: 640px) {
   .issues-dialog { width: calc(100% - 32px); padding: 12px; }
   table.issues .col-active { display: none; }
-  table.issues .issue-title { max-width: 200px; }
+  table.issues .issue-title, table.issues .issue-synopsis { max-width: 200px; }
 }
 
 /* ---------- Designs: agents' design docs */

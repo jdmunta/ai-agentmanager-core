@@ -63,14 +63,14 @@ export function assistantPrompt(s, dir, bin = `node ${BIN}`) {
   const pick =
     `Don't start agents for new issues: the person picks which ones get agents. Propose each one you haven't handled instead: ${am} issues propose @<project> "<the issue link> <a one-line summary of what to do>". ` +
     `It is listed for them under Jira, Not started, and an agent starts only if they tick it. Record it as "proposed". ` +
-    `A proposal for an issue they dismissed, or one that already has an agent, is refused: record it as skipped and don't propose it again.`;
+    `A proposal for an issue they skipped, marked done or removed, or one that already has an agent, is refused: record it as skipped and don't propose it again.`;
   if (s.sources.includes('jira')) {
     how.push(
       `Jira, new assignments: with your Jira / Atlassian tools, find unresolved issues assigned to the person that were created or assigned since your last check (on the first check, the last 2 days). ` +
         (s.pickIssues
           ? pick
           : `For each one you haven't handled, start an agent: ${am} add @<project> "<the issue link> <a one-line summary of what to do>". ` +
-            `Start the request with the issue link: the agent is then named after the issue key, and the daemon refuses a second agent for the same key.`),
+            `Start the request with the issue link: the agent is then named after the issue key, and the daemon refuses a second agent for the same key, or one for an issue the person skipped, marked done or removed under Jira (record those as skipped).`),
     );
   }
   if (s.sources.includes('linear')) {
