@@ -1360,6 +1360,46 @@ test('assistant: with "let me pick" it proposes new issues instead of starting a
   assert.match(pick, /an agent starts only if they tick it/);
 });
 
+test('explain the review by voice: the PR, checks, AI review, risky changes and what is left', async () => {
+  const { reviewSpeech, reviewedPr } = await import('../public/prvoice.js');
+  const pr = (o = {}) => ({ url: 'https://github.com/a/b/pull/12', number: 12, title: 'Retry uploads', source: 'branch', state: 'OPEN', checks: { state: 'passed', failed: [] }, ...o });
+  const a = {
+    id: 'a1',
+    name: 'OPS-7',
+    intent: 'https://x.atlassian.net/browse/OPS-7 retry failed uploads',
+    synopsis: { key: 'OPS-7', text: 'Retry failed uploads', source: 'jira' },
+    prs: [pr({ state: 'MERGED', number: 9 }), pr()],
+    runtime: {},
+    aiReview: { verdict: 'partial', summary: 'Retries work. Order is not checked.', met: ['retries with backoff'], missing: ['a test for file order'], risks: ['more load on the server'] },
+    docs: { walkthrough: { data: { summary: 'Adds retries.', changes: [{ title: 'Backoff helper', file: 'src/net/retry.js', risk: 'high' }, { title: 'Wire it in', file: 'src/upload.js', risk: 'low' }] } } },
+    questions: [{ question: 'Five retries or three?' }, { question: 'Old one', answer: 'x' }],
+  };
+  assert.equal(reviewedPr(a).number, 12, 'the open PR, not the merged one');
+  const text = reviewSpeech(a, { designSummary: 'Failed uploads retry with backoff.' }).join(' ');
+  for (const want of [
+    'Review of OPS-7, Retry failed uploads.',
+    'Pull request 12, Retry uploads, is open, checks pass, and no review yet.',
+    'What it does: Failed uploads retry with backoff.',
+    'The AI review says it is partly done. Retries work. Order is not checked.',
+    'Met: retries with backoff.',
+    'Missing: a test for file order.',
+    'Risks: more load on the server.',
+    'The walkthrough has 2 changes; 1 is high risk: Backoff helper, in retry.js.',
+    'It asks you: Five retries or three?',
+    'Next: your review.',
+  ]) assert.ok(text.includes(want), `${want}\n---\n${text}`);
+  assert.ok(!text.includes('Old one'), 'answered questions are left out');
+  // Without a design summary: the walkthrough's. Failing checks and approval change the next step.
+  assert.match(reviewSpeech({ ...a, aiReview: null }).join(' '), /What it does: Adds retries\..*There is no AI review yet/);
+  assert.match(reviewSpeech({ ...a, prs: [pr({ checks: { state: 'failed', failed: ['lint', 'unit'] } })] }).join(' '), /is open, checks fail \(lint and unit\), and no review yet\..*Next: the failing checks need fixing/);
+  assert.match(reviewSpeech({ ...a, prs: [pr({ review: 'APPROVED' })] }).join(' '), /it's approved\..*Next: merge it when you are ready\./);
+  assert.match(reviewSpeech({ ...a, prs: [], results: { outcome: 'done' } }).join(' '), /There is no pull request: the agent says it is done/);
+  const noDocs = reviewSpeech({ ...a, docs: {}, results: { delivered: [{ text: 'PR #12 Retry uploads (open)', source: 'tracked' }, { text: 'Retries added', source: 'agent' }] } }).join(' ');
+  assert.match(noDocs, /What it does: Retries added\./);
+  assert.doesNotMatch(noDocs, /What it does: PR #12/);
+  assert.deepEqual(reviewSpeech(null), []);
+});
+
 test('designs: name and summary from DESIGN.md, links, and agents waiting for review first', async () => {
   const { designOutline, designRows, designsMarkdown } = await import('../src/designs.js');
   assert.deepEqual(designOutline('# Design: Upload retries\n\n## Summary\nRetries **failed** uploads with [backoff](http://x).\nKeeps order.\n\n## Architecture\nx'), { title: 'Upload retries', summary: 'Retries failed uploads with backoff. Keeps order.' });

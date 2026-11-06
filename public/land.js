@@ -1,6 +1,7 @@
 // Land tab: every agent's open pull request, grouped by what it needs to get merged, with
 // Review, Update, Ask to fix and Merge. Settings for sending failures back to agents at the bottom.
 
+import { listenHtml } from './speak.js';
 const SHORT = { ready: 'ready', fix: 'to fix', behind: 'behind', waiting: 'waiting', draft: 'draft' };
 const GROUPS = [
   ['ready', 'Ready to merge'],
@@ -55,6 +56,7 @@ export function initLand({ api, esc, toast, agents, $, scoreBadge = () => '', se
       <div class="land-chips">${scoreBadge(a.docs?.scorecard, esc)} ${prChips(pr, esc)}</div>
       <div class="bl-actions">
         <button class="small" data-land="review" title="Its diff, line comments for the agent, commit and push">Review</button>
+        ${listenHtml(`prvoice:${a.id}`, { title: 'Explain the review aloud: the PR, its checks, the AI review, the riskiest changes and what is left', label: 'Explain' })}
         ${land === 'behind' || pr.mergeable === 'CONFLICTING' ? '<button class="small" data-land="update" title="Merge the base branch in here (when the agent is idle and its work is committed) and push; otherwise, or on conflicts, ask the agent">Update</button>' : ''}
         ${canFix ? '<button class="small" data-land="fix" title="Send the failures, requested changes or conflicts to the agent">Ask to fix</button>' : ''}
         ${land === 'ready' ? '<button class="small primary" data-land="merge">Merge</button>' : ''}

@@ -1510,7 +1510,7 @@ test('issues: the Jira summary lists agents\' issues with their Jira status, wai
     assert.deepEqual(mine.map((r) => [r.key, r.stage, r.jira?.status]), [['ABC-21', 'review', 'In Review'], ['ABC-22', 'working', 'In Progress']]);
     assert.equal(mine[0].pr.url, url);
     assert.deepEqual(mine[0].plan, { written: true, review: null, done: 1, total: 2 });
-    assert.deepEqual(mine[0].design, { written: true, page: null, google: null });
+    assert.deepEqual(mine[0].design, { written: true, page: null, google: null, summary: 'Backoff.' });
     assert.equal(mine[0].title, 'Retry uploads');
     assert.equal(v.jira.signedIn, false);
     const you = (await call('GET', '/issues?group=you')).body.rows;

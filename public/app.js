@@ -26,6 +26,7 @@ import { initMachine } from '/machine.js';
 import { initWatch } from '/watch.js';
 import { initStandup } from '/standup.js';
 import { initIssues } from '/issues.js';
+import { reviewSpeech } from '/prvoice.js';
 import { initDesigns } from '/designs.js';
 import { initCodeMap } from '/codemap.js';
 import { initKeys } from '/keys.js';
@@ -403,7 +404,11 @@ function reviewBox(a) {
   if (noRepo(a)) return { button: '', box: '' };
   const r = a.aiReview;
   const button = `<button class="small" data-act="review" ${r?.pending ? 'disabled' : ''}
-    title="Check the work against the intent and brief: what is met, missing or risky. A separate one-off model call; runs by itself when the agent says it is done">${r?.pending ? 'Reviewing…' : 'Review with AI'}</button>`;
+    title="Check the work against the intent and brief: what is met, missing or risky. A separate one-off model call; runs by itself when the agent says it is done">${r?.pending ? 'Reviewing…' : 'Review with AI'}</button>${
+    r?.verdict || a.prs?.some((p) => p.source !== 'mentioned' && p.state)
+      ? listenHtml(`prvoice:${a.id}`, { title: 'Explain the review aloud: the PR, its checks, the AI review, the riskiest changes and what is left', label: 'Explain review' })
+      : ''
+  }`;
   // An unhandled review shows as a card above the brief; a handled one stays here, compact.
   if (!r?.verdict || !r.seen) return { button, box: '' };
   return {
@@ -717,6 +722,7 @@ bindListen((id) => {
   else if (what === 'walk') parts = reviewUi.listenParts();
   else if (what === 'score') parts = a?.docs?.scorecard?.data ? scorecardSpeech(a.docs.scorecard) : null;
   else if (what === 'sidewalk') parts = sidePane?.listenParts();
+  else if (what === 'prvoice') parts = reviewSpeech(a, issuesUi.about(agentId));
   if (!parts?.length || !play(id, parts)) toast('Nothing to read aloud here (or this browser has no speech)');
 });
 

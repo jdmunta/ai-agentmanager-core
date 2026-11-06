@@ -949,6 +949,10 @@ agentmgr issues --all         # and the rest
 agentmgr issues --markdown    # a table to paste
 ```
 
+### Explain the review, by voice
+
+**🔊 Explain** on a pull request (in **Jira**, **Land**, and next to **Review with AI** on the agent) reads a short spoken briefing for whoever reviews it, in this order: the issue; the PR and its state (open or draft, checks, conflicts, approved or changes requested); what it does, from the agent's design doc, else its change walkthrough; the AI review's verdict with what is met, missing and risky; the high-risk changes from the walkthrough; questions the agent is waiting on; and what's left before it can merge. It's built from what AI Agent Manager already tracks, so it starts at once; for each change in turn, use 🔊 Listen in **Review**. Pause, stop and speed are next to it while it plays.
+
 ### Designs
 
 **Designs** in the top bar (or `d`) lists every agent's design doc, the ones whose work waits for your review first, with their count on the button. Each shows the doc's name and the summary from its DESIGN.md, the agent (opens its session), its Jira issue and where the work stands, and links: **Read** it here, the design page the agent published, its Google Doc after **Publish to Google Drive**, and the PRDs and tech specs in the agent's brief. Search by name, summary, agent, project or issue; **Copy** puts the shown list on the clipboard as Markdown.

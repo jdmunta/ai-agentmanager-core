@@ -4,6 +4,7 @@
 
 import { leadingJiraKey, landState } from './tracker.js';
 import { wordsAfterLink } from './jira.js';
+import { designOutline } from './designs.js';
 import { needsOf } from './standup.js';
 
 const ISSUE_KEY = /^[A-Z][A-Z0-9_]+-\d+$/;
@@ -75,13 +76,14 @@ function planOf(v, read) {
   return { written, review, ...steps };
 }
 
-/** The agent's design doc: written or not, and where it's published. */
-function designOf(v) {
+/** The agent's design doc: written or not, its summary, and where it's published. */
+function designOf(v, read) {
   const written = Boolean(v.specDocs?.designdoc);
   const ref = (v.brief?.references ?? []).find((r) => /design page/i.test(r.label));
   const google = v.drive?.files?.designdoc?.url ?? null;
   if (!written && !ref && !google && !v.designDoc) return null;
-  return { written, page: ref?.url ?? null, google };
+  const summary = written ? designOutline(read(v.id, 'designdoc')).summary : null;
+  return { written, page: ref?.url ?? null, google, ...(summary ? { summary } : {}) };
 }
 
 /**
@@ -129,7 +131,7 @@ export function issueRows(views, jira = new Map(), read = () => null, proposed =
       pr: pr ? { url: pr.url, number: pr.number ?? null, title: pr.title ?? null, state: pr.state, checks: pr.checks?.state ?? null, review: pr.review ?? null } : null,
       aiReview: v.aiReview?.verdict ?? null,
       plan: planOf(v, read),
-      design: designOf(v),
+      design: designOf(v, read),
       updatedAt: v.activeAt ?? v.createdAt ?? null,
     });
   }

@@ -3,6 +3,8 @@
 // link to the agent. Issues proposed for agents (when you pick) come first, with a box to tick:
 // agents start only for the ticked ones.
 
+import { listenHtml } from './speak.js';
+
 const SAVED = 'agentmgr.issuesFilter';
 const FILTERS = [
   ['new', 'Not started'],
@@ -62,7 +64,7 @@ export function initIssues({ api, $, esc, ago, openAgent, openDoc, toast }) {
     const status = r.jira?.status ? `<span class="jira-status ${esc(r.jira.category ?? '')}">${esc(r.jira.status)}</span>` : '<span class="hint">—</span>';
     const check = r.pr?.checks && CHECKS[r.pr.checks] ? ` <span class="checks ${esc(r.pr.checks)}" title="${CHECKS[r.pr.checks][1]}">${CHECKS[r.pr.checks][0]}</span>` : '';
     const pr = r.pr?.url
-      ? `<a href="${esc(r.pr.url)}" target="_blank" rel="noopener" title="${esc(r.pr.title ?? '')}">#${esc(r.pr.number ?? '?')}</a>${check}${r.aiReview ? `<div class="hint" title="AI review">AI: ${esc(r.aiReview)}</div>` : ''}`
+      ? `<a href="${esc(r.pr.url)}" target="_blank" rel="noopener" title="${esc(r.pr.title ?? '')}">#${esc(r.pr.number ?? '?')}</a>${check}${r.aiReview ? `<div class="hint" title="AI review">AI: ${esc(r.aiReview)}</div>` : ''}<div>${listenHtml(`prvoice:${r.agent.id}`, { title: 'Explain the review aloud: the PR, its checks, the AI review, the riskiest changes and what is left', label: 'Explain' })}</div>`
       : '<span class="hint">—</span>';
     if (!r.agent) {
       const by = r.proposal?.by === 'assistant' ? 'proposed by the assistant' : 'proposed';
@@ -243,5 +245,11 @@ export function initIssues({ api, $, esc, ago, openAgent, openDoc, toast }) {
   }
 
   load({ quiet: true });
-  return { open, changed, isOpen: () => dialog.open };
+  /** What the table knows about an agent's issue: its key and design doc summary. */
+  const about = (agentId) => {
+    const r = data?.rows.find((x) => x.agent?.id === agentId);
+    return r ? { issueKey: r.key, designSummary: r.design?.summary ?? null } : {};
+  };
+
+  return { open, changed, about, isOpen: () => dialog.open };
 }
