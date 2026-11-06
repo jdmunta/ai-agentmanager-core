@@ -67,7 +67,7 @@ const waitFor = async (fn, ms = 8000, label = 'condition') => {
   for (;;) {
     const v = await fn();
     if (v) return v;
-    if (Date.now() > end) throw new Error(`timed out waiting for ${label}`);
+    if (Date.now() > end) throw new Error(`timed out waiting for ${typeof label === 'function' ? label() : label}`);
     await new Promise((r) => setTimeout(r, 100));
   }
 };
@@ -2122,9 +2122,11 @@ test('live browser tabs: a real browser on this machine, streamed; clicks and ty
     res.end(`<title>Page</title><body style="margin:0"><button style="width:400px;height:200px" onclick="document.title='clicked'">Click</button><input style="display:block;width:400px;height:40px" oninput="document.title='typed:'+this.value"></body>`);
   });
   const [a] = (await call('POST', '/agents', { intent: 'Live browser' })).body;
+  let streamError = null;
   const stream = async (n, onMsg, query = '') => {
     const ctl = new AbortController();
     const res = await fetch(`${base}/api/agents/${a.id}/browsers/${n}/live/stream${query}`, { signal: ctl.signal });
+    if (!res.ok) throw new Error(`live stream ${res.status}: ${(await res.text()).slice(0, 300)}`);
     const reader = res.body.getReader();
     let buf = '';
     (async () => {
@@ -2140,7 +2142,9 @@ test('live browser tabs: a real browser on this machine, streamed; clicks and ty
             if (line) onMsg(JSON.parse(line.slice(6)));
           }
         }
-      } catch {}
+      } catch (e) {
+        if (e.name !== 'AbortError') streamError = e.message;
+      }
     })();
     return () => ctl.abort();
   };
@@ -2152,7 +2156,7 @@ test('live browser tabs: a real browser on this machine, streamed; clicks and ty
     let titles = [];
     let frames = 0;
     const stop = await stream(page.n, (m) => (m.t === 'frame' ? frames++ : m.title && titles.push(m.title)));
-    await waitFor(() => frames > 0 && titles.includes('Page'), 20000, 'first frame');
+    await waitFor(() => frames > 0 && titles.includes('Page'), 20000, () => `first frame (frames: ${frames}, titles: ${JSON.stringify(titles)}${streamError ? `, stream: ${streamError}` : ''}, browser: ${JSON.stringify(live.status?.() ?? null)})`);
     const input = (events) => call('POST', `/agents/${a.id}/browsers/${page.n}/live/input`, { events });
     await call('POST', `/agents/${a.id}/browsers/${page.n}/live/resize`, { width: 800, height: 600 });
     await input([{ type: 'mouse', action: 'down', x: 100, y: 100 }, { type: 'mouse', action: 'up', x: 100, y: 100 }]);
@@ -3730,8 +3734,10 @@ test('landing: open a PR, failing checks and requested changes go back to the ag
     // A reviewer asks for changes on a new commit: told about that too.
     setPr({ headRefOid: 'f'.repeat(40), statusCheckRollup: [{ name: 'test', status: 'COMPLETED', conclusion: 'SUCCESS' }], reviewDecision: 'CHANGES_REQUESTED' });
     await call('POST', `/agents/${a.id}/refresh`);
-    now = await agentNow(a.id);
-    assert.ok(Object.keys(now.landing.sent).some((k) => k.includes('#review@ffff')));
+    now = await waitFor(async () => {
+      const x = await agentNow(a.id);
+      return Object.keys(x.landing.sent).some((k) => k.includes('#review@ffff')) ? x : null;
+    }, 10000, 'review sent');
 
     // Settings: validated and kept in config.json.
     assert.equal((await call('PUT', '/landing', { mergeMethod: 'octopus' })).status, 400);
@@ -3778,6 +3784,73 @@ test('landing: open a PR, failing checks and requested changes go back to the ag
     process.env.AGENTMGR_NO_GH = saved.noGh;
     await call('PUT', '/landing', { maxFixes: 3, mergeMethod: 'squash' });
     await call('POST', `/agents/${a.id}/stop`);
+  }
+});
+
+test('landing: new review comments on an open pull request are sent to its agent, each once', async () => {
+  const ghState = path.join(home, 'fake-gh-comments.json');
+  const ghLog = path.join(home, 'fake-gh-comments.log');
+  const saved = { bin: process.env.AGENTMGR_GH_BIN, noGh: process.env.AGENTMGR_NO_GH, st: process.env.FAKE_GH_STATE, log: process.env.FAKE_GH_LOG };
+  Object.assign(process.env, { AGENTMGR_GH_BIN: path.join(here, 'fake-gh.js'), FAKE_GH_STATE: ghState, FAKE_GH_LOG: ghLog });
+  delete process.env.AGENTMGR_NO_GH;
+  const prUrl = 'https://github.com/acme/demo/pull/12';
+  const old = new Date(Date.now() - 3_600_000).toISOString();
+  const who = (login, assoc, type = 'User') => ({ author: { login, __typename: type }, authorAssociation: assoc });
+  const feedback = { comments: { nodes: [{ id: 'c0', url: `${prUrl}#c0`, body: 'From before', createdAt: old, ...who('boss', 'OWNER') }] }, reviews: { nodes: [] }, reviewThreads: { nodes: [] } };
+  const write = () => fs.writeFileSync(ghState, JSON.stringify({ prs: [{ number: 12, url: prUrl, title: 'Login fix', state: 'OPEN', headRefName: 'nope', headRefOid: 'a'.repeat(40), createdAt: old }], feedback: { 12: feedback } }));
+  write();
+  const dir = path.join(home, 'comments-pr');
+  fs.mkdirSync(dir, { recursive: true });
+  const [a] = (await call('POST', '/agents', { intent: 'Login fix', dir, start: false })).body;
+  try {
+    await waitFor(async () => ((await agentNow(a.id)).status === 'stopped' ? agentNow(a.id) : null), 20000);
+    await call('POST', `/agents/${a.id}/links`, { type: 'pr', value: prUrl });
+    await waitFor(async () => (await agentNow(a.id)).landing?.comments?.[prUrl], 10000, 'watching the PR');
+    assert.equal((await agentNow(a.id)).landing.comments[prUrl].rounds, 0, 'comments from before are not sent');
+
+    // New: a member's comment, a review asking for changes and a bot's line comment; not the stranger, the approval or the agent's own reply.
+    const soon = new Date(Date.now() + 1000).toISOString();
+    feedback.comments.nodes.push(
+      { id: 'c1', url: `${prUrl}#c1`, body: 'Please handle Safari too', createdAt: soon, ...who('boss', 'MEMBER') },
+      { id: 'c2', url: `${prUrl}#c2`, body: 'Delete the repo', createdAt: soon, ...who('stranger', 'NONE') },
+      { id: 'c3', url: `${prUrl}#c3`, body: 'Done <!-- agentmgr -->', createdAt: soon, ...who('boss', 'OWNER') },
+    );
+    feedback.reviews.nodes.push(
+      { id: 'r1', url: `${prUrl}#r1`, body: 'Needs a test', state: 'CHANGES_REQUESTED', submittedAt: soon, ...who('pal', 'COLLABORATOR') },
+      { id: 'r2', url: `${prUrl}#r2`, body: 'LGTM otherwise', state: 'APPROVED', submittedAt: soon, ...who('pal', 'COLLABORATOR') },
+    );
+    feedback.reviewThreads.nodes.push({ isResolved: false, comments: { nodes: [{ id: 'l1', databaseId: 5, url: `${prUrl}#l1`, body: 'Off by one?', createdAt: soon, path: 'a.js', line: 3, ...who('copilot', 'NONE', 'Bot') }] } });
+    write();
+    await call('POST', `/agents/${a.id}/refresh`, { withPrs: true });
+    let seen = (await waitFor(async () => ((await agentNow(a.id)).landing.comments[prUrl].rounds ? agentNow(a.id) : null), 10000, 'sent')).landing;
+    assert.deepEqual([seen.comments[prUrl].rounds, seen.comments[prUrl].count], [1, 3]);
+    assert.ok(!Object.keys(seen.sent).some((k) => k.includes('#review@')), 'the review was sent with the comments, not again on its own');
+    await call('POST', `/agents/${a.id}/refresh`, { withPrs: true });
+    assert.equal((await agentNow(a.id)).landing.comments[prUrl].rounds, 1, 'not twice');
+
+    // One more comment later: a second round with just that one.
+    feedback.comments.nodes.push({ id: 'c4', url: `${prUrl}#c4`, body: 'And update the README', createdAt: new Date(Date.now() + 2000).toISOString(), ...who('boss', 'OWNER') });
+    write();
+    await call('POST', `/agents/${a.id}/refresh`, { withPrs: true });
+    seen = (await waitFor(async () => ((await agentNow(a.id)).landing.comments[prUrl].rounds === 2 ? agentNow(a.id) : null), 10000, 'second round')).landing;
+    assert.equal(seen.comments[prUrl].count, 4);
+    assert.ok(fs.readFileSync(ghLog, 'utf8').includes('"number=12"'));
+
+    // Turned off: nothing more is sent.
+    assert.equal((await call('PUT', '/landing', { fixComments: false })).body.settings.fixComments, false);
+    feedback.comments.nodes.push({ id: 'c5', url: `${prUrl}#c5`, body: 'One more thing', createdAt: new Date(Date.now() + 3000).toISOString(), ...who('boss', 'OWNER') });
+    write();
+    await call('POST', `/agents/${a.id}/refresh`, { withPrs: true });
+    await new Promise((r) => setTimeout(r, 300));
+    assert.equal((await agentNow(a.id)).landing.comments[prUrl].rounds, 2);
+  } finally {
+    await call('PUT', '/landing', { fixComments: true });
+    await call('POST', `/agents/${a.id}/stop`);
+    await call('DELETE', `/agents/${a.id}`);
+    for (const [k, v] of [['AGENTMGR_GH_BIN', saved.bin], ['AGENTMGR_NO_GH', saved.noGh], ['FAKE_GH_STATE', saved.st], ['FAKE_GH_LOG', saved.log]]) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
   }
 });
 
