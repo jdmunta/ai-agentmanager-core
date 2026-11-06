@@ -67,7 +67,7 @@ const waitFor = async (fn, ms = 8000, label = 'condition') => {
   for (;;) {
     const v = await fn();
     if (v) return v;
-    if (Date.now() > end) throw new Error(`timed out waiting for ${label}`);
+    if (Date.now() > end) throw new Error(`timed out waiting for ${typeof label === 'function' ? label() : label}`);
     await new Promise((r) => setTimeout(r, 100));
   }
 };
@@ -2129,7 +2129,7 @@ test('live browser tabs: a real browser on this machine, streamed; clicks and ty
     let titles = [];
     let frames = 0;
     const stop = await stream(page.n, (m) => (m.t === 'frame' ? frames++ : m.title && titles.push(m.title)));
-    await waitFor(() => frames > 0 && titles.includes('Page'), 20000, 'first frame');
+    await waitFor(() => frames > 0 && titles.includes('Page'), 20000, () => `first frame (frames: ${frames}, titles: ${JSON.stringify(titles)})`);
     const input = (events) => call('POST', `/agents/${a.id}/browsers/${page.n}/live/input`, { events });
     await call('POST', `/agents/${a.id}/browsers/${page.n}/live/resize`, { width: 800, height: 600 });
     await input([{ type: 'mouse', action: 'down', x: 100, y: 100 }, { type: 'mouse', action: 'up', x: 100, y: 100 }]);

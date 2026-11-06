@@ -420,11 +420,14 @@ export class LiveBrowser extends EventEmitter {
 
   /**
    * A page holding still may never paint for the restarted stream (slow machines,
-   * a tab in the background): if no frame came, take one, retrying while it loads.
+   * a tab in the background): if no frame came, take one, retrying while it loads
+   * (up to about 15 seconds; a cold Chrome on a busy machine can take that long),
+   * and ask for its title again, which may only now be set.
    */
-  firstFrame(tab, client, asked, tries = 3) {
+  firstFrame(tab, client, asked, tries = 15) {
     setTimeout(() => {
       if (!tab.clients.has(client) || (tab.frameAt ?? 0) >= asked) return;
+      this.refresh(tab).catch(() => {});
       this.sharpen(tab).catch(() => {}).finally(() => {
         if (tries > 1) this.firstFrame(tab, client, asked, tries - 1);
       });
