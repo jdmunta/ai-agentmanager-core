@@ -1028,3 +1028,29 @@ body.remote .settings-links .local-only { display: none; }
 .goal-projects { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 4px 0 8px; }
 .goal-proj { display: inline-flex; align-items: center; gap: 4px; font-weight: normal; }
 .goal-proj input { width: auto; margin: 0; }
+
+/* ---------- Watch: agents' sessions side by side */
+body.watching .layout { display: none; }
+.watch-view { flex: 1; min-height: 0; overflow: auto; padding: 10px 16px 16px; background: var(--bg); }
+.watch-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-bottom: 10px; font-size: 13px; }
+.watch-bar select { width: auto; }
+.watch-bar .spacer { flex: 1; }
+.watch-empty { margin: 40px auto; text-align: center; }
+.watch-grid { display: grid; gap: 10px; grid-template-columns: minmax(0, 1fr); align-items: start; }
+/* Fit: every tile on screen; the newest lines stay in view when the session is taller than its tile. */
+.watch-grid.fit .watch-term { height: var(--watch-term-h, 300px); display: flex; flex-direction: column; justify-content: flex-end; }
+.watch-tile { display: flex; flex-direction: column; min-width: 0; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); overflow: hidden; }
+.watch-tile.attention { border-color: var(--red); box-shadow: 0 0 0 1px var(--red); }
+.watch-tile:focus-within { outline: 2px solid var(--accent); outline-offset: -1px; }
+.watch-head { display: flex; align-items: center; gap: 8px; padding: 5px 8px; font-size: 12.5px; border-bottom: 1px solid var(--border); min-width: 0; }
+.watch-head .spacer { flex: 1; }
+.watch-name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 45%; }
+.watch-what { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.watch-x { font-size: 16px; line-height: 1; color: var(--muted); }
+.watch-term { background: #0f1117; padding: 4px; overflow: hidden; cursor: text; }
+.watch-term .xterm-viewport { overflow-y: hidden; }
+#watch-btn.active { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+@media (max-width: 640px) {
+  .watch-view { padding: 8px 16px; }
+  .watch-grid:not(.fit) { grid-template-columns: minmax(0, 1fr) !important; }
+}
