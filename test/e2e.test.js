@@ -67,7 +67,7 @@ const waitFor = async (fn, ms = 8000, label = 'condition') => {
   for (;;) {
     const v = await fn();
     if (v) return v;
-    if (Date.now() > end) throw new Error(`timed out waiting for ${label}`);
+    if (Date.now() > end) throw new Error(`timed out waiting for ${typeof label === 'function' ? label() : label}`);
     await new Promise((r) => setTimeout(r, 100));
   }
 };
@@ -2099,9 +2099,11 @@ test('live browser tabs: a real browser on this machine, streamed; clicks and ty
     res.end(`<title>Page</title><body style="margin:0"><button style="width:400px;height:200px" onclick="document.title='clicked'">Click</button><input style="display:block;width:400px;height:40px" oninput="document.title='typed:'+this.value"></body>`);
   });
   const [a] = (await call('POST', '/agents', { intent: 'Live browser' })).body;
+  let streamError = null;
   const stream = async (n, onMsg, query = '') => {
     const ctl = new AbortController();
     const res = await fetch(`${base}/api/agents/${a.id}/browsers/${n}/live/stream${query}`, { signal: ctl.signal });
+    if (!res.ok) throw new Error(`live stream ${res.status}: ${(await res.text()).slice(0, 300)}`);
     const reader = res.body.getReader();
     let buf = '';
     (async () => {
@@ -2117,7 +2119,9 @@ test('live browser tabs: a real browser on this machine, streamed; clicks and ty
             if (line) onMsg(JSON.parse(line.slice(6)));
           }
         }
-      } catch {}
+      } catch (e) {
+        if (e.name !== 'AbortError') streamError = e.message;
+      }
     })();
     return () => ctl.abort();
   };
@@ -2129,7 +2133,7 @@ test('live browser tabs: a real browser on this machine, streamed; clicks and ty
     let titles = [];
     let frames = 0;
     const stop = await stream(page.n, (m) => (m.t === 'frame' ? frames++ : m.title && titles.push(m.title)));
-    await waitFor(() => frames > 0 && titles.includes('Page'), 20000, 'first frame');
+    await waitFor(() => frames > 0 && titles.includes('Page'), 20000, () => `first frame (frames: ${frames}, titles: ${JSON.stringify(titles)}${streamError ? `, stream: ${streamError}` : ''}, browser: ${JSON.stringify(live.status?.() ?? null)})`);
     const input = (events) => call('POST', `/agents/${a.id}/browsers/${page.n}/live/input`, { events });
     await call('POST', `/agents/${a.id}/browsers/${page.n}/live/resize`, { width: 800, height: 600 });
     await input([{ type: 'mouse', action: 'down', x: 100, y: 100 }, { type: 'mouse', action: 'up', x: 100, y: 100 }]);
