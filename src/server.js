@@ -39,6 +39,7 @@ import { LiveBrowser } from './livebrowser.js';
 import * as remote from './remote.js';
 import * as service from './service.js';
 import { jiraView, saveJira } from './jira.js';
+import { issuesMarkdown } from './issues.js';
 import { CONTAINER_ENGINES, buildImage, claudeToken, dockerStatus, isBuilding, saveSecrets } from './container.js';
 import { AgentkitReports } from './agentkit-reports.js';
 import { Builder } from './builder.js';
@@ -754,6 +755,13 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
     return stats(store.list(), { days, projectOf: (a) => manager.projectInfo(a)?.name ?? null });
   }));
   api.get('/codemap', wrap((req) => manager.codeMap(req.query.project ? String(req.query.project) : null)));
+  // Issues agents work on, for the summary; ?group=you|agent|done and ?format=markdown to paste.
+  api.get('/issues', wrap(async (req) => {
+    const v = await manager.issues();
+    const group = req.query.group ? String(req.query.group) : null;
+    const rows = group && group !== 'all' ? v.rows.filter((r) => r.group === group) : v.rows;
+    return req.query.format === 'markdown' ? { markdown: issuesMarkdown(rows) } : { ...v, rows };
+  }));
   api.get('/standup', wrap(() => standup.view()));
   api.post('/standup', wrap(async () => ({ ...standup.view(), latest: await standup.make({ reason: 'asked' }) })));
   api.put('/standup', wrap((req) => {

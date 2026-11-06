@@ -1213,7 +1213,7 @@ test('jira: the issue a request starts with, the words after the link, and where
   // Atlassian Cloud: fetched, without the token (it belongs to another site).
   assert.equal(await issueSummary({ key: 'ABC-1', site: 'https://other.atlassian.net' }, { jira, fetchImpl: ok('Cloud issue') }), 'Cloud issue');
   assert.equal(calls.at(-1).auth, null);
-  assert.equal(calls.at(-1).url, 'https://other.atlassian.net/rest/api/3/issue/ABC-1?fields=summary');
+  assert.equal(calls.at(-1).url, 'https://other.atlassian.net/rest/api/3/issue/ABC-1?fields=summary,status');
   // The configured site: with the email and token.
   assert.equal(await issueSummary({ key: 'ABC-2', site: 'https://jira.acme.com' }, { jira, fetchImpl: ok('Own site') }), 'Own site');
   assert.equal(calls.at(-1).auth, `Basic ${Buffer.from('me@acme.com:T').toString('base64')}`);
@@ -1225,6 +1225,57 @@ test('jira: the issue a request starts with, the words after the link, and where
   assert.equal(await issueSummary({ key: 'A-1', site: 'https://x.atlassian.net' }, { jira, fetchImpl: async () => ({ ok: false }) }), null);
   assert.equal(await issueSummary({ key: 'A-1', site: 'https://x.atlassian.net' }, { jira, fetchImpl: async () => ({ ok: true, json: async () => ({}) }) }), null);
   assert.equal(await issueSummary({ key: 'A-1', site: 'https://x.atlassian.net' }, { jira, fetchImpl: async () => { throw new Error('offline'); } }), null);
+});
+
+test('jira: an issue\'s workflow status with its summary', async () => {
+  const { issueFields } = await import('../src/jira.js');
+  const reply = (fields) => async () => ({ ok: true, json: async () => ({ fields }) });
+  const issue = { key: 'ABC-1', site: 'https://x.atlassian.net' };
+  assert.deepEqual(await issueFields(issue, { jira: {}, fetchImpl: reply({ summary: 'S', status: { name: 'In Review', statusCategory: { key: 'indeterminate' } } }) }), { summary: 'S', status: 'In Review', category: 'indeterminate' });
+  assert.deepEqual(await issueFields(issue, { jira: {}, fetchImpl: reply({ status: { name: 'Done' } }) }), { summary: null, status: 'Done', category: null });
+  assert.equal(await issueFields(issue, { jira: {}, fetchImpl: reply({}) }), null);
+});
+
+test('issues: the issue each agent works on and where it stands for you', async () => {
+  const { issueOf, stageOf, issueRows, issuesMarkdown } = await import('../src/issues.js');
+  const base = (over = {}) => ({ id: 'a1', name: 'ABC-1', intent: 'https://acme.atlassian.net/browse/ABC-1 fix it', prs: [], bugs: [], runtime: {}, ...over });
+  // From the leading link, or a key linked in the request; none otherwise.
+  assert.deepEqual(issueOf(base({ synopsis: { key: 'ABC-1', text: 'Login times out', source: 'jira' } })), { key: 'ABC-1', url: 'https://acme.atlassian.net/browse/ABC-1', title: 'Login times out' });
+  assert.equal(issueOf(base({ intent: 'fix it, see https://x.atlassian.net/browse/OPS-2', bugs: [{ key: 'OPS-2', url: 'https://x.atlassian.net/browse/OPS-2', source: 'intent' }] })).key, 'OPS-2');
+  assert.equal(issueOf(base({ intent: 'fix the login' })), null);
+  assert.equal(issueOf(base({ intent: 'fix https://github.com/a/b/issues/3', bugs: [{ key: 'a/b#3', url: 'https://github.com/a/b/issues/3', source: 'intent' }] })), null, 'GitHub issues are not Jira issues');
+  const pr = (o) => ({ url: 'https://github.com/a/b/pull/9', number: 9, source: 'branch', state: 'OPEN', ...o });
+  const stage = (o) => stageOf(base(o)).stage;
+  assert.equal(stage({ prs: [pr({ mergeState: 'CLEAN' })] }), 'review');
+  assert.match(stageOf(base({ prs: [pr({ checks: { state: 'running' } })] })).note, /checks running/);
+  assert.equal(stage({ prs: [pr({ review: 'APPROVED' })] }), 'approved');
+  assert.equal(stage({ prs: [pr({ review: 'CHANGES_REQUESTED' })] }), 'fixing');
+  assert.equal(stage({ prs: [pr({ checks: { state: 'failed' } })] }), 'fixing');
+  assert.equal(stage({ prs: [pr({ isDraft: true })] }), 'working');
+  assert.equal(stage({ prs: [pr({ state: 'MERGED' })] }), 'merged');
+  assert.equal(stage({ prs: [pr({ state: 'CLOSED' })] }), 'closed');
+  assert.equal(stage({ prs: [pr({ source: 'mentioned' })] }), 'working', 'a PR only mentioned is not the agent\'s');
+  assert.equal(stage({ results: { outcome: 'done' } }), 'review', 'finished without a PR: review it in the session');
+  assert.equal(stage({ results: { outcome: 'blocked', blockers: [{ text: 'no access' }] } }), 'blocked');
+  assert.equal(stage({ questions: [{ question: 'Which API?' }], prs: [pr({})] }), 'needs', 'a question comes before the PR');
+  assert.equal(stage({ runtime: { busy: true } }), 'working');
+  // Rows: waiting for you first, Jira status when known, no assistant session.
+  const rows = issueRows(
+    [
+      base({ id: 'w', name: 'OPS-3', intent: 'https://x.atlassian.net/browse/OPS-3 x', runtime: { busy: true }, activeAt: '2026-11-06T10:00:00Z' }),
+      base({ id: 'r', prs: [pr({})], activeAt: '2026-11-06T09:00:00Z', startedBy: 'as1' }),
+      { id: 'as', kind: 'assistant', intent: 'https://x.atlassian.net/browse/OPS-9' },
+    ],
+    new Map([['ABC-1', { summary: 'Login times out', status: 'In Review', category: 'indeterminate' }]]),
+  );
+  assert.deepEqual(rows.map((r) => [r.key, r.group]), [['ABC-1', 'you'], ['OPS-3', 'agent']]);
+  assert.deepEqual(rows[0].jira, { status: 'In Review', category: 'indeterminate' });
+  assert.equal(rows[0].title, 'Login times out');
+  assert.equal(rows[0].agent.from, 'assistant');
+  assert.equal(rows[0].pr.number, 9);
+  const md = issuesMarkdown(rows);
+  assert.match(md, /^\| Issue \| Jira status/);
+  assert.match(md, /\| \[ABC-1\]\(https:\/\/acme\.atlassian\.net\/browse\/ABC-1\) Login times out \| In Review \| Ready for your review \| \[#9\]\(https:\/\/github\.com\/a\/b\/pull\/9\) \| ABC-1 \|/);
 });
 
 test('listen: markdown turned into speech, split into short pieces; the walkthrough read change by change', async () => {

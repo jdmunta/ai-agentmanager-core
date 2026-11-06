@@ -25,6 +25,7 @@ import { initCode } from '/code.js';
 import { initMachine } from '/machine.js';
 import { initWatch } from '/watch.js';
 import { initStandup } from '/standup.js';
+import { initIssues } from '/issues.js';
 import { initCodeMap } from '/codemap.js';
 import { initKeys } from '/keys.js';
 import { morph } from '/morph.js';
@@ -202,6 +203,9 @@ const standupUi = initStandup({
   toast: (m, ms) => toast(m, ms),
   openAgent: (id) => (showTab('agents'), select(id)),
 });
+// Jira: every issue an agent works on, the ones waiting for your review first.
+const issuesUi = initIssues({ api, $, esc, ago, toast: (m, ms) => toast(m, ms), openAgent: (id) => (showTab('agents'), select(id)) });
+$('#issues-btn').onclick = () => issuesUi.open();
 // Keyboard shortcuts (keys.js): the same actions as the buttons.
 const keysUi = initKeys({ $, esc, run: (act) => shortcut(act) });
 $('#keys-btn').onclick = () => keysUi.help();
@@ -243,6 +247,7 @@ function shortcut(act) {
   if (act === 'watch') return $('#watch-btn') ? $('#watch-btn').click() : false;
   if (act === 'standup') return standupUi.open();
   if (act === 'map') return $('#map-btn').click();
+  if (act === 'issues') return issuesUi.open();
   if (act.startsWith('tab:')) return showTab(act.slice(4));
   return false;
 }
@@ -4117,6 +4122,7 @@ function handleEvent(msg) {
     watchDocs(msg.agent);
     agentChanged(msg.agent);
     if (msg.agent.builds) builtUi.sessionChanged(msg.agent);
+    issuesUi.changed();
     // The detail, terminal and document views show one agent; another agent's update leaves them be.
     return invalidate([
       'list', 'backlog', 'land', 'inbox', 'race', 'team',

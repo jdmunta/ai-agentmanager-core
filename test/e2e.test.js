@@ -1482,6 +1482,41 @@ test('jira: an agent from an issue link is described by the issue summary, or th
   }
 });
 
+test('issues: the Jira summary lists agents\' issues with their Jira status, waiting for review first', async () => {
+  const http = await import('node:http');
+  const srv = http.createServer((req, res) => {
+    if (req.url.startsWith('/rest/api/3/issue/ABC-21')) return res.end(JSON.stringify({ fields: { summary: 'Retry uploads', status: { name: 'In Review', statusCategory: { key: 'indeterminate' } } } }));
+    if (req.url.startsWith('/rest/api/3/issue/ABC-22')) return res.end(JSON.stringify({ fields: { summary: 'Faster search', status: { name: 'In Progress', statusCategory: { key: 'indeterminate' } } } }));
+    res.statusCode = 404;
+    res.end('{}');
+  });
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+  const site = `http://127.0.0.1:${srv.address().port}`;
+  manager.jiraOptions = { allow: (s) => s === site };
+  manager.jiraCache?.clear();
+  try {
+    const [a] = (await call('POST', '/agents', { intent: `${site}/browse/ABC-21 retry uploads`, start: false })).body;
+    const [b] = (await call('POST', '/agents', { intent: `${site}/browse/ABC-22 faster search`, start: false })).body;
+    const url = 'https://github.com/acme/web/pull/41';
+    manager.patch(a.id, { prs: { [url]: { url, number: 41, title: 'Retry uploads', source: 'branch', state: 'OPEN', mergeState: 'CLEAN', checks: { state: 'passed' } } } });
+    const v = (await call('GET', '/issues')).body;
+    const mine = v.rows.filter((r) => [a.id, b.id].includes(r.agent.id));
+    assert.deepEqual(mine.map((r) => [r.key, r.stage, r.jira?.status]), [['ABC-21', 'review', 'In Review'], ['ABC-22', 'working', 'In Progress']]);
+    assert.equal(mine[0].pr.url, url);
+    assert.equal(mine[0].title, 'Retry uploads');
+    assert.equal(v.jira.signedIn, false);
+    const you = (await call('GET', '/issues?group=you')).body.rows;
+    assert.ok(you.some((r) => r.agent.id === a.id) && !you.some((r) => r.agent.id === b.id));
+    const md = (await call('GET', '/issues?group=you&format=markdown')).body.markdown;
+    assert.match(md, /ABC-21.*In Review.*Ready for your review.*\[#41\]/);
+    await call('DELETE', `/agents/${a.id}`);
+    await call('DELETE', `/agents/${b.id}`);
+  } finally {
+    manager.jiraOptions = null;
+    srv.close();
+  }
+});
+
 test('intent, spec and plan: INTENT.md on create, the agent told to keep SPEC.md and PLAN.md, all readable', async () => {
   const [a] = (await call('POST', '/agents', { intent: 'Add a dark mode toggle' })).body;
   const dir = fs.realpathSync(path.join(home, 'briefs', a.id));

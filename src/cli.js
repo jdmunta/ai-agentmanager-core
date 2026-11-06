@@ -6,6 +6,7 @@ import WebSocket from 'ws';
 import { HOST, PORT } from './config.js';
 import { api, BASE, ensureDaemon, health, isRunning, waitForExit } from './client.js';
 import { about, latestRelease } from './about.js';
+import { issuesMarkdown } from './issues.js';
 
 const tty = process.stdout.isTTY;
 const c = (code) => (s) => (tty ? `\x1b[${code}m${s}\x1b[0m` : String(s));
@@ -659,6 +660,29 @@ export async function main(argv) {
         console.log(`\n${bold(title)}`);
         for (const r of rows) console.log(`  ${r.key.padEnd(24)} ${String(r.agents).padStart(4)} agents  ${String(r.merged).padStart(3)} merged  ${pct(r.mergeRate).padStart(4)}  ${m(r.costPerMerged)}/merged`);
       }
+    });
+
+  program
+    .command('issues')
+    .description('Jira and Linear issues agents work on: waiting for your review first, with Jira status, pull request and agent')
+    .option('--all', 'also the ones agents are still on and the finished ones')
+    .option('--markdown', 'print a Markdown table, to paste')
+    .option('--json', 'print JSON')
+    .action(async (opts) => {
+      await daemon();
+      const v = await api('GET', '/issues');
+      const rows = opts.all ? v.rows : v.rows.filter((r) => r.group === 'you');
+      if (opts.json) return console.log(JSON.stringify({ ...v, rows }, null, 2));
+      if (opts.markdown) return console.log(issuesMarkdown(rows));
+      if (!rows.length) return console.log(dim(opts.all ? 'No agents work on Jira or Linear issues.' : 'Nothing waiting for your review. --all shows the rest.'));
+      for (const r of rows) {
+        const pr = r.pr ? `  PR #${r.pr.number ?? '?'}` : '';
+        console.log(`${bold(r.key.padEnd(10))} ${r.jira?.status ? dim(`[${r.jira.status}] `) : ''}${truncate(r.title ?? '', 60)}`);
+        console.log(`  ${r.group === 'you' ? yellow(r.note) : r.note}${pr}  ${dim(`agent ${r.agent.name} (${r.agent.id})`)}`);
+      }
+      const others = v.rows.length - rows.length;
+      if (others) console.log(dim(`\n${others} more with agents still on them or finished: --all`));
+      if (!v.jira.signedIn) console.log(dim('Jira status needs your site, email and API token: Settings → Jira.'));
     });
 
   program

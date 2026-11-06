@@ -32,7 +32,7 @@ Run one background [Claude Code](https://claude.com/claude-code) agent per inten
 - **Standup.** Each weekday at 9:00 (or whenever you press **Standup**, or `p`), each agent with news since the last one is read aloud in a sentence or two, each in its own voice: what it did, what it's on, what it needs from you. Agents that need you go first and quiet ones are left out. It stops on an agent that needs you, with its questions beside it to answer by tap, or by voice when **Answer by voice** is on (what you say is read back, then sent when you say "send"). The wording comes from one short tool-less model call, plain wording if that fails. A Slack alert says when it's ready (Alerts). Change the time, weekends and wording in the player, or in config.json: `"standup": { "at": "09:00", "weekends": false, "ai": true, "notify": true }`. Speech is your browser's own; voice answers may be sent to your browser's maker to be turned into text.
 - **Map.** A project's folders as tiles sized by their files, with each agent as a badge on the folders it is changing (filled) or reading right now (ring), refreshed every few seconds (**Map** at the top, `m`, or `#map`). A red line joins two agents that changed the same file: they will conflict when merged. A dashed line runs from an agent reading a file to the agent that already changed it, which is the warning before they collide. Each pair is also spelled out above the map. Reading comes from the last half hour of each agent's session; changes from the conflict radar.
 - **Watch.** Every running agent's session side by side on one page, live (**Watch** at the top, or `#watch`), so you follow them all without clicking from one to the next. Tiles keep a fixed order; one waiting on you gets a red border and is counted at the top. Click a tile and type to answer it there; its name opens the agent. Show running agents, only those waiting on you or only those working, one project's, or a fixed number per row; **Fit** sizes the tiles so all of them (up to 12) are on screen, keeping the newest lines in view. Tiles show each session at its own size and never resize it.
-- **Keyboard shortcuts.** Press **?** for the list. `j`/`k` move through the agents, `Enter` opens the terminal, `r` reviews changes, `s` resumes, `Shift+X` closes the session, `e` edits; `n` new agents, `a` Ask Agent, `/` filter, `w` Watch, `m` Map, `p` the standup, `1`-`5` the side tabs. Single keys work when you're not typing in a field or a terminal. From inside a terminal, `Ctrl+Shift+↓`/`↑` switch to the next or previous agent's terminal and `Ctrl+Shift+L` leaves it.
+- **Keyboard shortcuts.** Press **?** for the list. `j`/`k` move through the agents, `Enter` opens the terminal, `r` reviews changes, `s` resumes, `Shift+X` closes the session, `e` edits; `n` new agents, `a` Ask Agent, `/` filter, `w` Watch, `m` Map, `p` the standup, `i` the Jira summary, `1`-`5` the side tabs. Single keys work when you're not typing in a field or a terminal. From inside a terminal, `Ctrl+Shift+↓`/`↑` switch to the next or previous agent's terminal and `Ctrl+Shift+L` leaves it.
 - **Landing.** A **Land** tab with every agent's open pull request: ready to merge, needs fixes, behind, waiting. Failing checks and requested changes go back to the agent automatically (a few times at most), and so does every new review comment while the PR is open; **Update**, **Ask to fix** and **Merge** in one click.
 - **Triggers.** A label on a GitHub issue starts an agent for it, `/agent …` comments on an agent's pull request reach the agent, and a webhook starts agents from Jira automation or CI. No model watches, so no tokens are spent waiting.
 - **Repo memory.** What one agent learns about a repo (how to run its tests, a gotcha) is recorded in one line and given to every later agent there.
@@ -925,6 +925,25 @@ agentmgr assistant pause                    # stop checking and close the sessio
 ```
 
 Settings live in `config.json` under `"assistant"`. A running assistant reads new watch lists and notes after **Pause** and **Turn on**.
+
+### Jira summary
+
+**Jira** in the top bar (or `i`) lists every Jira or Linear issue an agent works on (the ones started from an issue link, by you or the assistant), one row per agent. **Waiting for you** comes first, and its count shows on the button:
+
+| Where it stands | When |
+|---|---|
+| Needs your answer | The agent asked a question, waits at a prompt, or its plan waits for review |
+| Ready for your review | Its pull request is open, not a draft, with no review yet and checks not failing; or it finished without a pull request |
+| Blocked | It says it can't go on |
+| Approved, not merged yet | You approved; merging is left |
+
+**Agents on it** has the ones still working, fixing failing checks or working on your review comments; **Done** the merged and closed ones. Each row shows the issue with its Jira status, the pull request with its checks and AI review, and the agent, which opens its session. Jira status needs your site, email and API token in **Settings → Jira** (public Atlassian Cloud issues need nothing); it's fetched a few issues at a time and kept five minutes. **Copy** puts the list as a Markdown table on the clipboard, for Slack, Jira or a doc.
+
+```bash
+agentmgr issues               # waiting for your review
+agentmgr issues --all         # and the rest
+agentmgr issues --markdown    # a table to paste
+```
 
 ## Triggers
 

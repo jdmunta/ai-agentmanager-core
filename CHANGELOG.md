@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Jira summary.** A **Jira** button (or `i`) lists every Jira or Linear issue an agent works on, the ones waiting for your review first, with a count on the button: the issue and its Jira status, where the work stands (ready for your review, needs your answer, approved but not merged, checks failing, merged), its pull request and checks, and a link to the agent's session. **Copy** puts the list on the clipboard as a Markdown table. From the terminal: `agentmgr issues` (`--all`, `--markdown`, `--json`).
+
 ## 1.21.0 (2026-11-06)
 
 - **Map: where agents are in the code.** A **Map** page (or `m`) shows a project's folders as tiles with each agent on the folders it's changing or reading now. Two agents that changed the same file are joined in red; one reading a file another changed is joined with a dashed line, the warning before they collide, and each is spelled out above the map.

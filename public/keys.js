@@ -18,6 +18,7 @@ export const SHORTCUTS = [
     [['w'], 'Watch: agents side by side', 'watch'],
     [['p'], 'Play the standup', 'standup'],
     [['m'], 'Map: where agents are in the code', 'map'],
+    [['i'], 'Jira: issues waiting for your review', 'issues'],
     [['1'], 'Agents tab', 'tab:agents'],
     [['2'], 'Inbox: what needs you', 'tab:inbox'],
     [['3'], 'Backlog', 'tab:backlog'],
@@ -36,11 +37,11 @@ export const SHORTCUTS = [
 // A single key, as an event names it, to its action.
 export const SINGLE = {
   j: 'next', k: 'prev', Enter: 'terminal', t: 'terminal',
-  r: 'changes', s: 'start', X: 'stop', e: 'edit', n: 'new', a: 'ask', '/': 'filter', w: 'watch', p: 'standup', m: 'map', '?': 'help',
+  r: 'changes', s: 'start', X: 'stop', e: 'edit', n: 'new', a: 'ask', '/': 'filter', w: 'watch', p: 'standup', m: 'map', i: 'issues', '?': 'help',
   1: 'tab:agents', 2: 'tab:inbox', 3: 'tab:backlog', 4: 'tab:land', 5: 'tab:built',
 };
 // While Watch is open: only what makes sense there.
-const ON_WATCH = new Set(['new', 'ask', 'watch', 'standup', 'map', 'help']);
+const ON_WATCH = new Set(['new', 'ask', 'watch', 'standup', 'map', 'issues', 'help']);
 
 /** Typing somewhere: a field, an editor or a terminal (xterm types through a textarea). */
 const typing = (el) => Boolean(el?.closest?.('input, textarea, select, [contenteditable=""], [contenteditable="true"], .xterm, .cm-editor'));

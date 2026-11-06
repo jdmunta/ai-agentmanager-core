@@ -1124,3 +1124,43 @@ body.mapping .layout, body.mapping .watch-view { display: none; }
 .map-agents { display: flex; flex-wrap: wrap; gap: 6px 12px; margin-top: 8px; }
 .map-agent { display: inline-flex; align-items: center; gap: 6px; background: none; border: none; padding: 2px 0; cursor: pointer; font-size: 13px; color: inherit; }
 #map-btn.active { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+
+/* ---------- Jira: issues agents work on */
+.issues-dialog { width: min(1100px, calc(100% - 32px)); max-height: calc(100% - 32px); padding: 16px; display: flex; flex-direction: column; }
+.issues-dialog[open] { display: flex; }
+#issues-body { display: flex; flex-direction: column; min-height: 0; }
+.issues-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 10px; }
+.issues-head h2 { margin: 0 6px 0 0; font-size: 18px; }
+.issues-head .spacer { flex: 1; }
+.issues-head .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.issues-head .chip { font-size: 12px; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--border); background: var(--panel); cursor: pointer; }
+.issues-head .chip.active { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+.issues-head .chip .count { opacity: 0.75; margin-left: 2px; }
+.issues-scroll { overflow: auto; min-height: 0; border: 1px solid var(--border); border-radius: var(--radius); }
+table.issues { width: 100%; border-collapse: collapse; font-size: 13px; }
+table.issues th { position: sticky; top: 0; background: var(--panel-2); text-align: left; font-weight: 600; padding: 6px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; }
+table.issues td { padding: 7px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+table.issues tr:last-child td { border-bottom: 0; }
+table.issues .issue-key { font-family: var(--mono); font-weight: 600; white-space: nowrap; }
+table.issues .issue-title { max-width: 360px; color: var(--text); }
+table.issues tr td:first-child { border-left: 3px solid transparent; }
+table.issues tr.stage-review td:first-child, table.issues tr.stage-approved td:first-child { border-left-color: var(--green); }
+table.issues tr.stage-needs td:first-child, table.issues tr.stage-blocked td:first-child { border-left-color: var(--red); }
+table.issues tr.stage-fixing td:first-child, table.issues tr.stage-working td:first-child { border-left-color: var(--yellow); }
+table.issues tr.stage-needs .issue-note, table.issues tr.stage-blocked .issue-note { color: var(--red); }
+table.issues tr.stage-review .issue-note, table.issues tr.stage-approved .issue-note { color: var(--green); font-weight: 600; }
+.jira-status { display: inline-block; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.02em; padding: 2px 6px; border-radius: 4px; background: var(--panel-2); color: var(--muted); white-space: nowrap; }
+.jira-status.indeterminate { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
+.jira-status.done { background: color-mix(in srgb, var(--green) 16%, transparent); color: var(--green); }
+table.issues .checks.passed { color: var(--green); }
+table.issues .checks.failed { color: var(--red); }
+table.issues .checks.running { color: var(--yellow); }
+table.issues .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; margin-right: 6px; vertical-align: middle; }
+table.issues .dot.busy { background: var(--green); }
+table.issues .dot.idle { background: var(--muted); }
+.issues-empty { padding: 24px 4px; }
+@media (max-width: 640px) {
+  .issues-dialog { width: calc(100% - 32px); padding: 12px; }
+  table.issues th:nth-child(6), table.issues td:nth-child(6) { display: none; }
+  table.issues .issue-title { max-width: 200px; }
+}
