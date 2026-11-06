@@ -2391,3 +2391,11 @@ test('assistant: review requests start reviewers, or are only listed when you pi
   assert.match(pick, /Don't start reviewers: the person picks/);
   assert.doesNotMatch(pick, /am review </);
 });
+
+test('diagrams: unquoted labels with parentheses or braces are quoted for the retry; shapes and quoted labels stay', async () => {
+  const { quoteLabels } = await import('../public/diagram.js');
+  assert.equal(quoteLabels('flowchart LR\n  MV[GetMaintenanceView(s)] --> B[build {x}]'), 'flowchart LR\n  MV["GetMaintenanceView(s)"] --> B["build {x}"]');
+  const keep = 'flowchart LR\n  A[(Database)] --> B["Already (quoted)"] --> C[plain] --> D[/slanted (x)/] --> E([stadium])';
+  assert.equal(quoteLabels(keep), keep);
+  assert.equal(quoteLabels('A[say "hi" (now)]'), 'A[say "hi" (now)]', 'a label with quotes is left alone');
+});

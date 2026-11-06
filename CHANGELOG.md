@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- **Diagrams that fail to draw no longer litter the page.** Mermaid's "Syntax error" picture was left at the bottom of the page when an agent's diagram didn't parse. Now the diagram's own spot says it couldn't be drawn and shows its source. A diagram whose node labels have unquoted parentheses or braces (`A[GetView(s)]`, which agents often write) is drawn again with those labels quoted, so most of them now draw.
+- **The page reloads itself after an update.** While restarting, the old daemon keeps serving the old version until its agents are closed, so a reload during that time (even Shift+Reload) still showed the old one. Now any open page, including one on a phone over remote access, reloads by itself as soon as the new version is up.
+
 ## 1.23.0 (2026-11-06)
 
 - **Reviews.** Reviewer agents for other people's pull requests. **Reviews** (or `g`) lists PRs where your review is requested; tick them, or paste any PR link. A reviewer works read-only on the PR's head: a verdict (approve, approve with nits, blocked), the approval blockers with file, line, why and what would resolve them, critical questions for the author, risks, test gaps and nits. Tick what to send and **Post as pending review** (a draft review under your name that you submit on GitHub), or **Copy**. When the author pushes, the reviewer re-checks its blockers. **🔊 Explain** reads it aloud. The assistant's GitHub reviews source starts reviewers, or only lists them when you pick. `agentmgr review <PR>`, `agentmgr reviews` (`show`, `post`, `dismiss`).
