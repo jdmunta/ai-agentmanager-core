@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.23.0 (2026-11-06)
 
 - **Reviews.** Reviewer agents for other people's pull requests. **Reviews** (or `g`) lists PRs where your review is requested; tick them, or paste any PR link. A reviewer works read-only on the PR's head: a verdict (approve, approve with nits, blocked), the approval blockers with file, line, why and what would resolve them, critical questions for the author, risks, test gaps and nits. Tick what to send and **Post as pending review** (a draft review under your name that you submit on GitHub), or **Copy**. When the author pushes, the reviewer re-checks its blockers. **🔊 Explain** reads it aloud. The assistant's GitHub reviews source starts reviewers, or only lists them when you pick. `agentmgr review <PR>`, `agentmgr reviews` (`show`, `post`, `dismiss`).
 
