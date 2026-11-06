@@ -1838,3 +1838,15 @@ test('goals: due at the end of today or this week; the planner sees the outcome,
   assert.match(c, /^You check a work order/);
   assert.match(c, /- \(web\) Do A\n  outcome: done\n  delivered: the fix\n  pull requests: https:\/\/github.com\/o\/web\/pull\/1 \(merged\)/);
 });
+
+test('keyboard shortcuts: every key does something, and the list shows each one', async () => {
+  const { SHORTCUTS, SINGLE } = await import('../public/keys.js');
+  const listed = SHORTCUTS.flatMap(([, rows]) => rows).filter(([, , act]) => act);
+  const acts = new Set(listed.map(([, , act]) => act));
+  for (const [key, act] of Object.entries(SINGLE)) assert.ok(acts.has(act), `${key} -> ${act} is in the list`);
+  for (const [keys, , act] of listed) {
+    if (act.endsWith('-term') || act === 'leave') continue;
+    for (const k of keys) assert.equal(SINGLE[k === 'Shift+X' ? 'X' : k], act, `${k} does ${act}`);
+  }
+  assert.equal(new Set(listed.flatMap(([keys]) => keys)).size, listed.flatMap(([keys]) => keys).length, 'no key twice');
+});

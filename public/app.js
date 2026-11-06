@@ -24,6 +24,7 @@ import { initMenu } from '/menu.js';
 import { initCode } from '/code.js';
 import { initMachine } from '/machine.js';
 import { initWatch } from '/watch.js';
+import { initKeys } from '/keys.js';
 import { morph } from '/morph.js';
 
 const $ = (sel) => document.querySelector(sel);
@@ -180,6 +181,48 @@ const watchUi = initWatch({
   openAgent: (id) => (showTab('agents'), select(id), term.open(id)),
 });
 $('#watch-btn').onclick = () => watchUi.show(!watchUi.isOpen());
+// Keyboard shortcuts (keys.js): the same actions as the buttons.
+const keysUi = initKeys({ $, esc, run: (act) => shortcut(act) });
+$('#keys-btn').onclick = () => keysUi.help();
+
+/** The agents in the list as shown (collapsed projects left out), top to bottom. */
+const listedIds = () => [...document.querySelectorAll('#agent-list li.agent[data-id]')].filter((li) => li.offsetParent).map((li) => li.dataset.id);
+
+/** The next or previous agent in the list; from a terminal (Ctrl+Shift), its terminal. */
+function stepAgent(dir, { withTerm = false } = {}) {
+  if (sideTab !== 'agents') showTab('agents');
+  const ids = listedIds();
+  if (!ids.length) return;
+  const i = ids.indexOf(selectedId);
+  const id = ids[i < 0 ? (dir > 0 ? 0 : ids.length - 1) : (i + dir + ids.length) % ids.length];
+  select(id);
+  document.querySelector(`#agent-list li[data-id="${id}"]`)?.scrollIntoView({ block: 'nearest' });
+  if (withTerm && agents.get(id)?.runtime.running) term.open(id);
+  else document.activeElement?.blur();
+}
+
+/** Press one of the selected agent's buttons (false when it has none, or it's off). */
+function detailAct(name) {
+  const b = selectedId && document.querySelector(`#detail [data-act="${name}"]`);
+  if (!b || b.disabled) return false;
+  b.click();
+}
+
+function shortcut(act) {
+  if (act === 'next' || act === 'prev') return stepAgent(act === 'next' ? 1 : -1);
+  if (act === 'next-term' || act === 'prev-term') return stepAgent(act === 'next-term' ? 1 : -1, { withTerm: true });
+  if (act === 'leave') return document.activeElement?.blur();
+  if (['terminal', 'changes', 'start', 'stop', 'edit'].includes(act)) return detailAct(act);
+  if (act === 'new') return $('#new-btn').click();
+  if (act === 'ask') return $('#ask-btn').click();
+  if (act === 'filter') {
+    $('#filter').focus();
+    return $('#filter').select();
+  }
+  if (act === 'watch') return $('#watch-btn') ? $('#watch-btn').click() : false;
+  if (act.startsWith('tab:')) return showTab(act.slice(4));
+  return false;
+}
 
 function statusOf(a) {
   if (a.runtime.planning) return a.runtime.attention ? 'attention' : 'planning';
