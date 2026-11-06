@@ -39,6 +39,10 @@ import {
   planReviewPrompt,
   designPath,
   designDocPrompt,
+  demoPath,
+  demoPagePrompt,
+  benchPath,
+  benchmarksPrompt,
 } from './brief.js';
 
 // One-off summaries / documents built from an agent's live context.
@@ -600,6 +604,8 @@ export class AgentManager extends EventEmitter {
     plan = false,
     planReview,
     designDoc,
+    demoPage,
+    benchmarks,
     project,
     priority,
     workspace,
@@ -686,6 +692,8 @@ export class AgentManager extends EventEmitter {
       planReview: !general && !team && !builds && (planReview ?? this.config.planReview ?? false) ? { status: 'writing' } : null,
       // Write and publish a design doc (Google Doc + Artifact) after the plan, updated at the end.
       designDoc: !general && !team && !builds && Boolean(designDoc ?? this.config.designDoc ?? true),
+      demoPage: !general && !team && !builds && Boolean(demoPage ?? this.config.demoPage ?? false),
+      benchmarks: !general && !team && !builds && Boolean(benchmarks ?? this.config.benchmarks ?? false),
       status: 'preparing',
       desired: start ? 'running' : 'stopped',
       error: null,
@@ -759,8 +767,20 @@ export class AgentManager extends EventEmitter {
   /** One of an agent's intent, spec and plan files. */
   specDoc(ref, name) {
     const agent = this.mustGet(ref);
-    if (!['intent', 'spec', 'plan', 'designdoc'].includes(name)) throw Object.assign(new Error('Unknown file (intent, spec, plan or designdoc)'), { status: 400 });
+    if (!['intent', 'spec', 'plan', 'designdoc', 'benchmark'].includes(name)) throw Object.assign(new Error('Unknown file (intent, spec, plan, designdoc or benchmark)'), { status: 400 });
     return readSpecDoc(agent.id, name) ?? { name, markdown: null };
+  }
+
+  /** The agent's sample demo page (HTML), once it has written one. */
+  demoPage(ref) {
+    const agent = this.mustGet(ref);
+    let html = null;
+    try {
+      // Larger than the Markdown files: screenshots go in as data: URLs.
+      if (fs.statSync(demoPath(agent.id)).size <= 5_000_000) html = fs.readFileSync(demoPath(agent.id), 'utf8');
+    } catch {}
+    if (!html) throw Object.assign(new Error('No demo page yet'), { status: 404 });
+    return html;
   }
 
   /** Fill in summaries still missing (after Jira settings change); returns how many it found. */
@@ -1082,6 +1102,13 @@ export class AgentManager extends EventEmitter {
       const file = path.join(fs.realpathSync(briefDir(agent.id)), path.basename(designPath(agent.id)));
       writableDir ??= path.dirname(file);
       prompts.push(designDocPrompt(file, { afterApproval: Boolean(agent.planReview) }));
+    }
+    if ((agent.demoPage || agent.benchmarks) && task && !planning) {
+      fs.mkdirSync(briefDir(agent.id), { recursive: true });
+      const dir = fs.realpathSync(briefDir(agent.id));
+      writableDir ??= dir;
+      if (agent.demoPage) prompts.push(demoPagePrompt(path.join(dir, path.basename(demoPath(agent.id)))));
+      if (agent.benchmarks) prompts.push(benchmarksPrompt(path.join(dir, path.basename(benchPath(agent.id))), path.join(dir, 'bench')));
     }
     if (planning) prompts.push(planningPrompt(agent));
     // What earlier agents learned in this repo, and the one command to add to it.
@@ -2373,6 +2400,7 @@ export class AgentManager extends EventEmitter {
       spec: file('spec'),
       plan: file('plan') ?? agent.planReview?.markdown,
       designdoc: file('designdoc'),
+      benchmark: file('benchmark'),
     };
     return DRIVE_DOCS.map(([key, label]) => ({ key, label, markdown: (md[key] ?? (key in md ? null : agent.docs?.[key]?.markdown))?.trim() })).filter((d) => d.markdown);
   }

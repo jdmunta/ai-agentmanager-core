@@ -1499,6 +1499,29 @@ test('intent, spec and plan: INTENT.md on create, the agent told to keep SPEC.md
   const launchB = await waitFor(() => launches().find((l) => l.args.includes(b.sessionId) && l.args.includes('--append-system-prompt')), 8000, 'launch b');
   assert.doesNotMatch(launchB.args[launchB.args.indexOf('--append-system-prompt') + 1], /DESIGN\.md/);
   await call('DELETE', `/agents/${b.id}`);
+  // Demo page and micro benchmarks: off unless asked.
+  assert.equal((await agentNow(a.id)).demoPage, false);
+  assert.doesNotMatch(sys, /DEMO\.html|BENCHMARK\.md/);
+  const [c] = (await call('POST', '/agents', { intent: 'Speed up the parser', demoPage: true, benchmarks: true })).body;
+  assert.deepEqual([c.demoPage, c.benchmarks], [true, true]);
+  const cdir = fs.realpathSync(path.join(home, 'briefs', c.id));
+  const launchC = await waitFor(() => launches().find((l) => l.args.includes(c.sessionId) && l.args.includes('--append-system-prompt')), 8000, 'launch c');
+  const sysC = launchC.args[launchC.args.indexOf('--append-system-prompt') + 1];
+  assert.ok(sysC.includes(`sample demo page of it at ${path.join(cdir, 'DEMO.html')}`), sysC);
+  assert.ok(sysC.includes(`Write the results to ${path.join(cdir, 'BENCHMARK.md')}`) && sysC.includes(path.join(cdir, 'bench')), sysC);
+  assert.equal((await call('GET', `/agents/${c.id}/demo`)).status, 404, 'not written yet');
+  fs.writeFileSync(path.join(cdir, 'DEMO.html'), '<!doctype html><title>Parser demo</title><p>2x faster</p>');
+  fs.writeFileSync(path.join(cdir, 'BENCHMARK.md'), '# Benchmark: parser\n## Results\n| case | before | after | change |\n');
+  const demo = await fetch(`${base}/api/agents/${c.id}/demo`);
+  assert.equal(demo.status, 200);
+  assert.match(demo.headers.get('content-type'), /text\/html/);
+  assert.match(demo.headers.get('content-security-policy'), /^sandbox allow-scripts[^;]*; default-src 'none'/, 'sandboxed: no access to this origin, nothing loaded from elsewhere');
+  assert.match(await demo.text(), /2x faster/);
+  const cnow = await agentNow(c.id);
+  assert.ok(cnow.specDocs.demo && cnow.specDocs.benchmark);
+  assert.match((await call('GET', `/agents/${c.id}/specs/benchmark`)).body.markdown, /\| case \| before/);
+  assert.equal((await call('GET', `/agents/${c.id}/specs/demo`)).status, 400, 'the demo page is served sandboxed, not as a file');
+  await call('DELETE', `/agents/${c.id}`);
   // General sessions keep none of this.
   const g = (await call('POST', '/general', {})).body;
   assert.equal(g.specDocs, undefined);

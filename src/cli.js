@@ -347,6 +347,8 @@ export async function main(argv) {
     .option('--no-container', 'run on this computer even if containers are the default')
     .option('--plan', 'while a repo URL clones, plan the task with Claude (moves into the repo when ready)')
     .option('--no-design-doc', 'no design doc for this agent (on by default: "designDoc" in config.json)')
+    .option('--demo-page', 'make a sample demo page of the change, published as an Artifact')
+    .option('--benchmarks', 'micro benchmarks of the changed code, before and after')
     .option('--no-start', 'create without launching')
     .option('-a, --attach', 'attach to the agent after launch (single intent only)')
     .action(async (intents, opts, cmd) => {
@@ -374,6 +376,8 @@ export async function main(argv) {
         start: opts.start,
         plan: opts.plan,
         designDoc: cmd.getOptionValueSource('designDoc') === 'cli' ? opts.designDoc : undefined,
+        demoPage: opts.demoPage || undefined,
+        benchmarks: opts.benchmarks || undefined,
       });
       for (const a of created) console.log(`${green('+')} ${bold(a.name)} ${dim(a.id)}  session ${cyan(a.sessionId)}`);
       console.log(dim(`Workspace setup and launch continue in the background. "agentmgr ls" shows status.`));

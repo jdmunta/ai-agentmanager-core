@@ -18,6 +18,7 @@ export const DRIVE_DOCS = [
   ['spec', 'Spec'],
   ['plan', 'Plan'],
   ['designdoc', 'Design doc'],
+  ['benchmark', 'Benchmark'],
   ['analysis', 'Analysis'],
   ['design', 'Design'],
   ['flow', 'Flow'],

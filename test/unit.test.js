@@ -1212,6 +1212,26 @@ test('pr description: the intent in full, the spec and plan folded, their own he
   const withDesign = prSections('x', (n) => ({ ...files, designdoc: '# Design: x\n## Summary\nA switch.\n' })[n]);
   assert.match(withDesign, /<details><summary><b>Design<\/b><\/summary>\n\n### Summary\nA switch\.\n\n<\/details>/);
   assert.match(withDesign, /Intent, spec, plan and design doc kept/);
+  const withBench = prSections('x', (n) => ({ ...files, benchmark: '# Benchmark: x\n## Results\n| case | before | after |\n', demo: '<html>demo</html>' })[n]);
+  assert.match(withBench, /<details><summary><b>Benchmark<\/b><\/summary>\n\n### Results\n\| case/);
+  assert.doesNotMatch(withBench, /<html>/, 'the demo page is linked from the brief, not pasted in');
+});
+
+test('demo page and benchmark instructions: real outputs and measurements only, outside the repo', async () => {
+  const { demoPagePrompt, benchmarksPrompt } = await import('../src/brief.js');
+  const d = demoPagePrompt('/b/DEMO.html');
+  assert.match(d, /sample demo page of it at \/b\/DEMO\.html/);
+  assert.match(d, /self-contained HTML/);
+  assert.match(d, /Never invent output/);
+  assert.match(d, /\*\*Demo page\*\*: \[Artifact\]/);
+  assert.match(d, /never hold up the task/);
+  assert.match(d, /never copy it into the repo/);
+  const b = benchmarksPrompt('/b/BENCHMARK.md', '/b/bench');
+  assert.match(b, /already has a benchmark setup[\s\S]*otherwise put the scripts in \/b\/bench/);
+  assert.match(b, /base commit[\s\S]*back to back/);
+  assert.match(b, /case \| before \| after \| change/);
+  assert.match(b, /never estimate a number/);
+  assert.match(b, /Write the results to \/b\/BENCHMARK\.md/);
 });
 
 test('design doc instructions: short, three diagrams at most, published as an Artifact, updated when done', async () => {

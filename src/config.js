@@ -68,6 +68,10 @@ const DEFAULTS = {
   // Task agents write a short design doc once their plan is settled and publish it as a claude.ai
   // Artifact, updated when the work is done. Per agent: designDoc. (Publish to Google Drive is a button.)
   designDoc: true,
+  // Off unless asked, per agent too: a sample demo page of the change (published as an Artifact)
+  // and micro benchmarks of the code it changed, before and after. Per agent: demoPage, benchmarks.
+  demoPage: false,
+  benchmarks: false,
   // The AI judge (stuck, idle screens, reviews); see JUDGE_DEFAULTS in judge.js for every field.
   judge: { enabled: true },
   // Clean up old agents: "close-delete", "close" (delete by hand), "manual" or "off"; see cleanup.js.
