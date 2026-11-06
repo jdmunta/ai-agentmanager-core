@@ -1543,6 +1543,28 @@ test('intent, spec and plan: INTENT.md on create, the agent told to keep SPEC.md
   await call('DELETE', `/agents/${g.id}`);
 });
 
+test('standup: agents with news, the ones that need you first, worded by the model; settings kept', async () => {
+  const [a] = (await call('POST', '/agents', { intent: 'Pick the cache store #question' })).body;
+  try {
+    await waitFor(async () => (await agentNow(a.id)).questions?.length, 10000, 'question');
+    const made = (await call('POST', '/standup')).body;
+    const mine = made.latest.items.find((i) => i.agentId === a.id);
+    assert.ok(mine, JSON.stringify(made.latest.items.map((i) => i.name)));
+    assert.equal(made.latest.items[0].needs > 0, true, 'an agent that needs you goes first');
+    assert.equal(mine.text, `Spoken: ${a.name} needs you.`);
+    assert.equal(made.latest.ai, true);
+    assert.match(made.latest.intro, /^Spoken intro for \d+\.$/);
+    assert.equal((await call('GET', '/standup')).body.latest.at, made.latest.at);
+    // Settings: validated and kept in config.json.
+    assert.equal((await call('PUT', '/standup', { at: 'noon' })).status, 400);
+    assert.equal((await call('PUT', '/standup', { at: '08:15' })).body.settings.at, '08:15');
+    assert.equal(JSON.parse(fs.readFileSync(path.join(home, 'config.json'), 'utf8')).standup.at, '08:15');
+  } finally {
+    await call('PUT', '/standup', { at: '09:00' });
+    await call('DELETE', `/agents/${a.id}`);
+  }
+});
+
 test('publish to Google Drive: all the documents, one Google Doc each in one folder, through the Drive connector only; again replaces them', async () => {
   const [a] = (await call('POST', '/agents', { intent: 'Publish my docs', start: false })).body;
   const dir = fs.realpathSync(path.join(home, 'briefs', a.id));
@@ -2298,6 +2320,20 @@ test('conflict radar: agents in one repo editing the same lines are flagged, wit
 
   const warned = (await call('POST', `/agents/${y.id}/conflicts/warn`, { with: x.id })).body;
   assert.equal(warned.outbox, 1);
+  // The map: x and y changed the same file; z, reading it now, is heading there.
+  const { transcriptPath } = await import('../src/tracker.js');
+  const zt = transcriptPath(rz.workdir, rz.sessionId);
+  fs.mkdirSync(path.dirname(zt), { recursive: true });
+  fs.appendFileSync(zt, `${JSON.stringify({ type: 'assistant', timestamp: new Date().toISOString(), message: { content: [{ type: 'tool_use', id: 'r1', name: 'Read', input: { file_path: path.join(rz.workdir, 'app.js') } }] } })}\n`);
+  const map = (await call('GET', `/codemap?project=${encodeURIComponent(rx.projectInfo.key)}`)).body;
+  assert.equal(map.project.key, rx.projectInfo.key);
+  const top = map.map.modules.find((m) => m.key === '.');
+  assert.ok(top && top.files >= 2, JSON.stringify(map.map.modules));
+  assert.deepEqual(top.agents.map((t) => t.id).sort(), [x.id, y.id, z.id].sort());
+  const link = (k, a, b) => map.map.links.find((l) => l.kind === k && l.a === a && l.b === b);
+  assert.deepEqual((link('collide', x.id, y.id) ?? link('collide', y.id, x.id))?.files, ['app.js']);
+  assert.ok(link('heading', z.id, x.id) && link('heading', z.id, y.id), JSON.stringify(map.map.links));
+  assert.equal(map.map.agents.find((a) => a.id === z.id).reading, 1);
   for (const id of [x.id, y.id, z.id]) await call('DELETE', `/agents/${id}?deleteWorkspace=1`);
   assert.equal((await call('GET', `/agents/${x.id}`)).status, 404);
 });

@@ -30,6 +30,12 @@ if (args.includes('-p')) {
     const conv = section('conversation');
     // The AI judge: JSON verdicts (see src/judge.js).
     const json = (o) => process.stdout.write(JSON.stringify(o), () => process.exit(0));
+    if (input.startsWith('Write a short spoken standup')) {
+      // The standup: each agent's facts, worded; "#plainstandup" in a fact fails the call.
+      const facts = JSON.parse(section('facts') || '[]');
+      if (!ok || JSON.stringify(facts).includes('#plainstandup')) return process.exit(1);
+      return json({ intro: `Spoken intro for ${facts.length}.`, agents: facts.map((f) => ({ id: f.id, text: `Spoken: ${f.name} ${f.needs.length ? 'needs you.' : 'is fine.'}` })) });
+    }
     if (input.startsWith('Publish documents to Google Drive')) {
       // Only the two Drive tools, none of Claude Code's own; reuse the folder it was given.
       fs.appendFileSync(process.env.FAKE_CLAUDE_LOG, JSON.stringify({ cwd: process.cwd(), args, publish: true }) + '\n');

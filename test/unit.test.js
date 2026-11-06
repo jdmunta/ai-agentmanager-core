@@ -1850,3 +1850,120 @@ test('keyboard shortcuts: every key does something, and the list shows each one'
   }
   assert.equal(new Set(listed.flatMap(([keys]) => keys)).size, listed.flatMap(([keys]) => keys).length, 'no key twice');
 });
+
+test('standup: facts since the last one, agents that need you first, plain wording, the reply checked', async () => {
+  const { agentFacts, order, plainLine, parseStandup, standupSettings, needsOf } = await import('../src/standup.js');
+  const since = '2026-11-05T09:00:00Z';
+  const base = { kind: 'task', prs: [], runtime: {}, questions: [], stuck: [], conflicts: [] };
+  assert.equal(agentFacts({ ...base, id: 'q', name: 'quiet', activeAt: '2026-11-04T09:00:00Z' }, since), null, 'nothing new: left out');
+  assert.equal(agentFacts({ ...base, kind: 'assistant', id: 'as', name: 'assistant', activeAt: '2026-11-06T08:00:00Z' }, since), null);
+  const shipped = agentFacts({ ...base, id: 's', name: 'shipper', activeAt: '2026-11-06T08:00:00Z', runtime: { busy: true }, progress: { summary: 'writing docs' }, prs: [{ number: 12, title: 'Add login', openedAt: '2026-11-05T10:00:00Z', mergedAt: '2026-11-05T12:00:00Z' }, { number: 3, title: 'Old', openedAt: '2026-10-01T00:00:00Z', source: 'mentioned' }] }, since);
+  assert.deepEqual([shipped.merged, shipped.opened, shipped.working, shipped.doing], [['#12 Add login'], ['#12 Add login'], true, 'writing docs']);
+  const asks = agentFacts({ ...base, id: 'n', name: 'asker', activeAt: '2026-11-04T00:00:00Z', questions: [{ id: 'q1', question: 'Postgres or SQLite?' }, { id: 'q2', question: 'Done?', answer: 'yes' }], runtime: { attention: 'Permission prompt', prompt: { tool: { name: 'Bash', text: 'npm test' } } } }, since);
+  assert.deepEqual(asks.needs.map((n) => n.kind), ['prompt', 'question'], 'needs you, even when not active since');
+  assert.equal(asks.needs[0].text, 'Bash npm test');
+  assert.deepEqual(order([shipped, asks]).map((f) => f.id), ['n', 's']);
+  assert.match(plainLine(shipped), /^Merged #12 Add login\. Opened #12 Add login\. Working on: writing docs\.$/);
+  assert.match(plainLine(asks), /Needs you: Bash npm test; Postgres or SQLite\?$/);
+  assert.deepEqual(needsOf({ planReview: { status: 'review' }, runtime: {} }).map((n) => n.kind), ['plan']);
+  // The model's reply: only agents it was asked about, no links.
+  const r = parseStandup('Sure: {"intro":"Two agents.","agents":[{"id":"s","text":"Shipper merged PR 12 https://x/pull/12"},{"id":"zz","text":"made up"}]}', ['s', 'n']);
+  assert.deepEqual(r, { intro: 'Two agents.', texts: { s: 'Shipper merged PR 12' } });
+  assert.equal(parseStandup('no json here', ['s']), null);
+  assert.deepEqual(standupSettings({}), { enabled: true, at: '09:00', weekends: false, ai: true, notify: true });
+  assert.equal(standupSettings({ standup: { at: '25:00' } }).at, '09:00');
+});
+
+test('standup: made once a day at the set time on weekdays, with the alert; a failed model call falls back to plain words', async () => {
+  const { Standup } = await import('../src/standup.js');
+  const agents = [{ id: 'a1', kind: 'task', name: 'one', prs: [], runtime: {}, questions: [{ id: 'q', question: 'Which DB?' }], stuck: [], conflicts: [] }];
+  const data = {};
+  let calls = 0;
+  let fail = false;
+  const manager = {
+    view: (a) => a,
+    writerFor: () => ({ engine: 'fake' }),
+    oneShot: async (_a, prompt) => {
+      calls += 1;
+      if (fail) throw new Error('no model');
+      assert.match(prompt, /<facts>/);
+      return '{"intro":"One agent needs you.","agents":[{"id":"a1","text":"One asks which database."}]}';
+    },
+  };
+  const sent = [];
+  const pushed = [];
+  const s = new Standup({ manager, store: { data, list: () => agents, save: () => {} }, config: { standup: { at: '09:00' } }, notify: (l) => sent.push(l), onChange: (l) => pushed.push(l), log: () => {} });
+  try {
+    const thu = (h, m = 0) => new Date(2026, 10, 5, h, m).getTime(); // a Thursday
+    assert.equal(await s.tick(thu(8, 59)), null, 'not before the time');
+    const made = await s.tick(thu(9, 1));
+    assert.deepEqual([made.reason, made.ai, made.intro, made.items[0].text, made.items[0].needs], ['scheduled', true, 'One agent needs you.', 'One asks which database.', 1]);
+    assert.equal(sent.length, 1);
+    assert.equal(pushed.length, 1);
+    assert.equal(await s.tick(thu(15)), null, 'once a day');
+    assert.equal(await s.tick(new Date(2026, 10, 7, 10).getTime()), null, 'not on a Saturday');
+    // Asked for: covers what's new since the last one; plain words when the model fails.
+    fail = true;
+    const asked = await s.make({ reason: 'asked', now: thu(16) });
+    assert.equal(asked.since, made.at);
+    assert.deepEqual([asked.ai, asked.items[0].text], [false, 'Needs you: Which DB?']);
+    assert.equal(sent.length, 1, 'no alert when asked for');
+    assert.throws(() => s.update({ at: '9am' }), /HH:MM/);
+    assert.equal(s.update({ at: '08:30', weekends: true }).settings.at, '08:30');
+  } finally {
+    s.close();
+  }
+});
+
+test('voice answers: yes, no and an option number pick a prompt choice', async () => {
+  const { choiceFor } = await import('../public/voice.js');
+  const choices = [{ key: '1', label: 'Yes' }, { key: '2', label: "Yes, and don't ask again" }, { key: '3', label: 'No' }];
+  assert.equal(choiceFor('yes please', choices), '1');
+  assert.equal(choiceFor('No, stop', choices), '3');
+  assert.equal(choiceFor('option two', choices), '2');
+  assert.equal(choiceFor('3', choices), '3');
+  assert.equal(choiceFor('the second one', choices), '2');
+  assert.equal(choiceFor('option nine', choices), null);
+  assert.equal(choiceFor('maybe later', choices), null);
+});
+
+test('codebase map: folders, who changes or reads what, and who is heading for a collision', async () => {
+  const { moduleOf, touchedFiles, buildMap } = await import('../src/codemap.js');
+  assert.equal(moduleOf('src/engines/claude.js'), 'src/engines');
+  assert.equal(moduleOf('src/a/b/c.js'), 'src/a');
+  assert.equal(moduleOf('README.md'), '.');
+  // From a transcript: edits outrank reads, only inside the workdir and the last half hour.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'map-'));
+  const t = path.join(dir, 's.jsonl');
+  const at = (ms) => new Date(Date.now() - ms).toISOString();
+  const use = (ms, name, input) => JSON.stringify({ type: 'assistant', timestamp: at(ms), message: { content: [{ type: 'tool_use', name, input }] } });
+  fs.writeFileSync(t, ['{"cut line', use(1000, 'Read', { file_path: '/w/src/a.js' }), use(500, 'Edit', { file_path: '/w/src/a.js' }), use(400, 'Read', { file_path: '/w/lib/b.js' }), use(300, 'Read', { file_path: '/elsewhere/x.js' }), use(3_600_000, 'Read', { file_path: '/w/old.js' }), use(200, 'Bash', { command: 'ls' })].join('\n'));
+  const touched = touchedFiles(t, '/w');
+  assert.deepEqual(Object.fromEntries(Object.entries(touched).map(([f, v]) => [f, v.kind])), { 'src/a.js': 'edit', 'lib/b.js': 'read' });
+  assert.deepEqual(touchedFiles(path.join(dir, 'missing.jsonl'), '/w'), {});
+  const m = buildMap({
+    files: ['src/a.js', 'src/b.js', 'lib/b.js', 'README.md', 'docs/x.md'],
+    agents: [
+      { id: 'x', name: 'x', changed: { 'src/a.js': {} } },
+      { id: 'y', name: 'y', changed: { 'src/a.js': {} } },
+      { id: 'z', name: 'z', changed: { 'lib/b.js': {} }, touched: { 'src/a.js': { kind: 'read', at: 1 } } },
+      { id: 'w', name: 'w', changed: { 'docs/x.md': {} }, touched: { 'lib/c.js': { kind: 'read', at: 1 } } },
+    ],
+  });
+  assert.deepEqual(m.modules.map((x) => [x.key, x.files]), [['src', 2], ['.', 1], ['docs', 1], ['lib', 1]]);
+  assert.deepEqual(m.modules.find((x) => x.key === 'src').agents, [{ id: 'x', changed: 1, reading: 0 }, { id: 'y', changed: 1, reading: 0 }, { id: 'z', changed: 0, reading: 1 }]);
+  const kinds = m.links.map((l) => `${l.kind}:${l.a}>${l.b}`).sort();
+  assert.deepEqual(kinds, ['collide:x>y', 'heading:z>x', 'heading:z>y', 'near:z>w'].sort());
+  assert.deepEqual(m.agents.find((a) => a.id === 'z'), { id: 'z', name: 'z', busy: false, attention: false, changed: 1, reading: 1 });
+});
+
+test('codebase map tiles: squarified, filling the rectangle, bigger folders bigger', async () => {
+  const { squarify } = await import('../public/codemap.js');
+  const rects = squarify([{ weight: 6 }, { weight: 6 }, { weight: 4 }, { weight: 3 }, { weight: 2 }, { weight: 2 }, { weight: 1 }], 0, 0, 600, 400);
+  assert.equal(rects.length, 7);
+  const area = rects.reduce((s, r) => s + r.w * r.h, 0);
+  assert.ok(Math.abs(area - 600 * 400) < 1, String(area));
+  for (const r of rects) assert.ok(r.x >= -0.01 && r.y >= -0.01 && r.x + r.w <= 600.01 && r.y + r.h <= 400.01, JSON.stringify(r));
+  assert.ok(rects[0].w * rects[0].h > rects[6].w * rects[6].h);
+  assert.deepEqual(squarify([], 0, 0, 10, 10), []);
+});

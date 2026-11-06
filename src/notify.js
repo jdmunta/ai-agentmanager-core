@@ -18,6 +18,7 @@ export const EVENT_DEFAULTS = {
   question: true, // asked a question in the decision inbox
   assistant: true, // an agent was started for new work (assistant, GitHub label, webhook)
   budget: true, // an agent neared or reached its budget, or today's spend reached the daily limit
+  standup: true, // the daily standup is ready to play
 };
 
 // Alerts the AI judge may hold for the digest or drop; the rest are always sent at once.
