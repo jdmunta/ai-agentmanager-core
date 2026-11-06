@@ -25,6 +25,8 @@ import { isText, languageOf, resolveInside } from '../src/studio.js';
 import { moveTranscript } from '../src/handoff.js';
 import { commentsMessage, parseBaseRef, prBase } from '../src/review.js';
 import { parseDiff } from '../public/review.js';
+import { normalizeReview, parsePrUrl, recheckMessage, reviewDraft, reviewRows, reviewerPrompt, Reviews } from '../src/reviews.js';
+import { reviewerSpeech } from '../public/reviews.js';
 import { VERDICTS, gapsOf, leadPrompt, readCoverage, readVerdict, subagents, summarize, teamPrompt } from '../src/teams.js';
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'agentmgr-unit-'));
@@ -2301,4 +2303,90 @@ test('codebase map tiles: squarified, filling the rectangle, bigger folders bigg
   for (const r of rects) assert.ok(r.x >= -0.01 && r.y >= -0.01 && r.x + r.w <= 600.01 && r.y + r.h <= 400.01, JSON.stringify(r));
   assert.ok(rects[0].w * rects[0].h > rects[6].w * rects[6].h);
   assert.deepEqual(squarify([], 0, 0, 10, 10), []);
+});
+
+test('reviews: PR links, the review file cleaned up, an open blocker always blocks', () => {
+  assert.deepEqual(parsePrUrl('<https://github.com/acme/demo/pull/12/files#diff-1>'), { url: 'https://github.com/acme/demo/pull/12', owner: 'acme', repo: 'demo', number: 12, slug: 'acme/demo' });
+  assert.equal(parsePrUrl('https://github.com/acme/demo/issues/12'), null);
+  const r = normalizeReview({
+    headSha: 'not a sha',
+    verdict: 'approve',
+    blockers: [{ title: 'Leak', category: 'nope', line: 0 }, { title: 'Fixed', status: 'resolved', line: 7, file: 'a.js' }, {}],
+    questions: [{ question: 'Why?' }, { why: 'no question' }],
+    nits: [{ text: 'name' }],
+    risks: ['r', ''],
+  });
+  assert.equal(r.verdict, 'blocked');
+  assert.equal(r.headSha, null);
+  assert.deepEqual(r.blockers.map((b) => [b.id, b.category, b.line, b.status]), [['b1', 'other', null, 'open'], ['b2', 'other', 7, 'resolved']]);
+  assert.equal(r.openBlockers, 1);
+  assert.deepEqual(r.questions.map((q) => q.id), ['q1']);
+  assert.deepEqual(r.risks, ['r']);
+  assert.equal(normalizeReview({ verdict: 'approve_with_nits', blockers: [{ title: 'x', status: 'resolved' }] }).verdict, 'approve_with_nits', 'resolved ones do not block');
+  assert.equal(normalizeReview({}).verdict, null);
+  assert.equal(normalizeReview('x'), null);
+});
+
+test('reviews: the draft puts lined items on their lines and the rest in the body; only picked ones', () => {
+  const review = normalizeReview({
+    blockers: [{ id: 'b1', title: 'Unbounded retry', why: 'Loops forever.', unblock: 'Cap it.', file: 'up.js', line: 4 }, { id: 'b2', title: 'Old', status: 'resolved' }],
+    questions: [{ id: 'q1', question: 'Why 400s?', file: 'up.js' }],
+    nits: [{ id: 'n1', text: 'Rename', file: 'up.js', line: 9 }],
+  });
+  const d = reviewDraft(review);
+  assert.deepEqual(d.picked, ['b1', 'q1'], 'open blockers and questions by default, not nits or resolved blockers');
+  assert.deepEqual(d.comments, [{ path: 'up.js', line: 4, side: 'RIGHT', body: '**Blocker: Unbounded retry**\n\nLoops forever.\n\nTo resolve: Cap it.' }]);
+  assert.equal(d.body, '1 thing to resolve before this can be approved.\n\n**Question:** Why 400s?\n(`up.js`)');
+  const only = reviewDraft(review, ['n1', 'b2']);
+  assert.deepEqual(only.picked, ['n1'], 'a resolved blocker is not sent');
+  assert.equal(only.comments[0].body, 'Nit: Rename');
+});
+
+test('reviews: rows, stale after a push, requests with no reviewer first; the prompt is read-only', () => {
+  const review = normalizeReview({ headSha: 'abc1234', verdict: 'approve' });
+  const views = [
+    { id: 'a1', name: 'review-x-1', createdAt: '2026-11-01', reviewing: { url: 'https://github.com/o/x/pull/1', slug: 'o/x', number: 1 }, prs: [{ url: 'https://github.com/o/x/pull/1', head: 'abc1234ffff', state: 'OPEN', title: 'One' }], runtime: {} },
+    { id: 'a2', name: 'review-x-2', createdAt: '2026-11-02', reviewing: { url: 'https://github.com/o/x/pull/2', slug: 'o/x', number: 2 }, prs: [{ url: 'https://github.com/o/x/pull/2', head: '999', state: 'OPEN' }], runtime: {} },
+    { id: 'a3', name: 'task', prs: [] },
+  ];
+  const read = (id) => (id === 'a1' ? { review, updatedAt: '2026-11-03' } : id === 'a2' ? { review, updatedAt: '2026-11-04' } : null);
+  const rows = reviewRows(views, [{ url: 'https://github.com/o/x/pull/1' }, { url: 'https://github.com/o/x/pull/3', number: 3, repo: 'o/x' }], read);
+  assert.deepEqual(rows.map((r) => [r.pr.number, r.status, r.stale]), [[2, 'approve', true], [3, 'requested', false], [1, 'approve', false]]);
+  const p = reviewerPrompt('/b/REVIEW.json', { url: 'https://github.com/o/x/pull/2', number: 2 });
+  assert.match(p, /git fetch origin pull\/2\/head:review\/pr-2/);
+  assert.match(p, /Never commit, push, edit the pull request, approve/);
+  assert.match(p, /\/b\/REVIEW\.json as JSON/);
+  assert.match(recheckMessage({ url: 'u' }, 'fff9999aaa000'), /^The author pushed new commits to u \(head fff9999aaa00\)/);
+});
+
+test('reviews: the reviewer is told once per new head, and only when its review is older', () => {
+  const told = [];
+  const patched = [];
+  const agent = { id: 'zz9', name: 'r', reviewing: { url: 'u', slug: 'o/x', number: 1 }, prs: { u: { head: 'new1234', state: 'OPEN' } } };
+  const manager = { on() {}, off() {}, tell: (id, text) => told.push(text), patch: (id, f) => (Object.assign(agent, f), patched.push(f)) };
+  const rv = new Reviews({ manager, store: { data: {}, list: () => [agent] } });
+  rv.recheck(agent);
+  assert.equal(told.length, 0, 'no review written yet');
+  rv.recheck({ id: 'x', prs: {} });
+  assert.equal(patched.length, 0);
+});
+
+test('reviews: read aloud: verdict, blockers, questions, resolved ones', () => {
+  const review = normalizeReview({ verdict: 'blocked', why: 'It can loop.', blockers: [{ title: 'Unbounded retry', why: 'No cap.' }, { title: 'Old', status: 'resolved' }], questions: [{ question: 'Why 400s?' }] });
+  const parts = reviewerSpeech({ pr: { number: 5, title: 'Retry uploads' }, review, stale: true });
+  assert.equal(parts[0], 'Review of pull request 5, Retry uploads. Verdict: Blocked. It can loop.');
+  assert.ok(parts.includes('1 blocker.'));
+  assert.ok(parts.includes('1: Unbounded retry. No cap.'));
+  assert.ok(parts.includes('1 earlier blocker is resolved.'));
+  assert.match(parts.at(-1), /author pushed/);
+  assert.deepEqual(reviewerSpeech({ review: null }), []);
+});
+
+test('assistant: review requests start reviewers, or are only listed when you pick', async () => {
+  const { assistantPrompt, assistantSettings } = await import('../src/assistant.js');
+  const on = assistantPrompt(assistantSettings({ assistant: { sources: ['reviews'] } }), '/d', 'am');
+  assert.match(on, /am review <the PR link>/);
+  const pick = assistantPrompt(assistantSettings({ assistant: { sources: ['reviews'], pickIssues: true } }), '/d', 'am');
+  assert.match(pick, /Don't start reviewers: the person picks/);
+  assert.doesNotMatch(pick, /am review </);
 });

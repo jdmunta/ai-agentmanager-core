@@ -4620,3 +4620,96 @@ test('goals: an outcome across projects is planned into backlog tasks, checked w
     await call('POST', '/backlog/settings', { autoRun: true });
   }
 });
+
+test("reviews: a reviewer agent on someone else's PR finds blockers and questions; you post the picked ones as a pending review", async () => {
+  const origin = makeOrigin('reviews');
+  const ghState = path.join(home, 'fake-gh-reviews.json');
+  const ghLog = path.join(home, 'fake-gh-reviews.log');
+  const pr5 = 'https://github.com/acme/demo/pull/5';
+  const pr6 = 'https://github.com/acme/demo/pull/6';
+  const saved = { bin: process.env.AGENTMGR_GH_BIN, noGh: process.env.AGENTMGR_NO_GH, st: process.env.FAKE_GH_STATE, log: process.env.FAKE_GH_LOG };
+  Object.assign(process.env, { AGENTMGR_GH_BIN: path.join(here, 'fake-gh.js'), FAKE_GH_STATE: ghState, FAKE_GH_LOG: ghLog });
+  delete process.env.AGENTMGR_NO_GH;
+  const gh = () => JSON.parse(fs.readFileSync(ghState, 'utf8'));
+  const setGh = (f) => fs.writeFileSync(ghState, JSON.stringify(f(gh())));
+  let id = null;
+  try {
+    fs.writeFileSync(
+      ghState,
+      JSON.stringify({
+        prs: [{ number: 5, url: pr5, title: 'Retry uploads', state: 'OPEN', isDraft: false, headRefOid: 'abc1234def', headRefName: 'retry', reviewDecision: '', statusCheckRollup: [] }],
+        requested: [
+          { url: pr5, number: 5, title: 'Retry uploads', repository: { nameWithOwner: 'acme/demo' }, author: { login: 'sam' }, updatedAt: '2026-11-05T10:00:00Z' },
+          { url: pr6, number: 6, title: 'Bump deps', repository: { nameWithOwner: 'acme/demo' }, author: { login: 'kim' }, updatedAt: '2026-11-04T10:00:00Z' },
+        ],
+      }),
+    );
+    let rows = (await call('GET', '/reviews?fresh=1')).body.rows;
+    assert.deepEqual(rows.map((r) => [r.pr.number, r.status]), [[5, 'requested'], [6, 'requested']], 'requested PRs, newest first');
+    assert.equal((await call('POST', '/reviews', { url: 'https://github.com/acme/demo/issues/5' })).status, 400, 'not a PR link');
+    assert.equal((await call('POST', '/projects', { shortcut: 'rvp', repo: `file://${origin}` })).status, 200);
+    const started = await call('POST', '/reviews', { url: `${pr5}/files`, project: 'rvp' });
+    assert.equal(started.status, 200, JSON.stringify(started.body));
+    id = started.body.id;
+    assert.equal(started.body.name, 'review-demo-5');
+    assert.deepEqual(started.body.reviewing, { url: pr5, slug: 'acme/demo', number: 5, title: 'Retry uploads' });
+    assert.equal(started.body.designDoc, false, 'no design doc for a reviewer');
+    assert.equal((await call('POST', '/reviews', { url: pr5 })).status, 409, 'one reviewer per PR');
+
+    const got = await waitFor(async () => {
+      const r = await call('GET', `/reviews/${id}`);
+      return r.body.review ? r.body : null;
+    }, 20000, 'review written');
+    assert.equal(got.review.verdict, 'blocked', 'an open blocker blocks, whatever the verdict says');
+    assert.equal(got.review.openBlockers, 1);
+    assert.deepEqual(got.draft.picked, ['b1', 'q1'], 'open blockers and questions are picked by default');
+    assert.match(got.markdown, /\*\*Blocked\*\*[\s\S]*Unbounded retry[\s\S]*Questions for the author[\s\S]*Why retry on 400s/);
+    const log = fs.readFileSync(process.env.FAKE_CLAUDE_LOG, 'utf8').trim().split('\n').map((l) => JSON.parse(l)).filter((l) => l.args.includes('--append-system-prompt') && l.args.join(' ').includes(`pull/5/head:review/pr-5`));
+    assert.ok(log.length, 'the reviewer was told how to check out the PR, read-only');
+
+    // The reviewed PR isn't the reviewer's own: landing, Value and the Jira summary leave it alone.
+    await call('POST', `/agents/${id}/refresh`, { withPrs: true });
+    const view = await waitFor(async () => ((await agentNow(id)).prs.find((p) => p.url === pr5)?.head ? agentNow(id) : null), 8000, 'pr details');
+    assert.equal(view.prs.find((p) => p.url === pr5).source, 'mentioned');
+    rows = (await call('GET', '/reviews')).body.rows;
+    assert.deepEqual(rows.map((r) => [r.pr.number, r.status, r.stale]), [[6, 'requested', false], [5, 'blocked', false]]);
+
+    // Posting: a line outside the diff makes GitHub refuse the comments, so they go in the body.
+    const p1 = await call('POST', `/reviews/${id}/post`, { ids: ['b1', 'q1', 'n1'] });
+    assert.equal(p1.status, 200, JSON.stringify(p1.body));
+    assert.equal(p1.body.moved, 2);
+    let sent = gh().reviews.at(-1);
+    assert.equal(sent.path, 'repos/acme/demo/pulls/5/reviews');
+    assert.equal(sent.commit_id, 'abc1234def');
+    assert.equal(sent.event, undefined, 'pending: you submit it on GitHub');
+    assert.equal(sent.comments, undefined);
+    assert.match(sent.body, /1 thing to resolve[\s\S]*Why retry on 400s[\s\S]*Blocker: Unbounded retry[\s\S]*src\/upload\.js:42[\s\S]*Nit: Name the constant/);
+    const p2 = await call('POST', `/reviews/${id}/post`, { ids: ['b1'] });
+    assert.equal(p2.body.moved, 0);
+    sent = gh().reviews.at(-1);
+    assert.deepEqual(sent.comments.map((c) => [c.path, c.line, c.side]), [['src/upload.js', 42, 'RIGHT']]);
+    assert.equal((await call('POST', `/reviews/${id}/post`, { ids: ['zz'] })).status, 400, 'nothing picked');
+    assert.ok((await agentNow(id)).reviewing.posted.at);
+
+    // The author pushes: the review is stale and the reviewer is told, once.
+    setGh((s) => ((s.prs[0].headRefOid = 'fff9999aaa'), s));
+    await call('POST', `/agents/${id}/refresh`, { withPrs: true });
+    const told = await waitFor(async () => ((await agentNow(id)).reviewing.recheckedFor === 'fff9999aaa' ? true : null), 8000, 'reviewer told');
+    assert.ok(told);
+    rows = (await call('GET', '/reviews')).body.rows;
+    assert.equal(rows[0].pr.number, 5, 'stale reviews first');
+    assert.equal(rows[0].stale, true);
+
+    assert.equal((await call('POST', '/reviews/dismiss', { urls: [pr6] })).body.dismissed, 1);
+    rows = (await call('GET', '/reviews')).body.rows;
+    assert.deepEqual(rows.map((r) => r.pr.number), [5]);
+    assert.match((await call('GET', '/reviews?format=markdown')).body.markdown, /^## Review of Retry uploads/);
+  } finally {
+    for (const [k, v] of [['AGENTMGR_GH_BIN', saved.bin], ['AGENTMGR_NO_GH', saved.noGh], ['FAKE_GH_STATE', saved.st], ['FAKE_GH_LOG', saved.log]]) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+    if (id) await call('DELETE', `/agents/${id}`);
+    await call('DELETE', '/projects/rvp');
+  }
+});

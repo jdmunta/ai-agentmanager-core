@@ -41,6 +41,7 @@ import * as service from './service.js';
 import { jiraView, saveJira } from './jira.js';
 import { ProposedIssues, issuesMarkdown } from './issues.js';
 import { designsMarkdown } from './designs.js';
+import { Reviews, reviewDraft, reviewMarkdown } from './reviews.js';
 import { CONTAINER_ENGINES, buildImage, claudeToken, dockerStatus, isBuilding, saveSecrets } from './container.js';
 import { AgentkitReports } from './agentkit-reports.js';
 import { Builder } from './builder.js';
@@ -91,6 +92,7 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
   const manager = new AgentManager({ store, config, plugins });
   const backlog = new Backlog({ manager, store, config });
   const proposed = new ProposedIssues({ store, manager });
+  const reviews = new Reviews({ manager, store, log: (m) => console.log(`[agentmgr] ${m}`) });
   const races = new Races({ manager, store });
   const review = new Review({ manager });
   // The walkthrough explains the same diff the review screen shows.
@@ -803,6 +805,22 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
       .filter((r) => !q || [r.title, r.summary, r.agent.name, r.agent.project, r.issue?.key].some((s) => String(s ?? '').toLowerCase().includes(q)));
     return req.query.format === 'markdown' ? { markdown: designsMarkdown(rows) } : { rows };
   }));
+  // Reviews: reviewer agents on other people's PRs, and PRs where your review is requested.
+  api.get('/reviews', wrap(async (req) => {
+    const rows = await reviews.rows({ fresh: req.query.fresh === '1' });
+    return req.query.format === 'markdown' ? { markdown: rows.filter((r) => r.agent).map(reviewMarkdown).join('\n\n---\n\n') || 'No reviews.' } : { rows };
+  }));
+  api.post('/reviews', wrap((req) => {
+    // Started by the assistant's own session: its limits apply, and it's marked as its.
+    const extra = assistant.admit(req.headers['x-agentmgr-agent'], [String(req.body?.url ?? '')]);
+    return reviews.start({ url: req.body?.url, project: req.body?.project, notes: req.body?.notes, startedBy: extra.startedBy ?? null });
+  }));
+  api.post('/reviews/dismiss', wrap((req) => reviews.dismiss(Array.isArray(req.body?.urls) ? req.body.urls.map(String) : [])));
+  api.get('/reviews/:id', wrap((req) => {
+    const row = reviews.row(req.params.id);
+    return { ...row, markdown: reviewMarkdown(row), draft: row.review ? reviewDraft(row.review) : null };
+  }));
+  api.post('/reviews/:id/post', wrap((req) => reviews.post(req.params.id, { ids: Array.isArray(req.body?.ids) ? req.body.ids.map(String) : null })));
   // Value: totals by period, items with estimates you can correct, reports.
   api.get('/value', wrap((req) => value.view({ period: String(req.query.period ?? 'week') })));
   api.put('/value', wrap((req) => {
@@ -1230,6 +1248,7 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
     landing.close();
     standup.close();
     value.close();
+    reviews.close();
     autopilot.close();
     goals.close();
     worklog.close();

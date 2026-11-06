@@ -55,6 +55,19 @@ if (group === 'pr' && cmd === 'list') {
   const number = args.find((a) => a.startsWith('number='))?.slice(7);
   const empty = { comments: { nodes: [] }, reviews: { nodes: [] }, reviewThreads: { nodes: [] } };
   console.log(JSON.stringify({ data: { repository: { pullRequest: state.feedback?.[number] ?? empty } } }));
+} else if (group === 'search' && cmd === 'prs') {
+  // PRs where your review is requested: state.requested, as gh search gives them.
+  console.log(JSON.stringify((state.requested ?? []).map(pick)));
+} else if (group === 'api' && args.includes('--input')) {
+  // A pending review: line 999 isn't in the diff, so GitHub refuses comments on it.
+  const payload = JSON.parse(fs.readFileSync(opt('--input'), 'utf8'));
+  if ((payload.comments ?? []).some((c) => c.line === 999)) {
+    console.error('gh: Unprocessable Entity (HTTP 422): line must be part of the diff');
+    process.exit(1);
+  }
+  state.reviews = [...(state.reviews ?? []), { path: args.find((a) => a.startsWith('repos/')), ...payload }];
+  save();
+  console.log(JSON.stringify({ id: 1, html_url: 'https://github.com/acme/demo/pull/5#pullrequestreview-1', state: 'PENDING' }));
 } else if (group === 'pr' && cmd === 'comment') {
   console.log(`${args[2]}#issuecomment-1`);
 } else {

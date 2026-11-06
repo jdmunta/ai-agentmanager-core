@@ -34,6 +34,7 @@
         <button id="standup-btn" title="Today's standup: each agent's news read aloud, and what they need from you">Standup <span id="standup-dot" class="assistant-dot" hidden></span></button>
         <button id="issues-btn" title="Jira: every issue an agent works on, with its Jira status, pull request and agent, the ones waiting for your review first">Jira <span id="issues-count" class="badge ready"></span></button>
         <button id="designs-btn" title="Designs: every agent's design doc with its summary and links, the ones waiting for your review first">Designs <span id="designs-count" class="badge ready"></span></button>
+        <button id="reviews-btn" title="Reviews: pull requests you review. Reviewer agents ask the critical questions and find what blocks approval; you post what you pick">Reviews <span id="reviews-count" class="badge ready"></span></button>
         <button id="value-btn" title="Value: what the delivered work is worth, by day, week, month and quarter, against the AI cost and your time; reports for management">Value</button>
         <button id="map-btn" title="The codebase map: where each agent is changing and reading code, and who is about to collide">Map</button>
         <button id="watch-btn" title="Running agents' sessions side by side, live: follow them all without clicking from one to the next">Watch</button>
@@ -384,6 +385,9 @@
     </dialog>
     <dialog id="designs-dialog" class="issues-dialog" aria-label="Design docs">
       <div id="designs-body"></div>
+    </dialog>
+    <dialog id="reviews-dialog" class="issues-dialog" aria-label="Reviews">
+      <div id="reviews-body"></div>
     </dialog>
     <dialog id="value-dialog" class="issues-dialog value-dialog" aria-label="Value">
       <div id="value-body"></div>

@@ -1230,3 +1230,41 @@ table.value-items tr.value-edit td { background: var(--panel-2); }
 .value-report-kinds { display: flex; flex-wrap: wrap; gap: 4px 14px; align-items: center; }
 .value-report-kinds input[type="time"] { width: auto; }
 input.inline { width: 64px; display: inline-block; padding: 2px 4px; }
+
+/* ---------- Reviews: other people's pull requests, reviewed by agents */
+.rv-new { display: flex; gap: 6px; flex: 1; min-width: 220px; max-width: 460px; }
+.rv-new input { flex: 1; min-width: 0; }
+.rv-card { border: 1px solid var(--border); border-left: 3px solid var(--border); border-radius: var(--radius); padding: 10px 14px; background: var(--panel); }
+.rv-card.blocked { border-left-color: var(--red); }
+.rv-card.approve, .rv-card.approve_with_nits { border-left-color: var(--green); }
+.rv-card.requested, .rv-card.stale { border-left-color: var(--yellow); }
+.rv-card.ticked { background: color-mix(in srgb, var(--yellow) 8%, var(--panel)); }
+.rv-card header { display: flex; align-items: baseline; gap: 10px; }
+.rv-card header[data-rv-toggle] { cursor: pointer; }
+.rv-card h3 { margin: 0; font-size: 15px; flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.rv-caret { color: var(--muted); width: 10px; }
+.verdict { font-size: 12px; font-weight: 600; padding: 1px 8px; border-radius: 10px; white-space: nowrap; border: 1px solid currentColor; }
+.verdict.ok { color: var(--green); }
+.verdict.bad { color: var(--red); }
+.verdict.wait, .verdict.new { color: var(--yellow); }
+.rv-detail { margin-top: 10px; border-top: 1px solid var(--border); padding-top: 8px; font-size: 14px; line-height: 1.45; }
+.rv-detail h4 { margin: 12px 0 4px; font-size: 13px; text-transform: uppercase; letter-spacing: .03em; color: var(--muted); }
+.rv-detail p { margin: 4px 0; }
+.rv-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.rv-item { display: flex; gap: 8px; align-items: flex-start; }
+.rv-item input { margin-top: 4px; }
+.rv-item.resolved { opacity: .65; }
+.rv-item.resolved strong { text-decoration: line-through; }
+.rv-done { color: var(--green); width: 13px; }
+.rv-cat { font-size: 11px; color: var(--muted); border: 1px solid var(--border); border-radius: 8px; padding: 0 6px; }
+.rv-where { font-size: 12px; }
+.rv-plain { margin: 0; padding-left: 20px; }
+.rv-stale { color: var(--yellow); font-weight: 600; }
+.rv-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 12px; }
+@media (max-width: 640px) {
+  .rv-new { max-width: none; order: 10; flex-basis: 100%; }
+  .rv-card header { flex-wrap: wrap; }
+  .rv-card.requested header { flex-wrap: nowrap; }
+}
+.rv-card input[type="checkbox"] { width: auto; flex: none; margin: 0; }
+.rv-item input[type="checkbox"] { margin-top: 4px; }
