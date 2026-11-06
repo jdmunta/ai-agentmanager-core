@@ -1,6 +1,7 @@
 // Print-ready view of one agent document: /share.html#<agent id>/<analysis|design|flow|proposal>
 import { marked } from '/vendor/marked/marked.esm.js';
 import DOMPurify from '/vendor/dompurify/purify.es.mjs';
+import { drawDiagram } from '/diagram.js';
 
 const $ = (s) => document.querySelector(s);
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
@@ -24,10 +25,10 @@ async function main() {
   document.title = (d.markdown.match(/^#\s+(.+)$/m)?.[1] ?? `${kind} · ${a.name}`).slice(0, 120);
   if (blocks.length) {
     const mermaid = (await import('/vendor/mermaid/mermaid.esm.min.mjs')).default;
-    mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme: 'default', htmlLabels: false, flowchart: { htmlLabels: false } });
+    mermaid.initialize({ startOnLoad: false, suppressErrorRendering: true, securityLevel: 'strict', theme: 'default', htmlLabels: false, flowchart: { htmlLabels: false } });
     for (const el of document.querySelectorAll('.diagram')) {
       try {
-        el.innerHTML = (await mermaid.render(`d${el.dataset.i}`, blocks[Number(el.dataset.i)])).svg;
+        el.innerHTML = (await drawDiagram(mermaid, `d${el.dataset.i}`, blocks[Number(el.dataset.i)])).svg;
       } catch {
         el.innerHTML = `<pre>${esc(blocks[Number(el.dataset.i)])}</pre>`;
       }

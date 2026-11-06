@@ -29,6 +29,7 @@ import { initIssues } from '/issues.js';
 import { reviewSpeech } from '/prvoice.js';
 import { initDesigns } from '/designs.js';
 import { initReviews } from '/reviews.js';
+import { drawDiagram } from '/diagram.js';
 import { initValue } from '/value.js';
 import { initCodeMap } from '/codemap.js';
 import { initKeys } from '/keys.js';
@@ -337,7 +338,8 @@ const isDark = () => {
 };
 // SVG text labels rather than HTML ones: a diagram then exports to PNG (the browser won't turn
 // HTML-in-SVG into an image).
-const mermaidConfig = () => ({ startOnLoad: false, securityLevel: 'strict', theme: isDark() ? 'dark' : 'default', htmlLabels: false, flowchart: { htmlLabels: false } });
+// suppressErrorRendering: a diagram that fails shows our message, not Mermaid's error picture.
+const mermaidConfig = () => ({ startOnLoad: false, suppressErrorRendering: true, securityLevel: 'strict', theme: isDark() ? 'dark' : 'default', htmlLabels: false, flowchart: { htmlLabels: false } });
 // Diagrams are drawn in the theme's colors: redraw them when it changes.
 window.addEventListener('agentmgr-theme', () => {
   diagrams.clear();
@@ -372,7 +374,7 @@ async function renderDiagrams(root) {
           mermaidLib = (await import('/vendor/mermaid/mermaid.esm.min.mjs')).default;
           mermaidLib.initialize(mermaidConfig());
         }
-        const { svg } = await mermaidLib.render(`mmd-${diagrams.size}-${Date.now()}`, src);
+        const { svg } = await drawDiagram(mermaidLib, `mmd-${diagrams.size}-${Date.now()}`, src);
         diagrams.set(src, { svg });
       } catch (err) {
         diagrams.set(src, { error: String(err?.message || err).split('\n')[0] });
@@ -4020,6 +4022,17 @@ async function loadAbout() {
   return aboutInfo;
 }
 loadAbout().catch(() => {});
+
+// After an update the old daemon keeps answering (with the old version and old pages) while it
+// closes its agents, so a reload then still shows the old one. Whenever the event stream
+// connects again, a daemon running a different version means this page is stale: reload it.
+async function reloadIfUpdated() {
+  if (!aboutInfo) return;
+  const was = aboutInfo.version;
+  try {
+    if ((await loadAbout()).version !== was) location.reload();
+  } catch {}
+}
 function renderAbout(a) {
   const link = (url, text = url.replace(/^https:\/\//, '')) => `<a href="${esc(url)}" target="_blank" rel="noopener">${esc(text)}</a>`;
   const when = (iso) => new Date(iso).toLocaleString();
@@ -4225,6 +4238,7 @@ function connectEvents() {
       onOpen: () => {
         $('#conn').textContent = REMOTE ? 'connected (remote)' : 'daemon connected';
         $('#conn').className = 'conn ok';
+        reloadIfUpdated();
       },
       onMessage: handleEvent,
       onClose: async () => {
