@@ -8,6 +8,7 @@ import { api, BASE, ensureDaemon, health, isRunning, waitForExit } from './clien
 import { about, latestRelease } from './about.js';
 import { issuesMarkdown } from './issues.js';
 import { designsMarkdown } from './designs.js';
+import { VERDICT_LABEL } from './reviews.js';
 
 const tty = process.stdout.isTTY;
 const c = (code) => (s) => (tty ? `\x1b[${code}m${s}\x1b[0m` : String(s));
@@ -736,6 +737,73 @@ export async function main(argv) {
         const links = [r.page?.url && `page ${r.page.url}`, r.google && `doc ${r.google}`].filter(Boolean);
         console.log(dim(`  agent ${r.agent.name} (${r.agent.id})${links.length ? `  ${links.join('  ')}` : r.page?.note ? `  page: ${r.page.note}` : ''}`));
       }
+    });
+
+  program
+    .command('review')
+    .description("Start a reviewer agent on someone else's pull request: it asks the critical questions and finds what blocks approval; nothing is posted")
+    .argument('<pr>', 'the pull request link')
+    .option('-p, --project <project>', 'the project to check it out in (default: the one whose repository it is)')
+    .option('--notes <text>', 'what to look at closely')
+    .action(async (url, o) => {
+      await daemon();
+      const a = await api('POST', '/reviews', { url, project: o.project, notes: o.notes });
+      console.log(`${green('✓')} reviewer ${bold(a.name)} (${a.id}) started; see it with agentmgr reviews show ${a.id}`);
+    });
+  const reviewsCmd = program.command('reviews').description('Pull requests you review: reviewer agents and their verdicts, and requests with no reviewer yet');
+  const verdictText = (r) => {
+    if (!r.agent) return yellow('requested, no reviewer');
+    if (!r.review?.verdict) return dim(r.status);
+    const label = VERDICT_LABEL[r.review.verdict];
+    const text = r.review.openBlockers ? `${label}: ${r.review.openBlockers} blocker${r.review.openBlockers === 1 ? '' : 's'}` : label;
+    return r.review.verdict === 'blocked' ? red(text) : green(text);
+  };
+  reviewsCmd
+    .command('ls', { isDefault: true })
+    .description('The list, stale and blocked ones first')
+    .option('--markdown', 'print every review as Markdown')
+    .option('--json', 'print JSON')
+    .action(async (opts) => {
+      await daemon();
+      if (opts.markdown) return console.log((await api('GET', '/reviews?format=markdown')).markdown);
+      const { rows } = await api('GET', '/reviews');
+      if (opts.json) return console.log(JSON.stringify(rows, null, 2));
+      if (!rows.length) return console.log(dim('No reviews, and no pull requests waiting for your review.'));
+      for (const r of rows) {
+        console.log(`${bold(`${r.pr.repo ?? ''}#${r.pr.number}`)} ${truncate(r.pr.title ?? '', 60)}  ${verdictText(r)}${r.stale ? yellow('  (author pushed since)') : ''}${r.posted ? dim('  posted') : ''}`);
+        console.log(dim(`  ${r.pr.url}${r.agent ? `  agent ${r.agent.name} (${r.agent.id})` : ''}`));
+      }
+    });
+  reviewsCmd
+    .command('show')
+    .description("A reviewer's review: verdict, blockers, questions for the author, risks")
+    .argument('<agent>')
+    .action(async (ref) => {
+      await daemon();
+      const a = await resolveAgent(ref);
+      const r = await api('GET', `/reviews/${a.id}`);
+      console.log(r.markdown);
+      if (r.review) console.log(dim(`\nIds to post: ${[...r.review.blockers.filter((b) => b.status === 'open'), ...r.review.questions, ...r.review.nits].map((x) => x.id).join(' ') || 'none'}`));
+    });
+  reviewsCmd
+    .command('post')
+    .description('Post a pending review on GitHub, under your name, with the picked items (default: open blockers and questions); you submit it there')
+    .argument('<agent>')
+    .argument('[ids...]', 'items to send, e.g. b1 q2 n1')
+    .action(async (ref, ids) => {
+      await daemon();
+      const a = await resolveAgent(ref);
+      const r = await api('POST', `/reviews/${a.id}/post`, { ids: ids.length ? ids : null });
+      console.log(`${green('✓')} pending review with ${r.ids.length} item${r.ids.length === 1 ? '' : 's'}: finish and submit it at ${r.url}${r.moved ? dim(`\n  ${r.moved} line comment(s) went in the body: their lines aren't in the diff`) : ''}`);
+    });
+  reviewsCmd
+    .command('dismiss')
+    .description("Take requested pull requests off the list (you won't have an agent review them)")
+    .argument('<prs...>')
+    .action(async (urls) => {
+      await daemon();
+      const r = await api('POST', '/reviews/dismiss', { urls });
+      console.log(`${r.dismissed} dismissed`);
     });
 
   const valueCmd = program.command('value').description('What the delivered work is worth (AI estimates you can correct), by day, week, month and quarter, with reports for management');

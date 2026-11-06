@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Reviews.** Reviewer agents for other people's pull requests. **Reviews** (or `g`) lists PRs where your review is requested; tick them, or paste any PR link. A reviewer works read-only on the PR's head: a verdict (approve, approve with nits, blocked), the approval blockers with file, line, why and what would resolve them, critical questions for the author, risks, test gaps and nits. Tick what to send and **Post as pending review** (a draft review under your name that you submit on GitHub), or **Copy**. When the author pushes, the reviewer re-checks its blockers. **🔊 Explain** reads it aloud. The assistant's GitHub reviews source starts reviewers, or only lists them when you pick. `agentmgr review <PR>`, `agentmgr reviews` (`show`, `post`, `dismiss`).
+
 ## 1.22.0 (2026-11-06)
 
 - **Value.** A **Value** button (or `v`) shows what the delivered work is worth, by day, week, month and quarter: engineering hours saved (valued at your loaded hourly rate), other savings, potential revenue and strategic weight, against the AI cost and your own time (leverage, value per AI dollar). Each delivered item (its pull request merged, or done without one) gets an estimate from one short model call, with reasons; correct any figure and yours win, marked ✎ in reports. Weekly, monthly and quarterly reports (daily if you like) go to Slack and, if you choose, a Google Doc, and are saved in `~/.agentmanager/value` with `value.csv`. `agentmgr value` (`edit`, `estimate`, `report`, `set`).

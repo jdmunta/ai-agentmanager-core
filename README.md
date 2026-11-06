@@ -963,6 +963,28 @@ agentmgr designs --waiting    # only the ones waiting for your review
 agentmgr designs --markdown   # a list to paste
 ```
 
+### Reviews: other people's pull requests
+
+When you're a reviewer on someone else's pull request, a reviewer agent does the first careful pass for you. **Reviews** in the top bar (or `g`) lists pull requests where GitHub has your review requested; tick some and **Review with agents**, or paste any PR link and **Review**. The project is the one whose repository the PR is in.
+
+A reviewer is read-only. It checks out the PR's head, reads the description, discussion and diff and as much of the surrounding code as it needs, and may run the tests; it never commits, pushes, approves or comments. It writes:
+
+- **A verdict:** approve, approve with nits, or **blocked**, with the reason. Any open blocker means blocked.
+- **Approval blockers:** each with its file and line, why it fails (correctness, security, data loss, a breaking change, missing tests for risky logic, not doing what the PR says), and what would resolve it. Style is never a blocker.
+- **Critical questions for the author:** what the code and description don't answer, such as intent, edge cases, rollout and rollback.
+- **Risks, test gaps and nits**, kept apart from the blockers.
+
+Open a review to read it, ask the reviewer about it in its session, or hear it with **🔊 Explain**. Tick what to send (open blockers and questions are ticked to start with) and **Post as pending review**: it becomes a draft review on GitHub under your name, with each item on its line, that only you see until you submit it there. A line outside the diff goes in the review's text instead. **Copy** gives the ticked items as Markdown. When the author pushes, the review is marked **New commits** and the reviewer re-checks each blocker, marking the fixed ones resolved.
+
+With **GitHub reviews** on in **Assistant**, it starts reviewers for new requests by itself, unless **Let me pick** is on; then they wait in **Reviews** for you to tick.
+
+```bash
+agentmgr review https://github.com/acme/api/pull/42   # start a reviewer (--project, --notes)
+agentmgr reviews                                       # the list, with verdicts
+agentmgr reviews show <agent>                          # blockers, questions, risks
+agentmgr reviews post <agent> b1 q2                    # a pending review with those items
+```
+
 ## Triggers
 
 Start agents from where the work lives, with no session watching and no tokens spent on it. **Assistant → Triggers…**, or `agentmgr triggers`:

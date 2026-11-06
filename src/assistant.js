@@ -93,7 +93,10 @@ export function assistantPrompt(s, dir, bin = `node ${BIN}`) {
   if (s.sources.includes('reviews')) {
     how.push(
       `GitHub reviews: gh search prs --review-requested=@me --state=open --json url,title,repository,updatedAt. ` +
-        `For each pull request you haven't handled, start a review agent in its project: ${am} add @<project> "Review <the PR link>: read the change, check out the branch if needed, and write the review as comments for the person to post. Don't approve, request changes or post anything yourself."`,
+        (s.pickIssues
+          ? `Don't start reviewers: the person picks. These pull requests are listed for them under Reviews, where they start a reviewer with one click. Record them as "listed".`
+          : `For each pull request you haven't handled, start a reviewer agent: ${am} review <the PR link>. It reviews the change read-only, writes its blockers and questions for the person, and never posts on GitHub. ` +
+            `A second reviewer for the same pull request is refused: record it as skipped.`),
     );
   }
   if (s.sources.includes('ci')) {

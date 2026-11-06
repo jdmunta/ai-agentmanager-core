@@ -236,6 +236,26 @@ if (building) {
   fs.writeFileSync('instructions.md', '1. Read the ticket.\n2. Pick a label.\n');
   fs.writeFileSync('tests.yaml', '- input: Login page crashes\n  expect: labelled auth\n- input: Invoice total wrong\n  expect: labelled billing\n');
 }
+// A reviewer (src/reviews.js): write REVIEW.json next to the brief, with one blocker, a question and a nit.
+const reviewing = prompt.match(/^Review (https:\/\/\S+\/pull\/\d+)/);
+if (reviewing && briefDir) {
+  fs.writeFileSync(
+    path.join(briefDir, 'REVIEW.json'),
+    JSON.stringify({
+      pr: reviewing[1],
+      headSha: process.env.FAKE_REVIEW_HEAD || 'abc1234def',
+      verdict: 'approve',
+      why: 'The retry loop can spin forever.',
+      summary: 'Adds retries to the upload client.',
+      blockers: [{ id: 'b1', title: 'Unbounded retry', file: 'src/upload.js', line: 42, category: 'correctness', why: 'No attempt limit: a dead server loops forever.', unblock: 'Cap attempts at 5.', status: 'open' }],
+      questions: [{ id: 'q1', question: 'Why retry on 400s?', why: 'Client errors will not succeed on retry.', file: null, line: null }],
+      risks: ['More load on a failing server.'],
+      testGaps: ['No test for the give-up path.'],
+      nits: [{ id: 'n1', text: 'Name the constant.', file: 'src/upload.js', line: 999 }],
+      tests: 'npm test: 12 passed.',
+    }),
+  );
+}
 // "#stuck": the same command failing the same way three times.
 if (prompt.includes('#stuck')) {
   for (let i = 0; i < 3; i++) {
