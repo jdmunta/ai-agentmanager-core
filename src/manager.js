@@ -1558,6 +1558,9 @@ export class AgentManager extends EventEmitter {
     return {
       backlog: rt.chunks.join(''),
       running: Boolean(rt.pty),
+      // The session's size, so a viewer that doesn't size it (Watch) can draw it as it is.
+      cols: rt.cols,
+      rows: rt.rows,
       detach: () => {
         rt.clients.delete(client);
         const a = this.store.get(agent.id);
@@ -1581,11 +1584,14 @@ export class AgentManager extends EventEmitter {
   resize(id, cols, rows, kind = 'claude') {
     const rt = this.termRuntime(id, kind);
     if (!rt || !(cols > 0 && rows > 0)) return;
+    const changed = rt.cols !== cols || rt.rows !== rows;
     rt.cols = cols;
     rt.rows = rows;
     try {
       rt.pty?.resize(cols, rows);
     } catch {}
+    // Viewers that don't size the session follow it.
+    if (changed) for (const c of rt.clients ?? []) c.send({ t: 'size', cols, rows });
   }
 
   // ------------------------------------------------------- ancillary shells

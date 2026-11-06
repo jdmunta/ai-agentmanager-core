@@ -147,6 +147,19 @@ test('agent lifecycle: spawn, track, terminal, close, resume, fresh session', as
   assert.match(received[0].backlog, /fake-claude ready new/);
   ws.send(JSON.stringify({ t: 'i', d: 'hi' }));
   await waitFor(() => received.some((m) => m.t === 'o' && m.d.includes('echo:hi')));
+  // Its size comes with the replay, and every viewer hears when it changes (Watch draws it as it is).
+  assert.ok(received[0].cols > 0 && received[0].rows > 0, JSON.stringify({ cols: received[0].cols, rows: received[0].rows }));
+  const viewer = new WebSocket(`ws://127.0.0.1:${port}/ws/term/${a1.id}`);
+  const seen = [];
+  viewer.on('message', (m) => seen.push(JSON.parse(m.toString())));
+  await new Promise((r) => viewer.on('open', r));
+  await waitFor(() => seen.find((m) => m.t === 'hello'));
+  ws.send(JSON.stringify({ t: 'r', cols: 101, rows: 29 }));
+  await waitFor(() => seen.some((m) => m.t === 'size' && m.cols === 101 && m.rows === 29), 5000, 'size to the viewer');
+  ws.send(JSON.stringify({ t: 'r', cols: 101, rows: 29 }));
+  await new Promise((r) => setTimeout(r, 200));
+  assert.equal(seen.filter((m) => m.t === 'size').length, 1, 'only when it changes');
+  viewer.close();
 
   // Close keeps the session ID; bringing it back resumes it.
   const stopped = (await call('POST', `/agents/${a1.id}/stop`)).body;

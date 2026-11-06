@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Watch: agents side by side.** A **Watch** page (top bar, or `#watch`) shows every running agent's live session at once, up to 12, so you can follow them without clicking from one to another. **Fit** puts them all on screen; an agent waiting on you gets a red border and a count at the top; click a tile and type to answer it in place, or click its name to open the agent. Filter by running, waiting on you or working, and by project.
+
 ## 1.19.0 (2026-11-05)
 
 - **Design docs, written automatically.** Once its plan is settled, a task agent writes a short design doc and publishes it as a claude.ai Artifact; the link goes in its brief. The doc covers a summary, the architecture, the design, the data flow and the decisions and risks, with at most three small diagrams and no repeats of the spec or plan. When the work is done, the agent brings it up to date at the same link. It's on by default; untick **Design doc** on the new-agent form, use `agentmgr add --no-design-doc`, or set `"designDoc": false`. View it under **Design doc** next to Intent · Spec · Plan; it's also folded into the pull request description.

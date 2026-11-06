@@ -943,7 +943,7 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
       send({ t: 'error', error: err.message });
       return res.end();
     }
-    send({ t: 'hello', id: agent.id, kind, running: session.running, backlog: session.backlog });
+    send({ t: 'hello', id: agent.id, kind, running: session.running, backlog: session.backlog, cols: session.cols, rows: session.rows });
     req.on('close', () => {
       clearTimeout(timer);
       session.detach();
@@ -1057,7 +1057,7 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
       };
       const kind = agent.id === MACHINE ? `shell:${shellNumber(url.searchParams.get('kind')) || 1}` : termKind(url.searchParams.get('kind'));
       session = attachTerm(agent.id, kind, client);
-      client.send({ t: 'hello', id: agent.id, kind, running: session.running, backlog: session.backlog });
+      client.send({ t: 'hello', id: agent.id, kind, running: session.running, backlog: session.backlog, cols: session.cols, rows: session.rows });
       ws.on('message', (raw) => {
         let msg;
         try {

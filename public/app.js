@@ -23,6 +23,7 @@ import { initUpdate } from '/update.js';
 import { initMenu } from '/menu.js';
 import { initCode } from '/code.js';
 import { initMachine } from '/machine.js';
+import { initWatch } from '/watch.js';
 import { morph } from '/morph.js';
 
 const $ = (sel) => document.querySelector(sel);
@@ -43,7 +44,10 @@ const loginHash = location.hash.match(/(?:^#|&)login=([\w-]+)/)?.[1] ?? null;
 const ticketHash = location.hash.match(/(?:^#|&)ticket=([\w-]+)/)?.[1] ?? null;
 const goHash = ticketHash ? decodeURIComponent(location.hash.match(/(?:^#|&)go=([^&]*)/)?.[1] ?? '') : '';
 const [hashId, hashView] = loginHash ? [null, null] : (ticketHash ? goHash : location.hash.slice(1)).split('/');
-let selectedId = hashId || null;
+// "#watch": the Watch page, not an agent.
+const watchOnLoad = hashId === 'watch';
+let watchShown = false;
+let selectedId = (watchOnLoad ? null : hashId) || null;
 let openTermOnLoad = hashView === 'term' || hashView === 'code' || isShell(hashView) || isBrowser(hashView);
 let filterText = '';
 // "Only agents created in the last N days": remembered in this browser.
@@ -161,6 +165,21 @@ const builtUi = initBuilt({
   onPanel: () => agents.get(selectedId)?.builds && renderDetail(),
 });
 const landUi = initLand({ api, esc, toast, agents, $, scoreBadge, select: (id) => (showTab('agents'), select(id)), openReview: (id) => reviewUi.open(id), isOpen: () => sideTab === 'land' });
+
+// Watch: running agents' sessions side by side.
+const watchUi = initWatch({
+  agents,
+  $,
+  esc,
+  Terminal,
+  openStream,
+  statusOf: (a) => statusOf(a),
+  pillText: (st) => pillText(st),
+  projectKey: (a) => a.projectInfo?.key ?? 'other',
+  projectLabel: (a) => a.projectInfo?.name ?? 'Other',
+  openAgent: (id) => (showTab('agents'), select(id), term.open(id)),
+});
+$('#watch-btn').onclick = () => watchUi.show(!watchUi.isOpen());
 
 function statusOf(a) {
   if (a.runtime.planning) return a.runtime.attention ? 'attention' : 'planning';
@@ -2095,6 +2114,7 @@ const VIEWS = {
   doc: () => renderDocDialog(),
   detail: () => renderDetail(),
   overlay: () => term.syncOverlay(),
+  watch: () => watchUi?.render(),
 };
 const ALL_VIEWS = Object.keys(VIEWS);
 
@@ -3993,6 +4013,10 @@ function handleEvent(msg) {
       else if (agents.get(selectedId).runtime.running) term.open(selectedId);
     }
     openTermOnLoad = false;
+    if (watchOnLoad && !watchUi.isOpen() && !watchShown) {
+      watchShown = true;
+      watchUi.show(true);
+    }
   } else if (msg.t === 'agent') {
     const id = msg.agent.id;
     agents.set(id, msg.agent);
@@ -4002,6 +4026,7 @@ function handleEvent(msg) {
     // The detail, terminal and document views show one agent; another agent's update leaves them be.
     return invalidate([
       'list', 'backlog', 'land', 'inbox', 'race', 'team',
+      ...(watchUi.isOpen() ? ['watch'] : []),
       ...(docView?.agentId === id ? ['doc'] : []),
       ...(id === selectedId || msg.agent.forkOf?.agentId === selectedId ? ['detail'] : []),
       ...(id === term.agentId ? ['overlay'] : []),
