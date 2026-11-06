@@ -36,6 +36,13 @@ if (args.includes('-p')) {
       if (!ok || JSON.stringify(facts).includes('#plainstandup')) return process.exit(1);
       return json({ intro: `Spoken intro for ${facts.length}.`, agents: facts.map((f) => ({ id: f.id, text: `Spoken: ${f.name} ${f.needs.length ? 'needs you.' : 'is fine.'}` })) });
     }
+    if (input.startsWith('Estimate the business value')) {
+      // Value: an estimate from the facts; "#novalue" in the request fails the call.
+      const facts = JSON.parse(section('facts') || '{}');
+      if (!ok || String(facts.request).includes('#novalue')) return process.exit(1);
+      const notes = section('notes');
+      return json({ humanHours: 8, savingsUsd: 500, revenueUsd: facts.pullRequests?.length ? 2000 : 0, strategic: 3, category: 'quality', summary: `Fake value for ${facts.name}${notes ? ' (with notes)' : ''}.`, confidence: 0.7, why: { hours: 'about a day', savings: 'fewer tickets', revenue: 'a customer ask', strategic: 'a notable capability' } });
+    }
     if (input.startsWith('Publish documents to Google Drive')) {
       // Only the two Drive tools, none of Claude Code's own; reuse the folder it was given.
       fs.appendFileSync(process.env.FAKE_CLAUDE_LOG, JSON.stringify({ cwd: process.cwd(), args, publish: true }) + '\n');

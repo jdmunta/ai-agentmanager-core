@@ -2537,6 +2537,18 @@ export class AgentManager extends EventEmitter {
     return this.view(this.store.get(agent.id));
   }
 
+  /**
+   * One Google Doc in a Drive folder (created the first time, `folderId` after that), through the
+   * Google Drive connector of the Claude account: { folderId, id, url }.
+   */
+  async publishDriveDoc({ folderTitle, folderId = null, title, markdown }) {
+    const sent = [{ key: 'doc', title, html: driveHtml(title, markdown) }];
+    const reply = await this.oneShot({ id: 'drive' }, drivePrompt({ folderTitle, folderId, docs: sent, trash: [] }), { engine: engineOf('claude'), tools: DRIVE_TOOLS, timeoutMs: 600_000 });
+    const r = parseDrive(reply, ['doc']);
+    if (!r.files.doc) throw new Error(r.errors[0] ?? 'Google Drive returned no document (is the Google Drive connector linked to your Claude account?)');
+    return { folderId: r.folderId, id: r.files.doc, url: docUrl(r.files.doc) };
+  }
+
   /** Diagrams only: the problem and its solution drawn from the documents already written and the live context. */
   async runDiagrams(agent, ctx) {
     const cur0 = this.store.get(agent.id) ?? agent;

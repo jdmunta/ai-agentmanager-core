@@ -1539,6 +1539,43 @@ test('issues: the Jira summary lists agents\' issues with their Jira status, wai
   }
 });
 
+test('value: delivered work estimated by the model, corrected, totals by period, a report sent to Slack', async () => {
+  const [a] = (await call('POST', '/agents', { intent: 'https://acme.atlassian.net/browse/VAL-1 speed up checkout', start: false })).body;
+  const url = 'https://github.com/acme/web/pull/77';
+  try {
+    manager.patch(a.id, { prs: { [url]: { url, number: 77, title: 'Cache prices', source: 'branch', state: 'MERGED', mergedAt: new Date().toISOString() } } });
+    const v = (await call('GET', '/value?period=week')).body;
+    const it = v.items.find((x) => x.agentId === a.id);
+    assert.ok(it, 'found as delivered');
+    assert.equal(it.link, url);
+    const est = (await call('POST', `/value/items/${a.id}/estimate`)).body;
+    assert.deepEqual([est.est.humanHours, est.value.laborUsd, est.value.revenueUsd, est.value.category], [8, 800, 2000, 'quality']);
+    assert.equal((await call('PATCH', `/value/items/${a.id}`, { humanHours: 6 })).body.value.laborUsd, 600);
+    const put = (await call('PUT', '/value?period=month', { hourlyRate: 150, notes: 'B2B SaaS', report: { slack: false } })).body;
+    assert.equal(put.settings.hourlyRate, 150);
+    const month = put.periods[0];
+    assert.ok(month.current && month.items.includes(a.id));
+    assert.ok(month.totals.valueUsd >= 6 * 150 + 500);
+    // The notes reach the next estimate.
+    assert.match((await call('POST', `/value/items/${a.id}/estimate`)).body.est.summary, /with notes/);
+    const r = (await call('GET', '/value/report?kind=week&current=1')).body;
+    assert.match(r.markdown, /^# Value delivered: Week of /);
+    assert.match(r.markdown, /speed up checkout/);
+    assert.equal((await call('GET', '/value/report?kind=year')).status, 400);
+    const sent = (await call('POST', '/value/report', { kind: 'week', current: true })).body;
+    assert.equal(sent.sent.slack, false, 'Slack is off in the settings');
+    assert.ok(fs.readFileSync(sent.sent.file, 'utf8').includes('speed up checkout'));
+    const csv = await fetch(`${base}/api/value/value.csv`, { headers: { 'x-agentmgr': '1' } });
+    assert.equal(csv.status, 200);
+    assert.match(await csv.text(), /^delivered,project,title.*\n.*speed up checkout/s);
+    assert.equal((await call('POST', `/value/items/${a.id}/exclude`, { excluded: true })).body.excluded, true);
+    assert.ok(!(await call('GET', '/value?period=week')).body.periods[0].items.includes(a.id));
+  } finally {
+    await call('PUT', '/value', { hourlyRate: 100, notes: '', report: { slack: true } });
+    await call('DELETE', `/agents/${a.id}`);
+  }
+});
+
 test('intent, spec and plan: INTENT.md on create, the agent told to keep SPEC.md and PLAN.md, all readable', async () => {
   const [a] = (await call('POST', '/agents', { intent: 'Add a dark mode toggle' })).body;
   const dir = fs.realpathSync(path.join(home, 'briefs', a.id));
