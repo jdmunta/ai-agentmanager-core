@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.22.0 (2026-11-06)
 
 - **Value.** A **Value** button (or `v`) shows what the delivered work is worth, by day, week, month and quarter: engineering hours saved (valued at your loaded hourly rate), other savings, potential revenue and strategic weight, against the AI cost and your own time (leverage, value per AI dollar). Each delivered item (its pull request merged, or done without one) gets an estimate from one short model call, with reasons; correct any figure and yours win, marked ✎ in reports. Weekly, monthly and quarterly reports (daily if you like) go to Slack and, if you choose, a Google Doc, and are saved in `~/.agentmanager/value` with `value.csv`. `agentmgr value` (`edit`, `estimate`, `report`, `set`).
 - **Jira summary.** A **Jira** button (or `i`) lists every Jira or Linear issue an agent works on, the ones waiting for your review first, with a count on the button: the issue and its Jira status, where the work stands (ready for your review, needs your answer, approved but not merged, checks failing, merged), its plan (steps done, approval) and design doc (read it here, its page and Google Doc), its pull request and checks, and a link to the agent's session. **Copy** puts the list on the clipboard as a Markdown table. From the terminal: `agentmgr issues` (`--all`, `--markdown`, `--json`).
