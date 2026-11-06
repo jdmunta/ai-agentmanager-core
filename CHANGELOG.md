@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Review comments reach the agent while its pull request is open.** New comments, reviews and line comments on an agent's open pull request are sent to it in one message (waking it if closed), checked every couple of minutes; it makes the changes, pushes and replies on the pull request. Only the repo's owners, members and collaborators (and review bots on the code) count; approvals, resolved threads and the agent's own replies don't. On by default: **Send new review comments** in the Land tab, `agentmgr land set --fix-comments off`, or `"landing": { "fixComments": false }`.
+
 ## 1.19.0 (2026-11-05)
 
 - **Design docs, written automatically.** Once its plan is settled, a task agent writes a short design doc and publishes it as a claude.ai Artifact; the link goes in its brief. The doc covers a summary, the architecture, the design, the data flow and the decisions and risks, with at most three small diagrams and no repeats of the spec or plan. When the work is done, the agent brings it up to date at the same link. It's on by default; untick **Design doc** on the new-agent form, use `agentmgr add --no-design-doc`, or set `"designDoc": false`. View it under **Design doc** next to Intent · Spec · Plan; it's also folded into the pull request description.

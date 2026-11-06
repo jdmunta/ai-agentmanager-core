@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Stand-in for the gh CLI: pull requests live in $FAKE_GH_STATE (JSON { prs: [...] }, each with
-// gh's own field names plus headRefName), and every call is logged to $FAKE_GH_LOG.
+// gh's own field names plus headRefName; review feedback in { feedback: { <number>: ... } }), and every
+// call is logged to $FAKE_GH_LOG.
 import fs from 'node:fs';
 
 const args = process.argv.slice(2);
@@ -49,6 +50,11 @@ if (group === 'pr' && cmd === 'list') {
   state.prs.push(pr);
   save();
   console.log(pr.url);
+} else if (group === 'api' && cmd === 'graphql') {
+  // Review feedback: state.feedback[number] holds { comments, reviews, reviewThreads } as gh's GraphQL gives them.
+  const number = args.find((a) => a.startsWith('number='))?.slice(7);
+  const empty = { comments: { nodes: [] }, reviews: { nodes: [] }, reviewThreads: { nodes: [] } };
+  console.log(JSON.stringify({ data: { repository: { pullRequest: state.feedback?.[number] ?? empty } } }));
 } else if (group === 'pr' && cmd === 'comment') {
   console.log(`${args[2]}#issuecomment-1`);
 } else {

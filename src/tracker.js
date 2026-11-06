@@ -298,6 +298,63 @@ export async function prDetails(url) {
   }
 }
 
+// ---------------------------------------------------------------- review feedback on a PR
+
+/** Marks a comment an agent posted, so it is never read back as feedback. */
+export const AGENT_MARK = '<!-- agentmgr -->';
+const TRUSTED = new Set(['OWNER', 'MEMBER', 'COLLABORATOR']);
+const WHO = 'authorAssociation author { login __typename }';
+const FEEDBACK_QUERY = `query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { pullRequest(number: $number) {
+  comments(last: 50) { nodes { id url body createdAt ${WHO} } }
+  reviews(last: 30) { nodes { id url body state submittedAt ${WHO} } }
+  reviewThreads(last: 50) { nodes { isResolved comments(last: 20) { nodes { id databaseId url body createdAt path line originalLine ${WHO} } } } }
+} } }`;
+
+/** gh's GraphQL answer -> a flat list of comments, reviews and line comments. */
+export function feedbackItems(pr) {
+  const who = (n) => ({ author: n.author?.login ?? 'someone', bot: n.author?.__typename === 'Bot', trusted: TRUSTED.has(n.authorAssociation) });
+  const items = [];
+  for (const n of pr?.comments?.nodes ?? []) items.push({ kind: 'comment', id: n.id, url: n.url, body: n.body ?? '', at: n.createdAt, ...who(n) });
+  for (const n of pr?.reviews?.nodes ?? []) items.push({ kind: 'review', id: n.id, url: n.url, body: n.body ?? '', at: n.submittedAt, state: n.state, ...who(n) });
+  for (const t of pr?.reviewThreads?.nodes ?? []) {
+    for (const n of t.comments?.nodes ?? []) {
+      items.push({ kind: 'line', id: n.id, dbId: n.databaseId ?? null, url: n.url, body: n.body ?? '', at: n.createdAt, path: n.path ?? null, line: n.line ?? n.originalLine ?? null, resolved: Boolean(t.isResolved), ...who(n) });
+    }
+  }
+  return items.filter((i) => i.at);
+}
+
+/**
+ * The feedback an agent should act on, newer than `since`: from the repo's owners, members or
+ * collaborators (and review bots on the code), with text, not posted by an agent, not an approval,
+ * not in a resolved thread, and not a "/agent" command (those are passed on as they are).
+ */
+export function newFeedback(items, { since, prefix = null } = {}) {
+  const after = Date.parse(since ?? 0) || 0;
+  return items
+    .filter((i) => Date.parse(i.at) > after)
+    .filter((i) => i.body.trim() && !i.body.includes(AGENT_MARK))
+    .filter((i) => i.trusted || (i.bot && i.kind !== 'comment'))
+    .filter((i) => !(i.kind === 'review' && ['APPROVED', 'DISMISSED', 'PENDING'].includes(i.state)))
+    .filter((i) => !(i.kind === 'line' && i.resolved))
+    .filter((i) => !(prefix && i.body.trim().toLowerCase().startsWith(prefix.toLowerCase())))
+    .sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
+}
+
+/** Every comment, review and line comment on a PR (null when gh can't say). */
+export async function prFeedback(url) {
+  if (process.env.AGENTMGR_NO_GH) return null;
+  const m = url.match(/github\.com\/([\w.-]+)\/([\w.-]+)\/pull\/(\d+)/);
+  if (!m) return null;
+  try {
+    const out = await run(ghBin(), ['api', 'graphql', '-f', `query=${FEEDBACK_QUERY}`, '-F', `owner=${m[1]}`, '-F', `name=${m[2]}`, '-F', `number=${m[3]}`], { timeout: 30_000 });
+    const pr = JSON.parse(out)?.data?.repository?.pullRequest;
+    return pr ? feedbackItems(pr) : null;
+  } catch {
+    return null;
+  }
+}
+
 // ---------------------------------------------------------------- session digest (for Explain)
 
 const stripNoise = (s) =>

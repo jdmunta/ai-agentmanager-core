@@ -29,7 +29,7 @@ Run one background [Claude Code](https://claude.com/claude-code) agent per inten
 - **Share for review.** One click writes an **Analysis**, **Design**, **Flow** or **Proposal** document from the agent's work. Copy it as Markdown, download it, or print it to PDF with diagrams.
 - **Human vs AI.** It splits the open questions about the work into the top 5 that need your judgment and the ones a model can answer from the evidence. It answers those, then a second model double-checks every answer.
 - **Review changes.** Each agent's diff file by file, line comments sent back to the agent as one message, then **Commit all** and **Push & open PR**, without leaving the page.
-- **Landing.** A **Land** tab with every agent's open pull request: ready to merge, needs fixes, behind, waiting. Failing checks and requested changes go back to the agent automatically (a few times at most); **Update**, **Ask to fix** and **Merge** in one click.
+- **Landing.** A **Land** tab with every agent's open pull request: ready to merge, needs fixes, behind, waiting. Failing checks and requested changes go back to the agent automatically (a few times at most), and so does every new review comment while the PR is open; **Update**, **Ask to fix** and **Merge** in one click.
 - **Triggers.** A label on a GitHub issue starts an agent for it, `/agent …` comments on an agent's pull request reach the agent, and a webhook starts agents from Jira automation or CI. No model watches, so no tokens are spent waiting.
 - **Repo memory.** What one agent learns about a repo (how to run its tests, a gotcha) is recorded in one line and given to every later agent there.
 - **Playbooks.** Saved requests with `{{values}}`, run in several projects at once (one agent each), by hand or every hour, day, weekday or week.
@@ -416,10 +416,14 @@ The **Land** tab lists every agent's open pull request by what it needs to get m
 
 Each agent's pull requests show the same tags (checks, review, conflicts). Pull requests are checked every couple of minutes for running agents, and every few minutes for closed agents with a PR still open.
 
-**Failures go back to the agent by themselves.** When checks fail on an agent's pull request, the agent is told which ones and how to read their logs; when a reviewer requests changes, it is told to read and address the review. Each commit is reported once, and at most 3 times per pull request, so an agent can't loop on a broken main. Change this at the bottom of the Land tab, with `agentmgr land set`, or in config.json:
+**Failures go back to the agent by themselves.** When checks fail on an agent's pull request, the agent is told which ones and how to read their logs; when a reviewer requests changes, it is told to read and address the review. Each commit is reported once, and at most 3 times per pull request, so an agent can't loop on a broken main.
+
+**Review comments go back to the agent too, for as long as the pull request is open.** Each time the pull request is checked, new comments, reviews and line comments are sent to its agent in one message, which wakes a closed agent. The agent makes the changes (or says why not), pushes, and replies on the pull request, answering line comments in their own threads. Only comments from the repo's owners, members and collaborators count, plus review bots' comments on the code (Copilot, for one); approvals, resolved threads, `/agent` commands and the agent's own replies are left out. Comments from before an agent's last turn aren't sent again. The Land tab shows how many were sent.
+
+Change these at the bottom of the Land tab, with `agentmgr land set` (`--fix-comments off`), or in config.json:
 
 ```json
-"landing": { "fixChecks": true, "fixReviews": true, "maxFixes": 3, "mergeMethod": "squash", "deleteBranch": true }
+"landing": { "fixChecks": true, "fixReviews": true, "fixComments": true, "maxFixes": 3, "mergeMethod": "squash", "deleteBranch": true }
 ```
 
 From a terminal: `agentmgr land` lists them, `agentmgr land update|fix|merge <agent>` (`--auto` for auto-merge). With `agentmgr changes`, `comment`, `commit` and `pr` you can review and open the pull request too. Plugins can refuse a merge (`agent.merge`).
