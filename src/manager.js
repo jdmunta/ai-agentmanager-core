@@ -107,7 +107,9 @@ import { spawn } from 'node:child_process';
 import * as git from './git.js';
 import { buildMap, touchedFiles } from './codemap.js';
 import { parseDiff } from '../public/review.js';
-import { issueSummary, leadingIssue, wordsAfterLink } from './jira.js';
+import { issueFields, issueSummary, leadingIssue, loadJira, wordsAfterLink } from './jira.js';
+import { issueRows } from './issues.js';
+import { designRows } from './designs.js';
 import { reminderFor, reminderSettings } from './reminders.js';
 import { combine, facts as scoreFacts, improveMessage, scorecardMarkdown, scorecardPrompt } from './scorecard.js';
 import { CONTAINER_ENGINES, claudeToken, containerName, containerRunning, engineMounts, gitCommonDir, removeContainer, runArgs, stopContainer } from './container.js';
@@ -817,6 +819,50 @@ export class AgentManager extends EventEmitter {
     return { project: { key: g.key, name: g.name }, projects: list, map: buildMap({ files, agents }) };
   }
 
+  /**
+   * The issues agents work on, for the summary: one row per agent, with each issue's Jira status
+   * (fetched a few at a time, kept five minutes).
+   */
+  async issues(proposed = []) {
+    const views = this.store.list().map((a) => this.view(a));
+    const rows = issueRows(views, new Map(), () => null, proposed);
+    this.jiraCache ??= new Map();
+    const jira = new Map();
+    const want = [];
+    for (const r of rows) {
+      if (jira.has(r.key)) continue;
+      const hit = this.jiraCache.get(r.key);
+      if (hit && Date.now() - hit.at < 5 * 60_000) jira.set(r.key, hit.fields);
+      else if (r.url && want.length < 40) {
+        let site = null;
+        try {
+          site = new URL(r.url).origin;
+        } catch {}
+        if (site) want.push({ key: r.key, site });
+        jira.set(r.key, null);
+      }
+    }
+    const opts = { ...this.jiraOptions };
+    for (let i = 0; i < want.length; i += 4) {
+      await Promise.all(
+        want.slice(i, i + 4).map(async (w) => {
+          const fields = await issueFields(w, opts).catch(() => null);
+          this.jiraCache.set(w.key, { at: Date.now(), fields });
+          jira.set(w.key, fields);
+        }),
+      );
+    }
+    for (const [k, v] of jira) if (!v) jira.delete(k);
+    const j = loadJira();
+    return { rows: issueRows(views, jira, (id, name) => readSpecDoc(id, name)?.markdown ?? null, proposed), jira: { site: j.site, signedIn: Boolean(j.site && j.email && j.token) } };
+  }
+
+  /** Every agent's design doc, for the Designs list. */
+  designs() {
+    const views = this.store.list().map((a) => this.view(a));
+    return { rows: designRows(views, (id) => readSpecDoc(id, 'designdoc')?.markdown ?? null) };
+  }
+
   /** A repository's tracked files, for the map (kept a few minutes). */
   async repoFiles(dir) {
     this.fileLists ??= new Map();
@@ -831,6 +877,7 @@ export class AgentManager extends EventEmitter {
 
   /** Fill in summaries still missing (after Jira settings change); returns how many it found. */
   async refreshSynopses() {
+    this.jiraCache?.clear();
     let found = 0;
     for (const a of this.store.list()) {
       if (a.synopsis?.source === 'jira' || !leadingIssue(a.intent)) continue;

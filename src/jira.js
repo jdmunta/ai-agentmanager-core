@@ -76,7 +76,15 @@ export function wordsAfterLink(text) {
  * The issue's summary, or null when it can't be had (not a site we contact, no access, offline).
  * `fetchImpl` and `allow` are for tests.
  */
-export async function issueSummary({ key, site }, { jira = loadJira(), fetchImpl = fetch, timeoutMs = 6000, allow = null } = {}) {
+export async function issueSummary(issue, opts = {}) {
+  return (await issueFields(issue, opts))?.summary ?? null;
+}
+
+/**
+ * The issue's summary and workflow status ({ summary, status, category }: category is Jira's
+ * "new", "indeterminate" or "done"), or null when it can't be had.
+ */
+export async function issueFields({ key, site }, { jira = loadJira(), fetchImpl = fetch, timeoutMs = 6000, allow = null } = {}) {
   const host = (() => {
     try {
       return new URL(site).host;
@@ -90,10 +98,13 @@ export async function issueSummary({ key, site }, { jira = loadJira(), fetchImpl
   const headers = { accept: 'application/json' };
   if (configured && jira.email && jira.token) headers.authorization = `Basic ${Buffer.from(`${jira.email}:${jira.token}`).toString('base64')}`;
   try {
-    const res = await fetchImpl(`${site}/rest/api/3/issue/${encodeURIComponent(key)}?fields=summary`, { headers, redirect: 'error', signal: AbortSignal.timeout(timeoutMs) });
+    const res = await fetchImpl(`${site}/rest/api/3/issue/${encodeURIComponent(key)}?fields=summary,status`, { headers, redirect: 'error', signal: AbortSignal.timeout(timeoutMs) });
     if (!res.ok) return null;
-    const summary = (await res.json())?.fields?.summary;
-    return typeof summary === 'string' && summary.trim() ? summary.trim().slice(0, 300) : null;
+    const f = (await res.json())?.fields ?? {};
+    const summary = typeof f.summary === 'string' && f.summary.trim() ? f.summary.trim().slice(0, 300) : null;
+    const status = typeof f.status?.name === 'string' ? f.status.name.slice(0, 60) : null;
+    if (!summary && !status) return null;
+    return { summary, status, category: typeof f.status?.statusCategory?.key === 'string' ? f.status.statusCategory.key : null };
   } catch {
     return null;
   }

@@ -146,10 +146,15 @@ const notify = () => listeners.forEach((fn) => fn(now()));
  * A Listen control for `id`: 🔊 Listen, or ⏸ / ▶ with ■ and the speed while that id plays.
  * Clicks are handled by `bindListen`; `data-say` names what to read.
  */
-export function listenHtml(id, { title = 'Read it aloud' } = {}) {
+const labels = new Map();
+
+export function listenHtml(id, { title = 'Read it aloud', label = null } = {}) {
   if (!canSpeak()) return '';
+  // Remembered, so a control redrawn as playback changes keeps its words.
+  if (label) labels.set(id, { title, label });
+  const saved = labels.get(id);
   const cur = now();
-  if (cur?.id !== id) return `<span class="say" data-say="${id}"><button type="button" class="small ghost" data-say-act="play" title="${title}">🔊 Listen</button></span>`;
+  if (cur?.id !== id) return `<span class="say" data-say="${id}"><button type="button" class="small ghost" data-say-act="play" title="${saved?.title ?? title}">🔊 ${saved?.label ?? 'Listen'}</button></span>`;
   return `<span class="say on" data-say="${id}"><button type="button" class="small" data-say-act="${cur.paused ? 'resume' : 'pause'}" title="${cur.paused ? 'Resume' : 'Pause'}">${cur.paused ? '▶' : '⏸'}</button><button type="button" class="small ghost" data-say-act="stop" title="Stop">■</button><button type="button" class="small ghost" data-say-act="rate" title="Speed">${rateLabel()}</button></span>`;
 }
 

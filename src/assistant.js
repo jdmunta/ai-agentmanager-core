@@ -27,6 +27,8 @@ export const ASSISTANT_DEFAULTS = {
   permissionMode: 'auto',
   model: null,
   notes: '',
+  // Propose Jira and Linear issues for the person to pick, instead of starting agents for them.
+  pickIssues: false,
 };
 const DAY = 86_400_000;
 const BIN = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'bin', 'agentmgr.js');
@@ -48,6 +50,7 @@ export function assistantSettings(config = {}) {
     permissionMode: typeof c.permissionMode === 'string' && c.permissionMode ? c.permissionMode : null,
     model: typeof c.model === 'string' && c.model ? c.model : null,
     notes: typeof c.notes === 'string' ? c.notes.slice(0, 4000) : '',
+    pickIssues: c.pickIssues === true,
   };
 }
 
@@ -56,18 +59,27 @@ export function assistantPrompt(s, dir, bin = `node ${BIN}`) {
   const am = bin;
   const watch = s.sources.map((k) => `- ${SOURCES[k]}`).join('\n');
   const how = [];
+  // The person picks which issues get agents: propose them instead of starting them.
+  const pick =
+    `Don't start agents for new issues: the person picks which ones get agents. Propose each one you haven't handled instead: ${am} issues propose @<project> "<the issue link> <a one-line summary of what to do>". ` +
+    `It is listed for them under Jira, Not started, and an agent starts only if they tick it. Record it as "proposed". ` +
+    `A proposal for an issue they dismissed, or one that already has an agent, is refused: record it as skipped and don't propose it again.`;
   if (s.sources.includes('jira')) {
     how.push(
       `Jira, new assignments: with your Jira / Atlassian tools, find unresolved issues assigned to the person that were created or assigned since your last check (on the first check, the last 2 days). ` +
-        `For each one you haven't handled, start an agent: ${am} add @<project> "<the issue link> <a one-line summary of what to do>". ` +
-        `Start the request with the issue link: the agent is then named after the issue key, and the daemon refuses a second agent for the same key.`,
+        (s.pickIssues
+          ? pick
+          : `For each one you haven't handled, start an agent: ${am} add @<project> "<the issue link> <a one-line summary of what to do>". ` +
+            `Start the request with the issue link: the agent is then named after the issue key, and the daemon refuses a second agent for the same key.`),
     );
   }
   if (s.sources.includes('linear')) {
     how.push(
       `Linear, new assignments: with your Linear tools, find open issues assigned to the person that were created or assigned since your last check (on the first check, the last 2 days). ` +
-        `For each one you haven't handled, start an agent: ${am} add @<project> "<the issue link> <a one-line summary of what to do>". ` +
-        `Start the request with the issue link (https://linear.app/<team>/issue/<KEY>/…): the agent is then named after the issue key, and the daemon refuses a second agent for the same key. ` +
+        (s.pickIssues
+          ? `${pick} The link looks like https://linear.app/<team>/issue/<KEY>/…. `
+          : `For each one you haven't handled, start an agent: ${am} add @<project> "<the issue link> <a one-line summary of what to do>". ` +
+            `Start the request with the issue link (https://linear.app/<team>/issue/<KEY>/…): the agent is then named after the issue key, and the daemon refuses a second agent for the same key. `) +
         `New comments on issues that already have an agent: pass them on with ${am} tell, as for Jira.`,
     );
   }

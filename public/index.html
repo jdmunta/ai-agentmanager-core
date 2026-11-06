@@ -32,6 +32,8 @@
         <button id="assistant-btn" title="An always-on session that finds new work and starts agents for it">Assistant <span id="assistant-dot" class="assistant-dot" hidden></span></button>
         <button id="spend-btn" title="Results across agents (merge rate, time to PR, cost per merged PR), what they cost, and spending limits">Results <span id="spend-today" class="spend-today"></span></button>
         <button id="standup-btn" title="Today's standup: each agent's news read aloud, and what they need from you">Standup <span id="standup-dot" class="assistant-dot" hidden></span></button>
+        <button id="issues-btn" title="Jira: every issue an agent works on, with its Jira status, pull request and agent, the ones waiting for your review first">Jira <span id="issues-count" class="badge ready"></span></button>
+        <button id="designs-btn" title="Designs: every agent's design doc with its summary and links, the ones waiting for your review first">Designs <span id="designs-count" class="badge ready"></span></button>
         <button id="map-btn" title="The codebase map: where each agent is changing and reading code, and who is about to collide">Map</button>
         <button id="watch-btn" title="Running agents' sessions side by side, live: follow them all without clicking from one to the next">Watch</button>
         <button id="machine-btn" title="A terminal on this computer (your home folder), from any device you're signed in on">Terminal</button>
@@ -376,6 +378,12 @@
       </form>
     </dialog>
 
+    <dialog id="issues-dialog" class="issues-dialog" aria-label="Jira issues">
+      <div id="issues-body"></div>
+    </dialog>
+    <dialog id="designs-dialog" class="issues-dialog" aria-label="Design docs">
+      <div id="designs-body"></div>
+    </dialog>
     <dialog id="standup-dialog" class="standup-dialog" aria-label="Standup">
       <div id="standup-body"></div>
     </dialog>
@@ -589,6 +597,7 @@
           <label class="check"><input type="checkbox" name="src_ci" /> Failing checks on my open pull requests</label>
           <label class="check"><input type="checkbox" name="src_slack" /> Slack messages to me that ask for work</label>
           <label class="check"><input type="checkbox" name="src_linear" /> Linear issues newly assigned to me</label>
+          <label class="check"><input type="checkbox" name="pickIssues" /> Let me pick: list new Jira and Linear issues under <b>Jira → Not started</b>, and start agents only for the ones I tick</label>
         </fieldset>
         <div class="row three">
           <label>Check every <span class="hint">minutes</span><input name="everyMin" type="number" min="1" /></label>

@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- **Jira summary.** A **Jira** button (or `i`) lists every Jira or Linear issue an agent works on, the ones waiting for your review first, with a count on the button: the issue and its Jira status, where the work stands (ready for your review, needs your answer, approved but not merged, checks failing, merged), its plan (steps done, approval) and design doc (read it here, its page and Google Doc), its pull request and checks, and a link to the agent's session. **Copy** puts the list on the clipboard as a Markdown table. From the terminal: `agentmgr issues` (`--all`, `--markdown`, `--json`).
+- **Pick which Jira issues get agents.** **Let me pick** in **Assistant** (`agentmgr assistant set --pick-issues on`): the assistant lists new Jira and Linear issues assigned to you under **Jira → Not started** instead of starting agents for them. Tick the ones you want and **Start**; agents start only for those. **Dismiss** takes the rest off the list for good. Also `agentmgr issues propose`, `start` and `dismiss`.
+- **Explain the review, by voice.** **🔊 Explain** on each pull request (in Jira, Land and the agent's AI review) reads a short briefing for the person about to review it: the issue, what the PR does (from its design doc or walkthrough), its state and checks, what the AI review found met, missing and risky, the high-risk changes, open questions, and what's left before it can merge. It starts at once (no model call); Review's change-by-change walkthrough goes deeper.
+- **Designs.** A **Designs** button (or `d`) lists every agent's design doc, the ones waiting for your review first: its name and summary from DESIGN.md, the agent and its issue, and links to read it here, its design page, its Google Doc and the specs it builds on. Search, filters and **Copy** as Markdown. `agentmgr designs` (`--waiting`, `--markdown`, `--json`).
+
 ## 1.21.0 (2026-11-06)
 
 - **Map: where agents are in the code.** A **Map** page (or `m`) shows a project's folders as tiles with each agent on the folders it's changing or reading now. Two agents that changed the same file are joined in red; one reading a file another changed is joined with a dashed line, the warning before they collide, and each is spelled out above the map.

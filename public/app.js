@@ -25,6 +25,9 @@ import { initCode } from '/code.js';
 import { initMachine } from '/machine.js';
 import { initWatch } from '/watch.js';
 import { initStandup } from '/standup.js';
+import { initIssues } from '/issues.js';
+import { reviewSpeech } from '/prvoice.js';
+import { initDesigns } from '/designs.js';
 import { initCodeMap } from '/codemap.js';
 import { initKeys } from '/keys.js';
 import { morph } from '/morph.js';
@@ -202,6 +205,28 @@ const standupUi = initStandup({
   toast: (m, ms) => toast(m, ms),
   openAgent: (id) => (showTab('agents'), select(id)),
 });
+// Jira: every issue an agent works on, the ones waiting for your review first.
+const issuesUi = initIssues({
+  api,
+  $,
+  esc,
+  ago,
+  toast: (m, ms) => toast(m, ms),
+  openAgent: (id) => (showTab('agents'), select(id)),
+  openDoc: (id, kind) => (showTab('agents'), select(id), openDoc(id, kind)),
+});
+$('#issues-btn').onclick = () => issuesUi.open();
+// Designs: every agent's design doc, the ones waiting for your review first.
+const designsUi = initDesigns({
+  api,
+  $,
+  esc,
+  ago,
+  toast: (m, ms) => toast(m, ms),
+  openAgent: (id) => (showTab('agents'), select(id)),
+  openDoc: (id) => (showTab('agents'), select(id), openDoc(id, 'designdoc')),
+});
+$('#designs-btn').onclick = () => designsUi.open();
 // Keyboard shortcuts (keys.js): the same actions as the buttons.
 const keysUi = initKeys({ $, esc, run: (act) => shortcut(act) });
 $('#keys-btn').onclick = () => keysUi.help();
@@ -243,6 +268,8 @@ function shortcut(act) {
   if (act === 'watch') return $('#watch-btn') ? $('#watch-btn').click() : false;
   if (act === 'standup') return standupUi.open();
   if (act === 'map') return $('#map-btn').click();
+  if (act === 'issues') return issuesUi.open();
+  if (act === 'designs') return designsUi.open();
   if (act.startsWith('tab:')) return showTab(act.slice(4));
   return false;
 }
@@ -377,7 +404,11 @@ function reviewBox(a) {
   if (noRepo(a)) return { button: '', box: '' };
   const r = a.aiReview;
   const button = `<button class="small" data-act="review" ${r?.pending ? 'disabled' : ''}
-    title="Check the work against the intent and brief: what is met, missing or risky. A separate one-off model call; runs by itself when the agent says it is done">${r?.pending ? 'Reviewing…' : 'Review with AI'}</button>`;
+    title="Check the work against the intent and brief: what is met, missing or risky. A separate one-off model call; runs by itself when the agent says it is done">${r?.pending ? 'Reviewing…' : 'Review with AI'}</button>${
+    r?.verdict || a.prs?.some((p) => p.source !== 'mentioned' && p.state)
+      ? listenHtml(`prvoice:${a.id}`, { title: 'Explain the review aloud: the PR, its checks, the AI review, the riskiest changes and what is left', label: 'Explain review' })
+      : ''
+  }`;
   // An unhandled review shows as a card above the brief; a handled one stays here, compact.
   if (!r?.verdict || !r.seen) return { button, box: '' };
   return {
@@ -691,6 +722,7 @@ bindListen((id) => {
   else if (what === 'walk') parts = reviewUi.listenParts();
   else if (what === 'score') parts = a?.docs?.scorecard?.data ? scorecardSpeech(a.docs.scorecard) : null;
   else if (what === 'sidewalk') parts = sidePane?.listenParts();
+  else if (what === 'prvoice') parts = reviewSpeech(a, issuesUi.about(agentId));
   if (!parts?.length || !play(id, parts)) toast('Nothing to read aloud here (or this browser has no speech)');
 });
 
@@ -4117,6 +4149,8 @@ function handleEvent(msg) {
     watchDocs(msg.agent);
     agentChanged(msg.agent);
     if (msg.agent.builds) builtUi.sessionChanged(msg.agent);
+    issuesUi.changed();
+    designsUi.changed();
     // The detail, terminal and document views show one agent; another agent's update leaves them be.
     return invalidate([
       'list', 'backlog', 'land', 'inbox', 'race', 'team',
@@ -4494,6 +4528,7 @@ async function loadAssistant({ fill = true } = {}) {
     f.maxPerDay.value = a.maxPerDay;
     f.maxRunning.value = a.maxRunning;
     f.notes.value = a.notes ?? '';
+    f.pickIssues.checked = Boolean(a.pickIssues);
   }
   const state = !a.agentId ? 'Not set up yet. Start it to create its session.' : a.on ? (a.busy ? 'On: checking now.' : 'On.') : 'Paused: not checking.';
   $('#assistant-status').innerHTML = `<p><b>${esc(state)}</b>
@@ -4516,6 +4551,7 @@ const assistantPatch = (f) => ({
   maxPerDay: Number(f.maxPerDay.value),
   maxRunning: Number(f.maxRunning.value),
   notes: f.notes.value,
+  pickIssues: f.pickIssues.checked,
 });
 const assistantError = (err) => {
   $('#assistant-error').textContent = err.message;

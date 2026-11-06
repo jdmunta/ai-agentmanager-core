@@ -6,6 +6,8 @@ import WebSocket from 'ws';
 import { HOST, PORT } from './config.js';
 import { api, BASE, ensureDaemon, health, isRunning, waitForExit } from './client.js';
 import { about, latestRelease } from './about.js';
+import { issuesMarkdown } from './issues.js';
+import { designsMarkdown } from './designs.js';
 
 const tty = process.stdout.isTTY;
 const c = (code) => (s) => (tty ? `\x1b[${code}m${s}\x1b[0m` : String(s));
@@ -658,6 +660,81 @@ export async function main(argv) {
       for (const [title, rows] of [['By engine and model', st.byEngine], ['By source', st.bySource]]) {
         console.log(`\n${bold(title)}`);
         for (const r of rows) console.log(`  ${r.key.padEnd(24)} ${String(r.agents).padStart(4)} agents  ${String(r.merged).padStart(3)} merged  ${pct(r.mergeRate).padStart(4)}  ${m(r.costPerMerged)}/merged`);
+      }
+    });
+
+  const issuesCmd = program.command('issues').description('Jira and Linear issues: the ones proposed for agents, and the ones agents work on, waiting for your review first');
+  issuesCmd
+    .command('ls', { isDefault: true })
+    .description('Issues not started and waiting for your review (--all for the rest)')
+    .option('--all', 'also the ones agents are still on and the finished ones')
+    .option('--markdown', 'print a Markdown table, to paste')
+    .option('--json', 'print JSON')
+    .action(async (opts) => {
+      await daemon();
+      const v = await api('GET', '/issues');
+      const rows = opts.all ? v.rows : v.rows.filter((r) => r.group === 'you' || r.group === 'new');
+      if (opts.json) return console.log(JSON.stringify({ ...v, rows }, null, 2));
+      if (opts.markdown) return console.log(issuesMarkdown(rows));
+      if (!rows.length) return console.log(dim(opts.all ? 'No agents work on Jira or Linear issues.' : 'Nothing to start or review. --all shows the rest.'));
+      for (const r of rows) {
+        const pr = r.pr ? `  PR #${r.pr.number ?? '?'}` : '';
+        console.log(`${bold(r.key.padEnd(10))} ${r.jira?.status ? dim(`[${r.jira.status}] `) : ''}${truncate(r.title ?? '', 60)}`);
+        console.log(`  ${r.group === 'you' || r.group === 'new' ? yellow(r.note) : r.note}${pr}  ${dim(r.agent ? `agent ${r.agent.name} (${r.agent.id})` : `start: agentmgr issues start ${r.key}`)}`);
+      }
+      const others = v.rows.length - rows.length;
+      if (others) console.log(dim(`\n${others} more with agents still on them or finished: --all`));
+      if (!v.jira.signedIn) console.log(dim('Jira status needs your site, email and API token: Settings → Jira.'));
+    });
+  issuesCmd
+    .command('propose')
+    .description('Propose an issue for an agent, to start when ticked (the assistant does this when you pick)')
+    .argument('<request...>', '[@project] "<issue link> <what to do>"')
+    .option('-r, --repo <url>', 'the repository, when no project fits')
+    .action(async (words, opts) => {
+      await daemon();
+      const project = words[0]?.startsWith('@') ? words.shift().slice(1) : null;
+      const p = await api('POST', '/issues/proposed', { intent: words.join(' '), project, repo: opts.repo });
+      console.log(`${green('+')} ${bold(p.key)} proposed${p.project ? ` in @${p.project}` : ''}: start it under Jira, Not started, or agentmgr issues start ${p.key}`);
+    });
+  issuesCmd
+    .command('start')
+    .description('Start agents for proposed issues')
+    .argument('<keys...>', 'issue keys, e.g. OPS-7 OPS-9')
+    .action(async (keys) => {
+      await daemon();
+      const r = await api('POST', '/issues/start', { keys });
+      for (const x of r.started) console.log(`${green('✓')} ${bold(x.key)} → agent ${x.agent.name} (${x.agent.id})`);
+      for (const x of r.failed) console.log(`${red('!')} ${bold(x.key)}: ${x.reason}`);
+    });
+  issuesCmd
+    .command('dismiss')
+    .description('Take proposed issues off the list; they are not proposed again')
+    .argument('<keys...>')
+    .action(async (keys) => {
+      await daemon();
+      const r = await api('POST', '/issues/dismiss', { keys });
+      console.log(`${r.dismissed} dismissed`);
+    });
+
+  program
+    .command('designs')
+    .description("Agents' design docs: name, summary and links, the ones waiting for your review first")
+    .option('--waiting', 'only the ones waiting for your review')
+    .option('--markdown', 'print a Markdown list, to paste')
+    .option('--json', 'print JSON')
+    .action(async (opts) => {
+      await daemon();
+      const { rows: all } = await api('GET', '/designs');
+      const rows = opts.waiting ? all.filter((r) => r.group === 'you') : all;
+      if (opts.json) return console.log(JSON.stringify(rows, null, 2));
+      if (opts.markdown) return console.log(designsMarkdown(rows));
+      if (!rows.length) return console.log(dim(opts.waiting ? 'No design docs waiting for your review.' : 'No design docs yet.'));
+      for (const r of rows) {
+        console.log(`${bold(r.title)}${r.issue ? dim(`  ${r.issue.key}`) : ''}  ${r.group === 'you' ? yellow(r.note) : dim(r.note)}`);
+        if (r.summary) console.log(`  ${truncate(r.summary, 200)}`);
+        const links = [r.page?.url && `page ${r.page.url}`, r.google && `doc ${r.google}`].filter(Boolean);
+        console.log(dim(`  agent ${r.agent.name} (${r.agent.id})${links.length ? `  ${links.join('  ')}` : r.page?.note ? `  page: ${r.page.note}` : ''}`));
       }
     });
 
@@ -1613,7 +1690,7 @@ export async function main(argv) {
   const showAssistant = (a) => {
     const state = !a.agentId ? dim('not set up (agentmgr assistant start)') : a.on ? green(a.busy ? 'on, checking now' : 'on') : yellow('paused');
     console.log(`${bold('Assistant')}: ${state}${a.agentId ? dim(`  agent ${a.agentId}`) : ''}`);
-    console.log(`checks every ${a.everyMin} min · watches ${a.sources.join(', ') || 'nothing'} · at most ${a.maxPerDay} new agents a day, ${a.maxRunning} running`);
+    console.log(`checks every ${a.everyMin} min · watches ${a.sources.join(', ') || 'nothing'} · at most ${a.maxPerDay} new agents a day, ${a.maxRunning} running${a.pickIssues ? ' · new issues proposed for you to pick (agentmgr issues)' : ''}`);
     if (a.lastCheckAt) console.log(dim(`last check ${new Date(a.lastCheckAt).toLocaleString()}${a.nextAt ? ` · next ${new Date(a.nextAt).toLocaleTimeString()}` : ''} · started ${a.startedToday} today, ${a.startedTotal} in all`));
     for (const x of a.started.slice(0, 10)) console.log(`  ${green('+')} ${bold(x.name)} ${dim(x.id)}  ${truncate(x.intent, 70)}`);
   };
@@ -1658,6 +1735,7 @@ export async function main(argv) {
     .option('--max-running <n>', 'of its agents running at once, at most')
     .option('--permission-mode <mode>', 'its own permission mode (default auto, so it can run agentmgr and gh without asking)')
     .option('--notes <text>', 'standing notes, e.g. which Jira project goes to which repo')
+    .option('--pick-issues <on|off>', 'on: propose new Jira and Linear issues for you to tick, instead of starting agents for them')
     .action(async (opts) => {
       await daemon();
       const patch = {
@@ -1667,6 +1745,7 @@ export async function main(argv) {
         ...(opts.maxRunning ? { maxRunning: Number(opts.maxRunning) } : {}),
         ...(opts.permissionMode ? { permissionMode: opts.permissionMode } : {}),
         ...(opts.notes !== undefined ? { notes: opts.notes } : {}),
+        ...(opts.pickIssues !== undefined ? { pickIssues: /^(on|yes|true|1)$/i.test(opts.pickIssues) } : {}),
       };
       showAssistant(await api('PUT', '/assistant', patch));
     });
