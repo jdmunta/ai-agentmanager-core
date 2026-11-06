@@ -1028,3 +1028,12 @@ body.remote .settings-links .local-only { display: none; }
 .goal-projects { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 4px 0 8px; }
 .goal-proj { display: inline-flex; align-items: center; gap: 4px; font-weight: normal; }
 .goal-proj input { width: auto; margin: 0; }
+
+/* ---------- keyboard shortcuts */
+kbd { display: inline-block; min-width: 1.6em; padding: 1px 5px; border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 4px; background: var(--bg); font: 11.5px var(--mono); text-align: center; line-height: 1.4; }
+.keys-dialog { max-width: 520px; width: calc(100% - 32px); }
+.keys-dialog h4 { margin: 14px 0 4px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+.keys-dialog table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.keys-dialog td { padding: 3px 0; vertical-align: top; }
+.keys-dialog td.keys { width: 42%; white-space: nowrap; padding-right: 12px; }
+#keys-btn kbd { margin-left: 6px; }

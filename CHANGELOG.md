@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Keyboard shortcuts.** Quick actions without the mouse: `j`/`k` to move through agents, `Enter` for the terminal, `r` review changes, `s` resume, `Shift+X` close, `e` edit, `n` new agents, `a` Ask Agent, `/` filter, `w` Watch, `1`-`5` tabs; `Ctrl+Shift+↓`/`↑` jump between agents' terminals and `Ctrl+Shift+L` leaves one. **?** (or **Keyboard shortcuts…** in the menu) lists them.
+
 ## 1.19.0 (2026-11-05)
 
 - **Design docs, written automatically.** Once its plan is settled, a task agent writes a short design doc and publishes it as a claude.ai Artifact; the link goes in its brief. The doc covers a summary, the architecture, the design, the data flow and the decisions and risks, with at most three small diagrams and no repeats of the spec or plan. When the work is done, the agent brings it up to date at the same link. It's on by default; untick **Design doc** on the new-agent form, use `agentmgr add --no-design-doc`, or set `"designDoc": false`. View it under **Design doc** next to Intent · Spec · Plan; it's also folded into the pull request description.
