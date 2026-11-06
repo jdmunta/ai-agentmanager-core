@@ -6,6 +6,7 @@
 - **Demo page and micro benchmarks, as options.** Tick **Demo page** on the new-agent form (`--demo-page`) and, once the change works, the agent makes a self-contained sample page showing it with real inputs and outputs, published as a claude.ai Artifact and opened here (sandboxed) with **Demo page ↗**. Tick **Micro benchmarks** (`--benchmarks`) and it times the code it changed before and after, writing a results table you open with **Benchmark**, also folded into the pull request description. Both are off by default (`"demoPage"`, `"benchmarks"` in config.json).
 - **Watch: agents side by side.** A **Watch** page (top bar, or `#watch`) shows every running agent's live session at once, up to 12, so you can follow them without clicking from one to another. **Fit** puts them all on screen; an agent waiting on you gets a red border and a count at the top; click a tile and type to answer it in place, or click its name to open the agent. Filter by running, waiting on you or working, and by project.
 - **Keyboard shortcuts.** Quick actions without the mouse: `j`/`k` to move through agents, `Enter` for the terminal, `r` review changes, `s` resume, `Shift+X` close, `e` edit, `n` new agents, `a` Ask Agent, `/` filter, `w` Watch, `1`-`5` tabs; `Ctrl+Shift+↓`/`↑` jump between agents' terminals and `Ctrl+Shift+L` leaves one. **?** (or **Keyboard shortcuts…** in the menu) lists them.
+- A live browser tab keeps trying for its first picture and title for up to 15 seconds when Chrome is slow to start, instead of staying blank.
 
 ## 1.19.0 (2026-11-05)
 
