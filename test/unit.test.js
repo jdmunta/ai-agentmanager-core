@@ -1274,8 +1274,114 @@ test('issues: the issue each agent works on and where it stands for you', async 
   assert.equal(rows[0].agent.from, 'assistant');
   assert.equal(rows[0].pr.number, 9);
   const md = issuesMarkdown(rows);
-  assert.match(md, /^\| Issue \| Jira status/);
-  assert.match(md, /\| \[ABC-1\]\(https:\/\/acme\.atlassian\.net\/browse\/ABC-1\) Login times out \| In Review \| Ready for your review \| \[#9\]\(https:\/\/github\.com\/a\/b\/pull\/9\) \| ABC-1 \|/);
+  assert.match(md, /^\| Issue \| Jira status \| Where it stands \| Plan \| Design \|/);
+  assert.match(md, /\| \[ABC-1\]\(https:\/\/acme\.atlassian\.net\/browse\/ABC-1\) Login times out \| In Review \| Ready for your review \|  \|  \| \[#9\]\(https:\/\/github\.com\/a\/b\/pull\/9\) \| ABC-1 \|/);
+});
+
+test('issues: the plan and design doc of each issue\'s agent', async () => {
+  const { issueRows, issuesMarkdown, planSteps, planText } = await import('../src/issues.js');
+  assert.deepEqual(planSteps('# Plan\n## Steps\n- [x] one\n- [ ] two\n* [X] three\n- not a step'), { done: 2, total: 3 });
+  const v = {
+    id: 'a1',
+    name: 'ABC-1',
+    intent: 'https://acme.atlassian.net/browse/ABC-1 fix it',
+    runtime: {},
+    specDocs: { plan: '2026-11-06T10:00:00Z', designdoc: '2026-11-06T10:05:00Z' },
+    planReview: { status: 'approved' },
+    brief: { references: [{ label: 'Design page', url: 'https://claude.ai/artifact/x' }] },
+    drive: { files: { designdoc: { url: 'https://docs.google.com/document/d/1/edit' } } },
+  };
+  const [r] = issueRows([v], new Map(), (id, name) => (id === 'a1' && name === 'plan' ? '- [x] a\n- [ ] b' : null));
+  assert.deepEqual(r.plan, { written: true, review: 'approved', done: 1, total: 2 });
+  assert.deepEqual(r.design, { written: true, page: 'https://claude.ai/artifact/x', google: 'https://docs.google.com/document/d/1/edit' });
+  assert.equal(planText(r.plan), '1/2 steps, approved');
+  assert.match(issuesMarkdown([r]), /\| 1\/2 steps, approved \| \[page\]\(https:\/\/claude\.ai\/artifact\/x\) \[doc\]\(https:\/\/docs\.google\.com\/document\/d\/1\/edit\) \|/);
+  // Neither asked for nor written: empty.
+  const [bare] = issueRows([{ ...v, specDocs: {}, planReview: null, brief: null, drive: null }]);
+  assert.deepEqual([bare.plan, bare.design], [null, null]);
+  // A design doc asked for but not written yet.
+  assert.deepEqual(issueRows([{ ...v, specDocs: {}, brief: null, drive: null, designDoc: true }])[0].design, { written: false, page: null, google: null });
+});
+
+test('issues: proposed issues wait for a tick; only ticked ones start agents, dismissed ones stay off', async () => {
+  const { ProposedIssues, issueRows } = await import('../src/issues.js');
+  const agents = [{ id: 'x1', kind: 'task', name: 'OPS-9', intent: 'https://x.atlassian.net/browse/OPS-9 y' }];
+  const store = { data: {}, saves: 0, list: () => agents, save() { this.saves++; } };
+  const created = [];
+  const manager = {
+    resolveProject: (p) => (p === 'cc' ? { shortcut: 'cc' } : null),
+    createMany: (intents, opts) => intents.map((intent) => {
+      const a = { id: `n${created.length}`, kind: 'task', name: intent.match(/browse\/([A-Z]+-\d+)/)[1], intent };
+      created.push({ intent, opts });
+      agents.push(a);
+      return a;
+    }),
+  };
+  const q = new ProposedIssues({ store, manager });
+  const p1 = q.add({ intent: 'https://x.atlassian.net/browse/OPS-1 fix the timeout', project: '@cc', by: 'assistant' });
+  assert.deepEqual([p1.key, p1.url, p1.title, p1.project, p1.status], ['OPS-1', 'https://x.atlassian.net/browse/OPS-1', 'fix the timeout', 'cc', 'waiting']);
+  q.add({ intent: 'https://x.atlassian.net/browse/OPS-2 add export' });
+  q.add({ intent: 'https://x.atlassian.net/browse/OPS-3 drop it' });
+  assert.throws(() => q.add({ intent: 'fix it' }), /issue link/);
+  assert.throws(() => q.add({ intent: 'https://x.atlassian.net/browse/OPS-9 again' }), /already exists/);
+  assert.throws(() => q.add({ intent: 'https://x.atlassian.net/browse/OPS-4 z', project: 'nope' }), /No project @nope/);
+  // Proposing again updates it, and keeps one entry.
+  q.add({ intent: 'https://x.atlassian.net/browse/OPS-2 add CSV export' });
+  assert.deepEqual(q.waiting().map((p) => [p.key, p.title]), [['OPS-1', 'fix the timeout'], ['OPS-2', 'add CSV export'], ['OPS-3', 'drop it']]);
+  // Rows: first, in their own group, with no agent.
+  const rows = issueRows([], new Map(), () => null, q.waiting());
+  assert.deepEqual(rows.map((r) => [r.key, r.stage, r.group, r.agent]), [['OPS-1', 'proposed', 'new', null], ['OPS-2', 'proposed', 'new', null], ['OPS-3', 'proposed', 'new', null]]);
+  assert.match(rows[0].note, /Not started \(@cc\): tick it/);
+  // Only the ticked ones start.
+  const r = q.start(['OPS-1', 'OPS-7']);
+  assert.deepEqual(r.started.map((x) => x.key), ['OPS-1']);
+  assert.deepEqual(r.failed, [{ key: 'OPS-7', reason: 'not waiting to be started' }]);
+  assert.deepEqual(created, [{ intent: 'https://x.atlassian.net/browse/OPS-1 fix the timeout', opts: { project: 'cc' } }]);
+  assert.deepEqual(q.waiting().map((p) => p.key), ['OPS-2', 'OPS-3']);
+  assert.throws(() => q.add({ intent: 'https://x.atlassian.net/browse/OPS-1 again' }), /already exists/);
+  // Dismissed: off the list, and refused when proposed again.
+  assert.deepEqual(q.dismiss(['OPS-3']), { dismissed: 1 });
+  assert.deepEqual(q.waiting().map((p) => p.key), ['OPS-2']);
+  assert.throws(() => q.add({ intent: 'https://x.atlassian.net/browse/OPS-3 drop it' }), /dismissed/);
+  // An agent started some other way takes it off the list.
+  agents.push({ id: 'h', kind: 'task', name: 'OPS-2', intent: 'https://x.atlassian.net/browse/OPS-2 by hand' });
+  assert.deepEqual(q.waiting(), []);
+});
+
+test('assistant: with "let me pick" it proposes new issues instead of starting agents', async () => {
+  const { assistantPrompt, assistantSettings } = await import('../src/assistant.js');
+  assert.equal(assistantSettings({}).pickIssues, false);
+  const auto = assistantPrompt(assistantSettings({ assistant: { sources: ['jira', 'linear'] } }), '/d', 'am');
+  assert.match(auto, /start an agent: am add @<project>/);
+  assert.doesNotMatch(auto, /issues propose/);
+  const pick = assistantPrompt(assistantSettings({ assistant: { sources: ['jira', 'linear'], pickIssues: true } }), '/d', 'am');
+  assert.doesNotMatch(pick, /For each one you haven't handled, start an agent/);
+  assert.equal(pick.match(/am issues propose @<project> "<the issue link>/g).length, 2, 'Jira and Linear');
+  assert.match(pick, /an agent starts only if they tick it/);
+});
+
+test('designs: name and summary from DESIGN.md, links, and agents waiting for review first', async () => {
+  const { designOutline, designRows, designsMarkdown } = await import('../src/designs.js');
+  assert.deepEqual(designOutline('# Design: Upload retries\n\n## Summary\nRetries **failed** uploads with [backoff](http://x).\nKeeps order.\n\n## Architecture\nx'), { title: 'Upload retries', summary: 'Retries failed uploads with backoff. Keeps order.' });
+  assert.deepEqual(designOutline('no headings'), { title: null, summary: null });
+  const pr = { url: 'https://github.com/a/b/pull/3', number: 3, source: 'branch', state: 'OPEN' };
+  const views = [
+    { id: 'w', name: 'w', intent: 'x', runtime: { busy: true }, specDocs: { designdoc: '2026-11-06T09:00:00Z' } },
+    { id: 'r', name: 'OPS-1', intent: 'https://x.atlassian.net/browse/OPS-1 retry', runtime: {}, prs: [pr], specDocs: { designdoc: '2026-11-06T08:00:00Z' }, brief: { references: [{ label: 'Design page', url: 'https://claude.ai/artifact/p' }, { label: 'Tech Spec', url: 'https://wiki/ts', key: true }] } },
+    { id: 'n', name: 'n', intent: 'y', runtime: {}, brief: { references: [{ label: 'Design page', url: null, highlight: 'not published: no Artifact tool' }] } },
+    { id: 'none', name: 'none', intent: 'z', runtime: {} },
+  ];
+  const read = (id) => ({ w: '# Design: Cache\n## Summary\nA cache.', r: '# Design: Retries\n## Summary\nBackoff.' })[id] ?? null;
+  const rows = designRows(views, read);
+  assert.deepEqual(rows.map((r) => [r.agent.id, r.title, r.group]), [['r', 'Retries', 'you'], ['w', 'Cache', 'agent'], ['n', 'n', 'agent']]);
+  assert.deepEqual(rows[0].page, { url: 'https://claude.ai/artifact/p' });
+  assert.deepEqual(rows[0].specs, [{ label: 'Tech Spec', title: undefined, url: 'https://wiki/ts' }]);
+  assert.deepEqual(rows[0].issue, { key: 'OPS-1', url: 'https://x.atlassian.net/browse/OPS-1' });
+  assert.deepEqual(rows[2].page, { note: 'not published: no Artifact tool' });
+  assert.equal(rows[2].written, false);
+  const md = designsMarkdown(rows);
+  assert.match(md, /^- \*\*Retries\*\* \(\[OPS-1\]\(https:\/\/x\.atlassian\.net\/browse\/OPS-1\)\): Ready for your review\n  Backoff\.\n  \[Design page\]\(https:\/\/claude\.ai\/artifact\/p\) · \[Tech Spec\]\(https:\/\/wiki\/ts\)/);
+  assert.equal(designsMarkdown([]), 'No design docs.');
 });
 
 test('listen: markdown turned into speech, split into short pieces; the walkthrough read change by change', async () => {

@@ -109,6 +109,7 @@ import { buildMap, touchedFiles } from './codemap.js';
 import { parseDiff } from '../public/review.js';
 import { issueFields, issueSummary, leadingIssue, loadJira, wordsAfterLink } from './jira.js';
 import { issueRows } from './issues.js';
+import { designRows } from './designs.js';
 import { reminderFor, reminderSettings } from './reminders.js';
 import { combine, facts as scoreFacts, improveMessage, scorecardMarkdown, scorecardPrompt } from './scorecard.js';
 import { CONTAINER_ENGINES, claudeToken, containerName, containerRunning, engineMounts, gitCommonDir, removeContainer, runArgs, stopContainer } from './container.js';
@@ -822,9 +823,9 @@ export class AgentManager extends EventEmitter {
    * The issues agents work on, for the summary: one row per agent, with each issue's Jira status
    * (fetched a few at a time, kept five minutes).
    */
-  async issues() {
+  async issues(proposed = []) {
     const views = this.store.list().map((a) => this.view(a));
-    const rows = issueRows(views);
+    const rows = issueRows(views, new Map(), () => null, proposed);
     this.jiraCache ??= new Map();
     const jira = new Map();
     const want = [];
@@ -853,7 +854,13 @@ export class AgentManager extends EventEmitter {
     }
     for (const [k, v] of jira) if (!v) jira.delete(k);
     const j = loadJira();
-    return { rows: issueRows(views, jira), jira: { site: j.site, signedIn: Boolean(j.site && j.email && j.token) } };
+    return { rows: issueRows(views, jira, (id, name) => readSpecDoc(id, name)?.markdown ?? null, proposed), jira: { site: j.site, signedIn: Boolean(j.site && j.email && j.token) } };
+  }
+
+  /** Every agent's design doc, for the Designs list. */
+  designs() {
+    const views = this.store.list().map((a) => this.view(a));
+    return { rows: designRows(views, (id) => readSpecDoc(id, 'designdoc')?.markdown ?? null) };
   }
 
   /** A repository's tracked files, for the map (kept a few minutes). */

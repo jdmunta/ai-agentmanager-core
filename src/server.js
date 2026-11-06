@@ -39,7 +39,8 @@ import { LiveBrowser } from './livebrowser.js';
 import * as remote from './remote.js';
 import * as service from './service.js';
 import { jiraView, saveJira } from './jira.js';
-import { issuesMarkdown } from './issues.js';
+import { ProposedIssues, issuesMarkdown } from './issues.js';
+import { designsMarkdown } from './designs.js';
 import { CONTAINER_ENGINES, buildImage, claudeToken, dockerStatus, isBuilding, saveSecrets } from './container.js';
 import { AgentkitReports } from './agentkit-reports.js';
 import { Builder } from './builder.js';
@@ -88,6 +89,7 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
   registerAcpEngines(config);
   const manager = new AgentManager({ store, config, plugins });
   const backlog = new Backlog({ manager, store, config });
+  const proposed = new ProposedIssues({ store, manager });
   const races = new Races({ manager, store });
   const review = new Review({ manager });
   // The walkthrough explains the same diff the review screen shows.
@@ -757,10 +759,24 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
   api.get('/codemap', wrap((req) => manager.codeMap(req.query.project ? String(req.query.project) : null)));
   // Issues agents work on, for the summary; ?group=you|agent|done and ?format=markdown to paste.
   api.get('/issues', wrap(async (req) => {
-    const v = await manager.issues();
+    const v = await manager.issues(proposed.waiting());
     const group = req.query.group ? String(req.query.group) : null;
     const rows = group && group !== 'all' ? v.rows.filter((r) => r.group === group) : v.rows;
     return req.query.format === 'markdown' ? { markdown: issuesMarkdown(rows) } : { ...v, rows };
+  }));
+  // Issues proposed for agents (the assistant, when you pick): start the ticked ones, or dismiss them.
+  api.post('/issues/proposed', wrap((req) => proposed.add({ ...req.body, by: req.headers['x-agentmgr-agent'] ? 'assistant' : 'you' })));
+  api.post('/issues/start', wrap((req) => proposed.start(Array.isArray(req.body?.keys) ? req.body.keys.map(String) : [])));
+  api.post('/issues/dismiss', wrap((req) => proposed.dismiss(Array.isArray(req.body?.keys) ? req.body.keys.map(String) : [])));
+  // Design docs of all agents; the same ?group= and ?format=markdown.
+  api.get('/designs', wrap((req) => {
+    const v = manager.designs();
+    const group = req.query.group ? String(req.query.group) : null;
+    const q = String(req.query.q ?? '').trim().toLowerCase();
+    const rows = v.rows
+      .filter((r) => !group || group === 'all' || r.group === group)
+      .filter((r) => !q || [r.title, r.summary, r.agent.name, r.agent.project, r.issue?.key].some((s) => String(s ?? '').toLowerCase().includes(q)));
+    return req.query.format === 'markdown' ? { markdown: designsMarkdown(rows) } : { rows };
   }));
   api.get('/standup', wrap(() => standup.view()));
   api.post('/standup', wrap(async () => ({ ...standup.view(), latest: await standup.make({ reason: 'asked' }) })));

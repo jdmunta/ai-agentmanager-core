@@ -26,6 +26,7 @@ import { initMachine } from '/machine.js';
 import { initWatch } from '/watch.js';
 import { initStandup } from '/standup.js';
 import { initIssues } from '/issues.js';
+import { initDesigns } from '/designs.js';
 import { initCodeMap } from '/codemap.js';
 import { initKeys } from '/keys.js';
 import { morph } from '/morph.js';
@@ -204,8 +205,27 @@ const standupUi = initStandup({
   openAgent: (id) => (showTab('agents'), select(id)),
 });
 // Jira: every issue an agent works on, the ones waiting for your review first.
-const issuesUi = initIssues({ api, $, esc, ago, toast: (m, ms) => toast(m, ms), openAgent: (id) => (showTab('agents'), select(id)) });
+const issuesUi = initIssues({
+  api,
+  $,
+  esc,
+  ago,
+  toast: (m, ms) => toast(m, ms),
+  openAgent: (id) => (showTab('agents'), select(id)),
+  openDoc: (id, kind) => (showTab('agents'), select(id), openDoc(id, kind)),
+});
 $('#issues-btn').onclick = () => issuesUi.open();
+// Designs: every agent's design doc, the ones waiting for your review first.
+const designsUi = initDesigns({
+  api,
+  $,
+  esc,
+  ago,
+  toast: (m, ms) => toast(m, ms),
+  openAgent: (id) => (showTab('agents'), select(id)),
+  openDoc: (id) => (showTab('agents'), select(id), openDoc(id, 'designdoc')),
+});
+$('#designs-btn').onclick = () => designsUi.open();
 // Keyboard shortcuts (keys.js): the same actions as the buttons.
 const keysUi = initKeys({ $, esc, run: (act) => shortcut(act) });
 $('#keys-btn').onclick = () => keysUi.help();
@@ -248,6 +268,7 @@ function shortcut(act) {
   if (act === 'standup') return standupUi.open();
   if (act === 'map') return $('#map-btn').click();
   if (act === 'issues') return issuesUi.open();
+  if (act === 'designs') return designsUi.open();
   if (act.startsWith('tab:')) return showTab(act.slice(4));
   return false;
 }
@@ -4123,6 +4144,7 @@ function handleEvent(msg) {
     agentChanged(msg.agent);
     if (msg.agent.builds) builtUi.sessionChanged(msg.agent);
     issuesUi.changed();
+    designsUi.changed();
     // The detail, terminal and document views show one agent; another agent's update leaves them be.
     return invalidate([
       'list', 'backlog', 'land', 'inbox', 'race', 'team',
@@ -4500,6 +4522,7 @@ async function loadAssistant({ fill = true } = {}) {
     f.maxPerDay.value = a.maxPerDay;
     f.maxRunning.value = a.maxRunning;
     f.notes.value = a.notes ?? '';
+    f.pickIssues.checked = Boolean(a.pickIssues);
   }
   const state = !a.agentId ? 'Not set up yet. Start it to create its session.' : a.on ? (a.busy ? 'On: checking now.' : 'On.') : 'Paused: not checking.';
   $('#assistant-status').innerHTML = `<p><b>${esc(state)}</b>
@@ -4522,6 +4545,7 @@ const assistantPatch = (f) => ({
   maxPerDay: Number(f.maxPerDay.value),
   maxRunning: Number(f.maxRunning.value),
   notes: f.notes.value,
+  pickIssues: f.pickIssues.checked,
 });
 const assistantError = (err) => {
   $('#assistant-error').textContent = err.message;

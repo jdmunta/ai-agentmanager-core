@@ -2,7 +2,9 @@
 
 ## Unreleased
 
-- **Jira summary.** A **Jira** button (or `i`) lists every Jira or Linear issue an agent works on, the ones waiting for your review first, with a count on the button: the issue and its Jira status, where the work stands (ready for your review, needs your answer, approved but not merged, checks failing, merged), its pull request and checks, and a link to the agent's session. **Copy** puts the list on the clipboard as a Markdown table. From the terminal: `agentmgr issues` (`--all`, `--markdown`, `--json`).
+- **Jira summary.** A **Jira** button (or `i`) lists every Jira or Linear issue an agent works on, the ones waiting for your review first, with a count on the button: the issue and its Jira status, where the work stands (ready for your review, needs your answer, approved but not merged, checks failing, merged), its plan (steps done, approval) and design doc (read it here, its page and Google Doc), its pull request and checks, and a link to the agent's session. **Copy** puts the list on the clipboard as a Markdown table. From the terminal: `agentmgr issues` (`--all`, `--markdown`, `--json`).
+- **Pick which Jira issues get agents.** **Let me pick** in **Assistant** (`agentmgr assistant set --pick-issues on`): the assistant lists new Jira and Linear issues assigned to you under **Jira → Not started** instead of starting agents for them. Tick the ones you want and **Start**; agents start only for those. **Dismiss** takes the rest off the list for good. Also `agentmgr issues propose`, `start` and `dismiss`.
+- **Designs.** A **Designs** button (or `d`) lists every agent's design doc, the ones waiting for your review first: its name and summary from DESIGN.md, the agent and its issue, and links to read it here, its design page, its Google Doc and the specs it builds on. Search, filters and **Copy** as Markdown. `agentmgr designs` (`--waiting`, `--markdown`, `--json`).
 
 ## 1.21.0 (2026-11-06)
 

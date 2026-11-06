@@ -1494,24 +1494,46 @@ test('issues: the Jira summary lists agents\' issues with their Jira status, wai
   const site = `http://127.0.0.1:${srv.address().port}`;
   manager.jiraOptions = { allow: (s) => s === site };
   manager.jiraCache?.clear();
+  const made = [];
   try {
     const [a] = (await call('POST', '/agents', { intent: `${site}/browse/ABC-21 retry uploads`, start: false })).body;
     const [b] = (await call('POST', '/agents', { intent: `${site}/browse/ABC-22 faster search`, start: false })).body;
+    made.push(a.id, b.id);
     const url = 'https://github.com/acme/web/pull/41';
     manager.patch(a.id, { prs: { [url]: { url, number: 41, title: 'Retry uploads', source: 'branch', state: 'OPEN', mergeState: 'CLEAN', checks: { state: 'passed' } } } });
+    const adir = path.join(home, 'briefs', a.id);
+    fs.mkdirSync(adir, { recursive: true });
+    fs.writeFileSync(path.join(adir, 'PLAN.md'), '# Plan: retries\n## Steps\n- [x] backoff\n- [ ] test\n');
+    fs.writeFileSync(path.join(adir, 'DESIGN.md'), '# Design: retries\n## Summary\nBackoff.\n');
     const v = (await call('GET', '/issues')).body;
     const mine = v.rows.filter((r) => [a.id, b.id].includes(r.agent.id));
     assert.deepEqual(mine.map((r) => [r.key, r.stage, r.jira?.status]), [['ABC-21', 'review', 'In Review'], ['ABC-22', 'working', 'In Progress']]);
     assert.equal(mine[0].pr.url, url);
+    assert.deepEqual(mine[0].plan, { written: true, review: null, done: 1, total: 2 });
+    assert.deepEqual(mine[0].design, { written: true, page: null, google: null });
     assert.equal(mine[0].title, 'Retry uploads');
     assert.equal(v.jira.signedIn, false);
     const you = (await call('GET', '/issues?group=you')).body.rows;
     assert.ok(you.some((r) => r.agent.id === a.id) && !you.some((r) => r.agent.id === b.id));
     const md = (await call('GET', '/issues?group=you&format=markdown')).body.markdown;
-    assert.match(md, /ABC-21.*In Review.*Ready for your review.*\[#41\]/);
-    await call('DELETE', `/agents/${a.id}`);
-    await call('DELETE', `/agents/${b.id}`);
+    assert.match(md, /ABC-21.*In Review.*Ready for your review \| 1\/2 steps \| written \|.*\[#41\]/);
+    // Proposed issues: listed first with no agent; only the started one gets an agent.
+    const prop = await call('POST', '/issues/proposed', { intent: `${site}/browse/ABC-31 add retries to export` });
+    assert.equal(prop.body.key, 'ABC-31');
+    await call('POST', '/issues/proposed', { intent: `${site}/browse/ABC-32 other` });
+    assert.equal((await call('POST', '/issues/proposed', { intent: `${site}/browse/ABC-21 dup` })).status, 409, 'ABC-21 has an agent');
+    const fresh = (await call('GET', '/issues?group=new')).body.rows;
+    assert.deepEqual(fresh.map((r) => [r.key, r.agent]).sort(), [['ABC-31', null], ['ABC-32', null]]);
+    const st = (await call('POST', '/issues/start', { keys: ['ABC-31'] })).body;
+    assert.deepEqual(st.started.map((x) => x.key), ['ABC-31']);
+    made.push(st.started[0].agent.id);
+    const c = await agentNow(st.started[0].agent.id);
+    assert.equal(c.name, 'ABC-31');
+    assert.equal((await call('POST', '/issues/dismiss', { keys: ['ABC-32'] })).body.dismissed, 1);
+    assert.deepEqual((await call('GET', '/issues?group=new')).body.rows, []);
+    assert.equal((await call('POST', '/issues/proposed', { intent: `${site}/browse/ABC-32 other` })).status, 409, 'dismissed');
   } finally {
+    for (const id of made) await call('DELETE', `/agents/${id}`);
     manager.jiraOptions = null;
     srv.close();
   }
@@ -1541,6 +1563,11 @@ test('intent, spec and plan: INTENT.md on create, the agent told to keep SPEC.md
   fs.writeFileSync(path.join(dir, 'DESIGN.md'), '# Design: toggle\n## Summary\nA switch.\n');
   assert.ok((await agentNow(a.id)).specDocs.designdoc);
   assert.match((await call('GET', `/agents/${a.id}/specs/designdoc`)).body.markdown, /A switch/);
+  // The Designs list: its name and summary, and the plan and design in the Jira summary's row.
+  const design = (await call('GET', '/designs')).body.rows.find((r) => r.agent.id === a.id);
+  assert.deepEqual([design.title, design.summary, design.written], ['toggle', 'A switch.', true]);
+  assert.match((await call('GET', '/designs?format=markdown&q=toggle')).body.markdown, /\*\*toggle\*\*.*\n  A switch\./);
+  assert.equal((await call('GET', '/designs?q=nothing-like-this')).body.rows.length, 0);
   // Turned off for one agent: no instructions.
   const [b] = (await call('POST', '/agents', { intent: 'Fix a typo', designDoc: false })).body;
   assert.equal(b.designDoc, false);
