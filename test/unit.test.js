@@ -1332,7 +1332,8 @@ test('issues: proposed issues wait for a tick; only ticked ones start agents, di
   assert.deepEqual(q.waiting().map((p) => [p.key, p.title]), [['OPS-1', 'fix the timeout'], ['OPS-2', 'add CSV export'], ['OPS-3', 'drop it']]);
   // Rows: first, in their own group, with no agent.
   const rows = issueRows([], new Map(), () => null, q.waiting());
-  assert.deepEqual(rows.map((r) => [r.key, r.stage, r.group, r.agent]), [['OPS-1', 'proposed', 'new', null], ['OPS-2', 'proposed', 'new', null], ['OPS-3', 'proposed', 'new', null]]);
+  // (Newest first; these can share a millisecond, so compare them in key order.)
+  assert.deepEqual(rows.map((r) => [r.key, r.stage, r.group, r.agent]).sort(), [['OPS-1', 'proposed', 'new', null], ['OPS-2', 'proposed', 'new', null], ['OPS-3', 'proposed', 'new', null]]);
   assert.match(rows[0].note, /Not started \(@cc\): tick it/);
   // Only the ticked ones start.
   const r = q.start(['OPS-1', 'OPS-7']);
