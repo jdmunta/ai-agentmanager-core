@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.21.0 (2026-11-06)
 
 - **Map: where agents are in the code.** A **Map** page (or `m`) shows a project's folders as tiles with each agent on the folders it's changing or reading now. Two agents that changed the same file are joined in red; one reading a file another changed is joined with a dashed line, the warning before they collide, and each is spelled out above the map.
 - **Standup.** Every weekday morning (or on demand: **Standup**, or `p`), each agent's news is read aloud in its own voice: what it did, what it's on and what it needs from you, the ones that need you first. It stops on those with their questions beside it: answer by tap, or by voice (read back, sent on "send"). Worded by one short model call; a Slack alert says when it's ready.
