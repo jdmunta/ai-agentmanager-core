@@ -310,9 +310,14 @@ const INSIGHT_ICONS = { why: '🎯', what: '📦', how: '🛠', now: '📍' };
 const DOCS = { analysis: 'Analysis', design: 'Design', flow: 'Flow', proposal: 'Proposal', humanai: 'Human vs AI', diagrams: 'Diagrams', scorecard: 'Scorecard' };
 // Optional extras that "Write all" leaves out.
 const DOC_EXTRAS = new Set(['diagrams', 'scorecard']);
-const DOC_TITLES = { ...DOCS, plan: 'Plan', intent: 'Intent', spec: 'Spec', designdoc: 'Design doc' };
+const DOC_TITLES = { ...DOCS, plan: 'Plan', intent: 'Intent', spec: 'Spec', designdoc: 'Design doc', benchmark: 'Benchmark' };
 // The agent's intent, spec and plan files (read from the daemon when opened; kept here by agent and kind).
-const SPEC_KINDS = { intent: 'Intent', spec: 'Spec', plan: 'Plan', designdoc: 'Design doc' };
+const SPEC_KINDS = { intent: 'Intent', spec: 'Spec', plan: 'Plan', designdoc: 'Design doc', benchmark: 'Benchmark' };
+// What each optional file is, for its button before it's written.
+const SPEC_PENDING = {
+  designdoc: 'The agent writes it once its plan is settled, publishes it as an Artifact (the link is in its brief) and updates it when done',
+  benchmark: 'The agent times the code it changed, before and after, once the change works',
+};
 const specCache = new Map(); // "<agent>:<kind>" -> { markdown, at }
 const isSpecKind = (a, kind) => Boolean(SPEC_KINDS[kind]) && !(kind === 'plan' && a?.planReview);
 async function loadSpec(agentId, kind) {
@@ -408,12 +413,21 @@ function driveButton(a) {
 function specButtons(a) {
   if (!a.specDocs) return '';
   return `<span class="doc-buttons spec-buttons" title="For reviewers, people and agents: what was asked, what done means, and the plan. Push & open PR puts them in the description">${Object.entries(SPEC_KINDS)
-    .filter(([k]) => k !== 'designdoc' || a.designDoc || a.specDocs.designdoc)
+    .filter(([k]) => (k === 'designdoc' ? a.designDoc : k === 'benchmark' ? a.benchmarks : true) || a.specDocs[k])
     .map(([k, label]) => {
       const at = a.specDocs[k] ?? (k === 'plan' ? a.planReview?.updatedAt : null);
-      return `<button class="small doc-btn ${at ? 'has' : ''}" data-doc="${k}" title="${at ? `Open ${label} (updated ${ago(at)})` : k === 'intent' ? 'Written when the agent is created' : k === 'designdoc' ? 'The agent writes it once its plan is settled, publishes it as an Artifact (the link is in its brief) and updates it when done' : `The agent writes it ${k === 'spec' ? 'before changing code' : 'and keeps it current'}`}">${label}${at ? ' ✓' : ''}</button>`;
+      return `<button class="small doc-btn ${at ? 'has' : ''}" data-doc="${k}" title="${at ? `Open ${label} (updated ${ago(at)})` : k === 'intent' ? 'Written when the agent is created' : SPEC_PENDING[k] ?? `The agent writes it ${k === 'spec' ? 'before changing code' : 'and keeps it current'}`}">${label}${at ? ' ✓' : ''}</button>`;
     })
-    .join('')}</span>`;
+    .join('')}${demoButton(a)}</span>`;
+}
+
+/** The sample demo page: opens in its own tab, sandboxed. */
+function demoButton(a) {
+  if (!a.demoPage && !a.specDocs.demo) return '';
+  const at = a.specDocs.demo;
+  return at
+    ? `<a class="small doc-btn has" href="/api/agents/${a.id}/demo" target="_blank" rel="noopener" title="Open the demo page (updated ${ago(at)}); the published copy is linked in the brief">Demo page ↗</a>`
+    : '<button class="small doc-btn" disabled title="The agent makes it once the change works and publishes it as an Artifact">Demo page</button>';
 }
 
 let docView = null; // { agentId, kind }
@@ -435,7 +449,7 @@ function renderDocDialog() {
   } else if (d?.error) body.innerHTML = `<p class="error">Couldn't write it: ${esc(d.error)}</p>`;
   else if (plan && !d?.markdown) body.innerHTML = '<p class="hint">The agent is investigating and hasn\'t written its plan yet. You\'ll see it here (and in the inbox) when it has.</p>';
   else if (specKind && !d?.loaded) body.innerHTML = '<p class="hint">Loading…</p>';
-  else if (specKind && !d?.markdown) body.innerHTML = `<p class="hint">${docView.kind === 'intent' ? 'No intent file for this agent (agents created before 1.9 have none).' : `The agent hasn't written its ${label.toLowerCase()} yet. It writes ${docView.kind === 'spec' ? 'the spec before changing code' : docView.kind === 'designdoc' ? 'the design doc once its plan is settled and publishes it as an Artifact' : 'the plan and keeps it current'}.`}</p>`;
+  else if (specKind && !d?.markdown) body.innerHTML = `<p class="hint">${docView.kind === 'intent' ? 'No intent file for this agent (agents created before 1.9 have none).' : `The agent hasn't written its ${label.toLowerCase()} yet. It writes ${docView.kind === 'spec' ? 'the spec before changing code' : docView.kind === 'designdoc' ? 'the design doc once its plan is settled and publishes it as an Artifact' : docView.kind === 'benchmark' ? 'the benchmark results once the change works' : 'the plan and keeps it current'}.`}</p>`;
   else if (d?.markdown) {
     // The scorecard's Improve button follows the agent being improved.
     const version = docView.kind === 'scorecard' ? `${d.at}:${Boolean(a.improving)}` : d.at;
@@ -3814,6 +3828,10 @@ $('#new-form').addEventListener('submit', async (e) => {
         plan: Boolean(f.get('plan')),
         planReview: Boolean(f.get('planReview')),
         designDoc: Boolean(f.get('designDoc')),
+      demoPage: Boolean(f.get('demoPage')),
+      benchmarks: Boolean(f.get('benchmarks')),
+        demoPage: Boolean(f.get('demoPage')),
+        benchmarks: Boolean(f.get('benchmarks')),
         priority: Number(f.get('priority')),
       });
       dialog.close();
