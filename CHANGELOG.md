@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.20.0 (2026-11-06)
 
 - **Review comments reach the agent while its pull request is open.** New comments, reviews and line comments on an agent's open pull request are sent to it in one message (waking it if closed), checked every couple of minutes; it makes the changes, pushes and replies on the pull request. Only the repo's owners, members and collaborators (and review bots on the code) count; approvals, resolved threads and the agent's own replies don't. On by default: **Send new review comments** in the Land tab, `agentmgr land set --fix-comments off`, or `"landing": { "fixComments": false }`.
 - **Demo page and micro benchmarks, as options.** Tick **Demo page** on the new-agent form (`--demo-page`) and, once the change works, the agent makes a self-contained sample page showing it with real inputs and outputs, published as a claude.ai Artifact and opened here (sandboxed) with **Demo page ↗**. Tick **Micro benchmarks** (`--benchmarks`) and it times the code it changed before and after, writing a results table you open with **Benchmark**, also folded into the pull request description. Both are off by default (`"demoPage"`, `"benchmarks"` in config.json).
