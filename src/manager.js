@@ -105,6 +105,7 @@ async function repoLayout(dir) {
 }
 import { spawn } from 'node:child_process';
 import * as git from './git.js';
+import { buildMap, touchedFiles } from './codemap.js';
 import { parseDiff } from '../public/review.js';
 import { issueSummary, leadingIssue, wordsAfterLink } from './jira.js';
 import { reminderFor, reminderSettings } from './reminders.js';
@@ -781,6 +782,51 @@ export class AgentManager extends EventEmitter {
     } catch {}
     if (!html) throw Object.assign(new Error('No demo page yet'), { status: 404 });
     return html;
+  }
+
+  /**
+   * The codebase map of one project (its key, else the one with the most running agents): its
+   * folders, and where each of its agents is changing and reading code now (codemap.js).
+   */
+  async codeMap(projectKey) {
+    const withCode = this.store.list().filter((a) => a.workdir && !NO_REPO.has(a.kind) && fs.existsSync(a.workdir));
+    const groups = new Map();
+    for (const a of withCode) {
+      const p = this.projectInfo(a);
+      if (!p) continue;
+      const g = groups.get(p.key) ?? groups.set(p.key, { key: p.key, name: p.name, agents: [] }).get(p.key);
+      g.agents.push(a);
+    }
+    const running = (g) => g.agents.filter((a) => this.runtimes.get(a.id)?.pty).length;
+    const projects = [...groups.values()].sort((x, y) => running(y) - running(x) || y.agents.length - x.agents.length);
+    const g = (projectKey && groups.get(projectKey)) || projects[0];
+    const list = projects.map((p) => ({ key: p.key, name: p.name, agents: p.agents.length, running: running(p) }));
+    if (!g) return { project: null, projects: list, map: buildMap({}) };
+    // Running agents, and closed ones with changes not yet merged.
+    const shown = g.agents.filter((a) => this.runtimes.get(a.id)?.pty || Object.keys(this.changeSets.get(a.id)?.files ?? {}).length);
+    const root = shown.find((a) => a.sourceDir && fs.existsSync(a.sourceDir))?.sourceDir ?? (shown[0] ?? g.agents[0]).workdir;
+    const files = await this.repoFiles(root);
+    const agents = shown.map((a) => {
+      const rt = this.runtimes.get(a.id);
+      let touched = {};
+      try {
+        touched = rt?.pty ? touchedFiles(engineOf(a).sessionFile(a.workdir, a.sessionId), a.workdir) : {};
+      } catch {}
+      return { id: a.id, name: a.name, busy: rt?.busy, attention: rt?.attention, changed: this.changeSets.get(a.id)?.files ?? {}, touched };
+    });
+    return { project: { key: g.key, name: g.name }, projects: list, map: buildMap({ files, agents }) };
+  }
+
+  /** A repository's tracked files, for the map (kept a few minutes). */
+  async repoFiles(dir) {
+    this.fileLists ??= new Map();
+    const hit = this.fileLists.get(dir);
+    if (hit && Date.now() - hit.at < 5 * 60_000) return hit.files;
+    // From the commit, not the index: the shared clone agents branch from may have no working copy.
+    const out = await git.run('git', ['ls-tree', '-r', '--name-only', 'HEAD'], { cwd: dir, timeout: 30_000 }).catch(() => '');
+    const files = out.split('\n').filter(Boolean);
+    this.fileLists.set(dir, { at: Date.now(), files });
+    return files;
   }
 
   /** Fill in summaries still missing (after Jira settings change); returns how many it found. */

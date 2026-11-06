@@ -42,6 +42,7 @@ import { jiraView, saveJira } from './jira.js';
 import { CONTAINER_ENGINES, buildImage, claudeToken, dockerStatus, isBuilding, saveSecrets } from './container.js';
 import { AgentkitReports } from './agentkit-reports.js';
 import { Builder } from './builder.js';
+import { Standup } from './standup.js';
 import { Store } from './store.js';
 import { about, latestRelease } from './about.js';
 
@@ -111,6 +112,23 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
     linkFor: (id) => {
       const phone = remoteServer ? remote.remoteUrls(remotePort).find((u) => !u.vpn) : null;
       return `${phone ? phone.url : `http://127.0.0.1:${port}/`}#${id}/term`;
+    },
+  });
+  // A daily standup: each agent's news, worded for listening; the page plays it (standup.js).
+  let pushStandup = () => {};
+  const standup = new Standup({
+    manager,
+    store,
+    config,
+    onChange: (latest) => pushStandup(latest),
+    notify: (latest) => {
+      const n = loadNotify();
+      if (!n.enabled || !n.events.standup) return;
+      const phone = remoteServer ? remote.remoteUrls(remotePort).find((u) => !u.vpn) : null;
+      const link = `${phone ? phone.url : `http://127.0.0.1:${port}/`}#standup`;
+      const need = latest.items.filter((i) => i.needs).length;
+      const what = `${latest.items.length} agent${latest.items.length === 1 ? '' : 's'} with news${need ? `, ${need} need you` : ''}`;
+      sendSlack(`:sunrise: *Standup ready*: ${what}\n<${link}|Play it>`, n, `Standup ready: ${what}\nPlay it: ${link}`).catch(() => {});
     },
   });
   const triggers = new Triggers({ manager, store, config, notifier });
@@ -735,6 +753,14 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
     const days = req.query.days === undefined ? 30 : Math.max(0, Math.min(3650, Math.floor(Number(req.query.days)) || 0));
     return stats(store.list(), { days, projectOf: (a) => manager.projectInfo(a)?.name ?? null });
   }));
+  api.get('/codemap', wrap((req) => manager.codeMap(req.query.project ? String(req.query.project) : null)));
+  api.get('/standup', wrap(() => standup.view()));
+  api.post('/standup', wrap(async () => ({ ...standup.view(), latest: await standup.make({ reason: 'asked' }) })));
+  api.put('/standup', wrap((req) => {
+    const next = standup.update(req.body ?? {});
+    saveConfig({ standup: next.settings });
+    return next;
+  }));
   api.get('/budgets', wrap(() => budgets.status()));
   api.put('/budgets', wrap((req) => {
     const next = budgets.update(req.body ?? {});
@@ -999,6 +1025,7 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
     for (const send of eventSinks) send(msg);
   };
   manager.on('change', (agent) => broadcast({ t: 'agent', agent }));
+  pushStandup = (latest) => broadcast({ t: 'standup', latest });
   reports.on('change', () => broadcast({ t: 'built', reports: reports.list() }));
   manager.rules.on('change', (rules) => broadcast({ t: 'rules', rules }));
   repeats.on('change', (view) => broadcast({ t: 'repeats', repeats: view }));
@@ -1132,6 +1159,7 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
     closing = true;
     cleanup.close();
     landing.close();
+    standup.close();
     autopilot.close();
     goals.close();
     worklog.close();

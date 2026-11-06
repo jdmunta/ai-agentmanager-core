@@ -16,6 +16,8 @@ export const SHORTCUTS = [
     [['a'], 'Ask Agent (a general session)', 'ask'],
     [['/'], 'Filter agents', 'filter'],
     [['w'], 'Watch: agents side by side', 'watch'],
+    [['p'], 'Play the standup', 'standup'],
+    [['m'], 'Map: where agents are in the code', 'map'],
     [['1'], 'Agents tab', 'tab:agents'],
     [['2'], 'Inbox: what needs you', 'tab:inbox'],
     [['3'], 'Backlog', 'tab:backlog'],
@@ -34,11 +36,11 @@ export const SHORTCUTS = [
 // A single key, as an event names it, to its action.
 export const SINGLE = {
   j: 'next', k: 'prev', Enter: 'terminal', t: 'terminal',
-  r: 'changes', s: 'start', X: 'stop', e: 'edit', n: 'new', a: 'ask', '/': 'filter', w: 'watch', '?': 'help',
+  r: 'changes', s: 'start', X: 'stop', e: 'edit', n: 'new', a: 'ask', '/': 'filter', w: 'watch', p: 'standup', m: 'map', '?': 'help',
   1: 'tab:agents', 2: 'tab:inbox', 3: 'tab:backlog', 4: 'tab:land', 5: 'tab:built',
 };
 // While Watch is open: only what makes sense there.
-const ON_WATCH = new Set(['new', 'ask', 'watch', 'help']);
+const ON_WATCH = new Set(['new', 'ask', 'watch', 'standup', 'map', 'help']);
 
 /** Typing somewhere: a field, an editor or a terminal (xterm types through a textarea). */
 const typing = (el) => Boolean(el?.closest?.('input, textarea, select, [contenteditable=""], [contenteditable="true"], .xterm, .cm-editor'));
@@ -77,7 +79,7 @@ export function initKeys({ $, esc, run }) {
     // An open dialog has the keyboard; ? still closes the shortcuts one.
     if (document.querySelector('dialog[open]') && !(dialog.open && e.key === '?')) return;
     const act = SINGLE[e.key];
-    if (!act || (document.body.classList.contains('watching') && !ON_WATCH.has(act))) return;
+    if (!act || (document.body.classList.contains('watching') || document.body.classList.contains('mapping')) && !ON_WATCH.has(act)) return;
     if (act === 'help') {
       e.preventDefault();
       return help();

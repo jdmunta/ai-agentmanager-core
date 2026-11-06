@@ -70,6 +70,8 @@ const DEFAULTS = {
   designDoc: true,
   // Off unless asked, per agent too: a sample demo page of the change (published as an Artifact)
   // and micro benchmarks of the code it changed, before and after. Per agent: demoPage, benchmarks.
+  // Each morning (weekdays), a spoken standup of the agents' news; see standup.js.
+  standup: { enabled: true, at: '09:00', weekends: false, ai: true, notify: true },
   demoPage: false,
   benchmarks: false,
   // The AI judge (stuck, idle screens, reviews); see JUDGE_DEFAULTS in judge.js for every field.

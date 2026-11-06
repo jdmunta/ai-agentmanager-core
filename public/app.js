@@ -24,6 +24,8 @@ import { initMenu } from '/menu.js';
 import { initCode } from '/code.js';
 import { initMachine } from '/machine.js';
 import { initWatch } from '/watch.js';
+import { initStandup } from '/standup.js';
+import { initCodeMap } from '/codemap.js';
 import { initKeys } from '/keys.js';
 import { morph } from '/morph.js';
 
@@ -47,8 +49,10 @@ const goHash = ticketHash ? decodeURIComponent(location.hash.match(/(?:^#|&)go=(
 const [hashId, hashView] = loginHash ? [null, null] : (ticketHash ? goHash : location.hash.slice(1)).split('/');
 // "#watch": the Watch page, not an agent.
 const watchOnLoad = hashId === 'watch';
+const standupOnLoad = hashId === 'standup';
+const mapOnLoad = hashId === 'map';
 let watchShown = false;
-let selectedId = (watchOnLoad ? null : hashId) || null;
+let selectedId = (watchOnLoad || standupOnLoad || mapOnLoad ? null : hashId) || null;
 let openTermOnLoad = hashView === 'term' || hashView === 'code' || isShell(hashView) || isBrowser(hashView);
 let filterText = '';
 // "Only agents created in the last N days": remembered in this browser.
@@ -180,7 +184,24 @@ const watchUi = initWatch({
   projectLabel: (a) => a.projectInfo?.name ?? 'Other',
   openAgent: (id) => (showTab('agents'), select(id), term.open(id)),
 });
-$('#watch-btn').onclick = () => watchUi.show(!watchUi.isOpen());
+$('#watch-btn').onclick = () => (mapUi.isOpen() && mapUi.show(false), watchUi.show(!watchUi.isOpen()));
+
+// Map: where each agent is in the code, and who is about to collide.
+const mapUi = initCodeMap({ api, $, esc, agents, toast: (m, ms) => toast(m, ms), openAgent: (id) => (showTab('agents'), select(id)) });
+$('#map-btn').onclick = () => (watchUi.isOpen() && watchUi.show(false), mapUi.show(!mapUi.isOpen()));
+
+// The standup: each agent's news read aloud, stopping on the ones that need you.
+const standupUi = initStandup({
+  api,
+  $,
+  esc,
+  agents,
+  needsFor: (a) => needsFor(a),
+  needCard: (it, o) => needCard(it, o),
+  onNeed: (e) => onNeed(e),
+  toast: (m, ms) => toast(m, ms),
+  openAgent: (id) => (showTab('agents'), select(id)),
+});
 // Keyboard shortcuts (keys.js): the same actions as the buttons.
 const keysUi = initKeys({ $, esc, run: (act) => shortcut(act) });
 $('#keys-btn').onclick = () => keysUi.help();
@@ -220,6 +241,8 @@ function shortcut(act) {
     return $('#filter').select();
   }
   if (act === 'watch') return $('#watch-btn') ? $('#watch-btn').click() : false;
+  if (act === 'standup') return standupUi.open();
+  if (act === 'map') return $('#map-btn').click();
   if (act.startsWith('tab:')) return showTab(act.slice(4));
   return false;
 }
@@ -2172,6 +2195,7 @@ const VIEWS = {
   detail: () => renderDetail(),
   overlay: () => term.syncOverlay(),
   watch: () => watchUi?.render(),
+  standup: () => standupUi?.render(),
 };
 const ALL_VIEWS = Object.keys(VIEWS);
 
@@ -4074,6 +4098,15 @@ function handleEvent(msg) {
       else if (agents.get(selectedId).runtime.running) term.open(selectedId);
     }
     openTermOnLoad = false;
+    if (mapOnLoad && !watchShown) {
+      watchShown = true;
+      mapUi.show(true);
+    }
+    if (standupOnLoad && !watchShown) {
+      watchShown = true;
+      history.replaceState(null, '', '#');
+      standupUi.open();
+    }
     if (watchOnLoad && !watchUi.isOpen() && !watchShown) {
       watchShown = true;
       watchUi.show(true);
@@ -4088,6 +4121,7 @@ function handleEvent(msg) {
     return invalidate([
       'list', 'backlog', 'land', 'inbox', 'race', 'team',
       ...(watchUi.isOpen() ? ['watch'] : []),
+      ...(standupUi.isOpen() ? ['standup'] : []),
       ...(docView?.agentId === id ? ['doc'] : []),
       ...(id === selectedId || msg.agent.forkOf?.agentId === selectedId ? ['detail'] : []),
       ...(id === term.agentId ? ['overlay'] : []),
@@ -4103,6 +4137,9 @@ function handleEvent(msg) {
     teams.set(msg.team.id, msg.team);
   } else if (msg.t === 'team-removed') {
     teams.delete(msg.id);
+  } else if (msg.t === 'standup') {
+    standupUi.set(msg.latest);
+    if (msg.latest?.reason === 'scheduled' && msg.latest.items.length) toast('Standup ready: press Standup (or p) to play it', 8000);
   } else if (msg.t === 'rules') {
     rulesState = msg.rules;
   } else if (msg.t === 'repeats') {

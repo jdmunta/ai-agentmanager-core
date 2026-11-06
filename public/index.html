@@ -31,6 +31,8 @@
         <input id="filter" type="search" placeholder="Filter agents" aria-label="Filter agents" />
         <button id="assistant-btn" title="An always-on session that finds new work and starts agents for it">Assistant <span id="assistant-dot" class="assistant-dot" hidden></span></button>
         <button id="spend-btn" title="Results across agents (merge rate, time to PR, cost per merged PR), what they cost, and spending limits">Results <span id="spend-today" class="spend-today"></span></button>
+        <button id="standup-btn" title="Today's standup: each agent's news read aloud, and what they need from you">Standup <span id="standup-dot" class="assistant-dot" hidden></span></button>
+        <button id="map-btn" title="The codebase map: where each agent is changing and reading code, and who is about to collide">Map</button>
         <button id="watch-btn" title="Running agents' sessions side by side, live: follow them all without clicking from one to the next">Watch</button>
         <button id="machine-btn" title="A terminal on this computer (your home folder), from any device you're signed in on">Terminal</button>
         <button id="ask-btn" title="A general session with no repo or folder, on Claude Code or another engine you have (Codex, Muse Code, …)">Ask Agent</button>
@@ -60,6 +62,12 @@
       </div>
     </header>
 
+    <section id="map-view" class="map-view" hidden aria-label="Map: where agents are in the code">
+      <div id="map-bar" class="watch-bar"></div>
+      <div id="map-warn" class="map-warn"></div>
+      <div id="map-box" class="map-box"></div>
+      <div id="map-agents" class="map-agents"></div>
+    </section>
     <section id="watch-view" class="watch-view" hidden aria-label="Watch: agents' sessions side by side">
       <div id="watch-bar" class="watch-bar"></div>
       <p id="watch-empty" class="hint watch-empty" hidden></p>
@@ -368,6 +376,9 @@
       </form>
     </dialog>
 
+    <dialog id="standup-dialog" class="standup-dialog" aria-label="Standup">
+      <div id="standup-body"></div>
+    </dialog>
     <dialog id="ask-dialog">
       <form id="ask-form" method="dialog">
         <h2>Ask an agent</h2>
@@ -518,6 +529,7 @@
           <label class="check"><input type="checkbox" name="ev_question" /> asks a question in the inbox</label>
           <label class="check"><input type="checkbox" name="ev_assistant" /> is started for new work (by the assistant, a GitHub label or a webhook)</label>
           <label class="check"><input type="checkbox" name="ev_budget" /> nears or reaches its budget, or today's spend reaches the daily limit</label>
+          <label class="check"><input type="checkbox" name="ev_standup" /> the daily standup is ready (with a link to play it)</label>
           <label class="check"><input type="checkbox" name="ev_waiting" /> finished its turn and is idle after <input name="waitingDelaySec" type="number" min="0" class="num" />s</label>
           <label class="check"><input type="checkbox" name="skipWhenWatching" /> not while I have its terminal open</label>
           <label class="check"><input type="checkbox" name="includeIntent" /> include the intent text in the message</label>

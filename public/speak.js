@@ -60,6 +60,7 @@ function playNext() {
   const part = s.parts[s.i];
   const u = new SpeechSynthesisUtterance(part.text);
   u.rate = rate();
+  if (part.voice) u.voice = part.voice;
   u.onstart = () => part.onStart?.();
   u.onend = () => {
     if (session !== s || s.paused) return;
@@ -74,7 +75,8 @@ function playNext() {
 }
 
 /**
- * Play `parts` (strings, or { text, onStart } to follow along, e.g. highlight a change) under `id`.
+ * Play `parts` (strings, or { text, onStart, voice } to follow along, e.g. highlight a change, and
+ * to speak in a given voice) under `id`.
  * `onState(state)` hears 'playing' | 'paused' | 'stopped'.
  */
 export function play(id, parts, { onState, onEnd } = {}) {
@@ -83,7 +85,7 @@ export function play(id, parts, { onState, onEnd } = {}) {
   const list = parts.flatMap((p) => {
     const text = typeof p === 'string' ? p : p.text;
     const chunks = pieces(text);
-    return chunks.map((c, k) => ({ text: c, onStart: k === 0 && typeof p !== 'string' ? p.onStart : null }));
+    return chunks.map((c, k) => ({ text: c, onStart: k === 0 && typeof p !== 'string' ? p.onStart : null, voice: typeof p === 'string' ? null : p.voice ?? null }));
   });
   if (!list.length) return false;
   session = { id, parts: list, i: 0, paused: false, onState, onEnd };
