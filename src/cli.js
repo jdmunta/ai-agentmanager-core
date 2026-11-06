@@ -738,6 +738,110 @@ export async function main(argv) {
       }
     });
 
+  const valueCmd = program.command('value').description('What the delivered work is worth (AI estimates you can correct), by day, week, month and quarter, with reports for management');
+  const money = (n, cur = 'USD') => (n == null ? '—' : new Intl.NumberFormat('en-US', { style: 'currency', currency: cur, maximumFractionDigits: 0 }).format(n));
+  valueCmd
+    .command('show', { isDefault: true })
+    .description('Totals for the last periods and the items in the current one')
+    .option('-p, --period <period>', 'day, week, month or quarter', 'week')
+    .option('--json', 'print JSON')
+    .action(async (opts) => {
+      await daemon();
+      const v = await api('GET', `/value?period=${encodeURIComponent(opts.period)}`);
+      if (opts.json) return console.log(JSON.stringify(v, null, 2));
+      const cur = v.settings.currency;
+      for (const p of v.periods.slice(0, 6)) {
+        const t = p.totals;
+        console.log(`${bold(p.label.padEnd(22))} ${money(t.valueUsd, cur).padStart(9)} value  ${money(t.revenueUsd, cur).padStart(9)} revenue  ${String(t.humanHours).padStart(5)} h  ${t.items} items${t.leverage ? dim(`  ${t.leverage}× leverage`) : ''}${p.current ? dim('  (so far)') : ''}`);
+      }
+      const now = v.periods[0];
+      const items = v.items.filter((it) => now.items.includes(it.agentId));
+      if (items.length) console.log('');
+      for (const it of items) console.log(`  ${truncate(it.title, 50).padEnd(50)} ${money(it.value.valueUsd, cur).padStart(9)} ${dim(`${it.value.humanHours ?? '—'} h · ${it.value.category ?? '—'}${it.value.yours.length ? ' · edited' : it.est ? '' : ' · no estimate yet'}  ${it.agentId}`)}`);
+      if (v.pending) console.log(dim(`\n${v.pending} waiting for an estimate`));
+    });
+  valueCmd
+    .command('edit')
+    .description("Correct an item's figures (\"\" puts one back to the AI's estimate)")
+    .argument('<agent>')
+    .option('--hours <n>', 'engineering hours it saved')
+    .option('--savings <usd>', 'other savings, first year')
+    .option('--revenue <usd>', 'potential revenue, first year')
+    .option('--strategic <0-5>', 'strategic weight')
+    .option('--your-hours <n>', 'your own time on it')
+    .option('--category <name>', 'cost savings, revenue, risk reduction, quality, customer experience, strategic or maintenance')
+    .option('--summary <text>', 'one sentence for management')
+    .option('--exclude', "don't count it")
+    .option('--include', 'count it again')
+    .action(async (ref, o) => {
+      await daemon();
+      const a = await resolveAgent(ref);
+      const val = (x, n = true) => (x === undefined ? undefined : x === '' ? null : n ? Number(x) : x);
+      const patch = Object.fromEntries(
+        Object.entries({ humanHours: val(o.hours), savingsUsd: val(o.savings), revenueUsd: val(o.revenue), strategic: val(o.strategic), yourHours: val(o.yourHours), category: val(o.category, false), summary: val(o.summary, false) }).filter(([, x]) => x !== undefined),
+      );
+      let it = Object.keys(patch).length ? await api('PATCH', `/value/items/${a.id}`, patch) : null;
+      if (o.exclude || o.include) it = await api('POST', `/value/items/${a.id}/exclude`, { excluded: Boolean(o.exclude) });
+      if (!it) throw new Error('Nothing to change: give --hours, --revenue, … or --exclude');
+      console.log(`${green('✓')} ${bold(it.title)}: ${money(it.value.valueUsd)} value, ${money(it.value.revenueUsd)} revenue, ${it.value.humanHours ?? '—'} h${it.excluded ? dim(' (not counted)') : ''}`);
+    });
+  valueCmd
+    .command('estimate')
+    .description('Estimate an item now (again)')
+    .argument('<agent>')
+    .action(async (ref) => {
+      await daemon();
+      const a = await resolveAgent(ref);
+      const it = await api('POST', `/value/items/${a.id}/estimate`);
+      if (it.estError) throw new Error(it.estError);
+      console.log(`${green('✓')} ${bold(it.title)}: ${it.est.humanHours} h, ${it.est.category}. ${it.est.summary}`);
+    });
+  valueCmd
+    .command('report')
+    .description('The report for the period just ended (or --current), as Markdown; --send to Slack and Google Drive as set')
+    .option('-k, --kind <kind>', 'day, week, month or quarter', 'week')
+    .option('--current', 'the current period so far')
+    .option('--send', 'send it now')
+    .action(async (o) => {
+      await daemon();
+      if (!o.send) return console.log((await api('GET', `/value/report?kind=${encodeURIComponent(o.kind)}${o.current ? '&current=1' : ''}`)).markdown);
+      const r = await api('POST', '/value/report', { kind: o.kind, current: Boolean(o.current) });
+      console.log(`${green('✓')} ${r.period.label}: saved to ${r.sent.file}${r.sent.slack ? ', sent to Slack' : ''}${r.sent.drive?.url ? `, Google Doc ${r.sent.drive.url}` : ''}${r.sent.drive?.error ? red(`; Google Drive: ${r.sent.drive.error}`) : ''}`);
+    });
+  valueCmd
+    .command('set')
+    .description('Settings: your rates, the estimates, and when reports go out')
+    .option('--rate <usd>', 'a loaded engineering hour')
+    .option('--currency <code>', 'e.g. USD, EUR')
+    .option('--your-minutes <n>', 'your time per item unless set on it')
+    .option('--ai <on|off>', 'estimate delivered work with AI')
+    .option('--notes <text>', 'context for the estimates: your company, customers, what revenue means')
+    .option('--reports <list>', 'which reports, comma separated: daily,weekly,monthly,quarterly (or none)')
+    .option('--at <HH:MM>', 'when reports go out')
+    .option('--slack <on|off>', 'send reports to Slack')
+    .option('--drive <on|off>', 'save reports as Google Docs')
+    .action(async (o) => {
+      await daemon();
+      const on = (x) => (x === undefined ? undefined : /^(on|yes|true|1)$/i.test(x));
+      const kinds = o.reports === undefined ? null : o.reports.split(',').map((x) => x.trim());
+      const report = Object.fromEntries(
+        Object.entries({
+          ...(kinds ? { daily: kinds.includes('daily'), weekly: kinds.includes('weekly'), monthly: kinds.includes('monthly'), quarterly: kinds.includes('quarterly') } : {}),
+          at: o.at,
+          slack: on(o.slack),
+          drive: on(o.drive),
+        }).filter(([, x]) => x !== undefined),
+      );
+      const patch = Object.fromEntries(
+        Object.entries({ hourlyRate: o.rate === undefined ? undefined : Number(o.rate), currency: o.currency?.toUpperCase(), yourMinutes: o.yourMinutes === undefined ? undefined : Number(o.yourMinutes), ai: on(o.ai), notes: o.notes, ...(Object.keys(report).length ? { report } : {}) }).filter(([, x]) => x !== undefined),
+      );
+      const v = await api('PUT', '/value', patch);
+      const s = v.settings;
+      const r = s.report;
+      console.log(`engineering hour ${money(s.hourlyRate, s.currency)} · your time ${s.yourMinutes} min per item · AI estimates ${s.ai ? `on (at most ${s.maxPerDay} a day)` : 'off'}`);
+      console.log(`reports: ${['daily', 'weekly', 'monthly', 'quarterly'].filter((k) => r[k]).join(', ') || 'none'} at ${r.at}${r.slack ? ' · Slack' : ''}${r.drive ? ' · Google Drive' : ''}`);
+    });
+
   program
     .command('spend')
     .description('What agents cost today and lately, and spending limits')

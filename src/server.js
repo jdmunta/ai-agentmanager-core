@@ -45,6 +45,7 @@ import { CONTAINER_ENGINES, buildImage, claudeToken, dockerStatus, isBuilding, s
 import { AgentkitReports } from './agentkit-reports.js';
 import { Builder } from './builder.js';
 import { Standup } from './standup.js';
+import { Value, valueSlack } from './value.js';
 import { Store } from './store.js';
 import { about, latestRelease } from './about.js';
 
@@ -132,6 +133,30 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
       const need = latest.items.filter((i) => i.needs).length;
       const what = `${latest.items.length} agent${latest.items.length === 1 ? '' : 's'} with news${need ? `, ${need} need you` : ''}`;
       sendSlack(`:sunrise: *Standup ready*: ${what}\n<${link}|Play it>`, n, `Standup ready: ${what}\nPlay it: ${link}`).catch(() => {});
+    },
+  });
+  // Value: what delivered work is worth, by day, week, month and quarter, with scheduled reports (value.js).
+  let pushValue = () => {};
+  const value = new Value({
+    manager,
+    store,
+    config,
+    who: me,
+    onChange: () => pushValue(),
+    notify: async (period, s) => {
+      const n = loadNotify();
+      if (!n.enabled || !n.events.value) throw new Error('Slack alerts are off');
+      const phone = remoteServer ? remote.remoteUrls(remotePort).find((u) => !u.vpn) : null;
+      const link = `${phone ? phone.url : `http://127.0.0.1:${port}/`}#value`;
+      const msg = valueSlack(period, s, link);
+      await sendSlack(msg.text, n, msg.plain);
+    },
+    publishDrive: async (title, markdown) => {
+      const st = store.data.value;
+      const r = await manager.publishDriveDoc({ folderTitle: 'Value reports (AI Agent Manager)', folderId: st.driveFolderId ?? null, title, markdown });
+      st.driveFolderId = r.folderId ?? st.driveFolderId;
+      store.save();
+      return r;
     },
   });
   const triggers = new Triggers({ manager, store, config, notifier });
@@ -778,6 +803,25 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
       .filter((r) => !q || [r.title, r.summary, r.agent.name, r.agent.project, r.issue?.key].some((s) => String(s ?? '').toLowerCase().includes(q)));
     return req.query.format === 'markdown' ? { markdown: designsMarkdown(rows) } : { rows };
   }));
+  // Value: totals by period, items with estimates you can correct, reports.
+  api.get('/value', wrap((req) => value.view({ period: String(req.query.period ?? 'week') })));
+  api.put('/value', wrap((req) => {
+    const next = value.update(req.body ?? {});
+    saveConfig({ value: next });
+    return value.view({ period: String(req.query.period ?? 'week') });
+  }));
+  api.patch('/value/items/:id', wrap((req) => value.edit(req.params.id, req.body ?? {})));
+  api.post('/value/items/:id/estimate', wrap((req) => value.estimate(req.params.id).then((it) => value.itemView(it))));
+  api.post('/value/items/:id/exclude', wrap((req) => value.exclude(req.params.id, req.body?.excluded !== false)));
+  api.get('/value/report', wrap((req) => value.report(String(req.query.kind ?? 'week'), { current: req.query.current === '1' })));
+  api.post('/value/report', wrap((req) => value.sendReport(String(req.body?.kind ?? 'week'), { current: req.body?.current === true })));
+  api.get('/value/value.csv', (req, res) => {
+    try {
+      res.download(value.writeCsv(), 'value.csv');
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
+  });
   api.get('/standup', wrap(() => standup.view()));
   api.post('/standup', wrap(async () => ({ ...standup.view(), latest: await standup.make({ reason: 'asked' }) })));
   api.put('/standup', wrap((req) => {
@@ -1050,6 +1094,7 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
   };
   manager.on('change', (agent) => broadcast({ t: 'agent', agent }));
   pushStandup = (latest) => broadcast({ t: 'standup', latest });
+  pushValue = () => broadcast({ t: 'value' });
   reports.on('change', () => broadcast({ t: 'built', reports: reports.list() }));
   manager.rules.on('change', (rules) => broadcast({ t: 'rules', rules }));
   repeats.on('change', (view) => broadcast({ t: 'repeats', repeats: view }));
@@ -1184,6 +1229,7 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
     cleanup.close();
     landing.close();
     standup.close();
+    value.close();
     autopilot.close();
     goals.close();
     worklog.close();

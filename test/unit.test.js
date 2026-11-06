@@ -1400,6 +1400,144 @@ test('explain the review by voice: the PR, checks, AI review, risky changes and 
   assert.deepEqual(reviewSpeech(null), []);
 });
 
+test('value: settings, delivery, estimates you can correct, and totals with leverage', async () => {
+  const { valueSettings, deliveredAt, parseValue, itemValue, totals, valueFacts, valuePrompt } = await import('../src/value.js');
+  const s = valueSettings({});
+  assert.deepEqual([s.hourlyRate, s.yourMinutes, s.currency, s.ai, s.report.weekly, s.report.daily, s.report.at], [100, 30, 'USD', true, true, false, '09:00']);
+  assert.equal(valueSettings({ value: { hourlyRate: -5, currency: 'eur', report: { at: '9am' } } }).hourlyRate, 0);
+  assert.equal(valueSettings({ value: { currency: 'eur' } }).currency, 'USD');
+  assert.equal(valueSettings({ value: { report: { at: '9am' } } }).report.at, '09:00');
+  // Delivered: the first merged PR; or done with no PR left open.
+  const merged = (n, at) => ({ [`u${n}`]: { url: `u${n}`, source: 'branch', state: 'MERGED', mergedAt: at } });
+  assert.equal(deliveredAt({ kind: 'task', prs: { ...merged(1, '2026-11-03T10:00:00Z'), ...merged(2, '2026-11-01T10:00:00Z') } }), '2026-11-01T10:00:00.000Z');
+  assert.equal(deliveredAt({ kind: 'task', prs: {}, brief: { status: 'done', updatedAt: '2026-11-02T08:00:00Z' } }), '2026-11-02T08:00:00.000Z');
+  assert.equal(deliveredAt({ kind: 'task', prs: { u: { url: 'u', source: 'branch', state: 'OPEN' } }, brief: { status: 'done', updatedAt: '2026-11-02T08:00:00Z' } }), null, 'its PR is still open');
+  assert.equal(deliveredAt({ kind: 'task', prs: {} }), null);
+  assert.equal(deliveredAt({ kind: 'general', brief: { status: 'done', updatedAt: '2026-11-02T08:00:00Z' } }), null);
+  // The estimate, bounded; garbage is not an estimate.
+  const est = parseValue('Here: {"humanHours": 12.34, "savingsUsd": -3, "revenueUsd": 5000, "strategic": 9, "category": "nope", "summary": "Faster checkout.", "confidence": 2, "why": {"hours": "a two-day change"}}');
+  assert.deepEqual([est.humanHours, est.savingsUsd, est.revenueUsd, est.strategic, est.category, est.confidence, est.why.hours, est.why.revenue], [12.3, 0, 5000, 5, 'maintenance', 1, 'a two-day change', '']);
+  assert.equal(parseValue('no json'), null);
+  assert.equal(parseValue('{"savingsUsd": 3}'), null, 'hours are required');
+  // Yours win over the estimate; labor is hours × rate.
+  const it = { est: { humanHours: 10, savingsUsd: 200, revenueUsd: 1000, strategic: 2, category: 'quality', summary: 'AI words' }, edits: { humanHours: 6, strategic: 4 }, aiCostUsd: 3.5 };
+  const v = itemValue(it, { ...s, hourlyRate: 150 });
+  assert.deepEqual([v.humanHours, v.laborUsd, v.savingsUsd, v.valueUsd, v.revenueUsd, v.strategic, v.yourHours, v.yours.sort()], [6, 900, 200, 1100, 1000, 4, 0.5, ['humanHours', 'strategic']]);
+  assert.equal(itemValue({ est: null, edits: {} }, s).valueUsd, null, 'not estimated yet');
+  const t = totals([it, { est: { humanHours: 4, savingsUsd: 0, revenueUsd: 0, strategic: 1 }, edits: { yourHours: 1.5 }, aiCostUsd: 1.5 }], { ...s, hourlyRate: 150 });
+  assert.deepEqual([t.items, t.humanHours, t.valueUsd, t.revenueUsd, t.strategicHigh, t.yourHours, t.aiCostUsd, t.leverage, t.roi], [2, 10, 1700, 1000, 1, 2, 5, 5, 340]);
+  // The prompt: facts as data, the person's notes when set.
+  const facts = valueFacts({ id: 'a', name: 'OPS-7', kind: 'task', intent: 'https://x.atlassian.net/browse/OPS-7 speed up checkout', createdAt: '2026-11-01T08:00:00Z', prs: merged(1, '2026-11-01T12:00:00Z'), brief: { results: { delivered: ['cached prices'] } } }, { project: 'web', designSummary: 'A price cache.', files: { 'a.js': { added: 10, removed: 2 } } });
+  assert.deepEqual([facts.issue, facts.project, facts.design, facts.filesChanged, facts.linesChanged, facts.elapsedHours, facts.delivered], ['OPS-7', 'web', 'A price cache.', 1, 12, 4, ['cached prices']]);
+  const p = valuePrompt(facts, { ...s, notes: 'B2B SaaS' });
+  assert.match(p, /^Estimate the business value/);
+  assert.match(p, /<facts>\n\{.*"OPS-7".*\}\n<\/facts>/s);
+  assert.match(p, /<notes>\nB2B SaaS\n<\/notes>/);
+  assert.doesNotMatch(valuePrompt(facts, s), /<notes>/);
+});
+
+test('value: day, week, month and quarter totals, and the report for management', async () => {
+  const { aggregate, valueMarkdown, valueSlack, valueSettings, PERIODS } = await import('../src/value.js');
+  const s = valueSettings({});
+  const item = (id, at, hours, revenue = 0) => ({ agentId: id, title: `Work ${id}`, link: `https://github.com/a/b/pull/${id}`, deliveredAt: at, est: { humanHours: hours, savingsUsd: 0, revenueUsd: revenue, strategic: 4, category: 'revenue', summary: `Sum ${id}.` }, edits: {}, aiCostUsd: 2 });
+  // Wednesday 2026-11-04 noon, local time.
+  const now = new Date(2026, 10, 4, 12).getTime();
+  const items = [item('1', new Date(2026, 10, 3, 9).toISOString(), 8, 1000), item('2', new Date(2026, 10, 2, 9).toISOString(), 4), item('3', new Date(2026, 9, 28, 9).toISOString(), 2), item('4', new Date(2026, 6, 15, 9).toISOString(), 10)];
+  const weeks = aggregate(items, s, { period: 'week', t: now });
+  assert.equal(weeks.length, 12);
+  assert.deepEqual([weeks[0].current, weeks[0].totals.items, weeks[0].totals.humanHours, weeks[1].totals.items], [true, 2, 12, 1]);
+  assert.equal(new Date(weeks[0].start).getDay(), 1, 'weeks start on Monday');
+  const months = aggregate(items, s, { period: 'month', t: now });
+  assert.deepEqual(months.slice(0, 5).map((m) => m.totals.items), [2, 1, 0, 0, 1]);
+  const quarters = aggregate(items, s, { period: 'quarter', t: now });
+  assert.deepEqual([quarters[0].key, quarters[0].totals.items, quarters[1].key, quarters[1].totals.items], ['2026-Q4', 3, '2026-Q3', 1]);
+  assert.equal(aggregate(items, s, { period: 'day', t: now })[1].totals.items, 1, 'yesterday');
+  assert.throws(() => aggregate(items, s, { period: 'year' }), /period is one of/);
+  assert.equal(PERIODS.month.key(PERIODS.month.start(now)), '2026-11');
+  const md = valueMarkdown(weeks[0], items.slice(0, 2), s, { who: 'Pat', prev: weeks[1] });
+  assert.match(md, /^# Value delivered: Week of Nov 2, Pat\n/);
+  assert.match(md, /\*\*Value delivered\*\*: \$1,200 \(\+500% vs the period before\): \$1,200 of engineering time \(12 hours at \$100\/hour\)/);
+  assert.match(md, /\*\*Potential revenue\*\*: \$1,000/);
+  assert.match(md, /\*\*AI augmentation\*\*: 12 hours of engineering per hour of my time \(1 hours of mine\); AI cost \$4, 300× value per AI dollar/);
+  assert.match(md, /\| \[Work 1\]\(https:\/\/github\.com\/a\/b\/pull\/1\)<br>Sum 1\. \| revenue \| 8 \| \$800 \| \$1,000 \| 4\/5 \|/);
+  const sl = valueSlack(weeks[0], s, 'http://x/#value');
+  assert.match(sl.text, /^:chart_with_upwards_trend: \*Value delivered, Week of Nov 2\*: \$1,200/);
+  assert.match(sl.text, /<http:\/\/x\/#value\|Open the report>$/);
+  assert.doesNotMatch(sl.plain, /[*<>]|:chart/);
+});
+
+test('value: new deliveries found, estimated one at a time, corrected, left out, and reports on schedule', async () => {
+  const { Value } = await import('../src/value.js');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'value-'));
+  const agents = [
+    { id: 'a1', kind: 'task', name: 'OPS-1', intent: 'https://x.atlassian.net/browse/OPS-1 speed up checkout', createdAt: '2026-11-02T08:00:00Z', prs: { u: { url: 'https://github.com/a/b/pull/5', number: 5, title: 'Cache', source: 'branch', state: 'MERGED', mergedAt: '2026-11-03T10:00:00Z' } }, sessions: [{ cost: { usd: 2.5 } }] },
+    { id: 'a2', kind: 'task', name: 'fix', intent: 'fix the flaky test #novalue', createdAt: '2026-11-02T08:00:00Z', prs: {}, brief: { status: 'done', updatedAt: '2026-11-03T12:00:00Z' } },
+    { id: 'a3', kind: 'task', name: 'wip', intent: 'wip', createdAt: '2026-11-02T08:00:00Z', prs: {} },
+    { id: 'old', kind: 'task', name: 'old', intent: 'old', createdAt: '2025-01-01T08:00:00Z', prs: {}, brief: { status: 'done', updatedAt: '2025-01-02T08:00:00Z' } },
+  ];
+  const store = { data: {}, list: () => agents, get: (id) => agents.find((a) => a.id === id), save() {} };
+  const prompts = [];
+  const manager = {
+    view: (a) => ({ ...a, projectInfo: { name: 'web' } }),
+    writerFor: () => ({ engine: 'claude' }),
+    specDoc: () => ({ markdown: null }),
+    changeSets: new Map(),
+    oneShot: async (_a, prompt) => {
+      prompts.push(prompt);
+      if (prompt.includes('#novalue')) throw new Error('model failed');
+      return '{"humanHours": 8, "savingsUsd": 100, "revenueUsd": 0, "strategic": 2, "category": "quality", "summary": "Faster checkout.", "confidence": 0.6, "why": {}}';
+    },
+  };
+  const sent = [];
+  const v = new Value({ manager, store, config: {}, dir, who: 'Pat', notify: async (p) => sent.push(p.key), log: () => {} });
+  v.close();
+  const t = new Date(2026, 10, 4, 12).getTime();
+  assert.equal(v.scan(t), 2, 'a1 and a2: a3 is not done, old is from before the backfill window');
+  assert.deepEqual(Object.keys(v.state.items).sort(), ['a1', 'a2']);
+  assert.equal(v.state.items.a1.aiCostUsd, 2.5);
+  assert.equal(v.state.items.a1.issue, 'OPS-1');
+  // Newest first; one call each; a failure is kept, not retried on its own.
+  await v.estimateNext(t);
+  assert.equal(v.state.items.a2.estError, 'model failed');
+  await v.estimateNext(t);
+  assert.equal(v.state.items.a1.est.humanHours, 8);
+  assert.equal(await v.estimateNext(t), null, 'nothing left');
+  assert.equal(prompts.length, 2);
+  // The daily cap.
+  v.update({ maxPerDay: 2 });
+  agents.push({ id: 'a4', kind: 'task', name: 'n', intent: 'n', createdAt: '2026-11-03T08:00:00Z', prs: {}, brief: { status: 'done', updatedAt: '2026-11-04T09:00:00Z' } });
+  v.scan(t);
+  assert.equal(await v.estimateNext(t), null, 'two calls today already');
+  assert.ok(await v.estimateNext(t + 86_400_000), 'tomorrow');
+  // Corrections win; null goes back to the estimate; bad input is refused.
+  const e = v.edit('a1', { humanHours: 5, revenueUsd: 3000, category: 'revenue' });
+  assert.deepEqual([e.value.humanHours, e.value.laborUsd, e.value.revenueUsd, e.value.category], [5, 500, 3000, 'revenue']);
+  assert.equal(v.edit('a1', { humanHours: null }).value.humanHours, 8);
+  assert.throws(() => v.edit('a1', { strategic: 'lots' }), /must be a number/);
+  assert.throws(() => v.edit('a1', { category: 'fun' }), /category is one of/);
+  assert.throws(() => v.edit('a1', { owner: 'me' }), /Unknown field/);
+  assert.throws(() => v.edit('zz', {}), /No delivered work/);
+  // Left out: not in the totals.
+  v.exclude('a4');
+  const week = v.view({ period: 'week', t }).periods[0];
+  assert.deepEqual([week.totals.items, week.items.sort()], [2, ['a1', 'a2']]);
+  assert.throws(() => v.update({ report: { at: 'noon' } }), /HH:MM/);
+  // Reports: the first time only marks where to start; then each period once, after the set time.
+  assert.deepEqual(await v.dueReports(t), []);
+  const nextMonday = new Date(2026, 10, 9, 9, 30).getTime();
+  assert.deepEqual(await v.dueReports(new Date(2026, 10, 9, 8, 0).getTime()), [], 'before 09:00');
+  const out = await v.dueReports(nextMonday);
+  assert.deepEqual(out.map((r) => r.period.key), ['week of 2026-11-02']);
+  assert.deepEqual(sent, ['week of 2026-11-02']);
+  assert.match(fs.readFileSync(out[0].sent.file, 'utf8'), /^# Value delivered: Week of Nov 2, Pat/);
+  assert.deepEqual(await v.dueReports(nextMonday + 3_600_000), [], 'once');
+  const csv = fs.readFileSync(path.join(dir, 'value.csv'), 'utf8').split('\n');
+  assert.equal(csv[0], 'delivered,project,title,issue,link,category,human_hours,labor_usd,savings_usd,value_usd,revenue_usd,strategic,your_hours,ai_cost_usd,summary,set_by_you,confidence,agent_id');
+  assert.equal(csv.filter(Boolean).length, 3, 'a4 is left out');
+  assert.match(csv.find((l) => l.includes('a1')), /,OPS-1,https:\/\/github\.com\/a\/b\/pull\/5,revenue,8,800,100,900,3000,2,0\.5,2\.5,Faster checkout\.,revenueUsd category,0\.6,a1$/);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 test('designs: name and summary from DESIGN.md, links, and agents waiting for review first', async () => {
   const { designOutline, designRows, designsMarkdown } = await import('../src/designs.js');
   assert.deepEqual(designOutline('# Design: Upload retries\n\n## Summary\nRetries **failed** uploads with [backoff](http://x).\nKeeps order.\n\n## Architecture\nx'), { title: 'Upload retries', summary: 'Retries failed uploads with backoff. Keeps order.' });

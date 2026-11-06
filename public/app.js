@@ -28,6 +28,7 @@ import { initStandup } from '/standup.js';
 import { initIssues } from '/issues.js';
 import { reviewSpeech } from '/prvoice.js';
 import { initDesigns } from '/designs.js';
+import { initValue } from '/value.js';
 import { initCodeMap } from '/codemap.js';
 import { initKeys } from '/keys.js';
 import { morph } from '/morph.js';
@@ -54,8 +55,9 @@ const [hashId, hashView] = loginHash ? [null, null] : (ticketHash ? goHash : loc
 const watchOnLoad = hashId === 'watch';
 const standupOnLoad = hashId === 'standup';
 const mapOnLoad = hashId === 'map';
+const valueOnLoad = hashId === 'value';
 let watchShown = false;
-let selectedId = (watchOnLoad || standupOnLoad || mapOnLoad ? null : hashId) || null;
+let selectedId = (watchOnLoad || standupOnLoad || mapOnLoad || valueOnLoad ? null : hashId) || null;
 let openTermOnLoad = hashView === 'term' || hashView === 'code' || isShell(hashView) || isBrowser(hashView);
 let filterText = '';
 // "Only agents created in the last N days": remembered in this browser.
@@ -227,6 +229,9 @@ const designsUi = initDesigns({
   openDoc: (id) => (showTab('agents'), select(id), openDoc(id, 'designdoc')),
 });
 $('#designs-btn').onclick = () => designsUi.open();
+// Value: what the delivered work is worth, for you and for management.
+const valueUi = initValue({ api, $, esc, toast: (m, ms) => toast(m, ms), openAgent: (id) => (showTab('agents'), select(id)) });
+$('#value-btn').onclick = () => valueUi.open();
 // Keyboard shortcuts (keys.js): the same actions as the buttons.
 const keysUi = initKeys({ $, esc, run: (act) => shortcut(act) });
 $('#keys-btn').onclick = () => keysUi.help();
@@ -270,6 +275,7 @@ function shortcut(act) {
   if (act === 'map') return $('#map-btn').click();
   if (act === 'issues') return issuesUi.open();
   if (act === 'designs') return designsUi.open();
+  if (act === 'value') return valueUi.open();
   if (act.startsWith('tab:')) return showTab(act.slice(4));
   return false;
 }
@@ -4134,6 +4140,11 @@ function handleEvent(msg) {
       watchShown = true;
       mapUi.show(true);
     }
+    if (valueOnLoad && !watchShown) {
+      watchShown = true;
+      history.replaceState(null, '', '#');
+      valueUi.open();
+    }
     if (standupOnLoad && !watchShown) {
       watchShown = true;
       history.replaceState(null, '', '#');
@@ -4171,6 +4182,8 @@ function handleEvent(msg) {
     teams.set(msg.team.id, msg.team);
   } else if (msg.t === 'team-removed') {
     teams.delete(msg.id);
+  } else if (msg.t === 'value') {
+    valueUi.changed();
   } else if (msg.t === 'standup') {
     standupUi.set(msg.latest);
     if (msg.latest?.reason === 'scheduled' && msg.latest.items.length) toast('Standup ready: press Standup (or p) to play it', 8000);
