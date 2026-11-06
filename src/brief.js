@@ -670,7 +670,11 @@ export const intentPath = (agentId) => path.join(briefDir(agentId), INTENT_FILE)
 export const specPath = (agentId) => path.join(briefDir(agentId), SPEC_FILE);
 export const DESIGN_FILE = 'DESIGN.md';
 export const designPath = (agentId) => path.join(briefDir(agentId), DESIGN_FILE);
-export const SPEC_DOCS = { intent: intentPath, spec: specPath, plan: planPath, designdoc: designPath };
+export const DEMO_FILE = 'DEMO.html';
+export const demoPath = (agentId) => path.join(briefDir(agentId), DEMO_FILE);
+export const BENCH_FILE = 'BENCHMARK.md';
+export const benchPath = (agentId) => path.join(briefDir(agentId), BENCH_FILE);
+export const SPEC_DOCS = { intent: intentPath, spec: specPath, plan: planPath, designdoc: designPath, benchmark: benchPath, demo: demoPath };
 
 /** INTENT.md: the request as given, and where it came from. */
 export function intentMarkdown(agent) {
@@ -724,6 +728,30 @@ export const designDocPrompt = (file, { afterApproval = false } = {}) =>
   '("- **Design page**: not published: <why>"; only for a missing or failing tool, never because the change is small) and carry on; never hold up the task for it. ' +
   'The file is outside the repository: never copy it into the repo or commit it.';
 
+export const demoPagePrompt = (file) =>
+  `When the change works (tests pass), make a sample demo page of it at ${file}: one self-contained HTML file ` +
+  '(CSS and JavaScript inline; no requests to other sites; under about 300 KB) that shows what this work does with realistic sample data. ' +
+  'Open with one line on what changed, then show it: for a library, API or CLI, runnable examples with sample inputs and the output you actually got ' +
+  'by running them (a small try-it form where the logic can run in the page); for a UI change, the changed screen rebuilt with sample data, ' +
+  'or screenshots you took embedded as data: URLs; for a fix, before and after. Never invent output or numbers. No filler, no repeat of the spec. ' +
+  'Publish it without asking, as a claude.ai Artifact with your Artifact tool, and add its link to the References section of your brief: ' +
+  '"- **Demo page**: [Artifact](<url>)". If you change the work later, update the file and republish to the same URL. ' +
+  'If the Artifact tool is missing or fails, write "- **Demo page**: not published: <why>" instead and carry on; never hold up the task for it. ' +
+  'The file is outside the repository: never copy it into the repo or commit it.';
+
+export const benchmarksPrompt = (file, dir) =>
+  'Measure the speed of the code this task changes with micro benchmarks, once the change works (tests pass). ' +
+  'If the repository already has a benchmark setup (a bench or benchmarks folder, go test -bench, pytest-benchmark, JMH, criterion, ' +
+  `vitest bench, Benchmark.js, hyperfine and the like), add yours there in its style; otherwise put the scripts in ${dir}, outside the repository, never committed. ` +
+  'Benchmark the changed functions directly with realistic sample inputs at two or three sizes; warm up, run enough iterations for stable numbers, ' +
+  'and take the median and the spread (p95 or ±%). Run the same benchmark on the base commit (check it out in a temporary git worktree) ' +
+  `and on your change, back to back on this machine. Write the results to ${file} (Markdown), short:\n` +
+  '# Benchmark: <short name>\n## What was measured\nThe functions, inputs and sizes, and the command to run it again.\n' +
+  '## Results\nA table: case | before | after | change.\n## Environment\nCPU, OS, runtime and version.\n' +
+  '## Notes\nAnything noisy or surprising. A slowdown over 5% gets a line on why, or a fix.\n' +
+  'Run them again if you change the code afterwards. Only real measurements: never estimate a number. ' +
+  'The file is outside the repository: never copy it into the repo or commit it.';
+
 /** One of the agent's files (intent, spec, plan, design doc): its Markdown and when it changed, or null. */
 export function readSpecDoc(agentId, name) {
   const file = SPEC_DOCS[name]?.(agentId);
@@ -751,11 +779,11 @@ export function specDocsInfo(agentId) {
 export function prSections(agentId, read = (n) => readSpecDoc(agentId, n)?.markdown) {
   const doc = (n) => read(n)?.trim();
   // Demote the files' own headings under the description's.
-  const demote = (md) => md.replace(/^(#{1,4}) /gm, '#$1 ').replace(/^## (Intent|Spec|Plan|Design): .*\n+/m, '');
+  const demote = (md) => md.replace(/^(#{1,4}) /gm, '#$1 ').replace(/^## (Intent|Spec|Plan|Design|Benchmark): .*\n+/m, '');
   const parts = [];
   const intent = doc('intent');
   if (intent) parts.push('## Intent', '', demote(intent), '');
-  for (const [name, label] of [['spec', 'Spec'], ['plan', 'Plan'], ['designdoc', 'Design']]) {
+  for (const [name, label] of [['spec', 'Spec'], ['plan', 'Plan'], ['designdoc', 'Design'], ['benchmark', 'Benchmark']]) {
     const md = doc(name);
     if (md) parts.push(`<details><summary><b>${label}</b></summary>`, '', demote(md), '', '</details>', '');
   }

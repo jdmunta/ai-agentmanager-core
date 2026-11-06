@@ -347,6 +347,8 @@ export async function main(argv) {
     .option('--no-container', 'run on this computer even if containers are the default')
     .option('--plan', 'while a repo URL clones, plan the task with Claude (moves into the repo when ready)')
     .option('--no-design-doc', 'no design doc for this agent (on by default: "designDoc" in config.json)')
+    .option('--demo-page', 'make a sample demo page of the change, published as an Artifact')
+    .option('--benchmarks', 'micro benchmarks of the changed code, before and after')
     .option('--no-start', 'create without launching')
     .option('-a, --attach', 'attach to the agent after launch (single intent only)')
     .action(async (intents, opts, cmd) => {
@@ -374,6 +376,8 @@ export async function main(argv) {
         start: opts.start,
         plan: opts.plan,
         designDoc: cmd.getOptionValueSource('designDoc') === 'cli' ? opts.designDoc : undefined,
+        demoPage: opts.demoPage || undefined,
+        benchmarks: opts.benchmarks || undefined,
       });
       for (const a of created) console.log(`${green('+')} ${bold(a.name)} ${dim(a.id)}  session ${cyan(a.sessionId)}`);
       console.log(dim(`Workspace setup and launch continue in the background. "agentmgr ls" shows status.`));
@@ -813,7 +817,7 @@ export async function main(argv) {
         console.log(`${(color[r.land] ?? dim)(r.land.padEnd(7))} P${r.agent.priority} ${bold(r.agent.name)}  #${r.pr.number ?? ''} ${r.pr.title ?? r.pr.url}  ${checks}${r.pr.review ? `  ${r.pr.review.toLowerCase().replace(/_/g, ' ')}` : ''}${r.fixes ? dim(`  sent back ${r.fixes}x`) : ''}`);
       }
       if (!rows.length) console.log(dim('No open pull requests from agents.'));
-      console.log(dim(`Failing checks ${settings.fixChecks ? 'are' : 'are not'} sent to agents, requested changes ${settings.fixReviews ? 'are' : 'are not'}, at most ${settings.maxFixes} times per PR; merges use ${settings.mergeMethod}.`));
+      console.log(dim(`Failing checks ${settings.fixChecks ? 'are' : 'are not'} sent to agents, requested changes ${settings.fixReviews ? 'are' : 'are not'}, at most ${settings.maxFixes} times per PR; new review comments ${settings.fixComments ? 'are' : 'are not'}, while it is open; merges use ${settings.mergeMethod}.`));
     });
   land
     .command('update')
@@ -853,6 +857,7 @@ export async function main(argv) {
     .description('Landing settings')
     .option('--fix-checks <on|off>', 'send failing checks to the agent')
     .option('--fix-reviews <on|off>', 'send requested changes to the agent')
+    .option('--fix-comments <on|off>', 'send new review comments to the agent while the pull request is open')
     .option('--max-fixes <n>', 'at most this many times per pull request')
     .option('--method <m>', 'merge method: squash, merge or rebase')
     .option('--delete-branch <on|off>', 'delete the branch on GitHub after merging')
@@ -860,7 +865,7 @@ export async function main(argv) {
       await daemon();
       const onOff = (v) => (v === undefined ? undefined : ['on', 'true', 'yes', '1'].includes(String(v).toLowerCase()));
       const patch = Object.fromEntries(
-        [['fixChecks', onOff(opts.fixChecks)], ['fixReviews', onOff(opts.fixReviews)], ['maxFixes', opts.maxFixes === undefined ? undefined : Number(opts.maxFixes)], ['mergeMethod', opts.method], ['deleteBranch', onOff(opts.deleteBranch)]].filter(([, v]) => v !== undefined),
+        [['fixChecks', onOff(opts.fixChecks)], ['fixReviews', onOff(opts.fixReviews)], ['fixComments', onOff(opts.fixComments)], ['maxFixes', opts.maxFixes === undefined ? undefined : Number(opts.maxFixes)], ['mergeMethod', opts.method], ['deleteBranch', onOff(opts.deleteBranch)]].filter(([, v]) => v !== undefined),
       );
       const { settings } = await api('PUT', '/landing', patch);
       console.log(JSON.stringify(settings, null, 2));

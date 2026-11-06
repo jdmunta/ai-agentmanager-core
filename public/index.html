@@ -31,6 +31,7 @@
         <input id="filter" type="search" placeholder="Filter agents" aria-label="Filter agents" />
         <button id="assistant-btn" title="An always-on session that finds new work and starts agents for it">Assistant <span id="assistant-dot" class="assistant-dot" hidden></span></button>
         <button id="spend-btn" title="Results across agents (merge rate, time to PR, cost per merged PR), what they cost, and spending limits">Results <span id="spend-today" class="spend-today"></span></button>
+        <button id="watch-btn" title="Running agents' sessions side by side, live: follow them all without clicking from one to the next">Watch</button>
         <button id="machine-btn" title="A terminal on this computer (your home folder), from any device you're signed in on">Terminal</button>
         <button id="ask-btn" title="A general session with no repo or folder, on Claude Code or another engine you have (Codex, Muse Code, …)">Ask Agent</button>
         <button id="new-btn" class="primary">+ New agents</button>
@@ -59,6 +60,11 @@
       </div>
     </header>
 
+    <section id="watch-view" class="watch-view" hidden aria-label="Watch: agents' sessions side by side">
+      <div id="watch-bar" class="watch-bar"></div>
+      <p id="watch-empty" class="hint watch-empty" hidden></p>
+      <div id="watch-grid" class="watch-grid"></div>
+    </section>
     <main class="layout">
       <aside class="sidebar">
         <div class="side-tabs" role="tablist">
@@ -273,6 +279,14 @@
         <label class="check">
           <input type="checkbox" name="designDoc" checked />
           Design doc <span class="hint">(after the plan: architecture, design and data flow, viewable here and published as an Artifact; updated when done)</span>
+        </label>
+        <label class="check">
+          <input type="checkbox" name="demoPage" />
+          Demo page <span class="hint">(once it works: a sample page showing the change with real inputs and outputs, viewable here and published as an Artifact)</span>
+        </label>
+        <label class="check">
+          <input type="checkbox" name="benchmarks" />
+          Micro benchmarks <span class="hint">(the changed code timed before and after, results in a table)</span>
         </label>
         <div class="row when">
           <label class="check"><input type="radio" name="when" value="now" checked /> Start now</label>

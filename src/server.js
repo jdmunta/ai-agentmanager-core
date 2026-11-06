@@ -274,6 +274,17 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
     }),
   );
   api.get('/agents/:id/specs/:name', wrap((req) => manager.specDoc(req.params.id, req.params.name)));
+  // The agent's demo page, sandboxed: no access to this page's origin, and nothing loaded from elsewhere.
+  api.get('/agents/:id/demo', (req, res) => {
+    try {
+      const html = manager.demoPage(req.params.id);
+      res.set('Content-Security-Policy', "sandbox allow-scripts allow-forms allow-modals; default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; media-src data: blob:");
+      res.set('X-Content-Type-Options', 'nosniff');
+      res.type('html').send(html);
+    } catch (err) {
+      res.status(err.status || 500).json({ error: err.message });
+    }
+  });
   // All of an agent's documents to Google Drive (through the Claude account's Google Drive connector).
   api.post('/agents/:id/drive', wrap((req) => manager.publishToDrive(req.params.id)));
   api.post('/agents/:id/scorecard/post', wrap((req) => review.postScorecard(req.params.id)));
@@ -943,7 +954,7 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
       send({ t: 'error', error: err.message });
       return res.end();
     }
-    send({ t: 'hello', id: agent.id, kind, running: session.running, backlog: session.backlog });
+    send({ t: 'hello', id: agent.id, kind, running: session.running, backlog: session.backlog, cols: session.cols, rows: session.rows });
     req.on('close', () => {
       clearTimeout(timer);
       session.detach();
@@ -1057,7 +1068,7 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
       };
       const kind = agent.id === MACHINE ? `shell:${shellNumber(url.searchParams.get('kind')) || 1}` : termKind(url.searchParams.get('kind'));
       session = attachTerm(agent.id, kind, client);
-      client.send({ t: 'hello', id: agent.id, kind, running: session.running, backlog: session.backlog });
+      client.send({ t: 'hello', id: agent.id, kind, running: session.running, backlog: session.backlog, cols: session.cols, rows: session.rows });
       ws.on('message', (raw) => {
         let msg;
         try {
