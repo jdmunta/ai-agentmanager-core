@@ -14,7 +14,7 @@ import { Backlog } from './backlog.js';
 import { Races } from './races.js';
 import { Review } from './review.js';
 import { Teams } from './teams.js';
-import { Assistant } from './assistant.js';
+import { Assistant, FEATURES, featuresOf } from './assistant.js';
 import { Cleanup } from './cleanup.js';
 import { Landing } from './landing.js';
 import { Autopilot } from './autopilot.js';
@@ -40,6 +40,7 @@ import * as remote from './remote.js';
 import * as service from './service.js';
 import { jiraView, saveJira } from './jira.js';
 import { ProposedIssues, issuesMarkdown } from './issues.js';
+import { MyActions } from './actions.js';
 import { designsMarkdown } from './designs.js';
 import { Reviews, reviewDraft, reviewMarkdown } from './reviews.js';
 import { CONTAINER_ENGINES, buildImage, claudeToken, dockerStatus, isBuilding, saveSecrets } from './container.js';
@@ -92,6 +93,7 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
   const manager = new AgentManager({ store, config, plugins });
   const backlog = new Backlog({ manager, store, config });
   const proposed = new ProposedIssues({ store, manager });
+  const myActions = new MyActions({ store, manager });
   const reviews = new Reviews({ manager, store, log: (m) => console.log(`[agentmgr] ${m}`) });
   const races = new Races({ manager, store });
   const review = new Review({ manager });
@@ -789,6 +791,7 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
   api.get('/issues', wrap(async (req) => {
     // ?fresh=1 (the ↻ button) asks Jira again for the issues assigned to you.
     if (req.query.fresh === '1') manager.assignedAt = 0;
+    manager.jiraOff = !featuresOf(config).jira;
     const v = await manager.issues(proposed.listed(), proposed.actions);
     const group = req.query.group ? String(req.query.group) : null;
     // "all" is everything still on the list: removed ones only when asked for.
@@ -799,6 +802,21 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
   api.post('/issues/proposed', wrap((req) => proposed.add({ ...req.body, by: req.headers['x-agentmgr-agent'] ? 'assistant' : 'you' })));
   api.post('/issues/start', wrap((req) => proposed.start(Array.isArray(req.body?.keys) ? req.body.keys.map(String) : [])));
   api.post('/issues/dismiss', wrap((req) => proposed.dismiss(Array.isArray(req.body?.keys) ? req.body.keys.map(String) : [])));
+  // My actions: what's asked of you in Slack and meeting notes (the assistant adds them).
+  api.get('/actions', wrap(() => ({ rows: myActions.rows(), features: featuresOf(config) })));
+  api.post('/actions', wrap((req) => myActions.add({ ...req.body, by: req.headers['x-agentmgr-agent'] ? 'assistant' : 'you' })));
+  api.post('/actions/set', wrap((req) => myActions.set(Array.isArray(req.body?.ids) ? req.body.ids.map(String) : [], String(req.body?.state ?? ''), { project: req.body?.project ?? null })));
+  api.post('/actions/:id/discuss', wrap((req) => myActions.discuss(req.params.id, `node ${JSON.stringify(path.join(__dirname, '..', 'bin', 'agentmgr.js'))}`)));
+  // The parts you use: Jira, Slack, meeting notes. Off hides its list and the assistant skips it.
+  api.get('/features', wrap(() => ({ features: featuresOf(config), me: assistant.settings.me })));
+  api.put('/features', wrap((req) => {
+    const next = {};
+    for (const k of Object.keys(FEATURES)) if (typeof req.body?.features?.[k] === 'boolean') next[k] = req.body.features[k];
+    config.features = { ...config.features, ...next };
+    saveConfig({ features: config.features });
+    if (typeof req.body?.me === 'string') saveConfig({ assistant: assistant.update({ me: req.body.me.trim() }) });
+    return { features: featuresOf(config), me: assistant.settings.me };
+  }));
   // Your action on issues: assign (starts an agent from the proposal), skip, done, remove, or null to clear.
   api.post('/issues/action', wrap((req) => proposed.setAction(Array.isArray(req.body?.keys) ? req.body.keys.map(String) : [], req.body?.action ?? null)));
   // Design docs of all agents; the same ?group= and ?format=markdown.

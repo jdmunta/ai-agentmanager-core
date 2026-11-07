@@ -19,6 +19,9 @@ export const SHORTCUTS = [
     [['p'], 'Play the standup', 'standup'],
     [['m'], 'Map: where agents are in the code', 'map'],
     [['i'], 'Jira: issues waiting for your review', 'issues'],
+    [['o'], "Actions: what's asked of you in Slack and meetings", 'actions'],
+    [['h'], 'Assistant', 'assistant'],
+    [[','], 'Settings', 'settings'],
     [['d'], 'Designs: agents\' design docs', 'designs'],
     [['g'], 'Reviews: pull requests you review', 'reviews'],
     [['v'], 'Value: what the work is worth', 'value'],
@@ -28,6 +31,22 @@ export const SHORTCUTS = [
     [['4'], 'Land: pull requests', 'tab:land'],
     [['5'], 'Built agents', 'tab:built'],
     [['?'], 'These shortcuts', 'help'],
+  ]],
+  ['In the Jira and Actions lists', [
+    [['j', 'k'], 'Next / previous row', null],
+    [['[', ']'], 'Previous / next filter', null],
+    [['a'], 'Assign (starts an agent)', null],
+    [['s'], 'Skip', null],
+    [['d'], 'Done', null],
+    [['x'], 'Remove', null],
+    [['o'], 'Undecided again (Actions) or clear (Jira)', null],
+    [['c'], 'Discuss it with Claude (Actions)', null],
+    [['Enter'], 'Open the issue or where it was asked', null],
+    [['r'], 'Look again', null],
+  ]],
+  ['In the standup', [
+    [['Space'], 'Play or pause', null],
+    [['←', '→'], 'Previous / next agent', null],
   ]],
   ['In a terminal', [
     [['Ctrl+Shift+↓'], "Next agent's terminal", 'next-term'],
@@ -40,11 +59,11 @@ export const SHORTCUTS = [
 // A single key, as an event names it, to its action.
 export const SINGLE = {
   j: 'next', k: 'prev', Enter: 'terminal', t: 'terminal',
-  r: 'changes', s: 'start', X: 'stop', e: 'edit', n: 'new', a: 'ask', '/': 'filter', w: 'watch', p: 'standup', m: 'map', i: 'issues', d: 'designs', g: 'reviews', v: 'value', '?': 'help',
+  r: 'changes', s: 'start', X: 'stop', e: 'edit', n: 'new', a: 'ask', '/': 'filter', w: 'watch', p: 'standup', m: 'map', i: 'issues', o: 'actions', h: 'assistant', ',': 'settings', d: 'designs', g: 'reviews', v: 'value', '?': 'help',
   1: 'tab:agents', 2: 'tab:inbox', 3: 'tab:backlog', 4: 'tab:land', 5: 'tab:built',
 };
 // While Watch is open: only what makes sense there.
-const ON_WATCH = new Set(['new', 'ask', 'watch', 'standup', 'map', 'issues', 'designs', 'reviews', 'value', 'help']);
+const ON_WATCH = new Set(['new', 'ask', 'watch', 'standup', 'map', 'issues', 'actions', 'assistant', 'settings', 'designs', 'reviews', 'value', 'help']);
 
 /** Typing somewhere: a field, an editor or a terminal (xterm types through a textarea). */
 const typing = (el) => Boolean(el?.closest?.('input, textarea, select, [contenteditable=""], [contenteditable="true"], .xterm, .cm-editor'));

@@ -1554,6 +1554,33 @@ test('issues: the Jira summary lists agents\' issues with their Jira status, wai
   }
 });
 
+test('actions: added by the assistant or you, decided, discussed; features turn lists off', async () => {
+  const made = [];
+  try {
+    const a = (await call('POST', '/actions', { text: 'Send Pat the latency numbers', source: 'slack', link: 'https://acme.slack.com/archives/C1/p9', from: 'Pat' })).body;
+    assert.equal(a.status, 'open');
+    assert.equal((await call('POST', '/actions', { text: 'Send Pat the latency numbers', source: 'slack', link: 'https://acme.slack.com/archives/C1/p9' })).body.duplicate, true);
+    assert.equal((await call('POST', '/actions', { text: 'x' })).status, 400);
+    const v = (await call('GET', '/actions')).body;
+    assert.ok(v.rows.some((r) => r.id === a.id && r.group === 'open' && r.sourceLabel === 'Slack'));
+    assert.deepEqual(v.features, { jira: true, slack: true, gemini: true });
+    assert.deepEqual((await call('POST', '/actions/set', { ids: [a.id], state: 'done' })).body.set, [a.id]);
+    assert.equal((await call('GET', '/actions')).body.rows.find((r) => r.id === a.id).group, 'done');
+    assert.equal((await call('POST', '/actions/set', { ids: [a.id], state: 'maybe' })).status, 400);
+    const d = (await call('POST', `/actions/${a.id}/discuss`, {})).body;
+    made.push(d.agent.id);
+    assert.equal((await agentNow(d.agent.id)).kind, 'general');
+    assert.equal((await call('POST', '/actions/nope/discuss', {})).status, 404);
+    // Features: off, and back on.
+    const f = (await call('PUT', '/features', { features: { jira: false, gemini: false } })).body;
+    assert.deepEqual(f.features, { jira: false, slack: true, gemini: false });
+    assert.deepEqual((await call('GET', '/features')).body.features, { jira: false, slack: true, gemini: false });
+  } finally {
+    await call('PUT', '/features', { features: { jira: true, slack: true, gemini: true } });
+    for (const id of made) await call('DELETE', `/agents/${id}`);
+  }
+});
+
 test('value: delivered work estimated by the model, corrected, totals by period, a report sent to Slack', async () => {
   const [a] = (await call('POST', '/agents', { intent: 'https://acme.atlassian.net/browse/VAL-1 speed up checkout', start: false })).body;
   const url = 'https://github.com/acme/web/pull/77';

@@ -1278,3 +1278,11 @@ input.inline { width: 64px; display: inline-block; padding: 2px 4px; }
 }
 .rv-card input[type="checkbox"] { width: auto; flex: none; margin: 0; }
 .rv-item input[type="checkbox"] { margin-top: 4px; }
+
+/* ---------- Lists you move through with j / k (Jira, Actions) */
+table.issues tr.kb-on td { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+table.issues tr.kb-on td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+.actions-table .action-text { font-weight: 600; color: var(--text); }
+.actions-table .action-meta { margin-top: 3px; }
+.actions-table .action-due { color: var(--yellow); font-weight: 600; }
+.actions-table tr.action-skip td:not(.issue-action), .actions-table tr.action-remove td:not(.issue-action), .actions-table tr.action-done td:not(.issue-action) { opacity: 0.65; }

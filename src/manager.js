@@ -121,7 +121,7 @@ import { Judge, clashPrompt, finishMessage, hash, reviewPrompt, screenPrompt, st
 import { findLocalUrls, findSignInLinks, parseCallback, parseUrl } from './preview.js';
 import { Plugins } from './plugins.js';
 import { leadPrompt, subagents, teamDir, teamPrompt } from './teams.js';
-import { assistantDir, assistantPrompt, assistantSettings } from './assistant.js';
+import { assistantDir, currentPrompt } from './assistant.js';
 import { learnCommand, memoryKey, memoryPrompt, memoryText } from './memory.js';
 import { Rules, describeTool } from './rules.js';
 import { runningClaude, scanClaudeSessions } from './sessions.js';
@@ -832,7 +832,8 @@ export class AgentManager extends EventEmitter {
     const views = this.store.list().map((a) => this.view(a));
     this.jiraCache ??= new Map();
     // Open issues assigned to you (kept two minutes); their fields stand in for a fetch each.
-    if (!this.assignedAt || Date.now() - this.assignedAt > 2 * 60_000) {
+    if (this.jiraOff) this.assignedNow = [];
+    else if (!this.assignedAt || Date.now() - this.assignedAt > 2 * 60_000) {
       const got = await (this.assignedFetch ?? assignedIssues)().catch(() => null);
       this.assignedAt = Date.now();
       if (got) this.assignedNow = got;
@@ -1239,10 +1240,11 @@ export class AgentManager extends EventEmitter {
       allowedTools = [...(allowedTools ?? []), ...builderAllowedTools(agent.workdir)];
     }
     if (agent.kind === 'assistant') {
-      fs.mkdirSync(assistantDir(), { recursive: true });
-      const dir = fs.realpathSync(assistantDir());
-      writableDir = dir;
-      prompts.push(assistantPrompt(assistantSettings(this.config), dir));
+      writableDir = fs.realpathSync((fs.mkdirSync(assistantDir(), { recursive: true }), assistantDir()));
+      const p = currentPrompt(this.config);
+      prompts.push(p.text);
+      // What it started with: a check after a settings change brings the new instructions.
+      (this.store.data.assistant ??= {}).promptHash = p.hash;
     }
     if (agent.team) {
       // Team members write their handoff files in the team's folder.

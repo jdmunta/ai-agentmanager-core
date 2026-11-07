@@ -4,6 +4,7 @@
 // it starts agents for that work through agentmgr, or passes news to the agent already on it.
 // The daemon keeps the limits: a daily cap, a cap on its agents running at once, and no second
 // agent for the same issue.
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -17,7 +18,32 @@ export const SOURCES = {
   comments: 'new comments and mentions on Jira issues the person owns',
   slack: 'Slack messages to the person (direct messages and mentions) that ask for work',
   linear: 'Linear issues newly assigned to the person',
+  actions: 'things asked of the person in Slack and in meeting notes (Notes by Gemini), for their Actions list',
 };
+
+/**
+ * The parts of AI Agent Manager you use (config.json "features"); all on unless turned off in
+ * Settings. Off, its list is hidden and the assistant doesn't look there.
+ */
+export const FEATURES = {
+  jira: 'Jira: the issues assigned to you and the agents on them',
+  slack: 'Slack: work and action items from your messages',
+  gemini: 'Meeting notes: action items from Google Meet\'s Notes by Gemini',
+};
+export function featuresOf(config = {}) {
+  const f = config.features ?? {};
+  return Object.fromEntries(Object.keys(FEATURES).map((k) => [k, f[k] !== false]));
+}
+
+/** The sources the assistant checks with these features on. */
+export function activeSources(sources, features) {
+  return sources.filter((k) => {
+    if (k === 'jira' || k === 'comments') return features.jira;
+    if (k === 'slack') return features.slack;
+    if (k === 'actions') return features.slack || features.gemini;
+    return true;
+  });
+}
 export const ASSISTANT_DEFAULTS = {
   everyMin: 15,
   // Linear only when chosen: most people use Jira or Linear, not both.
@@ -41,7 +67,9 @@ export const assistantDir = () => path.join(paths.home, 'assistant');
 export function assistantSettings(config = {}) {
   const c = { ...ASSISTANT_DEFAULTS, ...config.assistant };
   const n = (v, d, lo, hi) => (Number.isFinite(Number(v)) && Number(v) >= lo ? Math.min(hi, Math.floor(Number(v))) : d);
-  const sources = Array.isArray(c.sources) ? c.sources.filter((s) => SOURCES[s]) : ASSISTANT_DEFAULTS.sources;
+  let sources = Array.isArray(c.sources) ? c.sources.filter((s) => SOURCES[s]) : ASSISTANT_DEFAULTS.sources;
+  // Lists saved before "actions" existed get it once; after that, what you chose stays.
+  if (Array.isArray(c.sources) && c.sourcesV2 !== true && !sources.includes('actions')) sources = [...sources, 'actions'];
   return {
     everyMin: n(c.everyMin, ASSISTANT_DEFAULTS.everyMin, 1, 1440),
     sources,
@@ -51,11 +79,15 @@ export function assistantSettings(config = {}) {
     model: typeof c.model === 'string' && c.model ? c.model : null,
     notes: typeof c.notes === 'string' ? c.notes.slice(0, 4000) : '',
     pickIssues: c.pickIssues === true,
+    // Who "the person" is, to find what's asked of them: name and email(s). Empty: from git config.
+    me: typeof c.me === 'string' ? c.me.slice(0, 300) : '',
+    sourcesV2: true,
   };
 }
 
 /** The assistant's standing instructions (appended to its system prompt on every launch). */
-export function assistantPrompt(s, dir, bin = `node ${BIN}`) {
+export function assistantPrompt(s, dir, bin = `node ${BIN}`, features = featuresOf()) {
+  s = { ...s, sources: activeSources(s.sources, features) };
   const am = bin;
   const watch = s.sources.map((k) => `- ${SOURCES[k]}`).join('\n');
   const how = [];
@@ -106,6 +138,19 @@ export function assistantPrompt(s, dir, bin = `node ${BIN}`) {
         `Otherwise start one: ${am} add @<project> "Checks fail on <PR link>: find out why and fix it on that branch."`,
     );
   }
+  if (s.sources.includes('actions')) {
+    const where = [
+      features.slack && 'in Slack, direct messages to the person, messages that mention them and threads they take part in',
+      features.gemini && 'in meeting notes: the Google Docs named "Notes by Gemini" for their meetings (in Google Drive, or linked from the calendar event or the email Gemini sends)',
+    ].filter(Boolean);
+    const who = s.me ? `the person (${s.me})` : 'the person (their name and email: git config --global user.name and user.email)';
+    how.push(
+      `My action items: with your ${[features.slack && 'Slack', features.gemini && 'Google Drive, Calendar and Gmail'].filter(Boolean).join(' and ')} tools, read what's new since your last check ${where.join(', and ')}. ` +
+        `Find what is asked of ${who}, or what they agreed to do: in Gemini's notes, the action items and suggested next steps that name them. ` +
+        `For each one, add it to their list: ${am} actions add --source <${[features.slack && 'slack', features.gemini && 'gemini'].filter(Boolean).join('|')}> --link "<the message or doc link>" --from "<who asked>" [--due "<when, if said>"] --context "<one or two sentences of background>" "<the action in one line, starting with a verb>". ` +
+        `Adding the same one twice is harmless. Don't act on them, start agents for them or reply: the person decides under Actions.`,
+    );
+  }
   if (s.sources.includes('slack')) {
     how.push(
       `Slack: with your Slack tools, read direct messages to the person and messages that mention them, since your last check. ` +
@@ -127,6 +172,13 @@ export function assistantPrompt(s, dir, bin = `node ${BIN}`) {
   ]
     .filter(Boolean)
     .join('\n\n');
+}
+
+/** The instructions for the assistant as the settings stand now, and a short hash of them. */
+export function currentPrompt(config = {}) {
+  fs.mkdirSync(assistantDir(), { recursive: true });
+  const text = assistantPrompt(assistantSettings(config), fs.realpathSync(assistantDir()), undefined, featuresOf(config));
+  return { text, hash: crypto.createHash('sha256').update(text).digest('hex').slice(0, 16) };
 }
 
 export class Assistant {
@@ -207,7 +259,14 @@ export class Assistant {
     if (!a) throw err(409, 'The assistant is not set up yet: start it first');
     const last = this.state.lastCheckAt;
     const n = (this.state.checks ?? 0) + 1;
-    const text = `Check now (check ${n}, ${new Date().toISOString()}${last ? `; last check ${last}` : '; first check'}${by === 'person' ? ', asked by the person' : ''}).`;
+    let text = `Check now (check ${n}, ${new Date().toISOString()}${last ? `; last check ${last}` : '; first check'}${by === 'person' ? ', asked by the person' : ''}).`;
+    // Settings changed since the session started (sources, features, notes): the new instructions
+    // come with this check, so they apply without restarting it.
+    const now = currentPrompt(this.config);
+    if (this.state.promptHash && now.hash !== this.state.promptHash) {
+      text += `\n\nThe person changed your settings. From now on follow these instructions instead of the ones you started with:\n\n${now.text}`;
+    }
+    this.state.promptHash = now.hash;
     this.manager.tell(a.id, text, { source: 'assistant' });
     this.state.checks = n;
     this.state.lastCheckAt = new Date().toISOString();

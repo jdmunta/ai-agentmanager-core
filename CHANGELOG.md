@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **Actions: what's asked of you in Slack and in meeting notes, in one list.** The assistant reads your Slack messages and mentions and your meetings' Notes by Gemini on its checks, and lists what's asked of you (or what you agreed to do) with who asked, where (a link), when and any due date. Decide on each on the left (assign to an agent, skip, done, remove), kept across restarts and changeable any time; **Discuss** talks one through with Claude in a session of its own, which suggests what to do and drafts any reply, but never sends anything. Turn it on under Assistant (on by default for new and existing setups); `agentmgr actions` lists them.
+- **Turn off what you don't use**: Settings → What you use has Jira, Slack and Meeting notes. Off, its list and button are hidden and the assistant stops looking there; changes reach a running assistant with its next check. Settings also has your name and email, so the assistant knows what's asked of you.
+- **More keyboard shortcuts**: `o` Actions, `h` Assistant, `,` Settings. In the Jira and Actions lists, `j`/`k` move between rows, `a` `s` `d` `x` assign, skip, mark done or remove, `c` discusses an action, Enter opens the source, `[` `]` switch filters. In the standup, Space plays or pauses and ← → move between agents. `?` lists them all.
+
+## Unreleased
+
 - **Your action on each Jira issue: assign, skip, done or remove.** A picker on the left of every issue in the Jira tab. Your choice is kept by the daemon, so a restart or an update doesn't ask again, and you can change it any time (a removed issue is under Removed, to bring back). Assign starts an agent for an issue not started yet. The assistant doesn't propose or start agents for issues you skipped, marked done or removed. Also `agentmgr issues set <assign|skip|done|remove|clear> <keys...>`.
 - **Every open Jira issue assigned to you is listed**, epics too, until it's closed or integrated, with or without an agent. Needs your Jira site, email and API token in Settings → Jira.
 - **A synopsis under each issue**: what it's about in a sentence or two, from its Jira description (or the agent's design doc).
