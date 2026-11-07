@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.26.0 (2026-11-07)
 
 - **Today: what needs you, in one list.** The Today button (or `y`) gathers what the other lists know and puts the most pressing first: agents stopped at a prompt or waiting for your answer, overdue and due-today action items, issues and pull requests ready for your review, review requests, then the rest (actions due later, new Jira issues, stuck agents, follow-ups). Each says why it's there ("due today · asked by Pat · in Slack", "Blocked: staging credentials"), and the usual decision is a click or a key away: Done, Skip and Discuss for actions, Assign for new issues, Review it for a requested pull request, Open for the rest. Listen reads the top of it aloud. Lists turned off in Settings are left out. The button's count is the pressing ones.
 
