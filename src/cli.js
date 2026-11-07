@@ -674,16 +674,17 @@ export async function main(argv) {
     .action(async (opts) => {
       await daemon();
       const v = await api('GET', '/issues');
-      const rows = opts.all ? v.rows : v.rows.filter((r) => r.group === 'you' || r.group === 'new');
+      const rows = opts.all ? v.rows.filter((r) => r.group !== 'removed') : v.rows.filter((r) => r.group === 'you' || r.group === 'new');
       if (opts.json) return console.log(JSON.stringify({ ...v, rows }, null, 2));
       if (opts.markdown) return console.log(issuesMarkdown(rows));
       if (!rows.length) return console.log(dim(opts.all ? 'No agents work on Jira or Linear issues.' : 'Nothing to start or review. --all shows the rest.'));
       for (const r of rows) {
         const pr = r.pr ? `  PR #${r.pr.number ?? '?'}` : '';
         console.log(`${bold(r.key.padEnd(10))} ${r.jira?.status ? dim(`[${r.jira.status}] `) : ''}${truncate(r.title ?? '', 60)}`);
+        if (r.synopsis) console.log(dim(`  ${truncate(r.synopsis, 110)}`));
         console.log(`  ${r.group === 'you' || r.group === 'new' ? yellow(r.note) : r.note}${pr}  ${dim(r.agent ? `agent ${r.agent.name} (${r.agent.id})` : `start: agentmgr issues start ${r.key}`)}`);
       }
-      const others = v.rows.length - rows.length;
+      const others = v.rows.filter((r) => r.group !== 'removed').length - rows.length;
       if (others) console.log(dim(`\n${others} more with agents still on them or finished: --all`));
       if (!v.jira.signedIn) console.log(dim('Jira status needs your site, email and API token: Settings → Jira.'));
     });
@@ -716,6 +717,18 @@ export async function main(argv) {
       await daemon();
       const r = await api('POST', '/issues/dismiss', { keys });
       console.log(`${r.dismissed} dismissed`);
+    });
+  issuesCmd
+    .command('set')
+    .description('Your action on issues, kept across restarts and updates: assign (start an agent), skip, done, remove, or clear')
+    .argument('<action>', 'assign | skip | done | remove | clear')
+    .argument('<keys...>', 'issue keys, e.g. OPS-7 OPS-9')
+    .action(async (action, keys) => {
+      await daemon();
+      const r = await api('POST', '/issues/action', { keys, action: action === 'clear' ? null : action });
+      for (const x of r.started) console.log(`${green('✓')} ${bold(x.key)} → agent ${x.agent.name} (${x.agent.id})`);
+      if (r.set.length) console.log(`${green('✓')} ${r.set.join(', ')}: ${action === 'clear' ? 'cleared' : action}`);
+      for (const x of r.failed) console.log(`${red('!')} ${bold(x.key)}: ${x.reason}`);
     });
 
   program

@@ -1,9 +1,72 @@
 // Listening instead of reading: Explain, the documents and the change walkthrough read aloud with
-// the browser's own speech (nothing leaves the device; it works on phones). Text goes in short
+// the browser's own speech (on-device voices only unless you pick an online one; it works on
+// phones). The clearest voice here is used, never the robotic or novelty ones. Text goes in short
 // pieces, since some browsers stop a long utterance partway. One thing plays at a time.
 
 const RATES = [0.85, 1, 1.25, 1.5, 1.75];
 const RATE_KEY = 'agentmgr.speechRate';
+const VOICE_KEY = 'agentmgr.voice';
+
+// Voices that sound robotic or are made for fun: macOS's old and Eloquence voices, and its
+// novelty ones. Not used unless chosen by name.
+const ROBOTIC = /^(Albert|Bad News|Bahh|Bells|Boing|Bruce|Bubbles|Cellos|Deranged|Eddy|Flo|Fred|Good News|Grandma|Grandpa|Hysterical|Jester|Junior|Kathy|Organ|Pipe Organ|Princess|Ralph|Reed|Rocko|Sandy|Shelley|Superstar|Trinoids|Vicki|Victoria|Whisper|Wobble|Zarvox)\b/i;
+// Clear, natural voices: the downloadable high-quality ones, Siri's, Edge's neural and Google's.
+const NATURAL = /\b(Premium|Enhanced|Siri|Natural|Neural|Online)\b|^Google /i;
+const CLEAR = /^(Samantha|Alex|Ava|Allison|Susan|Tom|Karen|Daniel|Moira|Tessa|Serena|Zoe|Evan|Nathan|Joelle|Noelle|Aaron|Nicky|Rishi|Veena|Lee)\b/i;
+
+/**
+ * How good a voice sounds for reading aloud in `lang` ("en-US"); below 0 means don't use it.
+ * Online voices (Chrome's Google ones) send the text to their maker, so they count only when
+ * `online` (you pick one by name).
+ */
+export function voiceScore(v, lang = 'en-US', { online = false } = {}) {
+  const want = String(lang).toLowerCase();
+  const have = String(v?.lang ?? '').toLowerCase().replace('_', '-');
+  if (!have.startsWith(want.slice(0, 2)) || ROBOTIC.test(v.name ?? '')) return -1;
+  if (v.localService === false && !online) return -1;
+  return (NATURAL.test(v.name) ? 6 : 0) + (CLEAR.test(v.name) ? 3 : 0) + (have === want ? 2 : 0) + (v.default ? 1 : 0);
+}
+
+/** The voices worth using for `lang`, best first. */
+export function rankVoices(voices = [], lang = 'en-US', opts = {}) {
+  return voices
+    .map((v) => ({ v, s: voiceScore(v, lang, opts) }))
+    .filter((x) => x.s >= 0)
+    .sort((a, b) => b.s - a.s || String(a.v.name).localeCompare(String(b.v.name)))
+    .map((x) => x.v);
+}
+
+const lang = () => (typeof navigator !== 'undefined' && navigator.language) || 'en-US';
+
+/** This browser's good voices for the page's language, best first (`online`: those too). */
+export function goodVoices(opts = {}) {
+  return canSpeak() ? rankVoices(speechSynthesis.getVoices(), lang(), opts) : [];
+}
+
+/** The voice you picked (by name), or null for "the best one here". */
+export function chosenVoice() {
+  try {
+    return localStorage.getItem(VOICE_KEY) || null;
+  } catch {
+    return null;
+  }
+}
+
+export function setVoice(name) {
+  try {
+    if (name) localStorage.setItem(VOICE_KEY, name);
+    else localStorage.removeItem(VOICE_KEY);
+  } catch {}
+  notify();
+}
+
+/** The voice to read with when none is given: yours, else the best one here. */
+export function preferredVoice() {
+  if (!canSpeak()) return null;
+  const name = chosenVoice();
+  const all = speechSynthesis.getVoices();
+  return (name && all.find((v) => v.name === name)) || goodVoices()[0] || null;
+}
 
 export const canSpeak = () => typeof window !== 'undefined' && 'speechSynthesis' in window && 'SpeechSynthesisUtterance' in window;
 
@@ -60,7 +123,11 @@ function playNext() {
   const part = s.parts[s.i];
   const u = new SpeechSynthesisUtterance(part.text);
   u.rate = rate();
-  if (part.voice) u.voice = part.voice;
+  const voice = part.voice ?? preferredVoice();
+  if (voice) {
+    u.voice = voice;
+    u.lang = voice.lang;
+  }
   u.onstart = () => part.onStart?.();
   u.onend = () => {
     if (session !== s || s.paused) return;

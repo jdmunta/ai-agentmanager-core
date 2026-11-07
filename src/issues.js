@@ -9,6 +9,7 @@ import { needsOf } from './standup.js';
 
 const ISSUE_KEY = /^[A-Z][A-Z0-9_]+-\d+$/;
 const MAX_PROPOSED = 200;
+const MAX_ACTIONS = 1000;
 const err = (status, message) => Object.assign(new Error(message), { status });
 const NEEDS = new Set(['prompt', 'waiting', 'plan', 'question']);
 
@@ -16,6 +17,7 @@ const NEEDS = new Set(['prompt', 'waiting', 'plan', 'question']);
 // In the order they're listed.
 export const GROUPS = {
   proposed: 'new',
+  assigned: 'new',
   needs: 'you',
   review: 'you',
   blocked: 'you',
@@ -25,6 +27,16 @@ export const GROUPS = {
   merged: 'done',
   closed: 'done',
 };
+
+/**
+ * What you decided for an issue, kept in state.json so a restart or an update doesn't ask again:
+ * assign (an agent works on it), skip (not now), done (handled, by you or elsewhere), remove (off
+ * the list). Any of them can be changed later; skipped, done and removed issues aren't proposed or
+ * started by the assistant.
+ */
+export const ACTIONS = ['assign', 'skip', 'done', 'remove'];
+const SET_ASIDE = { skip: 'skipped', done: 'done', remove: 'removed' };
+const ACTION_NOTE = { skip: 'Skipped by you', done: 'Marked done by you', remove: 'Removed by you' };
 
 /** The issue an agent works on: { key, url }, from the link its request starts with or one in it. */
 export function issueOf(v) {
@@ -90,20 +102,23 @@ function designOf(v, read) {
  * The summary's rows from agent views, those waiting for you first.
  * `read(agentId, name)` gives one of the agent's documents ('plan'), or null.
  */
-export function issueRows(views, jira = new Map(), read = () => null, proposed = []) {
+export function issueRows(views, jira = new Map(), read = () => null, proposed = [], actions = {}, assigned = []) {
   const rank = Object.fromEntries(Object.keys(GROUPS).map((k, i) => [k, i]));
   const rows = [];
   // Issues proposed for agents, not started yet: they wait for you to tick them.
   for (const p of proposed) {
     const j = jira.get(p.key) ?? null;
+    const action = actions[p.key]?.action ?? (p.status === 'dismissed' ? 'remove' : null);
     rows.push({
       key: p.key,
       url: p.url,
       title: j?.summary ?? p.title,
+      synopsis: synopsisFor(j, p.title, null, j?.summary ?? p.title),
       jira: j ? { status: j.status, category: j.category } : null,
+      action,
       stage: 'proposed',
-      group: 'new',
-      note: `Not started${p.project ? ` (@${p.project})` : ''}: tick it to start an agent`,
+      group: SET_ASIDE[action] ?? 'new',
+      note: ACTION_NOTE[action] ?? `Not started${p.project ? ` (@${p.project})` : ''}: tick it to start an agent`,
       agent: null,
       proposal: { project: p.project ?? null, repo: p.repo ?? null, by: p.by ?? null, intent: p.intent },
       pr: null,
@@ -117,25 +132,67 @@ export function issueRows(views, jira = new Map(), read = () => null, proposed =
     if (v.kind === 'assistant') continue;
     const issue = issueOf(v);
     if (!issue) continue;
-    const { stage, note, pr } = stageOf(v);
+    const { stage, note: where, pr } = stageOf(v);
     const j = jira.get(issue.key) ?? null;
+    const action = actions[issue.key]?.action ?? 'assign';
+    const note = ACTION_NOTE[action] ? `${ACTION_NOTE[action]} (${where.charAt(0).toLowerCase()}${where.slice(1)})` : where;
+    const design = designOf(v, read);
     rows.push({
       key: issue.key,
       url: issue.url,
       title: j?.summary ?? issue.title,
+      synopsis: synopsisFor(j, wordsAfterLink(v.intent), design?.summary, j?.summary ?? issue.title),
       jira: j ? { status: j.status, category: j.category } : null,
+      action,
       stage,
-      group: GROUPS[stage],
+      group: SET_ASIDE[action] ?? GROUPS[stage],
       note: note.length > 200 ? `${note.slice(0, 199)}…` : note,
       agent: { id: v.id, name: v.name, project: v.projectInfo?.name ?? null, running: Boolean(v.runtime?.running), busy: Boolean(v.runtime?.busy), from: v.startedBy ? 'assistant' : v.trigger?.source ?? null },
       pr: pr ? { url: pr.url, number: pr.number ?? null, title: pr.title ?? null, state: pr.state, checks: pr.checks?.state ?? null, review: pr.review ?? null } : null,
       aiReview: v.aiReview?.verdict ?? null,
       plan: planOf(v, read),
-      design: designOf(v, read),
+      design,
       updatedAt: v.activeAt ?? v.createdAt ?? null,
     });
   }
+  // Open issues assigned to you in Jira (epics too) that no agent or proposal covers yet.
+  const listed = new Set(rows.map((r) => r.key));
+  for (const i of assigned) {
+    if (listed.has(i.key)) continue;
+    listed.add(i.key);
+    const action = actions[i.key]?.action ?? null;
+    rows.push({
+      key: i.key,
+      url: i.url,
+      title: i.summary,
+      synopsis: i.synopsis ?? null,
+      type: i.type ?? null,
+      jira: { status: i.status, category: i.category },
+      action,
+      stage: 'assigned',
+      group: SET_ASIDE[action] ?? 'new',
+      note: ACTION_NOTE[action] ?? 'Assigned to you in Jira; no agent yet',
+      agent: null,
+      proposal: null,
+      pr: null,
+      aiReview: null,
+      plan: null,
+      design: null,
+      updatedAt: i.updated,
+    });
+  }
   return rows.sort((a, b) => rank[a.stage] - rank[b.stage] || String(b.updatedAt ?? '').localeCompare(String(a.updatedAt ?? '')));
+}
+
+/**
+ * What the issue is about in a sentence or two: from its Jira description, else the agent's
+ * design doc summary, else the words the request had after the link (when they say more than
+ * the title).
+ */
+function synopsisFor(j, words, designSummary, title) {
+  if (j?.synopsis) return j.synopsis;
+  if (designSummary) return designSummary.length > 280 ? `${designSummary.slice(0, 279)}…` : designSummary;
+  return words && words !== title ? words : null;
 }
 
 const REVIEW = { writing: 'being written', review: 'waiting for your approval', approved: 'approved', changes: 'changes asked' };
@@ -180,9 +237,82 @@ export class ProposedIssues {
     return (this.store.data.proposedIssues ??= []);
   }
 
+  /** Your action per issue key: { action, at }. */
+  get actions() {
+    return (this.store.data.issueActions ??= {});
+  }
+
+  /** Skip, done or remove when you set one; dismissed before actions existed counts as remove. */
+  setAside(key) {
+    const a = this.actions[key]?.action ?? (this.all.find((p) => p.key === key)?.status === 'dismissed' ? 'remove' : null);
+    return SET_ASIDE[a] ? a : null;
+  }
+
   /** The ones waiting for you, without those an agent has taken up meanwhile. */
   waiting() {
-    return this.all.filter((p) => p.status === 'waiting' && !this.agentFor(p.key));
+    return this.all.filter((p) => p.status === 'waiting' && !this.setAside(p.key) && !this.agentFor(p.key));
+  }
+
+  /** Every proposal no agent works on: waiting, skipped, done or removed (for the table). */
+  listed() {
+    return this.all.filter((p) => p.status !== 'started' && !this.agentFor(p.key));
+  }
+
+  /** The assistant doesn't start agents for issues you skipped, marked done or removed. */
+  refuseSetAside(intents = []) {
+    for (const text of intents) {
+      const key = leadingJiraKey(text);
+      const a = key && this.setAside(key);
+      if (a) throw err(409, `${key}: ${ACTION_NOTE[a].toLowerCase()}; no agent is started for it unless they change that under Jira`);
+    }
+  }
+
+  /**
+   * Set your action on issues (null clears it). Assign starts an agent from the proposal when none
+   * works on the issue yet. Returns { set: [keys], started: [{ key, agent }], failed: [{ key, reason }] }.
+   */
+  setAction(keys = [], action = null) {
+    if (action !== null && !ACTIONS.includes(action)) throw err(400, `The action is one of ${ACTIONS.join(', ')}, or none to clear it`);
+    const set = [];
+    const started = [];
+    const failed = [];
+    for (const key of new Set(keys)) {
+      let p = this.all.find((x) => x.key === key);
+      let agent = this.agentFor(key);
+      const mine = !p && !agent ? (this.manager.assignedNow ?? []).find((i) => i.key === key) : null;
+      if (!p && !agent && !mine) {
+        failed.push({ key, reason: 'not on the list' });
+        continue;
+      }
+      // An issue assigned to you in Jira: assigning it makes the request from its link and summary.
+      if (action === 'assign' && mine) {
+        p = { key, url: mine.url, title: mine.summary, intent: `${mine.url} ${mine.summary ?? ''}`.trim().slice(0, 4000), project: null, repo: null, by: 'jira', status: 'waiting', at: new Date().toISOString() };
+        this.all.push(p);
+      }
+      if (action === 'assign' && !agent) {
+        p.status = 'waiting';
+        delete this.actions[key];
+        const r = this.start([key]);
+        if (r.failed.length) {
+          failed.push(...r.failed);
+          continue;
+        }
+        started.push(...r.started);
+        agent = r.started[0].agent;
+      }
+      // Assign is what an agent on it means anyway; only the others are kept.
+      if (SET_ASIDE[action]) this.actions[key] = { action, at: new Date().toISOString() };
+      else delete this.actions[key];
+      if (p?.status === 'dismissed') p.status = 'waiting';
+      set.push(key);
+    }
+    // Old decisions go first when the list grows long.
+    const keys_ = Object.keys(this.actions);
+    if (keys_.length > MAX_ACTIONS) {
+      for (const k of keys_.sort((a, b) => this.actions[a].at.localeCompare(this.actions[b].at)).slice(0, keys_.length - MAX_ACTIONS)) delete this.actions[k];
+    }
+    this.store.save();
+    return { set, started, failed };
   }
 
   agentFor(key) {
@@ -198,7 +328,8 @@ export class ProposedIssues {
     const agent = this.agentFor(key);
     if (agent) throw err(409, `An agent for ${key} already exists: ${agent.name} (${agent.id})`);
     const prev = this.all.find((p) => p.key === key);
-    if (prev?.status === 'dismissed') throw err(409, `${key} was dismissed; not proposed again`);
+    const aside = this.setAside(key);
+    if (aside) throw err(409, `${key}: ${ACTION_NOTE[aside].toLowerCase()}; not proposed again`);
     if (prev?.status === 'started') throw err(409, `${key} was started already`);
     project = project ? String(project).trim().replace(/^@/, '') || null : null;
     if (project && !this.manager.resolveProject(project)) throw err(400, `No project @${project}; see agentmgr project ls`);
@@ -255,18 +386,8 @@ export class ProposedIssues {
     return { started, failed };
   }
 
-  /** Not for an agent: off the list, and not proposed again. */
+  /** Not for an agent: off the list, and not proposed again (the remove action). */
   dismiss(keys = []) {
-    const want = new Set(keys);
-    let n = 0;
-    for (const p of this.all) {
-      if (want.has(p.key) && p.status === 'waiting') {
-        p.status = 'dismissed';
-        p.dismissedAt = new Date().toISOString();
-        n++;
-      }
-    }
-    this.store.save();
-    return { dismissed: n };
+    return { dismissed: this.setAction(keys, 'remove').set.length };
   }
 }

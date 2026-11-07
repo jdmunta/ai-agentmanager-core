@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- **Your action on each Jira issue: assign, skip, done or remove.** A picker on the left of every issue in the Jira tab. Your choice is kept by the daemon, so a restart or an update doesn't ask again, and you can change it any time (a removed issue is under Removed, to bring back). Assign starts an agent for an issue not started yet. The assistant doesn't propose or start agents for issues you skipped, marked done or removed. Also `agentmgr issues set <assign|skip|done|remove|clear> <keys...>`.
+- **Every open Jira issue assigned to you is listed**, epics too, until it's closed or integrated, with or without an agent. Needs your Jira site, email and API token in Settings → Jira.
+- **A synopsis under each issue**: what it's about in a sentence or two, from its Jira description (or the agent's design doc).
+- **A clearer standup voice.** The standup used a different voice for each agent, picked from every voice installed, and on a Mac that includes the old robotic ones. Now it uses only the clearest on-device voices (Premium, Enhanced and Siri voices first), names are read as words, and you can pick one voice under the player; it's used for everything read aloud. Online voices (Chrome's Google ones) are offered but never picked for you, since they send the text to Google.
+
 ## 1.23.1 (2026-11-06)
 
 - **Diagrams that fail to draw no longer litter the page.** Mermaid's "Syntax error" picture was left at the bottom of the page when an agent's diagram didn't parse. Now the diagram's own spot says it couldn't be drawn and shows its source. A diagram whose node labels have unquoted parentheses or braces (`A[GetView(s)]`, which agents often write) is drawn again with those labels quoted, so most of them now draw.

@@ -1215,7 +1215,7 @@ test('jira: the issue a request starts with, the words after the link, and where
   // Atlassian Cloud: fetched, without the token (it belongs to another site).
   assert.equal(await issueSummary({ key: 'ABC-1', site: 'https://other.atlassian.net' }, { jira, fetchImpl: ok('Cloud issue') }), 'Cloud issue');
   assert.equal(calls.at(-1).auth, null);
-  assert.equal(calls.at(-1).url, 'https://other.atlassian.net/rest/api/3/issue/ABC-1?fields=summary,status');
+  assert.equal(calls.at(-1).url, 'https://other.atlassian.net/rest/api/3/issue/ABC-1?fields=summary,status,description');
   // The configured site: with the email and token.
   assert.equal(await issueSummary({ key: 'ABC-2', site: 'https://jira.acme.com' }, { jira, fetchImpl: ok('Own site') }), 'Own site');
   assert.equal(calls.at(-1).auth, `Basic ${Buffer.from('me@acme.com:T').toString('base64')}`);
@@ -1345,10 +1345,119 @@ test('issues: proposed issues wait for a tick; only ticked ones start agents, di
   // Dismissed: off the list, and refused when proposed again.
   assert.deepEqual(q.dismiss(['OPS-3']), { dismissed: 1 });
   assert.deepEqual(q.waiting().map((p) => p.key), ['OPS-2']);
-  assert.throws(() => q.add({ intent: 'https://x.atlassian.net/browse/OPS-3 drop it' }), /dismissed/);
+  assert.throws(() => q.add({ intent: 'https://x.atlassian.net/browse/OPS-3 drop it' }), /removed by you; not proposed again/);
   // An agent started some other way takes it off the list.
   agents.push({ id: 'h', kind: 'task', name: 'OPS-2', intent: 'https://x.atlassian.net/browse/OPS-2 by hand' });
   assert.deepEqual(q.waiting(), []);
+});
+
+test('issues: your action on each issue (assign, skip, done, remove) is kept and can be changed', async () => {
+  const { ProposedIssues, issueRows } = await import('../src/issues.js');
+  const agents = [{ id: 'x1', kind: 'task', name: 'OPS-9', intent: 'https://x.atlassian.net/browse/OPS-9 y' }];
+  const store = { data: {}, list: () => agents, save() {} };
+  const manager = {
+    resolveProject: () => null,
+    createMany: (intents) => intents.map((intent) => {
+      const a = { id: `n${agents.length}`, kind: 'task', name: intent.match(/browse\/([A-Z]+-\d+)/)[1], intent };
+      agents.push(a);
+      return a;
+    }),
+  };
+  const q = new ProposedIssues({ store, manager });
+  for (const k of [1, 2, 3, 4]) q.add({ intent: `https://x.atlassian.net/browse/OPS-${k} task ${k}` });
+  assert.deepEqual(q.setAction(['OPS-1'], 'skip'), { set: ['OPS-1'], started: [], failed: [] });
+  q.setAction(['OPS-2'], 'done');
+  q.setAction(['OPS-3', 'OPS-9'], 'remove');
+  assert.throws(() => q.setAction(['OPS-4'], 'later'), /one of assign, skip, done, remove/);
+  assert.deepEqual(q.setAction(['NOPE-1'], 'skip').failed, [{ key: 'NOPE-1', reason: 'not on the list' }]);
+  // Kept in the store's data (state.json), so a restart finds them: a new instance sees the same.
+  const again = new ProposedIssues({ store, manager });
+  assert.deepEqual(Object.fromEntries(Object.entries(again.actions).map(([k, v]) => [k, v.action])), { 'OPS-1': 'skip', 'OPS-2': 'done', 'OPS-3': 'remove', 'OPS-9': 'remove' });
+  assert.deepEqual(again.waiting().map((p) => p.key), ['OPS-4']);
+  const views = agents.map((a) => ({ ...a, prs: [] }));
+  const rows = issueRows(views, new Map(), () => null, again.listed(), again.actions);
+  const by = Object.fromEntries(rows.map((r) => [r.key, [r.action, r.group]]));
+  assert.deepEqual(by, { 'OPS-1': ['skip', 'skipped'], 'OPS-2': ['done', 'done'], 'OPS-3': ['remove', 'removed'], 'OPS-4': [null, 'new'], 'OPS-9': ['remove', 'removed'] });
+  assert.match(rows.find((r) => r.key === 'OPS-9').note, /^Removed by you \(agent not running\)/);
+  // Set aside: not proposed again, and the assistant can't start an agent for it.
+  assert.throws(() => q.add({ intent: 'https://x.atlassian.net/browse/OPS-1 again' }), /skipped by you/);
+  assert.throws(() => q.refuseSetAside(['https://x.atlassian.net/browse/OPS-2 do it']), /marked done by you/);
+  q.refuseSetAside(['https://x.atlassian.net/browse/OPS-4 fine', 'no link']);
+  // Changed any time: skip → assign starts its agent; clearing a removed one brings it back.
+  const r = q.setAction(['OPS-1'], 'assign');
+  assert.deepEqual(r.started.map((x) => [x.key, x.agent.name]), [['OPS-1', 'OPS-1']]);
+  assert.equal(q.actions['OPS-1'], undefined);
+  q.setAction(['OPS-9'], null);
+  q.setAction(['OPS-3'], null);
+  assert.deepEqual(Object.keys(q.actions), ['OPS-2']);
+  assert.deepEqual(q.waiting().map((p) => p.key), ['OPS-3', 'OPS-4']);
+  // Dismissed before actions existed counts as removed.
+  const old = new ProposedIssues({ store: { data: { proposedIssues: [{ key: 'OLD-1', url: 'u', status: 'dismissed', at: '2026-01-01' }] }, list: () => [], save() {} }, manager });
+  assert.equal(old.setAside('OLD-1'), 'remove');
+  assert.equal(issueRows([], new Map(), () => null, old.listed(), old.actions)[0].group, 'removed');
+});
+
+test('issues: open Jira issues assigned to you are listed, epics too, closed and integrated ones not', async () => {
+  const { assignedIssues } = await import('../src/jira.js');
+  const { ProposedIssues, issueRows } = await import('../src/issues.js');
+  const jira = { site: 'https://acme.atlassian.net', email: 'me@acme.test', token: 't' };
+  assert.equal(await assignedIssues({ jira: { ...jira, token: '' } }), null, 'no token: not asked');
+  let asked = null;
+  const fetchImpl = async (url, opts) => {
+    asked = { url, opts };
+    const issue = (key, status, type, cat = 'indeterminate') => ({ key, fields: { summary: `${key} work`, status: { name: status, statusCategory: { key: cat } }, issuetype: { name: type }, updated: '2026-11-01T00:00:00.000Z', description: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: `About ${key}.` }] }] } } });
+    return { ok: true, json: async () => ({ issues: [issue('EP-1', 'In Progress', 'Epic'), issue('OPS-5', 'To Do', 'Story', 'new'), issue('OPS-6', 'Integrated', 'Story'), issue('OPS-7', 'Closed', 'Bug')] }) };
+  };
+  const got = await assignedIssues({ jira, fetchImpl });
+  assert.equal(asked.url, 'https://acme.atlassian.net/rest/api/3/search/jql');
+  assert.match(JSON.parse(asked.opts.body).jql, /assignee = currentUser\(\) AND statusCategory != Done/);
+  assert.deepEqual(got.map((i) => [i.key, i.type, i.status, i.synopsis, i.url]), [
+    ['EP-1', 'Epic', 'In Progress', 'About EP-1.', 'https://acme.atlassian.net/browse/EP-1'],
+    ['OPS-5', 'Story', 'To Do', 'About OPS-5.', 'https://acme.atlassian.net/browse/OPS-5'],
+  ]);
+  assert.equal(await assignedIssues({ jira, fetchImpl: async () => ({ ok: false }) }), null);
+  // Listed under Not started unless a proposal or an agent already covers the issue.
+  const agents = [{ id: 'x1', kind: 'task', name: 'OPS-5', intent: 'https://acme.atlassian.net/browse/OPS-5 y', prs: [] }];
+  const rows = issueRows(agents, new Map(), () => null, [], {}, got);
+  assert.deepEqual(rows.map((r) => [r.key, r.stage, r.group, r.type ?? null]).sort(), [['EP-1', 'assigned', 'new', 'Epic'], ['OPS-5', 'working', 'agent', null]]);
+  assert.match(rows.find((r) => r.key === 'EP-1').note, /Assigned to you in Jira/);
+  // Actions work on them too; assign makes the request from the link and summary and starts it.
+  const store = { data: {}, list: () => agents, save() {} };
+  const made = [];
+  const manager = { assignedNow: got, resolveProject: () => null, createMany: (intents) => intents.map((intent) => (made.push(intent), { id: 'n1', name: 'EP-1', intent })) };
+  const q = new ProposedIssues({ store, manager });
+  q.setAction(['EP-1'], 'skip');
+  assert.equal(issueRows([], new Map(), () => null, q.listed(), q.actions, got).find((r) => r.key === 'EP-1').group, 'skipped');
+  const r = q.setAction(['EP-1'], 'assign');
+  assert.deepEqual(r.started.map((x) => x.key), ['EP-1']);
+  assert.deepEqual(made, ['https://acme.atlassian.net/browse/EP-1 EP-1 work']);
+  assert.equal(q.actions['EP-1'], undefined);
+});
+
+test('issues: a synopsis of what each issue is about', async () => {
+  const { synopsisOf, descriptionText } = await import('../src/jira.js');
+  const { issueRows } = await import('../src/issues.js');
+  const adf = { type: 'doc', content: [
+    { type: 'heading', content: [{ type: 'text', text: 'Description' }] },
+    { type: 'paragraph', content: [{ type: 'text', text: 'The maintenance view times out ' }, { type: 'text', text: 'with 500+ devices.' }] },
+    { type: 'codeBlock', content: [{ type: 'text', text: 'SELECT *' }] },
+    { type: 'bulletList', content: [{ type: 'listItem', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Page it.' }] }] }] },
+  ] };
+  assert.equal(synopsisOf(adf), 'The maintenance view times out with 500+ devices. Page it.');
+  assert.equal(synopsisOf('h2. Summary\nPlain text works too.'), 'Plain text works too.');
+  assert.equal(synopsisOf(null), null);
+  assert.equal(descriptionText(null), '');
+  const long = `${'First sentence is here. '.repeat(10)}${'x'.repeat(300)}`;
+  assert.ok(synopsisOf(long).endsWith('here.') && synopsisOf(long).length <= 280);
+  assert.ok(synopsisOf('word '.repeat(100)).endsWith('…'));
+  // In the rows: Jira's first, else the design doc's summary, else the request's own words.
+  const jira = new Map([['A-1', { summary: 'Slow view', status: 'Open', synopsis: 'Times out.' }]]);
+  const rows = issueRows([], jira, () => null, [
+    { key: 'A-1', url: 'u', title: 'fix it', status: 'waiting' },
+    { key: 'A-2', url: 'u', title: 'add CSV export', status: 'waiting' },
+  ]);
+  const by = Object.fromEntries(rows.map((r) => [r.key, [r.title, r.synopsis]]));
+  assert.deepEqual(by, { 'A-1': ['Slow view', 'Times out.'], 'A-2': ['add CSV export', null] });
 });
 
 test('assistant: with "let me pick" it proposes new issues instead of starting agents', async () => {
@@ -2398,4 +2507,19 @@ test('diagrams: unquoted labels with parentheses or braces are quoted for the re
   const keep = 'flowchart LR\n  A[(Database)] --> B["Already (quoted)"] --> C[plain] --> D[/slanted (x)/] --> E([stadium])';
   assert.equal(quoteLabels(keep), keep);
   assert.equal(quoteLabels('A[say "hi" (now)]'), 'A[say "hi" (now)]', 'a label with quotes is left alone');
+});
+
+test('speech: the clearest on-device voices, never robotic, novelty or (unpicked) online ones', async () => {
+  const { rankVoices, voiceScore } = await import('../public/speak.js');
+  const V = (name, lang = 'en-US', extra = {}) => ({ name, lang, default: false, localService: true, ...extra });
+  const voices = [
+    V('Fred'), V('Rocko (English (US))'), V('Grandpa (English (UK))', 'en-GB'), V('Bubbles'), V('Thomas', 'fr-FR'),
+    V('Samantha', 'en-US', { default: true }), V('Daniel', 'en-GB'), V('Ava (Premium)'), V('Zoe (Enhanced)'),
+    V('Google US English', 'en-US', { localService: false }),
+  ];
+  assert.deepEqual(rankVoices(voices, 'en-US').map((v) => v.name), ['Ava (Premium)', 'Zoe (Enhanced)', 'Samantha', 'Daniel']);
+  assert.deepEqual(rankVoices(voices, 'en-US', { online: true }).map((v) => v.name).slice(0, 3), ['Ava (Premium)', 'Zoe (Enhanced)', 'Google US English']);
+  assert.equal(voiceScore(V('Fred'), 'en-US'), -1);
+  assert.equal(voiceScore(V('Amélie', 'fr-CA'), 'en-US'), -1);
+  assert.ok(voiceScore(V('Daniel', 'en_GB'), 'en-GB') > voiceScore(V('Daniel', 'en-US'), 'en-GB'));
 });

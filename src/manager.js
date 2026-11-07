@@ -107,7 +107,7 @@ import { spawn } from 'node:child_process';
 import * as git from './git.js';
 import { buildMap, touchedFiles } from './codemap.js';
 import { parseDiff } from '../public/review.js';
-import { issueFields, issueSummary, leadingIssue, loadJira, wordsAfterLink } from './jira.js';
+import { assignedIssues, issueFields, issueSummary, leadingIssue, loadJira, wordsAfterLink } from './jira.js';
 import { issueRows } from './issues.js';
 import { designRows } from './designs.js';
 import { reviewPath, reviewerPrompt } from './reviews.js';
@@ -828,10 +828,19 @@ export class AgentManager extends EventEmitter {
    * The issues agents work on, for the summary: one row per agent, with each issue's Jira status
    * (fetched a few at a time, kept five minutes).
    */
-  async issues(proposed = []) {
+  async issues(proposed = [], actions = {}) {
     const views = this.store.list().map((a) => this.view(a));
-    const rows = issueRows(views, new Map(), () => null, proposed);
     this.jiraCache ??= new Map();
+    // Open issues assigned to you (kept two minutes); their fields stand in for a fetch each.
+    if (!this.assignedAt || Date.now() - this.assignedAt > 2 * 60_000) {
+      const got = await (this.assignedFetch ?? assignedIssues)().catch(() => null);
+      this.assignedAt = Date.now();
+      if (got) this.assignedNow = got;
+      else if (!loadJira().token) this.assignedNow = [];
+      for (const i of got ?? []) this.jiraCache.set(i.key, { at: Date.now(), fields: { summary: i.summary, status: i.status, category: i.category, ...(i.synopsis ? { synopsis: i.synopsis } : {}) } });
+    }
+    const assigned = this.assignedNow ?? [];
+    const rows = issueRows(views, new Map(), () => null, proposed, actions, assigned);
     const jira = new Map();
     const want = [];
     for (const r of rows) {
@@ -859,7 +868,7 @@ export class AgentManager extends EventEmitter {
     }
     for (const [k, v] of jira) if (!v) jira.delete(k);
     const j = loadJira();
-    return { rows: issueRows(views, jira, (id, name) => readSpecDoc(id, name)?.markdown ?? null, proposed), jira: { site: j.site, signedIn: Boolean(j.site && j.email && j.token) } };
+    return { rows: issueRows(views, jira, (id, name) => readSpecDoc(id, name)?.markdown ?? null, proposed, actions, assigned), jira: { site: j.site, signedIn: Boolean(j.site && j.email && j.token) } };
   }
 
   /** Every agent's design doc, for the Designs list. */

@@ -1485,7 +1485,7 @@ test('jira: an agent from an issue link is described by the issue summary, or th
 test('issues: the Jira summary lists agents\' issues with their Jira status, waiting for review first', async () => {
   const http = await import('node:http');
   const srv = http.createServer((req, res) => {
-    if (req.url.startsWith('/rest/api/3/issue/ABC-21')) return res.end(JSON.stringify({ fields: { summary: 'Retry uploads', status: { name: 'In Review', statusCategory: { key: 'indeterminate' } } } }));
+    if (req.url.startsWith('/rest/api/3/issue/ABC-21')) return res.end(JSON.stringify({ fields: { summary: 'Retry uploads', status: { name: 'In Review', statusCategory: { key: 'indeterminate' } }, description: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Uploads fail on flaky networks.' }] }] } } }));
     if (req.url.startsWith('/rest/api/3/issue/ABC-22')) return res.end(JSON.stringify({ fields: { summary: 'Faster search', status: { name: 'In Progress', statusCategory: { key: 'indeterminate' } } } }));
     res.statusCode = 404;
     res.end('{}');
@@ -1512,6 +1512,8 @@ test('issues: the Jira summary lists agents\' issues with their Jira status, wai
     assert.deepEqual(mine[0].plan, { written: true, review: null, done: 1, total: 2 });
     assert.deepEqual(mine[0].design, { written: true, page: null, google: null, summary: 'Backoff.' });
     assert.equal(mine[0].title, 'Retry uploads');
+    assert.equal(mine[0].synopsis, 'Uploads fail on flaky networks.');
+    assert.equal(mine[0].action, 'assign');
     assert.equal(v.jira.signedIn, false);
     const you = (await call('GET', '/issues?group=you')).body.rows;
     assert.ok(you.some((r) => r.agent.id === a.id) && !you.some((r) => r.agent.id === b.id));
@@ -1532,6 +1534,19 @@ test('issues: the Jira summary lists agents\' issues with their Jira status, wai
     assert.equal((await call('POST', '/issues/dismiss', { keys: ['ABC-32'] })).body.dismissed, 1);
     assert.deepEqual((await call('GET', '/issues?group=new')).body.rows, []);
     assert.equal((await call('POST', '/issues/proposed', { intent: `${site}/browse/ABC-32 other` })).status, 409, 'dismissed');
+    // Removed ones are listed under Removed (not in All), and can be brought back.
+    const all = (await call('GET', '/issues?group=all')).body.rows;
+    assert.ok(!all.some((r) => r.key === 'ABC-32'));
+    assert.deepEqual((await call('GET', '/issues?group=removed')).body.rows.map((r) => [r.key, r.action]), [['ABC-32', 'remove']]);
+    const sk = (await call('POST', '/issues/action', { keys: ['ABC-32', 'ABC-22'], action: 'skip' })).body;
+    assert.deepEqual(sk.set, ['ABC-32', 'ABC-22']);
+    assert.deepEqual((await call('GET', '/issues?group=skipped')).body.rows.map((r) => r.key).sort(), ['ABC-22', 'ABC-32']);
+    assert.equal((await call('POST', '/issues/action', { keys: ['ABC-22'], action: 'later' })).status, 400);
+    const as = (await call('POST', '/issues/action', { keys: ['ABC-32'], action: 'assign' })).body;
+    assert.deepEqual(as.started.map((x) => x.key), ['ABC-32']);
+    made.push(as.started[0].agent.id);
+    await call('POST', '/issues/action', { keys: ['ABC-22'], action: null });
+    assert.equal((await call('GET', '/issues?group=skipped')).body.rows.length, 0);
   } finally {
     for (const id of made) await call('DELETE', `/agents/${id}`);
     manager.jiraOptions = null;
