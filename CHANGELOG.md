@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.24.0 (2026-11-06)
 
 - **Your action on each Jira issue: assign, skip, done or remove.** A picker on the left of every issue in the Jira tab. Your choice is kept by the daemon, so a restart or an update doesn't ask again, and you can change it any time (a removed issue is under Removed, to bring back). Assign starts an agent for an issue not started yet. The assistant doesn't propose or start agents for issues you skipped, marked done or removed. Also `agentmgr issues set <assign|skip|done|remove|clear> <keys...>`.
 - **Every open Jira issue assigned to you is listed**, epics too, until it's closed or integrated, with or without an agent. Needs your Jira site, email and API token in Settings → Jira.
