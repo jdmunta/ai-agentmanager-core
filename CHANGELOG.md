@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.25.0 (2026-11-06)
 
 - **Actions: what's asked of you in Slack and in meeting notes, in one list.** The assistant reads your Slack messages and mentions and your meetings' Notes by Gemini on its checks, and lists what's asked of you (or what you agreed to do) with who asked, where (a link), when and any due date. Decide on each on the left (assign to an agent, skip, done, remove), kept across restarts and changeable any time; **Discuss** talks one through with Claude in a session of its own, which suggests what to do and drafts any reply, but never sends anything. Turn it on under Assistant (on by default for new and existing setups); `agentmgr actions` lists them.
 - **Turn off what you don't use**: Settings → What you use has Jira, Slack and Meeting notes. Off, its list and button are hidden and the assistant stops looking there; changes reach a running assistant with its next check. Settings also has your name and email, so the assistant knows what's asked of you.
