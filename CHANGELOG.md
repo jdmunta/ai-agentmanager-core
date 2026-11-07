@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- **Jira and Actions lists: bigger.** Drag the corner to any size, or fill the window with ⤢ (or `f`); it's remembered. Filled, an issue's summary and synopsis show in full.
+- **Fixed: choosing an action with the mouse didn't stick.** The list redraws every few seconds while agents work, which threw away an open dropdown before you chose; it now waits until you've picked.
+- **Fixed: a key could act on the wrong issue.** Clicking a row now selects it for the keys, a key pressed in a row's dropdown acts on that row, and when the selected issue leaves the list (skipped, removed) the one now in its place is selected instead of the top one.
+- **The Jira summary on every row**: an agent's issue shows its summary and synopsis from your assigned-issues search too, and messages name issues by summary.
+
 ## 1.25.0 (2026-11-06)
 
 - **Actions: what's asked of you in Slack and in meeting notes, in one list.** The assistant reads your Slack messages and mentions and your meetings' Notes by Gemini on its checks, and lists what's asked of you (or what you agreed to do) with who asked, where (a link), when and any due date. Decide on each on the left (assign to an agent, skip, done, remove), kept across restarts and changeable any time; **Discuss** talks one through with Claude in a session of its own, which suggests what to do and drafts any reply, but never sends anything. Turn it on under Assistant (on by default for new and existing setups); `agentmgr actions` lists them.

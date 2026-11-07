@@ -3,7 +3,8 @@
 // (assign to an agent, skip, done, remove) is kept by the daemon and can be changed any time;
 // Discuss talks one through with Claude in a session of its own.
 
-import { rowKeys } from './rowkeys.js';
+import { holdWhilePicking, rowKeys } from './rowkeys.js';
+import { expandButton, expandable } from './expand.js';
 
 const SAVED = 'agentmgr.actionsFilter';
 const PROJECT = 'agentmgr.actionsProject';
@@ -73,7 +74,7 @@ export function initActions({ api, $, esc, ago, toast, openAgent, projects = () 
     </tr>`;
   }
 
-  function render() {
+  function draw() {
     if (!dialog.open) return;
     if (!data) {
       body.innerHTML = '<p class="hint">Loading…</p>';
@@ -95,9 +96,10 @@ export function initActions({ api, $, esc, ago, toast, openAgent, projects = () 
           ${list.map((p) => `<option value="${esc(p.key)}" ${p.key === project ? 'selected' : ''}>${esc(p.name ?? p.key)}</option>`).join('')}
         </select></label>
         <button class="small" data-act="refresh" title="Look again (r)">↻</button>
+        ${expandButton(dialog)}
         <button class="small" data-act="close" title="Close (Esc)">Close</button>
       </div>
-      <p class="hint">What's asked of you in ${esc(from || 'Slack and meeting notes')}, found by the assistant on its checks. Decide on the left; <b>Discuss</b> talks one through with Claude. Keys: j/k move, a assign, s skip, d done, x remove, o open again, c discuss, Enter opens the source.</p>
+      <p class="hint">What's asked of you in ${esc(from || 'Slack and meeting notes')}, found by the assistant on its checks. Decide on the left; <b>Discuss</b> talks one through with Claude. Keys: j/k move, a assign, s skip, d done, x remove, o open again, c discuss, Enter opens the source, f bigger.</p>
       ${rows.length
         ? `<div class="issues-scroll"><table class="issues actions-table">
             <thead><tr><th class="issue-action">Decision</th><th>Action</th><th></th></tr></thead>
@@ -112,6 +114,8 @@ export function initActions({ api, $, esc, ago, toast, openAgent, projects = () 
           )}</p>`}`;
     keys.redraw();
   }
+  const render = holdWhilePicking(body, draw);
+  expandable(dialog, draw);
 
   async function set(ids, state) {
     if (busy) return;
@@ -156,7 +160,10 @@ export function initActions({ api, $, esc, ago, toast, openAgent, projects = () 
 
   body.addEventListener('change', (e) => {
     const id = e.target.dataset.actState;
-    if (id) return set([id], e.target.value);
+    if (id) {
+      e.target.blur();
+      return set([id], e.target.value);
+    }
     if (e.target.dataset.actProject !== undefined) {
       project = e.target.value;
       try {

@@ -1493,6 +1493,9 @@ test('issues: open Jira issues assigned to you are listed, epics too, closed and
   const rows = issueRows(agents, new Map(), () => null, [], {}, got);
   assert.deepEqual(rows.map((r) => [r.key, r.stage, r.group, r.type ?? null]).sort(), [['EP-1', 'assigned', 'new', 'Epic'], ['OPS-5', 'working', 'agent', null]]);
   assert.match(rows.find((r) => r.key === 'EP-1').note, /Assigned to you in Jira/);
+  // An agent's row shows the issue's Jira summary and synopsis from that search, not just its name.
+  const ops5 = rows.find((r) => r.key === 'OPS-5');
+  assert.deepEqual([ops5.title, ops5.synopsis], ['OPS-5 work', 'About OPS-5.']);
   // Actions work on them too; assign makes the request from the link and summary and starts it.
   const store = { data: {}, list: () => agents, save() {} };
   const made = [];

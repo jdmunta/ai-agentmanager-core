@@ -105,6 +105,8 @@ function designOf(v, read) {
 export function issueRows(views, jira = new Map(), read = () => null, proposed = [], actions = {}, assigned = []) {
   const rank = Object.fromEntries(Object.keys(GROUPS).map((k, i) => [k, i]));
   const rows = [];
+  // What the search for issues assigned to you found: their summaries stand in where nothing else has one.
+  const mine = new Map(assigned.map((i) => [i.key, i]));
   // Issues proposed for agents, not started yet: they wait for you to tick them.
   for (const p of proposed) {
     const j = jira.get(p.key) ?? null;
@@ -112,8 +114,8 @@ export function issueRows(views, jira = new Map(), read = () => null, proposed =
     rows.push({
       key: p.key,
       url: p.url,
-      title: j?.summary ?? p.title,
-      synopsis: synopsisFor(j, p.title, null, j?.summary ?? p.title),
+      title: j?.summary ?? mine.get(p.key)?.summary ?? p.title,
+      synopsis: synopsisFor({ synopsis: j?.synopsis ?? mine.get(p.key)?.synopsis }, p.title, null, j?.summary ?? mine.get(p.key)?.summary ?? p.title),
       jira: j ? { status: j.status, category: j.category } : null,
       action,
       stage: 'proposed',
@@ -140,8 +142,8 @@ export function issueRows(views, jira = new Map(), read = () => null, proposed =
     rows.push({
       key: issue.key,
       url: issue.url,
-      title: j?.summary ?? issue.title,
-      synopsis: synopsisFor(j, wordsAfterLink(v.intent), design?.summary, j?.summary ?? issue.title),
+      title: j?.summary ?? mine.get(issue.key)?.summary ?? issue.title,
+      synopsis: synopsisFor({ synopsis: j?.synopsis ?? mine.get(issue.key)?.synopsis }, wordsAfterLink(v.intent), design?.summary, j?.summary ?? mine.get(issue.key)?.summary ?? issue.title),
       jira: j ? { status: j.status, category: j.category } : null,
       action,
       stage,
