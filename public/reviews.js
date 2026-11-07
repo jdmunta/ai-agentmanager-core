@@ -3,6 +3,7 @@
 // under your name (or copy it). PRs where your review is requested and no reviewer has started
 // come first, with a box to tick.
 
+import { expandButton, expandable } from './expand.js';
 import { listenHtml, speakable } from './speak.js';
 
 const VERDICT = { approve: ['Approve', 'ok'], approve_with_nits: ['Approve with nits', 'ok'], blocked: ['Blocked', 'bad'] };
@@ -165,6 +166,7 @@ export function initReviews({ api, $, esc, ago, openAgent, toast }) {
         </form>
         <span class="spacer"></span>
         <button class="small" data-rv="refresh" title="Look again now, including GitHub">↻</button>
+        ${expandButton(dialog)}
         <button class="small" data-rv="close" title="Close (Esc)">Close</button>
       </div>
       ${requested.length ? `<div class="issues-pickbar"><span>${requested.length} pull request${requested.length === 1 ? '' : 's'} where your review is requested.</span>
@@ -314,5 +316,6 @@ export function initReviews({ api, $, esc, ago, openAgent, toast }) {
   }
 
   load({ quiet: true });
+  expandable(dialog, render);
   return { open, changed, isOpen: () => dialog.open, speech: (id) => reviewerSpeech(rowOf(id)), show: (id) => ((openId = id), dialog.open ? render() : open()) };
 }
