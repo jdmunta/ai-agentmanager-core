@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.26.1 (2026-11-07)
 
 - **Jira says why it isn't working.** When your Jira site can't be used (the token isn't accepted, the site sends a sign-in page, it can't be reached), the Jira list and Today say so in words instead of just showing no summaries or statuses. Settings → Jira has a **Check Jira** button that asks the site for your open issues and says how many it found, or why it couldn't.
 - **Jira Server and Data Center.** With no email, the API token is sent as a personal access token, and the older API those sites have is used when Jira Cloud's isn't there. The site address may have a port and a path (`https://jira.company.com:8443/jira`).
