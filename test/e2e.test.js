@@ -1488,7 +1488,8 @@ test('jira: an agent from an issue link is described by the issue summary, or th
     assert.deepEqual((await agentNow(b.id)).synopsis, { text: 'make it faster', source: 'request', key: 'ABC-8' });
     // Settings: the token is saved but never shown.
     const put = await call('PUT', '/jira', { site: 'acme.atlassian.net', email: 'me@acme.com', token: 'SECRET' });
-    assert.deepEqual(put.body, { site: 'https://acme.atlassian.net', email: 'me@acme.com', hasToken: true });
+    // Saving tries the site at once: the e2e daemon's fake Jira lists nothing assigned.
+    assert.deepEqual(put.body, { site: 'https://acme.atlassian.net', email: 'me@acme.com', hasToken: true, assigned: 0, problem: null });
     assert.ok(!JSON.stringify((await call('GET', '/jira')).body).includes('SECRET'));
     assert.equal((await call('PUT', '/jira', { site: 'ftp://nope' })).status, 400);
     await call('PUT', '/jira', { site: '', email: '', clearToken: true });

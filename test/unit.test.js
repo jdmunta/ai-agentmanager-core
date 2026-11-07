@@ -1442,7 +1442,9 @@ test('issues: your action on each issue (assign, skip, done, remove) is kept and
   q.setAction(['OPS-2'], 'done');
   q.setAction(['OPS-3', 'OPS-9'], 'remove');
   assert.throws(() => q.setAction(['OPS-4'], 'later'), /one of assign, skip, done, remove/);
-  assert.deepEqual(q.setAction(['NOPE-1'], 'skip').failed, [{ key: 'NOPE-1', reason: 'not on the list' }]);
+  // Assign needs a link to start from; skip, done and remove take any issue key (the Jira list may show it from an agent).
+  assert.match(q.setAction(['NOPE-1'], 'assign').failed[0].reason, /no link for it/);
+  assert.deepEqual(q.setAction(['nope'], 'skip').failed, [{ key: 'nope', reason: 'not an issue key' }]);
   // Kept in the store's data (state.json), so a restart finds them: a new instance sees the same.
   const again = new ProposedIssues({ store, manager });
   assert.deepEqual(Object.fromEntries(Object.entries(again.actions).map(([k, v]) => [k, v.action])), { 'OPS-1': 'skip', 'OPS-2': 'done', 'OPS-3': 'remove', 'OPS-9': 'remove' });
@@ -1489,6 +1491,25 @@ test('issues: open Jira issues assigned to you are listed, epics too, closed and
     ['OPS-5', 'Story', 'To Do', 'About OPS-5.', 'https://acme.atlassian.net/browse/OPS-5'],
   ]);
   assert.equal(await assignedIssues({ jira, fetchImpl: async () => ({ ok: false }) }), null);
+  // When Jira can't be used, it says why.
+  const { jiraProblem } = await import('../src/jira.js');
+  assert.equal(await assignedIssues({ jira, fetchImpl: async () => ({ ok: false, status: 401 }) }), null);
+  assert.match(jiraProblem().reason, /answered 401: the email or API token is not accepted/);
+  await assignedIssues({ jira, fetchImpl: async () => { throw Object.assign(new TypeError('fetch failed'), { cause: new Error('unexpected redirect') }); } });
+  assert.match(jiraProblem().reason, /sign-in page/);
+  // Jira Server / Data Center: no v3 search, so v2; no email, so the token is a bearer token.
+  const seen = [];
+  const server = { site: 'https://jira.acme.test', email: '', token: 'pat' };
+  const v2 = await assignedIssues({
+    jira: server,
+    fetchImpl: async (url, opts) => {
+      seen.push([url.replace(/\?.*/, ''), opts.method, opts.headers.authorization]);
+      return url.includes('/api/3/') ? { ok: false, status: 404 } : { ok: true, json: async () => ({ issues: [{ key: 'SRV-1', fields: { summary: 'Server one', status: { name: 'Open', statusCategory: { key: 'new' } }, description: 'Plain text.' } }] }) };
+    },
+  });
+  assert.deepEqual(seen, [['https://jira.acme.test/rest/api/3/search/jql', 'POST', 'Bearer pat'], ['https://jira.acme.test/rest/api/2/search', 'GET', 'Bearer pat']]);
+  assert.deepEqual(v2.map((i) => [i.key, i.summary, i.status, i.synopsis]), [['SRV-1', 'Server one', 'Open', 'Plain text.']]);
+  assert.equal(jiraProblem(), null, 'worked: no problem');
   // Listed under Not started unless a proposal or an agent already covers the issue.
   const agents = [{ id: 'x1', kind: 'task', name: 'OPS-5', intent: 'https://acme.atlassian.net/browse/OPS-5 y', prs: [] }];
   const rows = issueRows(agents, new Map(), () => null, [], {}, got);

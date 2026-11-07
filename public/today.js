@@ -18,11 +18,11 @@ export function initToday({ api, $, esc, ago, openAgent, showInbox, openActions,
   let again = null;
   let loadedAt = 0;
 
-  async function load({ quiet = false } = {}) {
+  async function load({ quiet = false, fresh = false } = {}) {
     if (loading) return;
     loading = true;
     try {
-      data = await api('GET', '/today');
+      data = await api('GET', `/today${fresh ? '?fresh=1' : ''}`);
       loadedAt = Date.now();
     } catch (e) {
       if (!quiet) toast?.(e.message, 5000);
@@ -85,7 +85,7 @@ export function initToday({ api, $, esc, ago, openAgent, showInbox, openActions,
       ${items.length
         ? `<div class="issues-scroll"><table class="issues today-table"><tbody>${items.map(row).join('')}</tbody></table></div>`
         : '<p class="hint issues-empty">Nothing needs you right now: no agent is waiting on you, nothing is due, and no review is waiting.</p>'}
-      <p class="hint">Keys: j/k move (or click a row), Enter opens, a assign or review, d done, s skip, c discuss, r look again, f bigger.${off.length ? ` Not included (off in Settings → What you use): ${esc(off.join(', '))}.` : ''}${data.errors?.length ? ` Couldn't get: ${esc(data.errors.map((e) => e.source).join(', '))}.` : ''}</p>`;
+      <p class="hint">Keys: j/k move (or click a row), Enter opens, a assign or review, d done, s skip, c discuss, r look again, f bigger.${off.length ? ` Not included (off in Settings → What you use): ${esc(off.join(', '))}.` : ''}${data.errors?.length ? ` Couldn't get: ${esc(data.errors.map((e) => `${e.source === 'jira' ? 'Jira' : e.source} (${e.error})`).join('; '))}.` : ''}</p>`;
     keys.redraw();
   }
   const render = holdWhilePicking(body, draw);
@@ -151,7 +151,7 @@ export function initToday({ api, $, esc, ago, openAgent, showInbox, openActions,
       d: (r) => act(itemOf(r.dataset.rowId), 'done'),
       s: (r) => act(itemOf(r.dataset.rowId), 'skip'),
       c: (r) => act(itemOf(r.dataset.rowId), 'discuss'),
-      r: Object.assign(() => load(), { needsRow: false }),
+      r: Object.assign(() => load({ fresh: true }), { needsRow: false }),
     },
   });
 
@@ -159,7 +159,7 @@ export function initToday({ api, $, esc, ago, openAgent, showInbox, openActions,
     const b = e.target.closest('[data-today]')?.dataset.today;
     if (!b) return;
     if (b === 'close') return dialog.close();
-    if (b === 'refresh') return load();
+    if (b === 'refresh') return load({ fresh: true });
     act(itemOf(e.target.closest('tr[data-row-id]')?.dataset.rowId), b);
   });
 

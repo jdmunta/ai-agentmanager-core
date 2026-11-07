@@ -1175,6 +1175,7 @@ table.issues .dot { display: inline-block; width: 7px; height: 7px; border-radiu
 table.issues .dot.busy { background: var(--green); }
 table.issues .dot.idle { background: var(--muted); }
 .issues-empty { padding: 24px 4px; }
+.issues-problem { margin: 0 0 8px; padding: 6px 10px; border-left: 3px solid var(--red); color: var(--red); font-size: 13px; }
 @media (max-width: 640px) {
   .issues-dialog { width: calc(100% - 32px); padding: 12px; }
   table.issues .col-active { display: none; }

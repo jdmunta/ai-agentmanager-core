@@ -873,12 +873,13 @@
         </fieldset>
         <fieldset class="local-only">
           <legend>Jira</legend>
-          <p class="hint">For an agent created from a Jira link, its description shows the issue's summary. Public issues on Atlassian Cloud need nothing here; for your company's site, add it with your email and an <a href="https://id.atlassian.com/manage-profile/security/api-tokens" target="_blank" rel="noopener">API token</a>. The token is kept on this computer and sent only to that site.</p>
+          <p class="hint">For an agent created from a Jira link, its description shows the issue's summary. Public issues on Atlassian Cloud need nothing here; for your company's site, add it with your email and an <a href="https://id.atlassian.com/manage-profile/security/api-tokens" target="_blank" rel="noopener">API token</a> (Jira Server or Data Center: leave the email empty and use a personal access token). The token is kept on this computer and sent only to that site.</p>
           <div class="row three">
             <label>Site <input name="jiraSite" placeholder="https://yourcompany.atlassian.net" autocomplete="off" /></label>
             <label>Email <input name="jiraEmail" type="email" autocomplete="off" /></label>
             <label>API token <input name="jiraToken" type="password" autocomplete="new-password" /></label>
           </div>
+          <p><button type="button" class="small" data-jira-check title="Ask your Jira site for the open issues assigned to you, with the saved settings">Check Jira</button> <span class="hint" data-jira-result></span></p>
         </fieldset>
         <fieldset>
           <legend>Updates</legend>

@@ -282,8 +282,9 @@ export class ProposedIssues {
       let p = this.all.find((x) => x.key === key);
       let agent = this.agentFor(key);
       const mine = !p && !agent ? (this.manager.assignedNow ?? []).find((i) => i.key === key) : null;
-      if (!p && !agent && !mine) {
-        failed.push({ key, reason: 'not on the list' });
+      // Skip, done, remove and clear are kept by key, whatever listed the issue; assign needs where to start from.
+      if (!p && !agent && !mine && (action === 'assign' || !ISSUE_KEY.test(key))) {
+        failed.push({ key, reason: action === 'assign' ? "can't start an agent: no link for it (Jira didn't list it; is Settings → Jira working?)" : 'not an issue key' });
         continue;
       }
       // An issue assigned to you in Jira: assigning it makes the request from its link and summary.
@@ -319,7 +320,13 @@ export class ProposedIssues {
 
   agentFor(key) {
     const k = key.toLowerCase();
-    return this.store.list().find((a) => a.kind === 'task' && (a.name.toLowerCase() === k || leadingJiraKey(a.intent)?.toLowerCase() === k)) ?? null;
+    const list = this.store.list();
+    return (
+      list.find((a) => a.kind === 'task' && (a.name.toLowerCase() === k || leadingJiraKey(a.intent)?.toLowerCase() === k)) ??
+      // The agent the Jira list shows on the issue: its request may name the issue later on, not lead with the link.
+      list.find((a) => a.kind !== 'assistant' && issueOf({ ...a, bugs: Object.values(a.bugs ?? {}) })?.key.toLowerCase() === k) ??
+      null
+    );
   }
 
   /** Propose an issue: the request starts with its link. */

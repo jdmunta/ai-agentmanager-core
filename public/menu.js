@@ -107,6 +107,7 @@ export function initMenu({ api, esc, toast, $ }) {
         form.jiraEmail.value = jira?.email ?? '';
         form.jiraToken.value = '';
         form.jiraToken.placeholder = jira?.hasToken ? 'saved (type to replace)' : '';
+        dialog.querySelector('[data-jira-result]').textContent = '';
         containers = await api('GET', '/isolation').catch(() => null);
         showContainers();
         form.claudeToken.value = '';
@@ -146,6 +147,29 @@ export function initMenu({ api, esc, toast, $ }) {
     dialog.close();
     $(`#${go.dataset.open}`).click();
   });
+  // Check Jira: saves what was typed, then asks the site for your open issues.
+  dialog.addEventListener('click', async (e) => {
+    const b = e.target.closest('[data-jira-check]');
+    if (!b) return;
+    const out = dialog.querySelector('[data-jira-result]');
+    b.disabled = true;
+    out.textContent = 'Asking Jira…';
+    try {
+      const typed = { site: form.jiraSite.value.trim(), email: form.jiraEmail.value.trim(), token: form.jiraToken.value.trim() || undefined };
+      const changed = jira && (typed.site !== (jira.site ?? '') || typed.email !== (jira.email ?? '') || typed.token);
+      const r = changed ? await api('PUT', '/jira', typed) : await api('GET', '/jira/check');
+      if (changed) {
+        jira = { site: r.site, email: r.email, hasToken: r.hasToken };
+        form.jiraToken.value = '';
+        form.jiraToken.placeholder = r.hasToken ? 'saved (type to replace)' : '';
+      }
+      out.textContent = r.problem ? `Not working: ${r.problem}` : `Works: ${r.assigned} open issue${r.assigned === 1 ? '' : 's'} assigned to you`;
+    } catch (err) {
+      out.textContent = err.message;
+    } finally {
+      b.disabled = false;
+    }
+  });
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     try {
@@ -159,8 +183,8 @@ export function initMenu({ api, esc, toast, $ }) {
         }
       }
       if (!remote() && jira && (form.jiraSite.value.trim() !== (jira.site ?? '') || form.jiraEmail.value.trim() !== (jira.email ?? '') || form.jiraToken.value.trim())) {
-        await api('PUT', '/jira', { site: form.jiraSite.value.trim(), email: form.jiraEmail.value.trim(), token: form.jiraToken.value.trim() || undefined });
-        toast('Jira saved; summaries for agents from Jira links are being fetched', 4000);
+        const j = await api('PUT', '/jira', { site: form.jiraSite.value.trim(), email: form.jiraEmail.value.trim(), token: form.jiraToken.value.trim() || undefined });
+        toast(j.problem ? `Jira saved, but it doesn't work yet: ${j.problem}` : j.assigned !== null && j.assigned !== undefined ? `Jira works: ${j.assigned} open issue${j.assigned === 1 ? '' : 's'} assigned to you` : 'Jira saved', j.problem ? 10_000 : 4000);
       }
       if (!remote() && containers?.available) {
         if (form.claudeToken.value.trim()) await api('PUT', '/isolation/token', { token: form.claudeToken.value.trim() });
