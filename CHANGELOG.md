@@ -1,7 +1,8 @@
 # Changelog
 
-## Unreleased
+## 1.25.2 (2026-11-07)
 
+- **Designs, Reviews and Value: bigger too.** Drag the corner to any size, or fill the window with ⤢ (or `f`), as in the Jira and Actions lists.
 - **Fixed: Close all could leave an agent open without saying so.** An agent busy when you clicked, which finished while the others closed, was neither closed nor listed as left working; it's now listed as left open.
 - For contributors: `npm test` runs the end-to-end tests in parallel slices, each with its own daemon (`E2E_PARTS=1` for one), about three times faster; several timing-dependent tests no longer fail now and then.
 
