@@ -26,6 +26,7 @@ import { Repeats } from './repeats.js';
 import { Updates } from './update.js';
 import { identity } from './identity.js';
 import { WorkLog, summaryMarkdown } from './worklog.js';
+import { todayItems, todaySpeech } from './today.js';
 import { Studio } from './studio.js';
 import { Memory } from './memory.js';
 import { doctor } from './doctor.js';
@@ -864,6 +865,29 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
       res.status(500).json({ error: e.message });
     }
   });
+  // Today: what needs you, from every list, most pressing first (today.js). A list that's off or
+  // can't be had right now is left out, and said so.
+  api.get('/today', wrap(async () => {
+    const f = featuresOf(config);
+    manager.jiraOff = !f.jira;
+    const errors = [];
+    const got = async (name, fn) => {
+      try {
+        return await fn();
+      } catch (e) {
+        errors.push({ source: name, error: e.message });
+        return [];
+      }
+    };
+    const [inbox, issues, actions, prs] = await Promise.all([
+      got('inbox', () => manager.inbox()),
+      f.jira ? got('jira', async () => (await manager.issues(proposed.listed(), proposed.actions)).rows) : [],
+      f.slack || f.gemini ? got('actions', () => myActions.rows()) : [],
+      got('reviews', () => reviews.rows()),
+    ]);
+    const items = todayItems({ inbox, issues, actions, reviews: prs });
+    return { items, speech: todaySpeech(items), features: f, errors };
+  }));
   api.get('/standup', wrap(() => standup.view()));
   api.post('/standup', wrap(async () => ({ ...standup.view(), latest: await standup.make({ reason: 'asked' }) })));
   api.put('/standup', wrap((req) => {

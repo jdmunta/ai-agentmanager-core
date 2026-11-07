@@ -27,6 +27,7 @@ import { commentsMessage, parseBaseRef, prBase } from '../src/review.js';
 import { parseDiff } from '../public/review.js';
 import { normalizeReview, parsePrUrl, recheckMessage, reviewDraft, reviewRows, reviewerPrompt, Reviews } from '../src/reviews.js';
 import { reviewerSpeech } from '../public/reviews.js';
+import { dueAt, dueWords, todayItems, todaySpeech } from '../src/today.js';
 import { VERDICTS, gapsOf, leadPrompt, readCoverage, readVerdict, subagents, summarize, teamPrompt } from '../src/teams.js';
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'agentmgr-unit-'));
@@ -2597,4 +2598,40 @@ test('speech: the clearest on-device voices, never robotic, novelty or (unpicked
   assert.equal(voiceScore(V('Fred'), 'en-US'), -1);
   assert.equal(voiceScore(V('Amélie', 'fr-CA'), 'en-US'), -1);
   assert.ok(voiceScore(V('Daniel', 'en_GB'), 'en-GB') > voiceScore(V('Daniel', 'en-US'), 'en-GB'));
+});
+
+test('today: due dates said in words, and what needs you ranked with why', () => {
+  const now = new Date('2026-11-07T10:00:00'); // a Saturday
+  const day = (d) => (d ? `${d.getMonth() + 1}/${d.getDate()}` : null);
+  assert.deepEqual(['today', 'EOD', 'tomorrow', 'Friday', 'mon', '2026-11-03', 'by Dec 3rd', 'soon', ''].map((d) => day(dueAt(d, now))), ['11/7', '11/7', '11/8', '11/13', '11/9', '11/3', '12/3', null, null]);
+  assert.equal(dueWords(dueAt('2026-11-03', now), now), 'overdue 4 days');
+  assert.equal(dueWords(dueAt('today', now), now), 'due today');
+  const items = todayItems({
+    now,
+    inbox: [
+      { kind: 'reminder', key: 'reminder:a1', agentName: 'tidy', title: 'Done a while ago', priority: 2 },
+      { kind: 'prompt', key: 'prompt:a2', agentId: 'a2', agentName: 'OPS-7', title: 'Allow Bash?', priority: 2 },
+    ],
+    issues: [
+      { key: 'OPS-9', title: 'Retry uploads', group: 'new', stage: 'assigned', url: 'https://acme.atlassian.net/browse/OPS-9' },
+      { key: 'OPS-8', title: 'Paging', group: 'you', note: 'Pull request ready: review it', agent: { id: 'a3' } },
+      { key: 'OPS-1', title: 'Old', group: 'done' },
+    ],
+    actions: [
+      { id: 'x1', text: 'Send the numbers', group: 'open', due: 'Friday', from: 'Pat', sourceLabel: 'Slack' },
+      { id: 'x2', text: 'Book the review', group: 'open', due: '2026-11-03' },
+      { id: 'x3', text: 'Old one', group: 'done', due: 'today' },
+    ],
+    reviews: [{ pr: { url: 'https://github.com/acme/demo/pull/5', repo: 'acme/demo', number: 5, title: 'Retry', author: 'sam' }, status: 'requested' }],
+  });
+  assert.deepEqual(items.map((i) => i.id), ['prompt:a2', 'action:x2', 'issue:OPS-8', 'pr:https://github.com/acme/demo/pull/5', 'action:x1', 'issue:OPS-9', 'reminder:a1']);
+  assert.equal(items[0].why, 'OPS-7 is stopped until you answer');
+  assert.equal(items[1].why, 'overdue 4 days');
+  assert.equal(items.find((i) => i.id === 'action:x1').why, 'due Friday · asked by Pat · in Slack');
+  assert.equal(items.find((i) => i.id === 'issue:OPS-9').why, 'Assigned to you in Jira, not started');
+  assert.match(todaySpeech(items)[0], /^7 things for you today/);
+  // An agent's question about its issue: one item, naming the issue.
+  const one = todayItems({ inbox: [{ kind: 'question', key: 'q:a3:1', agentId: 'a3', agentName: 'paging', title: 'Cursor or offset?' }], issues: [{ key: 'OPS-8', title: 'Paging', group: 'you', note: 'Needs your answer', agent: { id: 'a3' } }] });
+  assert.deepEqual(one.map((i) => [i.id, i.why]), [['q:a3:1', 'paging asked · OPS-8: Paging']]);
+  assert.deepEqual(todaySpeech([]), ['Nothing needs you right now.']);
 });

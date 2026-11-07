@@ -1181,6 +1181,20 @@ table.issues .dot.idle { background: var(--muted); }
   table.issues .issue-title, table.issues .issue-synopsis { max-width: 200px; }
 }
 
+/* ---------- Today: what needs you */
+#today-body { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+#today-btn { font-weight: 600; }
+table.today-table .today-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.02em; padding: 2px 6px; border-radius: 4px; background: var(--panel-2); color: var(--muted); }
+table.today-table tr.pressing .today-label { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
+table.today-table tr.today-prompt .today-label, table.today-table tr.today-waiting .today-label, table.today-table tr.today-question .today-label { background: color-mix(in srgb, var(--red) 16%, transparent); color: var(--red); }
+table.today-table .today-title { color: var(--text); }
+table.today-table .today-why { margin-top: 2px; }
+table.today-table .today-acts { width: 1%; text-align: right; }
+table.today-table .small-link { font-size: 12px; margin-left: 4px; }
+@media (max-width: 640px) {
+  table.today-table .today-acts { white-space: normal; }
+}
+
 /* ---------- Designs: agents' design docs */
 .designs-search { width: 180px; }
 .designs-list { overflow: auto; min-height: 0; display: flex; flex-direction: column; gap: 10px; padding-right: 2px; }

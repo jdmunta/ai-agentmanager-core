@@ -27,6 +27,7 @@ import { initWatch } from '/watch.js';
 import { initStandup } from '/standup.js';
 import { initIssues } from '/issues.js';
 import { initActions } from '/actions.js';
+import { initToday } from '/today.js';
 import { reviewSpeech } from '/prvoice.js';
 import { initDesigns } from '/designs.js';
 import { initReviews } from '/reviews.js';
@@ -243,7 +244,22 @@ api('GET', '/features').then((r) => applyFeatures(r.features)).catch(() => {});
 document.addEventListener('agentmgr:features', (e) => {
   applyFeatures(e.detail);
   actionsUi.load();
+  todayUi.load();
 });
+// Today: what needs you, from every list, most pressing first.
+const todayUi = initToday({
+  api,
+  $,
+  esc,
+  ago,
+  toast: (m, ms) => toast(m, ms),
+  openAgent: (id) => (showTab('agents'), select(id)),
+  showInbox: () => showTab('inbox'),
+  openActions: () => actionsUi.open(),
+  openIssues: () => issuesUi.open(),
+  openReviews: () => reviewsUi.open(),
+});
+$('#today-btn').onclick = () => todayUi.open();
 // Designs: every agent's design doc, the ones waiting for your review first.
 const designsUi = initDesigns({
   api,
@@ -310,6 +326,7 @@ function shortcut(act) {
   if (act === 'designs') return designsUi.open();
   if (act === 'reviews') return reviewsUi.open();
   if (act === 'value') return valueUi.open();
+  if (act === 'today') return todayUi.open();
   if (act.startsWith('tab:')) return showTab(act.slice(4));
   return false;
 }
@@ -765,6 +782,7 @@ bindListen((id) => {
   else if (what === 'sidewalk') parts = sidePane?.listenParts();
   else if (what === 'prvoice') parts = reviewSpeech(a, issuesUi.about(agentId));
   else if (what === 'reviewer') parts = reviewsUi.speech(agentId);
+  else if (what === 'today') parts = todayUi.speech();
   if (!parts?.length || !play(id, parts)) toast('Nothing to read aloud here (or this browser has no speech)');
 });
 
@@ -4213,6 +4231,7 @@ function handleEvent(msg) {
     agentChanged(msg.agent);
     if (msg.agent.builds) builtUi.sessionChanged(msg.agent);
     issuesUi.changed();
+    todayUi.changed();
     designsUi.changed();
     if (msg.agent.reviewing) reviewsUi.changed();
     // The detail, terminal and document views show one agent; another agent's update leaves them be.
