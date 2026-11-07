@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.25.1 (2026-11-06)
 
 - **Jira and Actions lists: bigger.** Drag the corner to any size, or fill the window with ⤢ (or `f`); it's remembered. Filled, an issue's summary and synopsis show in full.
 - **Fixed: choosing an action with the mouse didn't stick.** The list redraws every few seconds while agents work, which threw away an open dropdown before you chose; it now waits until you've picked.
