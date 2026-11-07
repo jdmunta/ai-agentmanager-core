@@ -26,6 +26,7 @@ import { initMachine } from '/machine.js';
 import { initWatch } from '/watch.js';
 import { initStandup } from '/standup.js';
 import { initIssues } from '/issues.js';
+import { initActions } from '/actions.js';
 import { reviewSpeech } from '/prvoice.js';
 import { initDesigns } from '/designs.js';
 import { initReviews } from '/reviews.js';
@@ -221,6 +222,28 @@ const issuesUi = initIssues({
   openDoc: (id, kind) => (showTab('agents'), select(id), openDoc(id, kind)),
 });
 $('#issues-btn').onclick = () => issuesUi.open();
+// Actions: what's asked of you in Slack and meeting notes.
+const actionsUi = initActions({
+  api,
+  $,
+  esc,
+  ago,
+  toast: (m, ms) => toast(m, ms),
+  openAgent: (id) => (showTab('agents'), select(id)),
+  projects: () => projectsState.map((p) => ({ key: p.shortcut, name: p.name })),
+});
+$('#actions-btn').onclick = () => actionsUi.open();
+// What you use (Settings): lists you turned off are hidden.
+function applyFeatures(f) {
+  if (!f) return;
+  $('#issues-btn').hidden = !f.jira;
+  $('#actions-btn').hidden = !f.slack && !f.gemini;
+}
+api('GET', '/features').then((r) => applyFeatures(r.features)).catch(() => {});
+document.addEventListener('agentmgr:features', (e) => {
+  applyFeatures(e.detail);
+  actionsUi.load();
+});
 // Designs: every agent's design doc, the ones waiting for your review first.
 const designsUi = initDesigns({
   api,
@@ -279,7 +302,11 @@ function shortcut(act) {
   if (act === 'watch') return $('#watch-btn') ? $('#watch-btn').click() : false;
   if (act === 'standup') return standupUi.open();
   if (act === 'map') return $('#map-btn').click();
-  if (act === 'issues') return issuesUi.open();
+  if (act === 'issues') return $('#issues-btn').hidden ? false : issuesUi.open();
+  if (act === 'actions') return $('#actions-btn').hidden ? false : actionsUi.open();
+  if (act === 'assistant') return $('#assistant-btn').click();
+  if (act === 'settings') return $('#settings-btn').click();
+  if (act === 'results') return $('#spend-btn').click();
   if (act === 'designs') return designsUi.open();
   if (act === 'reviews') return reviewsUi.open();
   if (act === 'value') return valueUi.open();
@@ -4544,7 +4571,7 @@ $('#edit-form').addEventListener('submit', async (e) => {
 
 // ------------------------------------------------------------------ assistant
 
-const ASSISTANT_SOURCES = ['jira', 'comments', 'reviews', 'ci', 'slack', 'linear'];
+const ASSISTANT_SOURCES = ['jira', 'comments', 'reviews', 'ci', 'slack', 'linear', 'actions'];
 let assistantState = null;
 
 function renderAssistantDot() {

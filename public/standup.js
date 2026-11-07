@@ -294,6 +294,19 @@ export function initStandup({ api, $, esc, agents, needsFor, needCard, onNeed, t
       </details>` : ''}`;
   }
 
+  // Space plays or pauses, the arrows move between agents (not while typing an answer).
+  dialog.addEventListener('keydown', (e) => {
+    if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey || e.target.closest?.('input:not([type="checkbox"]), textarea, select, [contenteditable]')) return;
+    if (e.key === ' ' && !e.target.closest?.('button')) {
+      e.preventDefault();
+      return toggle();
+    }
+    if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+      e.preventDefault();
+      return playFrom(idx + (e.key === 'ArrowRight' ? 1 : -1));
+    }
+  });
+
   body.addEventListener('click', (e) => {
     if (e.target.closest('[data-need]')) return onNeed(e);
     const el = e.target.closest('[data-su]');

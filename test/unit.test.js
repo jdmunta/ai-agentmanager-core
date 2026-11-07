@@ -771,7 +771,9 @@ test('assistantSettings: defaults, bounds and known sources only', async () => {
   const s = assistantSettings({ assistant: { everyMin: 0, maxPerDay: -1, sources: ['jira', 'fax'], notes: 7 } });
   assert.equal(s.everyMin, 15);
   assert.equal(s.maxPerDay, 10);
-  assert.deepEqual(s.sources, ['jira']);
+  // A list saved before "actions" existed gets it once; saved since, it stays as chosen.
+  assert.deepEqual(s.sources, ['jira', 'actions']);
+  assert.deepEqual(assistantSettings({ assistant: { sources: ['jira'], sourcesV2: true } }).sources, ['jira']);
   assert.equal(s.notes, '');
   assert.equal(assistantSettings({ assistant: { everyMin: 99999 } }).everyMin, 1440);
 });
@@ -788,6 +790,76 @@ test('assistantPrompt: one section per watched source, limits, memory and the ne
   assert.match(p, /\/tmp\/a\/activity\.md/);
   assert.match(p, /Never merge, approve/);
   assert.match(p, /OPS goes to @cc/);
+});
+
+test('assistant: action items from Slack and meeting notes; features turn sources off', async () => {
+  const { assistantPrompt, assistantSettings, featuresOf, activeSources } = await import('../src/assistant.js');
+  assert.deepEqual(featuresOf({}), { jira: true, slack: true, gemini: true });
+  assert.deepEqual(featuresOf({ features: { jira: false } }), { jira: false, slack: true, gemini: true });
+  const all = ['jira', 'comments', 'reviews', 'slack', 'actions'];
+  assert.deepEqual(activeSources(all, { jira: false, slack: true, gemini: true }), ['reviews', 'slack', 'actions']);
+  assert.deepEqual(activeSources(all, { jira: true, slack: false, gemini: false }), ['jira', 'comments', 'reviews']);
+  const s = assistantSettings({ assistant: { sources: all, me: 'Jane Doe, jane@acme.test' } });
+  const p = assistantPrompt(s, '/tmp/a', 'agentmgr', featuresOf({}));
+  assert.match(p, /My action items/);
+  assert.match(p, /Notes by Gemini/);
+  assert.match(p, /the person \(Jane Doe, jane@acme\.test\)/);
+  assert.match(p, /agentmgr actions add --source <slack\|gemini> --link/);
+  // Slack off: only the meeting notes, and no Slack work section; Jira off: no Jira sections.
+  const q = assistantPrompt(s, '/tmp/a', 'agentmgr', { jira: false, slack: false, gemini: true });
+  assert.match(q, /--source <gemini>/);
+  assert.doesNotMatch(q, /Slack:|in Slack, direct messages|Jira, new assignments|Jira, comments/);
+  assert.doesNotMatch(assistantPrompt(assistantSettings({ assistant: { sources: ['actions'] } }), '/tmp/a', 'agentmgr', featuresOf({})), /the person \(Jane/);
+});
+
+test('actions: added once, decided (assign starts an agent), kept, discussed in a session of its own', async () => {
+  const { MyActions, actionIntent, discussPrompt } = await import('../src/actions.js');
+  const agents = new Map();
+  const made = [];
+  const manager = {
+    store: { get: (id) => agents.get(id) ?? null },
+    createMany: (intents, opts) => intents.map((intent) => {
+      if (!opts.project) throw new Error('Pick a project');
+      const a = { id: `a${agents.size}`, name: 'reply-to-pat', intent };
+      agents.set(a.id, a);
+      made.push({ intent, opts });
+      return a;
+    }),
+    createGeneral: ({ question, name }) => {
+      const a = { id: `g${agents.size}`, name, intent: question };
+      agents.set(a.id, a);
+      return a;
+    },
+  };
+  const store = { data: {}, save() {} };
+  const q = new MyActions({ store, manager });
+  const a = q.add({ text: 'Send Pat the Q3 latency numbers', source: 'slack', link: 'https://acme.slack.com/archives/C1/p123', from: 'Pat', due: 'Friday', context: 'For the infra review.' });
+  assert.equal(a.status, 'open');
+  assert.equal(q.add({ text: 'send pat the Q3 latency numbers!', source: 'slack', link: 'https://acme.slack.com/archives/C1/p123' }).duplicate, true, 'the same one again');
+  const b = q.add({ text: 'Write up the rollout plan', source: 'gemini', link: 'https://docs.google.com/document/d/x', from: 'Weekly sync' });
+  assert.throws(() => q.add({ text: 'x' }), /Say what/);
+  assert.throws(() => q.add({ text: 'Do it', source: 'fax' }), /source is one of/);
+  assert.throws(() => q.add({ text: 'Do it', link: 'javascript:alert(1)' }), /http/);
+  assert.equal(q.rows().length, 2);
+  // Decisions, kept in the store's data (state.json).
+  q.set([b.id], 'skip');
+  assert.deepEqual(new MyActions({ store, manager }).rows().map((r) => [r.id, r.group]), [[a.id, 'open'], [b.id, 'skipped']]);
+  assert.deepEqual(q.set([a.id], 'assign').failed, [{ id: a.id, reason: 'Pick a project' }]);
+  const r = q.set([a.id], 'assign', { project: '@cc' });
+  assert.deepEqual(r.started.map((x) => x.agent.name), ['reply-to-pat']);
+  assert.deepEqual(made[0].opts, { project: 'cc' });
+  assert.match(made[0].intent, /^Send Pat the Q3 latency numbers\n\nAsked in Slack by Pat: https:\/\/acme\.slack\.com\/archives\/C1\/p123\nDue: Friday\.\n\nContext: For the infra review\.$/);
+  assert.deepEqual(q.rows().find((x) => x.id === a.id).agent, { id: 'a0', name: 'reply-to-pat' });
+  q.set([b.id], 'open');
+  assert.throws(() => q.set([b.id], 'later'), /one of open, assign/);
+  // Discuss: one session per action.
+  const d = q.discuss(b.id, 'agentmgr');
+  assert.equal(d.existing, false);
+  assert.match(agents.get(d.agent.id).intent, /Write up the rollout plan[\s\S]*Never send a message[\s\S]*agentmgr actions set <done\|skip\|remove> /);
+  assert.equal(q.discuss(b.id).existing, true);
+  assert.equal(q.rows().find((x) => x.id === b.id).discussion.id, d.agent.id);
+  assert.match(actionIntent({ text: 'Do it', source: 'other' }), /^Do it$/);
+  assert.match(discussPrompt({ id: 'z', text: 'Do it', source: 'gemini' }), /Where: Meeting notes/);
 });
 
 test('review: base ref, PR target, comments message, diff parsing', () => {

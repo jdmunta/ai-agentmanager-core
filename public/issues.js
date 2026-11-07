@@ -5,6 +5,7 @@
 // remove), kept by the daemon across restarts and updates, and changeable any time.
 
 import { listenHtml } from './speak.js';
+import { rowKeys } from './rowkeys.js';
 
 const SAVED = 'agentmgr.issuesFilter';
 const FILTERS = [
@@ -89,7 +90,7 @@ export function initIssues({ api, $, esc, ago, openAgent, openDoc, toast }) {
       : '<span class="hint">—</span>';
     if (!r.agent) {
       const by = !r.proposal ? 'assigned to you' : r.proposal.by === 'assistant' ? 'proposed by the assistant' : r.proposal.by === 'jira' ? 'assigned to you' : 'proposed';
-      return `<tr class="stage-proposed ${ticked.has(r.key) ? 'ticked' : ''} ${r.action ? `action-${esc(r.action)}` : ''}">${box}${actionCell(r)}
+      return `<tr data-row-id="${esc(r.key)}" class="stage-proposed ${ticked.has(r.key) ? 'ticked' : ''} ${r.action ? `action-${esc(r.action)}` : ''}">${box}${actionCell(r)}
         <td>${issue}${aboutIssue(r)}</td>
         <td>${status}</td>
         <td class="issue-note">${esc(r.note)}</td>
@@ -112,7 +113,7 @@ export function initIssues({ api, $, esc, ago, openAgent, openDoc, toast }) {
     const design = d
       ? [d.written ? read('designdoc', 'Read', 'Read the design doc here') : '<span class="hint">not yet</span>', d.page && ext('Page', d.page, 'The design page the agent published'), d.google && ext('Doc', d.google, 'Google Doc')].filter(Boolean).join(' · ')
       : '<span class="hint">—</span>';
-    return `<tr class="stage-${esc(r.stage)} action-${esc(r.action)}">${box}${actionCell(r)}
+    return `<tr data-row-id="${esc(r.key)}" class="stage-${esc(r.stage)} action-${esc(r.action)}">${box}${actionCell(r)}
         <td>${issue}${aboutIssue(r)}</td>
         <td>${status}</td>
         <td class="issue-note">${esc(r.note)}</td>
@@ -174,7 +175,9 @@ export function initIssues({ api, $, esc, ago, openAgent, openDoc, toast }) {
             <tbody>${rows.map((r) => row(r, boxes)).join('')}</tbody>
           </table></div>`
         : `<p class="hint issues-empty">${esc(empty)}</p>`}
+      ${rows.length ? '<p class="hint">Keys: j/k move, a assign, s skip, d done, x remove, o clear, Enter opens the issue, [ ] filters.</p>' : ''}
       ${data.jira.signedIn || !data.rows.length ? '' : '<p class="hint">Jira status shows for public issues only, and the issues assigned to you aren\'t listed, until you add your Jira site, email and API token in Settings → Jira.</p>'}`;
+    keys.redraw();
   }
 
   /** Set your action on issues; assign starts the agents of ones not started yet. */
@@ -191,6 +194,20 @@ export function initIssues({ api, $, esc, ago, openAgent, openDoc, toast }) {
     }
     load();
   }
+
+  const keys = rowKeys(dialog, {
+    rows: () => [...body.querySelectorAll('tbody tr[data-row-id]')],
+    filters: () => [...body.querySelectorAll('[data-issues-filter]')],
+    keys: {
+      a: (r) => setAction([r.dataset.rowId], 'assign'),
+      s: (r) => setAction([r.dataset.rowId], 'skip'),
+      d: (r) => setAction([r.dataset.rowId], 'done'),
+      x: (r) => setAction([r.dataset.rowId], 'remove'),
+      o: (r) => setAction([r.dataset.rowId], null),
+      Enter: (r) => r.querySelector('a.issue-key')?.click(),
+      r: Object.assign(() => load({ fresh: true }), { needsRow: false }),
+    },
+  });
 
   body.addEventListener('change', (e) => {
     const act = e.target.dataset.issueAction;

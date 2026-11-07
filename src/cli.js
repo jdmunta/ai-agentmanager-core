@@ -731,6 +731,60 @@ export async function main(argv) {
       for (const x of r.failed) console.log(`${red('!')} ${bold(x.key)}: ${x.reason}`);
     });
 
+  const actionsCmd = program.command('actions').description("Your action items from Slack and meeting notes (the assistant finds them): decide on each one");
+  actionsCmd
+    .command('ls', { isDefault: true })
+    .description('The open ones (--all for the decided ones too)')
+    .option('--all', 'also assigned, skipped, done and removed')
+    .option('--json', 'print JSON')
+    .action(async (opts) => {
+      await daemon();
+      const v = await api('GET', '/actions');
+      const rows = opts.all ? v.rows : v.rows.filter((r) => r.group === 'open');
+      if (opts.json) return console.log(JSON.stringify({ ...v, rows }, null, 2));
+      if (!rows.length) return console.log(dim(opts.all ? 'No action items yet.' : 'Nothing open. --all shows the decided ones.'));
+      for (const r of rows) {
+        console.log(`${bold(r.id)} ${r.group === 'open' ? yellow(r.text) : r.text}${r.group === 'open' ? '' : dim(` [${r.status}]`)}`);
+        console.log(dim(`  ${[r.sourceLabel, r.from && `from ${r.from}`, r.due && `due ${r.due}`, r.link].filter(Boolean).join(' · ')}`));
+      }
+    });
+  actionsCmd
+    .command('add')
+    .description('Add an action item (the assistant does this on its checks)')
+    .argument('<text...>', 'the action, in one line')
+    .option('--source <source>', 'slack | gemini | other', 'other')
+    .option('--link <url>', 'the message or document it comes from')
+    .option('--from <who>', 'who asked')
+    .option('--due <when>', 'when it is due, if said')
+    .option('--context <text>', 'a sentence or two of background')
+    .action(async (words, opts) => {
+      await daemon();
+      const a = await api('POST', '/actions', { text: words.join(' '), source: opts.source, link: opts.link, from: opts.from, due: opts.due, context: opts.context });
+      console.log(a.duplicate ? dim(`Already listed: ${a.id}`) : `${green('+')} ${bold(a.id)} ${a.text}`);
+    });
+  actionsCmd
+    .command('set')
+    .description('Your decision: assign (an agent does it), skip, done, remove, or open again')
+    .argument('<state>', 'assign | skip | done | remove | open')
+    .argument('<ids...>')
+    .option('-p, --project <project>', 'with assign: the project the agent works in')
+    .action(async (state, ids, opts) => {
+      await daemon();
+      const r = await api('POST', '/actions/set', { ids, state, project: opts.project });
+      for (const x of r.started) console.log(`${green('✓')} ${bold(x.id)} → agent ${x.agent.name} (${x.agent.id})`);
+      if (r.set.length) console.log(`${green('✓')} ${r.set.join(', ')}: ${state}`);
+      for (const x of r.failed) console.log(`${red('!')} ${bold(x.id)}: ${x.reason}`);
+    });
+  actionsCmd
+    .command('discuss')
+    .description('Talk an action item through with Claude, in a session of its own')
+    .argument('<id>')
+    .action(async (id) => {
+      await daemon();
+      const r = await api('POST', `/actions/${id}/discuss`, {});
+      console.log(`${r.existing ? 'Already talking about it' : 'Started'}: ${bold(r.agent.name)} (${r.agent.id}); open it with agentmgr attach ${r.agent.id}`);
+    });
+
   program
     .command('designs')
     .description("Agents' design docs: name, summary and links, the ones waiting for your review first")

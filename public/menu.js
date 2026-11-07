@@ -56,6 +56,8 @@ export function initMenu({ api, esc, toast, $ }) {
   let service = null; // the login service as the dialog opened
   let jira = null; // the Jira settings as the dialog opened
   let containers = null; // Docker and the agent image as the dialog opened
+  let features = null; // what you use, and who you are, as the dialog opened
+  const FEATURE_KEYS = ['jira', 'slack', 'gemini'];
   function showContainers() {
     const c = containers;
     $('#settings-containers').hidden = !c;
@@ -93,6 +95,10 @@ export function initMenu({ api, esc, toast, $ }) {
       $('#settings-running').textContent = `Open now: ${c.running}.`;
       service = null;
       showRules(await api('GET', '/rules').catch(() => null));
+      features = await api('GET', '/features').catch(() => null);
+      $('#settings-features').hidden = !features;
+      for (const k of FEATURE_KEYS) form[`feat_${k}`].checked = features?.features?.[k] !== false;
+      form.me.value = features?.me ?? '';
       const u = await api('GET', '/update').catch(() => null);
       form.updateCheck.checked = u?.check !== false;
       if (!remote()) {
@@ -145,6 +151,13 @@ export function initMenu({ api, esc, toast, $ }) {
     try {
       const c = await api('PUT', '/cleanup', { maxRunning: form.maxRunning.value.trim() || null });
       await api('PUT', '/update', { check: form.updateCheck.checked }).catch(() => {});
+      if (features) {
+        const want = Object.fromEntries(FEATURE_KEYS.map((k) => [k, form[`feat_${k}`].checked]));
+        if (FEATURE_KEYS.some((k) => want[k] !== features.features[k]) || form.me.value.trim() !== (features.me ?? '')) {
+          const r = await api('PUT', '/features', { features: want, me: form.me.value });
+          document.dispatchEvent(new CustomEvent('agentmgr:features', { detail: r.features }));
+        }
+      }
       if (!remote() && jira && (form.jiraSite.value.trim() !== (jira.site ?? '') || form.jiraEmail.value.trim() !== (jira.email ?? '') || form.jiraToken.value.trim())) {
         await api('PUT', '/jira', { site: form.jiraSite.value.trim(), email: form.jiraEmail.value.trim(), token: form.jiraToken.value.trim() || undefined });
         toast('Jira saved; summaries for agents from Jira links are being fetched', 4000);
