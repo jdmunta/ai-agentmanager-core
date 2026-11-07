@@ -4,14 +4,28 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import test from 'node:test';
+import nodeTest from 'node:test';
 import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
+// E2E_PART=i/n (set by test/run.js): this process runs every n-th test from the i-th, in order,
+// against a daemon and a home of its own, so the parts run side by side; dealt out like cards,
+// the slow tests next to each other land in different parts.
+const [part, parts] = (process.env.E2E_PART ?? '1/1').split('/').map(Number);
+let seen = 0;
+const test = Object.assign((...args) => (seen++ % parts === part - 1 ? nodeTest(...args) : undefined), { after: nodeTest.after });
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'agentmgr-e2e-'));
 const claudeLog = path.join(home, 'fake-claude.log');
-const port = 20000 + Math.floor(Math.random() * 20000);
+// A port nothing listens on: the test runs side by side (test/run.js), so a random one could clash.
+const port = await (async () => {
+  const net = await import('node:net');
+  const srv = net.createServer();
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+  const { port } = srv.address();
+  await new Promise((r) => srv.close(r));
+  return port;
+})();
 
 process.env.AGENTMGR_HOME = home;
 process.env.AGENTMGR_PLUGINS = path.join(here, 'fixtures', 'test-plugin.js');
@@ -954,7 +968,8 @@ test('browser tabs: any address, saved per agent, suggested from terminal output
   const idleSrc = (await httpsReq(rport, 'POST', '/api/preview', { headers: { ...json, cookie }, body: { url: String(idle) } })).json.src;
   const down = await httpsReq(Number(new URL(idleSrc).port), 'GET', '/', { headers: { cookie } });
   assert.equal(down.status, 502);
-  assert.match(down.text, /Nothing is answering/);
+  // Refused, as a rule; on a busy runner the freed port can be taken and drop the connection instead.
+  assert.match(down.text, /Nothing is answering|Could not reach/);
 
   // Turning remote access off closes the relays...
   await call('POST', '/remote/disable');
@@ -1128,7 +1143,10 @@ test('backlog: per-project limit, done → review frees a slot, accept, reopen, 
 
   // Two at a time per project (the default): one and two start, three waits.
   await waitFor(async () => (await item(one)).status !== 'queued' && (await item(two)).status === 'active', 8000, 'two active');
-  assert.equal((await item(three)).status, 'queued');
+  // One snapshot: item one can finish at any moment (#done), and then three rightly takes its slot.
+  const now = Object.fromEntries((await bl()).items.map((i) => [i.id, i.status]));
+  assert.ok([one, two, three].filter((id) => now[id] === 'active').length <= 2, JSON.stringify(now));
+  if (now[one] === 'active') assert.equal(now[three], 'queued');
   const a1 = (await item(one)).agent.id;
   assert.equal((await agentNow(a1)).backlogItem, one);
   assert.equal((await agentNow(a1)).projectInfo.name, 'BL');
@@ -2326,12 +2344,14 @@ test('live browser tabs: a real browser on this machine, streamed; clicks and ty
   };
   try {
     assert.equal((await call('GET', '/browser')).body.available, true);
+    // Chrome first: a cold start on a busy runner can take most of the frame wait below.
+    await live.start();
     // Clicks and typing reach the page; its title comes back; frames stream.
     const page = (await call('POST', `/agents/${a.id}/browsers`, { url: `http://127.0.0.1:${provider.address().port}/`, mode: 'live' })).body;
     assert.equal(page.mode, 'live');
     let titles = [];
     let frames = 0;
-    const stop = await stream(page.n, (m) => (m.t === 'frame' ? frames++ : m.title && titles.push(m.title)));
+    const stop = await stream(page.n, (m) => (m.t === 'frame' ? frames++ : m.t === 'error' ? (streamError = m.error ?? JSON.stringify(m)) : m.title && titles.push(m.title)));
     await waitFor(() => frames > 0 && titles.includes('Page'), 20000, () => `first frame (frames: ${frames}, titles: ${JSON.stringify(titles)}${streamError ? `, stream: ${streamError}` : ''}, browser: ${JSON.stringify(live.status?.() ?? null)})`);
     const input = (events) => call('POST', `/agents/${a.id}/browsers/${page.n}/live/input`, { events });
     await call('POST', `/agents/${a.id}/browsers/${page.n}/live/resize`, { width: 800, height: 600 });
@@ -4266,7 +4286,7 @@ test('getting started: what is set up, and what this machine is missing', async 
 test('restart and serve wait for a daemon that is still closing its agents', async () => {
   const { execFile, spawn } = await import('node:child_process');
   const h2 = fs.mkdtempSync(path.join(os.tmpdir(), 'agentmgr-restart-'));
-  const port2 = port + 7;
+  const port2 = await freePort();
   fs.writeFileSync(path.join(h2, 'config.json'), JSON.stringify({ claudeBin: process.execPath, claudeArgs: [path.join(here, 'fake-claude.js')], judge: { enabled: false }, cleanup: { strategy: 'off' } }));
   const env = { ...process.env, AGENTMGR_HOME: h2, AGENTMGR_PORT: String(port2), AGENTMGR_REMOTE: '0', AGENTMGR_PLUGINS: '', CLAUDE_CONFIG_DIR: path.join(h2, 'claude'), FAKE_CLAUDE_LOG: path.join(h2, 'fake.log'), FAKE_CLAUDE_HUP_DELAY_MS: '2500', AGENTMGR_SERVICE_LABEL: `com.agentmgr.test-${process.pid}` };
   const bin = path.join(here, '..', 'bin', 'agentmgr.js');
@@ -4468,7 +4488,7 @@ test('hub move: an agent continues on another machine with its conversation, bra
   };
   // Machine B: a second daemon with its own home, port and Claude folder.
   const hB = fs.mkdtempSync(path.join(os.tmpdir(), 'agentmgr-moveB-'));
-  const portB = port + 9;
+  const portB = await freePort();
   fs.writeFileSync(path.join(hB, 'config.json'), JSON.stringify({ claudeBin: process.execPath, claudeArgs: [path.join(here, 'fake-claude.js')], judge: { enabled: false }, cleanup: { strategy: 'off' }, updates: { check: false }, hub: { allow: ['view', 'control', 'move'] } }));
   const envB = { ...process.env, AGENTMGR_HOME: hB, AGENTMGR_PORT: String(portB), AGENTMGR_REMOTE: '0', AGENTMGR_PLUGINS: '', CLAUDE_CONFIG_DIR: path.join(hB, 'claude'), FAKE_CLAUDE_LOG: path.join(hB, 'fake.log'), AGENTMGR_SERVICE_LABEL: `com.agentmgr.test-${process.pid}` };
   const callB = async (method, route, body) => {
@@ -4589,9 +4609,14 @@ test('work record: what the agents got done, appended to a CSV in agentmgr home,
   assert.equal(v.files.events, path.join(home, 'worklog.csv'));
   assert.equal(v.files.weekly, path.join(home, 'worklog-weekly.csv'));
   for (const k of ['prs_opened', 'prs_merged', 'bugs_fixed', 'issues_filed', 'agents_finished']) assert.equal(typeof v.totals[k], 'number');
-  // Earlier tests merged pull requests (autopilot, landing): they're in the record.
-  assert.ok(v.totals.prs_merged >= 1, JSON.stringify(v.totals));
-  assert.ok(v.events.some((e) => e.event === 'pr_merged' && e.link));
+  // A merged pull request on an agent is in the record (its own, so it doesn't hang on which tests ran before).
+  const a = manager.store.list().find((x) => x.kind !== 'assistant' && x.kind !== 'general');
+  assert.ok(a, 'an agent from an earlier test');
+  const url = 'https://github.com/acme/demo/pull/9901';
+  manager.patch(a.id, { prs: { ...a.prs, [url]: { url, number: 9901, title: 'Work record merge', source: 'session', state: 'MERGED', openedAt: new Date(Date.now() - 3_600_000).toISOString(), mergedAt: new Date().toISOString() } } });
+  const v2 = (await call('GET', '/worklog?days=0')).body;
+  assert.ok(v2.totals.prs_merged >= 1, JSON.stringify(v2.totals));
+  assert.ok(v2.events.some((e) => e.event === 'pr_merged' && e.link === url));
   const res = await fetch(`${base}/api/worklog/worklog.csv`, { headers: { 'x-agentmgr': '1' } });
   assert.equal(res.status, 200);
   const csv = await res.text();

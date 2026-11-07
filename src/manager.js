@@ -1473,14 +1473,15 @@ export class AgentManager extends EventEmitter {
    */
   async closeAll({ working = false } = {}) {
     const open = this.store.list().filter((a) => a.kind !== 'assistant' && this.runtimes.get(a.id)?.pty);
-    const busy = (a) => this.runtimes.get(a.id)?.busy;
-    const close = open.filter((a) => working || !busy(a));
+    // Busy as of the click: one that finishes while the others close is still reported as left open.
+    const left = working ? [] : open.filter((a) => this.runtimes.get(a.id)?.busy);
+    const close = open.filter((a) => !left.includes(a));
     const results = await Promise.allSettled(close.map((a) => this.stop(a.id)));
     const failed = close.filter((a, i) => results[i].status === 'rejected').map((a) => ({ id: a.id, name: a.name }));
     return {
       closed: close.filter((a, i) => results[i].status === 'fulfilled').map((a) => ({ id: a.id, name: a.name })),
       failed,
-      working: open.filter((a) => !working && busy(a)).map((a) => ({ id: a.id, name: a.name })),
+      working: left.map((a) => ({ id: a.id, name: a.name })),
     };
   }
 

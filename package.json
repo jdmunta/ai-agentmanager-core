@@ -41,7 +41,7 @@
   ],
   "scripts": {
     "start": "node bin/agentmgr.js serve",
-    "test": "node --test --test-concurrency=1 test/*.test.js",
+    "test": "node test/run.js",
     "postinstall": "node scripts/fix-pty.js"
   },
   "engines": {
