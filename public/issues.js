@@ -5,7 +5,8 @@
 // remove), kept by the daemon across restarts and updates, and changeable any time.
 
 import { listenHtml } from './speak.js';
-import { rowKeys } from './rowkeys.js';
+import { holdWhilePicking, rowKeys } from './rowkeys.js';
+import { expandButton, expandable } from './expand.js';
 
 const SAVED = 'agentmgr.issuesFilter';
 const FILTERS = [
@@ -76,7 +77,8 @@ export function initIssues({ api, $, esc, ago, openAgent, openDoc, toast }) {
   }
 
   function aboutIssue(r) {
-    return `${r.title ? `<div class="issue-title">${esc(r.title)}</div>` : ''}${r.synopsis ? `<div class="issue-synopsis" title="${esc(r.synopsis)}">${esc(r.synopsis)}</div>` : ''}`;
+    const missing = data?.jira?.signedIn ? 'Summary not fetched from Jira yet' : 'Summary shows once your Jira site, email and API token are in Settings → Jira';
+    return `${r.title ? `<div class="issue-title">${esc(r.title)}</div>` : `<div class="hint issue-title">${esc(missing)}</div>`}${r.synopsis ? `<div class="issue-synopsis" title="${esc(r.synopsis)}">${esc(r.synopsis)}</div>` : ''}`;
   }
 
   function row(r, boxes) {
@@ -125,7 +127,7 @@ export function initIssues({ api, $, esc, ago, openAgent, openDoc, toast }) {
       </tr>`;
   }
 
-  function render() {
+  function draw() {
     if (!dialog.open) return;
     if (!data) {
       body.innerHTML = '<p class="hint">Loading…</p>';
@@ -159,6 +161,7 @@ export function initIssues({ api, $, esc, ago, openAgent, openDoc, toast }) {
         <span class="spacer"></span>
         <button class="small" data-issues="copy" title="Copy this list as a Markdown table, to paste into Slack, Jira or a doc" ${rows.length ? '' : 'disabled'}>Copy</button>
         <button class="small" data-issues="refresh" title="Look again now">↻</button>
+        ${expandButton(dialog)}
         <button class="small" data-issues="close" title="Close (Esc)">Close</button>
       </div>
       ${boxes
@@ -175,10 +178,12 @@ export function initIssues({ api, $, esc, ago, openAgent, openDoc, toast }) {
             <tbody>${rows.map((r) => row(r, boxes)).join('')}</tbody>
           </table></div>`
         : `<p class="hint issues-empty">${esc(empty)}</p>`}
-      ${rows.length ? '<p class="hint">Keys: j/k move, a assign, s skip, d done, x remove, o clear, Enter opens the issue, [ ] filters.</p>' : ''}
+      ${rows.length ? '<p class="hint">Keys: j/k move (or click a row), a assign, s skip, d done, x remove, o clear, Enter opens the issue, [ ] filters, f bigger.</p>' : ''}
       ${data.jira.signedIn || !data.rows.length ? '' : '<p class="hint">Jira status shows for public issues only, and the issues assigned to you aren\'t listed, until you add your Jira site, email and API token in Settings → Jira.</p>'}`;
     keys.redraw();
   }
+  const render = holdWhilePicking(body, draw);
+  expandable(dialog, draw);
 
   /** Set your action on issues; assign starts the agents of ones not started yet. */
   async function setAction(keys, action) {
@@ -187,7 +192,11 @@ export function initIssues({ api, $, esc, ago, openAgent, openDoc, toast }) {
       for (const k of r.set) ticked.delete(k);
       const bad = r.failed.map((x) => `${x.key}: ${x.reason}`).join('; ');
       const label = ACTIONS.find(([v]) => v === action)?.[1] ?? 'Cleared';
-      const what = r.started.length ? `Started ${r.started.map((x) => `${x.key} (${x.agent.name})`).join(', ')}` : r.set.length ? `${r.set.join(', ')}: ${label}` : 'Nothing changed';
+      const named = (k) => {
+        const t = data?.rows.find((x) => x.key === k)?.title;
+        return t ? `${k} (${t.length > 60 ? `${t.slice(0, 59)}…` : t})` : k;
+      };
+      const what = r.started.length ? `Started ${r.started.map((x) => named(x.key)).join(', ')}` : r.set.length ? `${r.set.map(named).join(', ')}: ${label}` : 'Nothing changed';
       toast?.(`${what}${bad ? `. Not changed: ${bad}` : ''}`, bad ? 8000 : 3000);
     } catch (err) {
       toast?.(err.message, 6000);
@@ -211,7 +220,11 @@ export function initIssues({ api, $, esc, ago, openAgent, openDoc, toast }) {
 
   body.addEventListener('change', (e) => {
     const act = e.target.dataset.issueAction;
-    if (act) return setAction([act], e.target.value);
+    if (act) {
+      // Let go of the dropdown so the list can be drawn again with the change.
+      e.target.blur();
+      return setAction([act], e.target.value);
+    }
     const one = e.target.dataset.issuePick;
     if (one) {
       if (e.target.checked) ticked.add(one);

@@ -1131,7 +1131,12 @@ body.mapping .layout, body.mapping .watch-view { display: none; }
 .issues-dialog { width: min(1100px, calc(100% - 32px)); max-height: calc(100% - 32px); padding: 16px; }
 /* Only while open: a display on the dialog itself would keep a closed one on screen. */
 .issues-dialog[open] { display: flex; flex-direction: column; }
-#issues-body { display: flex; flex-direction: column; min-height: 0; }
+#issues-body, #actions-body { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+/* Jira and Actions: drag the corner to any size, or fill the window (⤢ or f). */
+#issues-dialog, #actions-dialog { resize: both; overflow: hidden; min-width: min(520px, calc(100% - 32px)); min-height: 240px; max-width: calc(100% - 16px); max-height: calc(100% - 16px); }
+#issues-dialog.expanded, #actions-dialog.expanded { width: calc(100% - 16px); height: calc(100% - 16px); }
+.issues-dialog.expanded table.issues .issue-title, .issues-dialog.expanded table.issues .issue-synopsis { max-width: none; }
+.issues-dialog.expanded table.issues .issue-synopsis { -webkit-line-clamp: 6; }
 .issues-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 10px; }
 .issues-head h2 { margin: 0 6px 0 0; font-size: 18px; }
 .issues-head .spacer { flex: 1; }
