@@ -107,7 +107,7 @@ import { spawn } from 'node:child_process';
 import * as git from './git.js';
 import { buildMap, touchedFiles } from './codemap.js';
 import { parseDiff } from '../public/review.js';
-import { assignedIssues, issueFields, issueSummary, leadingIssue, loadJira, wordsAfterLink } from './jira.js';
+import { assignedIssues, issueFields, issueSummary, jiraProblem, leadingIssue, loadJira, wordsAfterLink } from './jira.js';
 import { issueRows } from './issues.js';
 import { designRows } from './designs.js';
 import { reviewPath, reviewerPrompt } from './reviews.js';
@@ -869,7 +869,7 @@ export class AgentManager extends EventEmitter {
     }
     for (const [k, v] of jira) if (!v) jira.delete(k);
     const j = loadJira();
-    return { rows: issueRows(views, jira, (id, name) => readSpecDoc(id, name)?.markdown ?? null, proposed, actions, assigned), jira: { site: j.site, signedIn: Boolean(j.site && j.email && j.token) } };
+    return { rows: issueRows(views, jira, (id, name) => readSpecDoc(id, name)?.markdown ?? null, proposed, actions, assigned), jira: { site: j.site, signedIn: Boolean(j.site && j.token), problem: j.site && j.token ? jiraProblem()?.reason ?? null : null } };
   }
 
   /** Every agent's design doc, for the Designs list. */
@@ -893,6 +893,7 @@ export class AgentManager extends EventEmitter {
   /** Fill in summaries still missing (after Jira settings change); returns how many it found. */
   async refreshSynopses() {
     this.jiraCache?.clear();
+    this.assignedAt = 0;
     let found = 0;
     for (const a of this.store.list()) {
       if (a.synopsis?.source === 'jira' || !leadingIssue(a.intent)) continue;

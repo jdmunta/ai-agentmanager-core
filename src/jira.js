@@ -42,7 +42,7 @@ export function saveJira({ site, email, token, clearToken = false } = {}) {
     email: email === undefined ? cur.email ?? '' : String(email).trim(),
     token: clearToken ? '' : token ? String(token).trim() : cur.token ?? '',
   };
-  if (next.site && !/^https:\/\/[\w.-]+$/.test(next.site)) throw Object.assign(new Error('The Jira site is an https address, like https://yourcompany.atlassian.net'), { status: 400 });
+  if (next.site && !/^https:\/\/[\w.-]+(:\d+)?(\/[\w.~-]+)*$/.test(next.site)) throw Object.assign(new Error('The Jira site is an https address, like https://yourcompany.atlassian.net (or https://jira.yourcompany.com:8443/jira)'), { status: 400 });
   fs.mkdirSync(paths.home, { recursive: true });
   fs.writeFileSync(file(), JSON.stringify(next, null, 2) + '\n', { mode: 0o600 });
   return jiraView(loadJira());
@@ -75,18 +75,67 @@ export function wordsAfterLink(text) {
 // Statuses that mean the work is over, whatever category a workflow puts them in.
 const FINISHED = /^(closed|done|resolved|integrated|cancell?ed|won'?t (do|fix)|duplicate|rejected)$/i;
 
+// Why the last call to your Jira site failed ({ at, reason }), or null when it worked: shown in
+// the Jira list and Today, since an empty list alone doesn't say whether Jira was reached.
+let problem = null;
+
+/** Why your Jira site couldn't be used last time, or null. */
+export const jiraProblem = () => problem;
+
+/** Basic with the email and API token (Jira Cloud); a bearer token without an email (Server, Data Center). */
+const authOf = (jira) => (jira.email ? `Basic ${Buffer.from(`${jira.email}:${jira.token}`).toString('base64')}` : `Bearer ${jira.token}`);
+
+/** The reason in words for an answer that isn't ok, or a fetch that threw. */
+function reasonOf(site, res, e) {
+  if (res) {
+    const why = {
+      401: 'the email or API token is not accepted (Settings → Jira)',
+      403: 'no permission; if you mistyped the token a few times, Jira may want you to sign in once in the browser',
+      404: 'no Jira API at that address (is the site right?)',
+      429: 'too many requests; trying again later',
+    }[res.status];
+    return `${site} answered ${res.status}${why ? `: ${why}` : ''}`;
+  }
+  const m = String(e?.cause?.message ?? e?.message ?? e ?? '');
+  if (e?.name === 'TimeoutError' || /abort|timeout/i.test(m)) return `${site} did not answer in time (VPN off?)`;
+  if (/redirect/i.test(m)) return `${site} sent a sign-in page instead of an answer (the site address may be wrong, or it needs single sign-on)`;
+  return `couldn't reach ${site}: ${m || 'network error'}`;
+}
+
+/**
+ * Jira Cloud's API (v3), then the older one (v2) that Jira Server and Data Center have when v3
+ * isn't there. Returns the response, or throws.
+ */
+async function jiraGet(fetchImpl, site, v3, v2, init) {
+  const res = await fetchImpl(`${site}${v3.path}`, { ...init, ...v3.init });
+  if (res.status !== 404 || !v2) return res;
+  return fetchImpl(`${site}${v2.path}`, { ...init, ...v2.init });
+}
+
 /**
  * Open issues assigned to you on your Jira site (epics too): [{ key, url, summary, status,
- * category, type, synopsis, updated }]. Needs the site, email and API token from Settings → Jira;
- * null without them or when Jira can't be reached. Closed and integrated ones are left out.
+ * category, type, synopsis, updated }]. Needs the site and API token from Settings → Jira (and the
+ * email, for Jira Cloud); null without them or when Jira can't be reached (jiraProblem() says why).
+ * Closed and integrated ones are left out.
  */
 export async function assignedIssues({ jira = loadJira(), fetchImpl = fetch, timeoutMs = 10_000, max = 100 } = {}) {
-  if (!jira.site || !jira.email || !jira.token) return null;
-  const headers = { accept: 'application/json', 'content-type': 'application/json', authorization: `Basic ${Buffer.from(`${jira.email}:${jira.token}`).toString('base64')}` };
-  const body = JSON.stringify({ jql: 'assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC', fields: ['summary', 'status', 'issuetype', 'description', 'updated'], maxResults: max });
+  if (!jira.site || !jira.token) return null;
+  const headers = { accept: 'application/json', 'content-type': 'application/json', authorization: authOf(jira) };
+  const jql = 'assignee = currentUser() AND statusCategory != Done ORDER BY updated DESC';
+  const fields = ['summary', 'status', 'issuetype', 'description', 'updated'];
+  const q = new URLSearchParams({ jql, fields: fields.join(','), maxResults: String(max) });
   try {
-    const res = await fetchImpl(`${jira.site}/rest/api/3/search/jql`, { method: 'POST', headers, body, redirect: 'error', signal: AbortSignal.timeout(timeoutMs) });
-    if (!res.ok) return null;
+    const res = await jiraGet(
+      fetchImpl,
+      jira.site,
+      { path: '/rest/api/3/search/jql', init: { method: 'POST', body: JSON.stringify({ jql, fields, maxResults: max }) } },
+      { path: `/rest/api/2/search?${q}`, init: { method: 'GET' } },
+      { headers, redirect: 'error', signal: AbortSignal.timeout(timeoutMs) },
+    );
+    if (!res.ok) {
+      problem = { at: new Date().toISOString(), reason: reasonOf(jira.site, res) };
+      return null;
+    }
     const out = [];
     for (const i of (await res.json())?.issues ?? []) {
       const f = i?.fields ?? {};
@@ -104,8 +153,10 @@ export async function assignedIssues({ jira = loadJira(), fetchImpl = fetch, tim
         updated: typeof f.updated === 'string' ? f.updated : null,
       });
     }
+    problem = null;
     return out;
-  } catch {
+  } catch (e) {
+    problem = { at: new Date().toISOString(), reason: reasonOf(jira.site, null, e) };
     return null;
   }
 }
@@ -168,17 +219,24 @@ export async function issueFields({ key, site }, { jira = loadJira(), fetchImpl 
   const allowed = configured || /\.atlassian\.net$/.test(host) || allow?.(site);
   if (!allowed) return null;
   const headers = { accept: 'application/json' };
-  if (configured && jira.email && jira.token) headers.authorization = `Basic ${Buffer.from(`${jira.email}:${jira.token}`).toString('base64')}`;
+  if (configured && jira.token) headers.authorization = authOf(jira);
+  const q = `${encodeURIComponent(key)}?fields=summary,status,description`;
   try {
-    const res = await fetchImpl(`${site}/rest/api/3/issue/${encodeURIComponent(key)}?fields=summary,status,description`, { headers, redirect: 'error', signal: AbortSignal.timeout(timeoutMs) });
-    if (!res.ok) return null;
+    // Your site as saved: it may have a path (https://host/jira) that the link's origin leaves out.
+    const res = await jiraGet(fetchImpl, configured ? jira.site : site, { path: `/rest/api/3/issue/${q}` }, configured ? { path: `/rest/api/2/issue/${q}` } : null, { headers, redirect: 'error', signal: AbortSignal.timeout(timeoutMs) });
+    if (!res.ok) {
+      // Your own site refusing (not a missing issue) is worth saying.
+      if (configured && res.status !== 404) problem = { at: new Date().toISOString(), reason: reasonOf(jira.site, res) };
+      return null;
+    }
     const f = (await res.json())?.fields ?? {};
     const summary = typeof f.summary === 'string' && f.summary.trim() ? f.summary.trim().slice(0, 300) : null;
     const status = typeof f.status?.name === 'string' ? f.status.name.slice(0, 60) : null;
     if (!summary && !status) return null;
     const synopsis = synopsisOf(f.description);
     return { summary, status, category: typeof f.status?.statusCategory?.key === 'string' ? f.status.statusCategory.key : null, ...(synopsis ? { synopsis } : {}) };
-  } catch {
+  } catch (e) {
+    if (configured) problem = { at: new Date().toISOString(), reason: reasonOf(jira.site, null, e) };
     return null;
   }
 }

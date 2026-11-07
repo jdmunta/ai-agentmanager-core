@@ -39,7 +39,7 @@ import { Previews, parseUrl } from './preview.js';
 import { LiveBrowser } from './livebrowser.js';
 import * as remote from './remote.js';
 import * as service from './service.js';
-import { jiraView, saveJira } from './jira.js';
+import { assignedIssues, jiraProblem, jiraView, saveJira } from './jira.js';
 import { ProposedIssues, issuesMarkdown } from './issues.js';
 import { MyActions } from './actions.js';
 import { designsMarkdown } from './designs.js';
@@ -78,7 +78,7 @@ function isAllowedOrigin(origin, port) {
 const PUBLIC_REMOTE_API = new Set(['POST /api/login', 'GET /api/session']);
 // Updates are not here: a signed-in device (a phone) can install the newest release too. It only
 // ever installs an official release from where this copy came from (git tag or npm) and restarts.
-const LOCAL_ONLY_API = /^\/api\/(remote(\/|$)|notify(\/|$)|hub(\/|$)|triggers(\/|$)|service$|jira$|isolation\/|editors$|agentkit\/connect$|agents\/[\w-]+\/open-in$|shutdown$)/;
+const LOCAL_ONLY_API = /^\/api\/(remote(\/|$)|notify(\/|$)|hub(\/|$)|triggers(\/|$)|service$|jira(\/check)?$|isolation\/|editors$|agentkit\/connect$|agents\/[\w-]+\/open-in$|shutdown$)/;
 const HOOK_PATH = '/api/hooks/agents';
 const REPORT_PATH = '/api/agentkit/report';
 const NO_REPO_KINDS = new Set(['general', 'assistant']);
@@ -717,13 +717,25 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
   );
   // Jira: the site and API token used to show an issue's summary for agents created from its link.
   api.get('/jira', wrap(() => jiraView()));
+  // Whether the saved settings work: how many open issues are yours, or why Jira can't be used.
+  api.get(
+    '/jira/check',
+    wrap(async () => {
+      const view = jiraView();
+      if (!view.site || !view.hasToken) return { assigned: null, problem: 'Add the site and API token first' };
+      const mine = await assignedIssues({ timeoutMs: 8000 });
+      return { assigned: mine ? mine.length : null, problem: mine ? null : jiraProblem()?.reason ?? 'Jira could not be reached' };
+    }),
+  );
   api.put(
     '/jira',
     wrap(async (req) => {
       const view = saveJira(req.body ?? {});
       // Agents already created from links get their summaries now (in the background).
       manager.refreshSynopses().catch(() => {});
-      return view;
+      // Tried at once, so Settings can say whether it works: how many issues are yours, or why not.
+      const mine = view.site && view.hasToken ? await assignedIssues({ timeoutMs: 8000 }) : null;
+      return { ...view, assigned: mine ? mine.length : null, problem: view.site && view.hasToken && !mine ? jiraProblem()?.reason ?? 'Jira could not be reached' : null };
     }),
   );
   // Start at login: the login service (launchd or systemd) that brings the daemon back after a reboot.
@@ -790,8 +802,11 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
   api.get('/codemap', wrap((req) => manager.codeMap(req.query.project ? String(req.query.project) : null)));
   // Issues agents work on, for the summary; ?group=you|agent|done and ?format=markdown to paste.
   api.get('/issues', wrap(async (req) => {
-    // ?fresh=1 (the ↻ button) asks Jira again for the issues assigned to you.
-    if (req.query.fresh === '1') manager.assignedAt = 0;
+    // ?fresh=1 (the ↻ button) asks Jira again: the issues assigned to you and each issue's status.
+    if (req.query.fresh === '1') {
+      manager.assignedAt = 0;
+      manager.jiraCache?.clear();
+    }
     manager.jiraOff = !featuresOf(config).jira;
     const v = await manager.issues(proposed.listed(), proposed.actions);
     const group = req.query.group ? String(req.query.group) : null;
@@ -867,8 +882,13 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
   });
   // Today: what needs you, from every list, most pressing first (today.js). A list that's off or
   // can't be had right now is left out, and said so.
-  api.get('/today', wrap(async () => {
+  api.get('/today', wrap(async (req) => {
     const f = featuresOf(config);
+    // ?fresh=1 (↻ or r) asks Jira again rather than using what was fetched in the last few minutes.
+    if (req.query.fresh === '1') {
+      manager.assignedAt = 0;
+      manager.jiraCache?.clear();
+    }
     manager.jiraOff = !f.jira;
     const errors = [];
     const got = async (name, fn) => {
@@ -881,7 +901,13 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
     };
     const [inbox, issues, actions, prs] = await Promise.all([
       got('inbox', () => manager.inbox()),
-      f.jira ? got('jira', async () => (await manager.issues(proposed.listed(), proposed.actions)).rows) : [],
+      f.jira
+        ? got('jira', async () => {
+            const v = await manager.issues(proposed.listed(), proposed.actions);
+            if (v.jira.problem) errors.push({ source: 'jira', error: v.jira.problem });
+            return v.rows;
+          })
+        : [],
       f.slack || f.gemini ? got('actions', () => myActions.rows()) : [],
       got('reviews', () => reviews.rows()),
     ]);

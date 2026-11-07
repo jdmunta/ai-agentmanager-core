@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- **Jira says why it isn't working.** When your Jira site can't be used (the token isn't accepted, the site sends a sign-in page, it can't be reached), the Jira list and Today say so in words instead of just showing no summaries or statuses. Settings → Jira has a **Check Jira** button that asks the site for your open issues and says how many it found, or why it couldn't.
+- **Jira Server and Data Center.** With no email, the API token is sent as a personal access token, and the older API those sites have is used when Jira Cloud's isn't there. The site address may have a port and a path (`https://jira.company.com:8443/jira`).
+- **Skip, Done and Remove work on every issue in the list.** Before, an issue listed through its agent, whose request named it after other words rather than starting with its link, could fail with "not on the list".
+- **↻ asks Jira again.** Refreshing the Jira list or Today fetches statuses again rather than using those from the last few minutes.
+
 ## 1.26.0 (2026-11-07)
 
 - **Today: what needs you, in one list.** The Today button (or `y`) gathers what the other lists know and puts the most pressing first: agents stopped at a prompt or waiting for your answer, overdue and due-today action items, issues and pull requests ready for your review, review requests, then the rest (actions due later, new Jira issues, stuck agents, follow-ups). Each says why it's there ("due today · asked by Pat · in Slack", "Blocked: staging credentials"), and the usual decision is a click or a key away: Done, Skip and Discuss for actions, Assign for new issues, Review it for a requested pull request, Open for the rest. Listen reads the top of it aloud. Lists turned off in Settings are left out. The button's count is the pressing ones.

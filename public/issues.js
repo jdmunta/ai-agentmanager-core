@@ -77,7 +77,7 @@ export function initIssues({ api, $, esc, ago, openAgent, openDoc, toast }) {
   }
 
   function aboutIssue(r) {
-    const missing = data?.jira?.signedIn ? 'Summary not fetched from Jira yet' : 'Summary shows once your Jira site, email and API token are in Settings → Jira';
+    const missing = data?.jira?.problem ? 'No summary: Jira can’t be used (see above)' : data?.jira?.signedIn ? 'Summary not fetched from Jira yet' : 'Summary shows once your Jira site, email and API token are in Settings → Jira';
     return `${r.title ? `<div class="issue-title">${esc(r.title)}</div>` : `<div class="hint issue-title">${esc(missing)}</div>`}${r.synopsis ? `<div class="issue-synopsis" title="${esc(r.synopsis)}">${esc(r.synopsis)}</div>` : ''}`;
   }
 
@@ -172,6 +172,7 @@ export function initIssues({ api, $, esc, ago, openAgent, openDoc, toast }) {
             <span class="hint">Tick the issues to start agents for; the rest stay here.</span>
           </div>`
         : ''}
+      ${data.jira?.problem ? `<p class="issues-problem" role="alert">Jira: ${esc(data.jira.problem)}. Summaries, statuses and the issues assigned to you need it; try <b>Check Jira</b> in Settings → Jira.</p>` : ''}
       ${rows.length
         ? `<div class="issues-scroll"><table class="issues">
             <thead><tr>${boxes ? `<th class="pick"><input type="checkbox" data-issue-pick-all ${allTicked ? 'checked' : ''} aria-label="Tick all" title="Tick all" /></th>` : ''}<th class="issue-action" title="Your action, kept across restarts and updates">Action</th><th>Issue</th><th>Jira status</th><th>Where it stands</th><th>Plan</th><th>Design</th><th>Pull request</th><th>Agent</th><th class="col-active">Active</th></tr></thead>
