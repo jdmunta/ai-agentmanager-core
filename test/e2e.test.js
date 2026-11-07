@@ -1572,6 +1572,32 @@ test('issues: the Jira summary lists agents\' issues with their Jira status, wai
   }
 });
 
+test('today: what needs you from every list, ranked with why; decided from there; lists turned off are left out', async () => {
+  const a = (await call('POST', '/actions', { text: 'Send Sam the rollout plan', source: 'slack', link: 'https://acme.slack.com/archives/C1/p77', from: 'Sam', due: 'today' })).body;
+  try {
+    const t = (await call('GET', '/today')).body;
+    const it = t.items.find((i) => i.actionId === a.id);
+    assert.ok(it, JSON.stringify(t.items.map((i) => i.id)));
+    assert.match(it.why, /^due today · asked by Sam · in Slack$/);
+    assert.ok(it.score <= 20);
+    // Ranked: nothing after it is more pressing.
+    const i = t.items.indexOf(it);
+    assert.ok(t.items.slice(i + 1).every((x) => x.score >= it.score));
+    assert.match(t.speech[0], /things? for you today/);
+    assert.deepEqual(t.errors, []);
+    // Done from Today (the same call its button makes): off the list.
+    await call('POST', '/actions/set', { ids: [a.id], state: 'done' });
+    assert.ok(!(await call('GET', '/today')).body.items.some((x) => x.actionId === a.id));
+    // Actions turned off: none of them on Today.
+    await call('POST', '/actions/set', { ids: [a.id], state: 'open' });
+    await call('PUT', '/features', { features: { slack: false, gemini: false } });
+    assert.ok(!(await call('GET', '/today')).body.items.some((x) => x.kind === 'action'));
+  } finally {
+    await call('PUT', '/features', { features: { jira: true, slack: true, gemini: true } });
+    await call('POST', '/actions/set', { ids: [a.id], state: 'remove' });
+  }
+});
+
 test('actions: added by the assistant or you, decided, discussed; features turn lists off', async () => {
   const made = [];
   try {

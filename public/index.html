@@ -29,6 +29,7 @@
       </div>
       <div class="top-actions">
         <input id="filter" type="search" placeholder="Filter agents" aria-label="Filter agents" />
+        <button id="today-btn" title="Today: what needs you, from every list, most pressing first, and why (y)">Today <span id="today-count" class="badge ready"></span></button>
         <button id="assistant-btn" title="An always-on session that finds new work and starts agents for it">Assistant <span id="assistant-dot" class="assistant-dot" hidden></span></button>
         <button id="spend-btn" title="Results across agents (merge rate, time to PR, cost per merged PR), what they cost, and spending limits">Results <span id="spend-today" class="spend-today"></span></button>
         <button id="standup-btn" title="Today's standup: each agent's news read aloud, and what they need from you">Standup <span id="standup-dot" class="assistant-dot" hidden></span></button>
@@ -381,6 +382,9 @@
       </form>
     </dialog>
 
+    <dialog id="today-dialog" class="issues-dialog" aria-label="Today">
+      <div id="today-body"></div>
+    </dialog>
     <dialog id="actions-dialog" class="issues-dialog" aria-label="Your action items">
       <div id="actions-body"></div>
     </dialog>

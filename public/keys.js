@@ -12,6 +12,7 @@ export const SHORTCUTS = [
     [['e'], 'Edit it', 'edit'],
   ]],
   ['Anywhere', [
+    [['y'], 'Today: what needs you, most pressing first', 'today'],
     [['n'], 'New agents', 'new'],
     [['a'], 'Ask Agent (a general session)', 'ask'],
     [['/'], 'Filter agents', 'filter'],
@@ -32,7 +33,7 @@ export const SHORTCUTS = [
     [['5'], 'Built agents', 'tab:built'],
     [['?'], 'These shortcuts', 'help'],
   ]],
-  ['In the Jira and Actions lists', [
+  ['In the Today, Jira and Actions lists', [
     [['j', 'k'], 'Next / previous row', null],
     [['[', ']'], 'Previous / next filter', null],
     [['a'], 'Assign (starts an agent)', null],
@@ -59,11 +60,11 @@ export const SHORTCUTS = [
 // A single key, as an event names it, to its action.
 export const SINGLE = {
   j: 'next', k: 'prev', Enter: 'terminal', t: 'terminal',
-  r: 'changes', s: 'start', X: 'stop', e: 'edit', n: 'new', a: 'ask', '/': 'filter', w: 'watch', p: 'standup', m: 'map', i: 'issues', o: 'actions', h: 'assistant', ',': 'settings', d: 'designs', g: 'reviews', v: 'value', '?': 'help',
+  r: 'changes', s: 'start', X: 'stop', e: 'edit', n: 'new', a: 'ask', '/': 'filter', w: 'watch', p: 'standup', m: 'map', i: 'issues', o: 'actions', h: 'assistant', ',': 'settings', d: 'designs', g: 'reviews', v: 'value', y: 'today', '?': 'help',
   1: 'tab:agents', 2: 'tab:inbox', 3: 'tab:backlog', 4: 'tab:land', 5: 'tab:built',
 };
 // While Watch is open: only what makes sense there.
-const ON_WATCH = new Set(['new', 'ask', 'watch', 'standup', 'map', 'issues', 'actions', 'assistant', 'settings', 'designs', 'reviews', 'value', 'help']);
+const ON_WATCH = new Set(['today', 'new', 'ask', 'watch', 'standup', 'map', 'issues', 'actions', 'assistant', 'settings', 'designs', 'reviews', 'value', 'help']);
 
 /** Typing somewhere: a field, an editor or a terminal (xterm types through a textarea). */
 const typing = (el) => Boolean(el?.closest?.('input, textarea, select, [contenteditable=""], [contenteditable="true"], .xterm, .cm-editor'));
