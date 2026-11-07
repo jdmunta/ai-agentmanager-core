@@ -1,4 +1,4 @@
-// Making a list dialog (Jira, Actions) bigger: a button in its header, or f, fills the window,
+// Making a list dialog (Jira, Actions, Designs, Reviews, Value) bigger: a button in its header, or f, fills the window,
 // remembered per list. The dialog's corner can also be dragged to any size.
 
 const saved = (id) => `agentmgr.expanded.${id}`;

@@ -1,6 +1,8 @@
 // Designs: every agent's design doc in one list, the ones waiting for your review first: its name
 // and summary, where it's published, the specs it builds on, and the agent and its issue.
 
+import { expandButton, expandable } from './expand.js';
+
 const SAVED = 'agentmgr.designsFilter';
 const FILTERS = [
   ['you', 'Waiting for you'],
@@ -100,6 +102,7 @@ export function initDesigns({ api, $, esc, ago, openAgent, openDoc, toast }) {
         <span class="spacer"></span>
         <button class="small" data-designs="copy" title="Copy this list as Markdown, to paste into Slack, Jira or a doc" ${shown.length ? '' : 'disabled'}>Copy</button>
         <button class="small" data-designs="refresh" title="Look again now">↻</button>
+        ${expandButton(dialog)}
         <button class="small" data-designs="close" title="Close (Esc)">Close</button>
       </div>
       ${shown.length ? `<div class="designs-list">${shown.map(card).join('')}</div>` : `<p class="hint issues-empty">${esc(empty)}</p>`}`;
@@ -168,5 +171,6 @@ export function initDesigns({ api, $, esc, ago, openAgent, openDoc, toast }) {
   }
 
   load({ quiet: true });
+  expandable(dialog, render);
   return { open, changed, isOpen: () => dialog.open };
 }

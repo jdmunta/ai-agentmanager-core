@@ -2,6 +2,8 @@
 // saved, other savings, potential revenue and strategic weight, against the AI cost and your own
 // time. Each item's figures are AI estimates you can correct; reports go out on a schedule.
 
+import { expandButton, expandable } from './expand.js';
+
 const PERIODS = [
   ['day', 'Day'],
   ['week', 'Week'],
@@ -159,6 +161,7 @@ export function initValue({ api, $, esc, toast, openAgent }) {
         <button class="small" data-value="copy" title="Copy this period's report as Markdown, for an email, doc or review">Copy report</button>
         <button class="small" data-value="send" title="Send this period's report now, to Slack and Google Drive as set below">Send</button>
         <button class="small" data-value="csv" title="Every item with its figures, for a spreadsheet">CSV</button>
+        ${expandButton(dialog)}
         <button class="small" data-value="close" title="Close (Esc)">Close</button>
       </div>
       <p class="value-period"><b>${esc(p.label)}</b>${p.current ? ' <span class="hint">so far</span>' : ''} · ${t.items} item${t.items === 1 ? '' : 's'} delivered${data.pending ? ` · <span class="hint">${data.pending} waiting for an estimate</span>` : ''}</p>
@@ -295,5 +298,6 @@ export function initValue({ api, $, esc, toast, openAgent }) {
     again = setTimeout(load, 800);
   }
 
+  expandable(dialog, render);
   return { open, changed, isOpen: () => dialog.open };
 }
