@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.32.0 (2026-11-08)
 
 - **Micro benchmarks per module, for Jira issues.** The Map has a *Speed* view: click a folder where speed matters, *Benchmark this folder*, and optionally name the Jira components or labels that mean it. An agent on a Jira issue then benchmarks that module when its issue names it (a component or label, or the folder in the request), or when its change touches it: if it says it's done without having measured it, it's asked to once. It runs every case before and after its change on the same machine, and adds cases for what it changed. A module's benchmarks are kept on this computer, outside the repository, so the next issue on it runs the same ones and the numbers line up. Each issue's numbers show on the module (case, before, after, change), and the folder is coloured by what the last issue did to its speed. A case more than 5% slower shows in Today as *Slower*, with *Ask to fix* (the agent makes it as fast as before, or says why it can't be) and *It's fine*. Jira issues' components and labels are now read along with their summary.
 
