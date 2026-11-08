@@ -13,6 +13,7 @@ export const SHORTCUTS = [
   ]],
   ['Anywhere', [
     [['y'], 'Today: what needs you, most pressing first', 'today'],
+    [['b'], 'Bugs: what bug hunts found, and the hunts', 'bugs'],
     [['n'], 'New agents', 'new'],
     [['a'], 'Ask Agent (a general session)', 'ask'],
     [['/'], 'Filter agents', 'filter'],
@@ -61,11 +62,11 @@ export const SHORTCUTS = [
 // A single key, as an event names it, to its action.
 export const SINGLE = {
   j: 'next', k: 'prev', Enter: 'terminal', t: 'terminal',
-  r: 'changes', s: 'start', X: 'stop', e: 'edit', n: 'new', a: 'ask', '/': 'filter', w: 'watch', p: 'standup', m: 'map', i: 'issues', o: 'actions', h: 'assistant', ',': 'settings', d: 'designs', g: 'reviews', v: 'value', y: 'today', '?': 'help',
+  r: 'changes', s: 'start', X: 'stop', e: 'edit', n: 'new', a: 'ask', '/': 'filter', w: 'watch', p: 'standup', m: 'map', i: 'issues', o: 'actions', h: 'assistant', ',': 'settings', d: 'designs', g: 'reviews', v: 'value', y: 'today', b: 'bugs', '?': 'help',
   1: 'tab:agents', 2: 'tab:inbox', 3: 'tab:backlog', 4: 'tab:land', 5: 'tab:built',
 };
 // While Watch is open: only what makes sense there.
-const ON_WATCH = new Set(['today', 'new', 'ask', 'watch', 'standup', 'map', 'issues', 'actions', 'assistant', 'settings', 'designs', 'reviews', 'value', 'help']);
+const ON_WATCH = new Set(['today', 'new', 'ask', 'watch', 'standup', 'map', 'issues', 'actions', 'assistant', 'settings', 'designs', 'reviews', 'value', 'bugs', 'help']);
 
 /** Typing somewhere: a field, an editor or a terminal (xterm types through a textarea). */
 const typing = (el) => Boolean(el?.closest?.('input, textarea, select, [contenteditable=""], [contenteditable="true"], .xterm, .cm-editor'));

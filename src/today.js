@@ -59,7 +59,7 @@ const INBOX = {
  * The list: [{ id, kind, label, title, why, score, at, agentId?, url?, actionId?, issueKey?, reviewUrl? }],
  * most pressing first. Each source may be missing (turned off, or it couldn't be had).
  */
-export function todayItems({ inbox = [], issues = [], actions = [], reviews = [], now = new Date() } = {}) {
+export function todayItems({ inbox = [], issues = [], actions = [], reviews = [], findings = [], now = new Date() } = {}) {
   const items = [];
   // The issue each agent works on: named on its questions, and not listed twice.
   const issueOfAgent = new Map(issues.filter((r) => r.agent?.id).map((r) => [r.agent.id, r]));
@@ -99,6 +99,11 @@ export function todayItems({ inbox = [], issues = [], actions = [], reviews = []
       const verdict = { blocked: 'blocks approval', approve_with_nits: 'approve with nits', approve: 'approve' }[r.status] ?? r.status;
       items.push({ id: `pr:${r.pr.url}`, kind: 'pr-ready', label: 'Review', title, why: `${r.agent.name}'s review is ready to post: ${verdict}${r.stale ? ' (the author pushed since)' : ''}`, score: 32, at: r.updatedAt ?? null, agentId: r.agent.id, url: r.pr.url, reviewUrl: r.pr.url });
     }
+  }
+  // Bugs a hunt found and the check confirmed: the serious ones (the rest wait in the Bugs list).
+  for (const f of findings) {
+    if (f.status !== 'open' || !['critical', 'high'].includes(f.severity)) continue;
+    items.push({ id: `bug:${f.id}`, kind: 'bug', label: 'Bug', title: f.title, why: `${f.severity === 'critical' ? 'Critical' : 'High'}: found by the ${f.hunt ?? 'bug'} hunt${f.file ? ` in ${f.file}${f.line ? `:${f.line}` : ''}` : ''}${f.evidence?.type === 'test' ? ' · a test fails' : ''}`, score: f.severity === 'critical' ? 28 : 38, at: f.at ?? null, findingId: f.id });
   }
   return items.sort((x, y) => x.score - y.score || String(y.at ?? '').localeCompare(String(x.at ?? '')));
 }

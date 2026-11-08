@@ -52,6 +52,7 @@ import { Value, valueSlack } from './value.js';
 import { Store } from './store.js';
 import { about, latestRelease } from './about.js';
 import { Support } from './support.js';
+import { BugHunts } from './bughunt.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
@@ -97,6 +98,9 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
   const proposed = new ProposedIssues({ store, manager });
   const myActions = new MyActions({ store, manager });
   const reviews = new Reviews({ manager, store, log: (m) => console.log(`[agentmgr] ${m}`) });
+  // Bug hunts: the judge checks each finding when it's on (else only failing tests are kept).
+  const hunts = new BugHunts({ manager, store, judge: manager.judge, log: (m) => console.log(`[agentmgr] ${m}`) });
+  hunts.startTimer();
   const races = new Races({ manager, store });
   const review = new Review({ manager });
   // The walkthrough explains the same diff the review screen shows.
@@ -912,7 +916,8 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
       f.slack || f.gemini ? got('actions', () => myActions.rows()) : [],
       got('reviews', () => reviews.rows()),
     ]);
-    const items = todayItems({ inbox, issues, actions, reviews: prs });
+    const findings = hunts.list().findings.filter((x) => x.status === 'open');
+    const items = todayItems({ inbox, issues, actions, reviews: prs, findings });
     return { items, aside: todayAside({ issues, actions }), speech: todaySpeech(items), features: f, errors };
   }));
   // Support tickets: kept on this computer, each with a filled-in link to a new GitHub issue.
@@ -933,6 +938,18 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
       res.status(e.status ?? 500).json({ error: e.message });
     }
   });
+  // Bug hunts and what they found.
+  api.get('/hunts', wrap(async () => {
+    await hunts.sweep();
+    return hunts.list();
+  }));
+  api.post('/hunts', wrap((req) => hunts.add(req.body ?? {})));
+  api.put('/hunts/:id', wrap((req) => hunts.update(req.params.id, req.body ?? {})));
+  api.delete('/hunts/:id', wrap((req) => hunts.remove(req.params.id)));
+  api.post('/hunts/:id/run', wrap((req) => hunts.run(req.params.id)));
+  api.post('/findings/set', wrap((req) => hunts.set(Array.isArray(req.body?.ids) ? req.body.ids.map(String) : [], req.body?.status, { until: req.body?.until ?? null })));
+  api.post('/findings/:id/fix', wrap((req) => hunts.fix(req.params.id)));
+  api.get('/findings/:id/issue', wrap((req) => hunts.issue(req.params.id)));
   api.get('/standup', wrap(() => standup.view()));
   api.post('/standup', wrap(async () => ({ ...standup.view(), latest: await standup.make({ reason: 'asked' }) })));
   api.put('/standup', wrap((req) => {
@@ -1342,6 +1359,7 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
     standup.close();
     value.close();
     reviews.close();
+    hunts.close();
     autopilot.close();
     goals.close();
     worklog.close();
@@ -1390,6 +1408,7 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
       .catch((err) => console.error(`[agentmgr] could not join the hub ${process.env.AGENTMGR_HUB_URL}: ${err.message}`));
   }
   return {
+    hunts,
     hubLink,
     server,
     manager,

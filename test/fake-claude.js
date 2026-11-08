@@ -256,6 +256,23 @@ if (reviewing && briefDir) {
     }),
   );
 }
+// A bug hunter (src/bughunt.js): two findings, one with a failing test, one traced; then done.
+if (prompt.startsWith('Bug hunt:') && briefDir) {
+  fs.writeFileSync(
+    path.join(briefDir, 'FINDINGS.json'),
+    JSON.stringify({
+      headSha: 'feed1234beef',
+      covered: ['src/'],
+      findings: [
+        { title: 'Upload retries forever on a dead server', file: 'src/upload.js', line: 42, kind: 'correctness', severity: 'high', why: 'No attempt limit.', evidence: { type: 'test', detail: 'FAIL upload.test.js: timed out after 5000ms', test: "test('gives up', ...)" }, fix: 'Cap attempts at 5.', confidence: 0.9 },
+        { title: 'Maybe a race in the cache', file: 'src/cache.js', line: 7, kind: 'concurrency', severity: 'medium', why: 'Two writers could overlap.', evidence: { type: 'trace', detail: 'cache.js:7 -> cache.js:12' }, confidence: 0.5 },
+      ],
+      notes: 'Checked src/.',
+    }),
+  );
+  const brief = path.join(briefDir, 'BRIEF.md');
+  fs.writeFileSync(brief, fs.readFileSync(brief, 'utf8').replace('Status: working', 'Status: done'));
+}
 // "#stuck": the same command failing the same way three times.
 if (prompt.includes('#stuck')) {
   for (let i = 0; i < 3; i++) {

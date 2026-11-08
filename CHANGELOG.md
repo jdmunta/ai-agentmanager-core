@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Bug hunts.** *Bugs* (or `b`) runs agents that look for bugs in the background, in a project or one folder of it: in what changed since the last run, or the whole module a part at a time, for any bug or the kinds you pick (races, error handling, leaks, security, data). A hunt runs by hand (*Hunt now*) or every night, one at a time, and stops at its cost limit. The hunter reads the code and runs the tests on its own copy and never commits or pushes. Each bug must come with evidence (a failing test, or the path through the code), and the AI judge checks each one against the code: only those that hold up are listed, worst first, and nothing is reported twice. On each: *Fix* starts an agent with the finding and its test, *File it* opens a filled-in GitHub issue (or copies it as Markdown), *Not a bug* keeps it from coming back, *Snooze* hides it until tomorrow or Monday. Critical and high ones show in Today.
+
 ## 1.27.0 (2026-11-07)
 
 - **Jira on your company's own address.** With your site saved in Settings → Jira, every issue's summary and status are asked of that site, whatever address its link has (links often use the company's own domain, like `jira.company.com`, while the API answers on `company.atlassian.net`). A site that sends the API on to its Atlassian address is followed there (and only there). When Jira says it can't find an issue, the Jira list says so: usually the email in Settings isn't the one you sign in to Jira with.

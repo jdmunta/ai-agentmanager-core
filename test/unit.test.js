@@ -2720,3 +2720,110 @@ test('today: what you skipped, marked done or removed is listed to bring back, n
   assert.equal(aside[1].actionId, 'a1');
   assert.equal(aside[2].issueKey, 'OPS-1');
 });
+
+test('bughunt: findings are read, fingerprinted, checked, and not reported twice', async () => {
+  const { BugHunts, cleanPath, fingerprint, hunterPrompt, issueLinkFor, keep, normalizeFindings } = await import('../src/bughunt.js');
+  assert.equal(cleanPath('./pkg/providers/'), 'pkg/providers');
+  assert.equal(cleanPath(''), '');
+  assert.throws(() => cleanPath('../etc'), /inside the repository/);
+  assert.equal(cleanPath('/etc'), 'etc', 'always inside the repository');
+  // The prompt: read-only, the scope, and evidence required.
+  const p = hunterPrompt('/b/FINDINGS.json', { path: 'pkg/x', focus: 'changes', since: 'abc1234', kinds: ['concurrency'] });
+  assert.match(p, /git diff abc1234\.\.HEAD -- pkg\/x/);
+  assert.match(p, /Races and deadlocks/);
+  assert.match(p, /never commit, push/);
+  assert.match(p, /If you can't show how it fails, leave it out/);
+  assert.match(hunterPrompt('/f', { path: '', focus: 'module', covered: ['a/', 'b/'] }), /Earlier runs covered: a\/, b\//);
+  const raw = { headSha: 'abcdef1', covered: ['pkg/x'], findings: [{ title: 'Nil map write on reload', why: 'reload before init panics', file: 'pkg/x/a.go', line: 12, kind: 'nope', severity: 'high', evidence: { type: 'test', detail: 'panic: assignment to entry in nil map' }, confidence: 0.9 }, { title: 'no why' }] };
+  const n = normalizeFindings(raw);
+  assert.equal(n.findings.length, 1);
+  assert.equal(n.findings[0].kind, 'correctness');
+  // Same bug, another line or word order: the same fingerprint; another file: not.
+  const f = n.findings[0];
+  assert.equal(fingerprint('k', f), fingerprint('k', { ...f, line: 40, title: 'reload: nil map write on' }));
+  assert.notEqual(fingerprint('k', f), fingerprint('k', { ...f, file: 'pkg/x/b.go' }));
+  // Kept: the judge's word when it gave one; without it, only a failing test.
+  assert.equal(keep(f, { real: true, confidence: 0.8 }), true);
+  assert.equal(keep(f, { real: true, confidence: 0.4 }), false);
+  assert.equal(keep(f, { real: false, confidence: 0.9 }), false);
+  assert.equal(keep(f, null), true);
+  assert.equal(keep({ ...f, evidence: { type: 'trace' } }, null), false);
+  assert.match(issueLinkFor('git@github.com:acme/app.git', f), /^https:\/\/github\.com\/acme\/app\/issues\/new\?title=Nil\+map/);
+  assert.equal(issueLinkFor('https://gitlab.com/a/b.git', f), null);
+
+  // The hunt: a run starts a capped, read-only agent; its findings come in once, checked.
+  const agents = new Map();
+  const handlers = {};
+  const data = {};
+  const store = { data, save() {}, list: () => [...agents.values()], get: (id) => agents.get(id) ?? null };
+  const manager = {
+    on: (e, fn) => (handlers[e] = fn),
+    off() {},
+    resolveProject: (k) => (k === 'app' ? { key: 'app', repo: 'https://github.com/acme/app.git' } : null),
+    create(o) {
+      const a = { id: `h${agents.size + 1}`, name: o.name, project: o.project, hunting: o.hunting, desired: 'running', workdir: null };
+      agents.set(a.id, a);
+      return a;
+    },
+    createMany([intent], o) {
+      const a = { id: `f${agents.size + 1}`, name: o.name, intent, desired: 'running' };
+      agents.set(a.id, a);
+      return [a];
+    },
+    patch: (id, fields) => Object.assign(agents.get(id), fields),
+    stop: (id) => (agents.get(id).desired = 'stopped'),
+  };
+  const asked = [];
+  const judge = { ask: async (key, agent, prompt) => (asked.push(key), prompt.includes('Nil map') ? { real: true, confidence: 0.9, severity: 'critical', reason: 'yes' } : { real: false, confidence: 0.8, reason: 'handled' }) };
+  let reply = raw;
+  const hunts = new BugHunts({ manager, store, judge, read: () => normalizeFindings(reply) });
+  assert.throws(() => hunts.add({ project: 'nope' }), /No project @nope/);
+  assert.throws(() => hunts.add({ project: 'app', maxUsd: 0 }), /cost limit/);
+  const h = hunts.add({ project: 'app', path: 'pkg/x', focus: 'changes', schedule: 'nightly', maxUsd: 3 });
+  assert.equal(h.name, 'app/pkg/x');
+  const r = hunts.run(h.id);
+  assert.equal(agents.get(r.agent.id).budgetUsd, 3);
+  assert.equal(agents.get(r.agent.id).hunting.since, null);
+  assert.throws(() => hunts.run(h.id), /one at a time/);
+  reply = { ...raw, findings: [...raw.findings, { title: 'Timeout ignored', why: 'ctx unused', file: 'pkg/x/c.go', evidence: { type: 'trace', detail: 'c.go:3 -> c.go:9' } }] };
+  assert.deepEqual(await hunts.ingest(r.agent.id), { found: 2, kept: 1 });
+  assert.equal(await hunts.ingest(r.agent.id), null, 'once');
+  assert.equal(agents.get(r.agent.id).desired, 'stopped');
+  const list = hunts.list();
+  assert.deepEqual(list.findings.map((x) => [x.title, x.status, x.severity]), [['Nil map write on reload', 'open', 'critical'], ['Timeout ignored', 'dropped', 'medium']]);
+  assert.equal(list.hunts[0].lastSha, 'abcdef1');
+  assert.deepEqual([list.hunts[0].last.found, list.hunts[0].last.kept], [2, 1]);
+  // Not a bug: the next run finds it again, but it isn't reported or checked again.
+  const bug = list.findings[0];
+  hunts.set([bug.id], 'notbug');
+  const r2 = hunts.run(h.id);
+  assert.equal(agents.get(r2.agent.id).hunting.since, 'abcdef1', 'changes since the last run');
+  asked.length = 0;
+  assert.deepEqual(await hunts.ingest(r2.agent.id), { found: 0, kept: 0 });
+  assert.equal(asked.length, 0);
+  // Snoozed until a time: back on the list once it passes.
+  hunts.set([bug.id], 'open');
+  assert.throws(() => hunts.set([bug.id], 'snoozed', { until: '2000-01-01' }), /time to come/);
+  hunts.set([bug.id], 'snoozed', { until: new Date(Date.now() + 60_000).toISOString() });
+  assert.equal(hunts.list().findings[0].status, 'snoozed');
+  hunts.findings.find((x) => x.id === bug.id).snoozeUntil = new Date(Date.now() - 1000).toISOString();
+  assert.equal(hunts.list().findings[0].status, 'open');
+  // Fix: an agent with the finding and its evidence; asked again, the same agent.
+  const fx = hunts.fix(bug.id);
+  assert.match(agents.get(fx.agent.id).intent, /Nil map write on reload[\s\S]*panic: assignment/);
+  assert.equal(hunts.fix(bug.id).existing, true);
+  assert.equal(hunts.list().findings[0].status, 'fixing');
+  assert.match(hunts.issue(bug.id).url, /github\.com\/acme\/app\/issues\/new/);
+  // Nightly: between 1 and 5, once a day, not while another runs.
+  const night = new Date();
+  night.setHours(3, 0, 0, 0);
+  hunts.hunts[0].runs = [];
+  const started = await hunts.tick(night);
+  assert.ok(started?.agent);
+  assert.equal(await hunts.tick(night), null, 'one running');
+  const noon = new Date(night);
+  noon.setHours(12);
+  agents.get(started.agent.id).hunting.ingestedAt = 'x';
+  assert.equal(await hunts.tick(noon), null, 'not by day');
+  assert.equal(await hunts.tick(night), null, 'not twice a day');
+});

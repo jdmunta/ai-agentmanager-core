@@ -1573,6 +1573,51 @@ test('issues: the Jira summary lists agents\' issues with their Jira status, wai
   }
 });
 
+test('bughunt: a hunt runs a read-only agent, its checked findings are listed, and can be fixed or set aside', async () => {
+  const origin = makeOrigin('hunted');
+  assert.equal((await call('POST', '/projects', { shortcut: 'hunted', repo: `file://${origin}`, base: 'main' })).status, 200);
+  assert.equal((await call('POST', '/hunts', { project: 'hunted', path: '../x' })).status, 400);
+  const h = (await call('POST', '/hunts', { project: 'hunted', path: 'src', focus: 'changes', kinds: ['correctness', 'bogus'], maxUsd: 2 })).body;
+  assert.deepEqual(h.kinds, ['correctness']);
+  const run = await call('POST', `/hunts/${h.id}/run`);
+  assert.equal(run.status, 200, JSON.stringify(run.body));
+  assert.equal((await call('POST', `/hunts/${h.id}/run`)).status, 409, 'one at a time');
+  const a = await agentNow(run.body.agent.id);
+  assert.equal(a.budgetUsd, 2);
+  assert.equal(a.designDoc, false, 'no design doc, plan or spec for a hunter');
+  // Its findings come in when it says done: the failing test is kept; the trace isn't (no judge here).
+  const got = await waitFor(async () => {
+    const r = (await call('GET', '/hunts')).body;
+    return r.findings.length ? r : null;
+  }, 20000, 'findings in');
+  assert.deepEqual(got.findings.map((f) => [f.title, f.status]), [['Upload retries forever on a dead server', 'open'], ['Maybe a race in the cache', 'dropped']]);
+  assert.equal(got.hunts[0].lastSha, 'feed1234beef');
+  assert.equal(got.running, null);
+  const log = fs.readFileSync(process.env.FAKE_CLAUDE_LOG, 'utf8').trim().split('\n').map((l) => JSON.parse(l)).filter((l) => l.args.join(' ').includes('You are hunting for bugs'));
+  assert.ok(log.length, 'the hunter got its instructions');
+  // In Today, as a bug; Not a bug takes it off, and a later run doesn't bring it back.
+  const bug = got.findings[0];
+  assert.ok((await call('GET', '/today')).body.items.some((i) => i.kind === 'bug' && i.findingId === bug.id));
+  assert.equal((await call('POST', '/findings/set', { ids: [bug.id], status: 'notbug' })).body.set[0], bug.id);
+  assert.ok(!(await call('GET', '/today')).body.items.some((i) => i.kind === 'bug'));
+  const run2 = await call('POST', `/hunts/${h.id}/run`);
+  assert.equal(run2.status, 200, JSON.stringify(run2.body));
+  await waitFor(async () => (await call('GET', '/hunts')).body.hunts[0].last.status === 'done', 20000, 'second run done');
+  const after = (await call('GET', '/hunts')).body;
+  assert.equal(after.findings.length, 2, 'nothing reported twice');
+  assert.deepEqual([after.hunts[0].last.found, after.hunts[0].last.kept], [0, 0]);
+  // Fix: an agent with the finding; File it: Markdown (the repo isn't on GitHub).
+  await call('POST', '/findings/set', { ids: [bug.id], status: 'open' });
+  const fx = await call('POST', `/findings/${bug.id}/fix`);
+  assert.equal(fx.status, 200, JSON.stringify(fx.body));
+  assert.match((await agentNow(fx.body.agent.id)).intent, /Upload retries forever[\s\S]*timed out after 5000ms/);
+  const iss = (await call('GET', `/findings/${bug.id}/issue`)).body;
+  assert.equal(iss.url, null);
+  assert.match(iss.markdown, /a failing test/);
+  assert.equal((await call('DELETE', `/hunts/${h.id}`)).status, 200);
+  await call('POST', `/agents/${fx.body.agent.id}/stop`);
+});
+
 test('support: a report is kept with its screenshot, and links to a filled-in GitHub issue', async () => {
   assert.equal((await call('POST', '/support', { kind: 'bug', title: '', details: 'x' })).status, 400);
   assert.equal((await call('POST', '/support', { kind: 'other', title: 'x', details: 'x' })).status, 400);
