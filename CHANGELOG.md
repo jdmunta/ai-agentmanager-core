@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.27.0 (2026-11-07)
 
 - **Jira on your company's own address.** With your site saved in Settings → Jira, every issue's summary and status are asked of that site, whatever address its link has (links often use the company's own domain, like `jira.company.com`, while the API answers on `company.atlassian.net`). A site that sends the API on to its Atlassian address is followed there (and only there). When Jira says it can't find an issue, the Jira list says so: usually the email in Settings isn't the one you sign in to Jira with.
 - **Bring back what you set aside, and undo.** Today has a *Set aside* section listing what you skipped, marked done or removed, each with *Bring back*, and *Bring all back*. Skip, Done and Bring back offer *Undo* on their message (or press `u` in Today). The Jira and Actions lists offer *Undo* after each change too, and *Bring all back* on their Skipped, Done and Removed filters. Messages now show over an open window, so their buttons can be clicked.
