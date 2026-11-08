@@ -111,8 +111,14 @@ export function todayItems({ inbox = [], issues = [], actions = [], reviews = []
   }
   // Bugs a hunt found and the check confirmed: the serious ones (the rest wait in the Bugs list).
   for (const f of findings) {
+    // Fixed without you: a draft pull request to look over.
+    if (f.status === 'pr') {
+      items.push({ id: `bug:${f.id}`, kind: 'bug-pr', label: 'Fix ready', title: f.title, why: `Fixed automatically (${f.severity}): a draft pull request; its test failed before and passes now${f.auto?.check ? ', and the judge reviewed it' : ''}`, score: 34, at: f.auto?.doneAt ?? f.at ?? null, findingId: f.id, url: f.prUrl ?? null });
+      continue;
+    }
     if (f.status !== 'open' || !['critical', 'high'].includes(f.severity)) continue;
-    items.push({ id: `bug:${f.id}`, kind: 'bug', label: 'Bug', title: f.title, why: `${f.severity === 'critical' ? 'Critical' : 'High'}: found by the ${f.hunt ?? 'bug'} hunt${f.file ? ` in ${f.file}${f.line ? `:${f.line}` : ''}` : ''}${f.evidence?.type === 'test' ? ' · a test fails' : ''}`, score: f.severity === 'critical' ? 28 : 38, at: f.at ?? null, findingId: f.id });
+    const failed = f.auto?.state === 'failed' ? ` · the automatic fix didn't hold up: ${f.auto.reason}` : '';
+    items.push({ id: `bug:${f.id}`, kind: 'bug', label: 'Bug', title: f.title, why: `${f.severity === 'critical' ? 'Critical' : 'High'}: found by the ${f.hunt ?? 'bug'} hunt${f.file ? ` in ${f.file}${f.line ? `:${f.line}` : ''}` : ''}${f.evidence?.type === 'test' ? ' · a test fails' : ''}${failed}`, score: f.severity === 'critical' ? 28 : 38, at: f.at ?? null, findingId: f.id });
   }
   return items.sort((x, y) => x.score - y.score || String(y.at ?? '').localeCompare(String(x.at ?? '')));
 }

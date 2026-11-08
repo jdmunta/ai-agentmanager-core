@@ -52,8 +52,9 @@ import { Value, valueSlack } from './value.js';
 import { Store } from './store.js';
 import { about, latestRelease } from './about.js';
 import { Support } from './support.js';
-import { leadingJiraKey } from './tracker.js';
+import { ghBin, leadingJiraKey } from './tracker.js';
 import { BugHunts } from './bughunt.js';
+import * as git from './git.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
@@ -100,7 +101,44 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
   const myActions = new MyActions({ store, manager });
   const reviews = new Reviews({ manager, store, log: (m) => console.log(`[agentmgr] ${m}`) });
   // Bug hunts: the judge checks each finding when it's on (else only failing tests are kept).
-  const hunts = new BugHunts({ manager, store, judge: manager.judge, log: (m) => console.log(`[agentmgr] ${m}`) });
+  // Fixing automatically: the change, the tests, a commit and a draft pull request, or an issue.
+  const huntGit = {
+    diff: async (id) => {
+      const a = manager.mustGet(id);
+      const base = await review.base(a);
+      return base ? git.fullDiff(a.workdir, base.sha) : '';
+    },
+    commit: (id, message) => review.commit(id, { message }),
+    pr: (id, opts) => review.pr(id, opts),
+    test: (id, command) => runCommand(manager.mustGet(id), command),
+    fileIssue: async (project, { title, body }) => {
+      const p = manager.resolveProject(project);
+      const slug = /github\.com[/:]([\w.-]+\/[\w.-]+?)(?:\.git)?\/?$/.exec(p?.repo ?? '')?.[1];
+      if (!slug && !p?.dir) throw new Error('The project has no GitHub repository to file in');
+      const out = await git.run(ghBin(), ['issue', 'create', ...(slug ? ['-R', slug] : []), '--title', title, '--body', body, '--label', 'bug'], { cwd: p?.dir ?? undefined, timeout: 60_000 }).catch((e) =>
+        // A repository without a "bug" label: file it without one.
+        /label/i.test(e.message) ? git.run(ghBin(), ['issue', 'create', ...(slug ? ['-R', slug] : []), '--title', title, '--body', body], { cwd: p?.dir ?? undefined, timeout: 60_000 }) : Promise.reject(e),
+      );
+      return /https:\/\/\S+\/issues\/\d+/.exec(out)?.[0] ?? null;
+    },
+  };
+  /** A shell command in an agent's folder: { passed, output } (the last lines), killed after 15 minutes. */
+  const runCommand = (agent, command) =>
+    new Promise((resolve) => {
+      const child = spawn(process.env.SHELL || '/bin/sh', ['-lc', command], { cwd: agent.workdir, env: manager.childEnv(agent), detached: true });
+      let out = '';
+      const keep = (d) => (out = (out + d).slice(-4000));
+      child.stdout.on('data', keep);
+      child.stderr.on('data', keep);
+      const timer = setTimeout(() => {
+        try {
+          process.kill(-child.pid, 'SIGKILL');
+        } catch {}
+      }, 15 * 60_000);
+      child.on('error', (e) => (clearTimeout(timer), resolve({ passed: false, output: e.message })));
+      child.on('close', (code) => (clearTimeout(timer), resolve({ passed: code === 0, output: out })));
+    });
+  const hunts = new BugHunts({ manager, store, judge: manager.judge, git: huntGit, log: (m) => console.log(`[agentmgr] ${m}`) });
   hunts.startTimer();
   const races = new Races({ manager, store });
   const review = new Review({ manager });
@@ -936,7 +974,7 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
       f.slack || f.gemini ? got('actions', () => myActions.rows()) : [],
       got('reviews', () => reviews.rows()),
     ]);
-    const findings = hunts.list().findings.filter((x) => x.status === 'open');
+    const findings = hunts.list().findings.filter((x) => x.status === 'open' || x.status === 'pr');
     const items = todayItems({ inbox, issues, actions, reviews: prs, findings });
     return { items, aside: todayAside({ issues, actions }), speech: todaySpeech(items), features: f, errors };
   }));

@@ -2836,6 +2836,121 @@ test('bughunt: findings are read, fingerprinted, checked, and not reported twice
   assert.equal(await hunts.tick(night), null, 'not twice a day');
 });
 
+test('bughunt: fix automatically: serious findings get a fix agent; what holds up becomes a draft PR, the rest stays (and is filed)', async () => {
+  const { BugHunts, fixProblem, fixerPrompt, normalizeFix, fixPrBody } = await import('../src/bughunt.js');
+  const { todayItems: items } = await import('../src/today.js');
+  // The fix agent's own report: proven both ways, and the suite passes.
+  const good = normalizeFix({ fixed: true, why: 'Capped retries', test: { file: 't/up.test.js', before: 'fail', after: 'pass' }, suite: { command: 'npm test', passed: true } });
+  assert.equal(fixProblem(good), null);
+  assert.match(fixProblem(null), /no report/);
+  assert.match(fixProblem({ ...good, test: { ...good.test, before: 'pass' } }), /didn't fail before/);
+  assert.match(fixProblem({ ...good, suite: { passed: false } }), /suite fails/);
+  assert.match(fixProblem(normalizeFix({ fixed: false, why: 'Not a bug: handled upstream' })), /didn't fix it: Not a bug/);
+  assert.equal(normalizeFix({ why: 'no verdict' }), null);
+  assert.match(fixerPrompt('/b/FIX.json', { testCommand: 'make test' }), /make test[\s\S]*must fail before the fix[\s\S]*Don't commit, push[\s\S]*\/b\/FIX\.json/);
+
+  const agents = new Map();
+  const data = {};
+  const store = { data, save() {}, list: () => [...agents.values()], get: (id) => agents.get(id) ?? null };
+  const manager = {
+    on() {},
+    off() {},
+    resolveProject: (k) => (k === 'app' ? { key: 'app', repo: 'https://github.com/acme/app.git' } : null),
+    create(o) {
+      const a = { id: `a${agents.size + 1}`, name: o.name, project: o.project, intent: o.intent, hunting: o.hunting, fixing: o.fixing, worktree: o.worktree, planReview: o.planReview, desired: 'running', costUsd: 0 };
+      agents.set(a.id, a);
+      return a;
+    },
+    get: (id) => agents.get(id),
+    patch: (id, fields) => Object.assign(agents.get(id), fields),
+    stop: (id) => (agents.get(id).desired = 'stopped'),
+  };
+  const finding = (title, severity, file) => ({ title, why: 'it breaks', file, line: 3, kind: 'correctness', severity, evidence: { type: 'test', detail: 'FAIL' }, confidence: 0.9 });
+  const reply = { findings: [finding('Retries forever', 'high', 'up.js'), finding('Lost write on crash', 'critical', 'db.js'), finding('Off by one in paging', 'medium', 'page.js'), finding('Cache never expires', 'high', 'cache.js')] };
+  const reports = {};
+  const calls = [];
+  const git = {
+    diff: async (id) => (id === 'a3' ? '' : `diff for ${id}`),
+    commit: async (id, m) => calls.push(['commit', id, m]),
+    pr: async (id, o) => (calls.push(['pr', id, o.title, o.draft, o.body]), { url: `https://github.com/acme/app/pull/${id.slice(1)}` }),
+    test: async (id, cmd) => (calls.push(['test', id, cmd]), { passed: true, output: 'ok' }),
+    fileIssue: async (project, o) => (calls.push(['issue', project, o.title]), 'https://github.com/acme/app/issues/9'),
+  };
+  const judge = { ask: async (key, agent, prompt) => (key.startsWith('fix:') ? (agent.id === 'a4' ? { ok: false, confidence: 0.9, reason: 'It skips the test' } : { ok: true, confidence: 0.85, reason: 'Fixes the cause' }) : { real: true, confidence: 0.9, severity: prompt.match(/severity (\w+)/)[1] }) };
+  const hunts = new BugHunts({ manager, store, judge, git, read: () => reply, readFix: (id) => reports[id] ?? null });
+  assert.throws(() => hunts.add({ project: 'app', autoFix: true, fixAt: 'urgent' }), /Fix automatically from/);
+  const h = hunts.add({ project: 'app', maxUsd: 10, autoFix: true, fixAt: 'high', fileIssues: true, testCommand: 'npm test' });
+  assert.deepEqual([h.autoFix, h.fixAt, h.fileIssues, h.testCommand], [true, 'high', true, 'npm test']);
+  const r = hunts.run(h.id);
+  agents.get(r.agent.id).costUsd = 4;
+  const got = await hunts.ingest(r.agent.id);
+  // High and up only, worst first, each on its own branch with no plan review, sharing what's left of $10.
+  assert.equal(got.fixing.length, 3);
+  const fixers = [...agents.values()].filter((a) => a.fixing);
+  assert.deepEqual(fixers.map((a) => [a.id, a.intent.split('\n')[0], a.worktree, a.planReview, a.budgetUsd]), [
+    ['a2', 'Bug fix: Lost write on crash', true, false, 2],
+    ['a3', 'Bug fix: Cache never expires', true, false, 2],
+    ['a4', 'Bug fix: Retries forever', true, false, 2],
+  ]);
+  assert.equal(fixers[0].fixing.testCommand, 'npm test');
+  const byTitle = (t) => hunts.findings.find((f) => f.title === t);
+  assert.equal(byTitle('Off by one in paging').status, 'open', 'medium: left for you');
+  assert.equal(byTitle('Lost write on crash').status, 'fixing');
+
+  // a2: proven, tests pass, the judge agrees: a draft pull request.
+  reports.a2 = good;
+  assert.deepEqual(await hunts.settle('a2'), { status: 'pr', problem: null, prUrl: 'https://github.com/acme/app/pull/2' });
+  assert.equal(await hunts.settle('a2'), null, 'once');
+  const pr = calls.find((c) => c[0] === 'pr');
+  assert.deepEqual(pr.slice(0, 4), ['pr', 'a2', 'Fix: Lost write on crash', true]);
+  assert.match(pr[4], /failed before the fix and passes after[\s\S]*npm test[\s\S]*Run again here before this pull request: `npm test` passes[\s\S]*Fixes the cause[\s\S]*Nothing was merged/);
+  assert.deepEqual(calls.filter((c) => c[1] === 'a2').map((c) => c[0]), ['test', 'commit', 'pr']);
+  assert.equal(agents.get('a2').desired, 'stopped');
+  // a3 changed nothing; a4 the judge rejects: back on the list with the reason, filed as an issue.
+  reports.a3 = good;
+  reports.a4 = good;
+  assert.match((await hunts.settle('a3')).problem, /changed nothing/);
+  assert.match((await hunts.settle('a4')).problem, /judge didn't accept the change: It skips the test/);
+  assert.equal(calls.filter((c) => c[0] === 'pr').length, 1);
+  assert.deepEqual(calls.filter((c) => c[0] === 'issue').map((c) => c[2]), ['Cache never expires', 'Retries forever']);
+  assert.equal(byTitle('Cache never expires').status, 'filed');
+  assert.equal(byTitle('Cache never expires').issueUrl, 'https://github.com/acme/app/issues/9');
+
+  // Today: the draft PR is "Fix ready"; Done takes it off, Undo brings it back.
+  const t = items({ findings: hunts.list().findings.filter((f) => ['open', 'pr'].includes(f.status)) });
+  const ready = t.find((i) => i.kind === 'bug-pr');
+  assert.deepEqual([ready.label, ready.title, ready.url], ['Fix ready', 'Lost write on crash', 'https://github.com/acme/app/pull/2']);
+  const lost = byTitle('Lost write on crash');
+  hunts.set([lost.id], 'done');
+  assert.equal(lost.status, 'done');
+  hunts.set([lost.id], 'pr');
+  assert.equal(lost.status, 'pr');
+  hunts.set([byTitle('Off by one in paging').id], 'pr');
+  assert.equal(byTitle('Off by one in paging').status, 'open', 'no pull request to go back to');
+
+  // A fix that stopped without finishing (out of budget) is settled by the sweep; a hunt that
+  // spent its whole limit starts no fixes; without the option, none.
+  const r2 = hunts.run(h.id);
+  reply.findings = [finding('Leaks a socket', 'critical', 'net.js')];
+  agents.get(r2.agent.id).costUsd = 9.8;
+  const g2 = await hunts.ingest(r2.agent.id);
+  assert.deepEqual(g2.fixing, []);
+  assert.match(byTitle('Leaks a socket').auto.reason, /cost limit/);
+  hunts.update(h.id, { autoFix: false });
+  const r3 = hunts.run(h.id);
+  reply.findings = [finding('Double free', 'critical', 'mem.js')];
+  assert.deepEqual(await hunts.ingest(r3.agent.id), { found: 1, kept: 1 });
+  hunts.update(h.id, { autoFix: true, fileIssues: false });
+  const r4 = hunts.run(h.id);
+  reply.findings = [finding('Stale lock', 'critical', 'lock.js')];
+  const g4 = await hunts.ingest(r4.agent.id);
+  const fixer = [...agents.values()].find((a) => a.fixing?.findingId === g4.fixing[0]);
+  fixer.desired = 'stopped';
+  await hunts.sweep();
+  assert.match(byTitle('Stale lock').auto.reason, /no report/);
+  assert.equal(byTitle('Stale lock').status, 'open', 'not filed: the hunt no longer files');
+});
+
 test('today: answering agents from the list, shipping finished work, and questions for you', () => {
   const now = new Date('2026-11-09T10:00:00');
   const items = todayItems({

@@ -265,7 +265,7 @@ const todayUi = initToday({
   openActions: () => actionsUi.open(),
   openIssues: () => issuesUi.open(),
   openReviews: () => reviewsUi.open(),
-  openBugs: () => bugsUi.open({ show: 'open' }),
+  openBugs: (show = 'open') => bugsUi.open({ show }),
   openChanges: (id) => (showTab('agents'), select(id), reviewUi.open(id)),
 });
 $('#today-btn').onclick = () => todayUi.open();

@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Bug hunts fix what they find.** Turn on *Fix automatically* on a hunt, and the bugs it finds at or above the severity you pick (high and up by default) are fixed without you: each by its own agent on its own branch, which must add a test that fails before the fix and passes after, and pass the whole suite. The hunt's test command (optional) is run on the fix too, and the AI judge, when it's on, reviews the change. Only then is a **draft** pull request opened, with the bug, the test and the checks in its description; nothing is merged. They show in Today as *Fix ready* and under Bugs → *Draft PRs*. At most 3 a run, within the hunt's cost limit. A fix that doesn't hold up stays in the list with the reason, and with *file it as an issue* on, it's filed on GitHub so it isn't lost.
+
 ## 1.29.0 (2026-11-07)
 
 - **Questions for you, with answers ready.** The assistant now also finds questions put to you in Slack (and email and meeting notes, with those on), including ones you're only copied or mentioned on, and prepares an answer for each: it reads the thread and checks the code of your projects, Jira and docs. They show in Today (*Asked you* is pressing, *CC'd* can wait) and under Actions → Questions, with the draft to *Copy*, *Edit*, or *Draft again*, and *Thread* to open where it was asked. A question without a draft has *Draft an answer*, which starts a session that researches it. Nothing is ever sent for you. (`agentmgr actions add --question … [--cc]`, `agentmgr actions answer <id> "<text>"`.)

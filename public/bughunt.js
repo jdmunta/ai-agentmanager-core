@@ -1,7 +1,8 @@
 // Bugs: what background bug hunts found, checked, worst first; and the hunts themselves (a project
 // or a folder of it, recent changes or the whole module, by hand or every night, with a cost
 // limit per run). Each finding opens to its evidence; Fix starts an agent on it, File it opens a
-// filled-in issue, Not a bug keeps it from coming back, Snooze hides it until later.
+// filled-in issue, Not a bug keeps it from coming back, Snooze hides it until later. A hunt can
+// fix the serious ones itself: those come as draft pull requests, under Draft PRs.
 
 import { holdWhilePicking, rowKeys } from './rowkeys.js';
 import { expandButton, expandable } from './expand.js';
@@ -10,9 +11,11 @@ const SAVED = 'agentmgr.bugsFilter';
 const FILTERS = [
   ['open', 'Open'],
   ['fixing', 'Fixing'],
+  ['pr', 'Draft PRs'],
   ['snoozed', 'Snoozed'],
   ['filed', 'Filed'],
   ['notbug', 'Not a bug'],
+  ['done', 'Done'],
   ['dropped', 'Not kept'],
   ['hunts', 'Hunts'],
 ];
@@ -70,9 +73,21 @@ export function initBugHunt({ api, $, esc, ago, toast, openAgent }) {
            <button class="small" data-bug="file" title="A filled-in issue to submit (i)">File it</button>
            <button class="small" data-bug="notbug" title="Not a bug: it won't be reported again (x)">Not a bug</button>
            <select class="small" data-bug-snooze title="Hide it until then (s: tomorrow)"><option value="">Snooze…</option><option value="day">Until tomorrow 9am</option><option value="week">Until Monday 9am</option></select>`
-        : f.status === 'fixing' && f.fixAgentId
-          ? `<button class="small" data-bug="open-fix" title="Open the agent fixing it">Open fix</button> <button class="small" data-bug="back" title="Back to open (o)">Bring back</button>`
-          : `<button class="small" data-bug="back" title="Back to open (o)">Bring back</button>`;
+        : f.status === 'pr'
+          ? `${f.prUrl ? `<a class="small-link primary-link" href="${esc(f.prUrl)}" target="_blank" rel="noopener" title="The draft pull request: look it over, then mark it ready">Open PR ↗</a>` : ''}
+             <button class="small" data-bug="done" title="You looked at it: off the list (d)">Done</button>
+             ${f.fixAgentId ? '<button class="small" data-bug="open-fix" title="The session that fixed it">Session</button>' : ''}`
+          : f.status === 'fixing' && f.fixAgentId
+            ? `<button class="small" data-bug="open-fix" title="Open the agent fixing it">Open fix</button> <button class="small" data-bug="back" title="Back to open (o)">Bring back</button>`
+            : `<button class="small" data-bug="back" title="Back to open (o)">Bring back</button>`;
+    const auto =
+      f.auto?.state === 'fixing'
+        ? ' · fixing automatically'
+        : f.auto?.state === 'failed'
+          ? ` · the automatic fix didn't hold up: ${f.auto.reason}`
+          : f.status === 'pr'
+            ? ' · fixed automatically: a draft pull request'
+            : '';
     const full =
       opened === f.id
         ? `<tr class="bug-detail"><td colspan="3">
@@ -80,18 +95,20 @@ export function initBugHunt({ api, $, esc, ago, toast, openAgent }) {
             <p><b>Evidence: ${f.evidence.type === 'test' ? 'a failing test' : 'the path through the code'}.</b></p><pre>${esc(f.evidence.detail)}</pre>
             ${f.evidence.test ? `<p><b>Test.</b></p><pre>${esc(f.evidence.test)}</pre>` : ''}
             ${f.fix ? `<p><b>Suggested fix.</b> ${esc(f.fix)}</p>` : ''}
+            ${f.auto?.check ? `<p class="hint">The fix was reviewed by the AI judge: ${esc(f.auto.check.reason ?? '')} (${Math.round(f.auto.check.confidence * 100)}%).</p>` : ''}
+            ${f.issueUrl ? `<p class="hint">Filed: <a href="${esc(f.issueUrl)}" target="_blank" rel="noopener">${esc(f.issueUrl)}</a></p>` : ''}
             <p class="hint">${f.check ? `Second check: ${f.check.real ? 'holds up' : 'does not hold up'} (${Math.round(f.check.confidence * 100)}%). ${esc(f.check.reason ?? '')}` : 'Second check: not asked (the AI judge is off); kept because a test fails.'} Found ${esc(ago(f.at))} by the ${esc(f.hunt ?? '')} hunt${f.foundBy ? ` · <button class="link" data-bug-agent="${esc(f.foundBy)}">its session</button>` : ''}.</p>
           </td></tr>`
         : '';
     return `<tr data-row-id="${esc(f.id)}" class="bug-${esc(f.severity)}">
       <td class="nowrap"><span class="bug-sev ${esc(f.severity)}">${esc(SEV[f.severity] ?? f.severity)}</span></td>
-      <td><div class="today-title">${esc(f.title)}</div><div class="hint">${esc(where(f))}${f.evidence?.type === 'test' ? ' · a test fails' : ''}${f.snoozeUntil ? ` · until ${esc(new Date(f.snoozeUntil).toLocaleString())}` : ''}</div></td>
+      <td><div class="today-title">${esc(f.title)}</div><div class="hint">${esc(where(f))}${f.evidence?.type === 'test' ? ' · a test fails' : ''}${esc(auto)}${f.snoozeUntil ? ` · until ${esc(new Date(f.snoozeUntil).toLocaleString())}` : ''}</div></td>
       <td class="nowrap today-acts">${acts}</td>
     </tr>${full}`;
   }
 
   function huntForm(h) {
-    const p = h ?? { focus: 'changes', schedule: 'manual', maxUsd: 5, kinds: [], path: '', project: projects[0]?.shortcut ?? '' };
+    const p = h ?? { focus: 'changes', schedule: 'manual', maxUsd: 5, kinds: [], path: '', project: projects[0]?.shortcut ?? '', autoFix: false, fixAt: 'high', fileIssues: false, testCommand: '' };
     return `<form class="hunt-form alerts-body" data-hunt-form="${esc(h?.id ?? 'new')}">
       <h3>${h ? `Edit ${esc(h.name)}` : 'New hunt'}</h3>
       <div class="row three">
@@ -106,6 +123,14 @@ export function initBugHunt({ api, $, esc, ago, toast, openAgent }) {
         <label>Cost limit per run ($) <input name="maxUsd" type="number" min="0.5" max="500" step="0.5" value="${esc(p.maxUsd)}" /></label>
       </div>
       <p class="hint">The hunter reads the code and runs the tests on its own copy; it never commits or pushes. One hunt runs at a time, and it stops at the cost limit.</p>
+      <fieldset><legend>Fix automatically</legend>
+        <label class="check"><input type="checkbox" name="autoFix" ${p.autoFix ? 'checked' : ''} /> Fix the bugs it finds, from
+          <select name="fixAt" class="small">${Object.entries(SEV).map(([k, label]) => `<option value="${k}" ${(p.fixAt ?? 'high') === k ? 'selected' : ''}>${esc(label)}${k === 'critical' ? ' only' : ' and up'}</option>`).join('')}</select>,
+          as draft pull requests</label>
+        <label>Test command <span class="hint">(optional: run on each fix before its pull request, like npm test)</span><input name="testCommand" value="${esc(p.testCommand ?? '')}" placeholder="npm test" autocomplete="off" /></label>
+        <label class="check"><input type="checkbox" name="fileIssues" ${p.fileIssues ? 'checked' : ''} /> When a fix doesn't hold up, file the bug as a GitHub issue <span class="hint">(issues on a public repository are public)</span></label>
+        <p class="hint">Each fix is made by its own agent on its own branch: its test must fail before and pass after, the whole suite must pass, and the AI judge (when it's on) reviews the change. Only then is a <b>draft</b> pull request opened; nothing is merged. At most 3 a run, within the cost limit above.</p>
+      </fieldset>
       <div class="dialog-actions"><button type="button" class="ghost" data-bug="cancel-hunt">Cancel</button><button type="submit" class="primary">${h ? 'Save' : 'Add hunt'}</button></div>
     </form>`;
   }
@@ -116,7 +141,7 @@ export function initBugHunt({ api, $, esc, ago, toast, openAgent }) {
       .map((h) => {
         const last = h.last ? `${h.last.status === 'running' ? 'running now' : `${h.last.kept ?? 0} kept of ${h.last.found ?? 0} new`} · ${ago(h.last.at)}` : 'not run yet';
         return `<tr data-hunt="${esc(h.id)}">
-          <td><div class="today-title">${esc(h.name)}</div><div class="hint">${esc(h.focus === 'changes' ? 'recent changes' : `whole module${h.coveredCount ? ` (${h.coveredCount} parts covered)` : ''}`)}${h.kinds.length ? ` · ${esc(h.kinds.join(', '))}` : ''} · ${esc(h.schedule === 'nightly' ? 'nightly' : 'by hand')} · up to $${esc(h.maxUsd)}</div></td>
+          <td><div class="today-title">${esc(h.name)}</div><div class="hint">${esc(h.focus === 'changes' ? 'recent changes' : `whole module${h.coveredCount ? ` (${h.coveredCount} parts covered)` : ''}`)}${h.kinds.length ? ` · ${esc(h.kinds.join(', '))}` : ''} · ${esc(h.schedule === 'nightly' ? 'nightly' : 'by hand')} · up to $${esc(h.maxUsd)}${h.autoFix ? ` · fixes ${esc(h.fixAt === 'critical' ? 'critical ones' : `${h.fixAt} and up`)} as draft PRs` : ''}</div></td>
           <td class="hint">${esc(last)}${h.open ? ` · ${h.open} open` : ''}</td>
           <td class="nowrap today-acts"><button class="small primary" data-bug="run" ${data.running ? 'disabled title="A hunt is running; one at a time"' : 'title="Start a run now"'}>Hunt now</button> <button class="small" data-bug="edit">Edit</button> <button class="small ${sure === h.id ? 'danger' : ''}" data-bug="delete">${sure === h.id ? 'Delete it?' : 'Delete'}</button></td>
         </tr>`;
@@ -136,6 +161,7 @@ export function initBugHunt({ api, $, esc, ago, toast, openAgent }) {
     const empty = {
       open: data.hunts.length ? 'No open bugs. Hunts add what they find here, worst first.' : 'No bugs yet: set up a hunt under Hunts.',
       dropped: "Findings the second check didn't confirm. They aren't reported again.",
+      pr: 'No draft pull requests. A hunt with Fix automatically on opens one for each bug it fixes and the checks accept.',
     };
     body.innerHTML = `
       <div class="issues-head">
@@ -152,7 +178,7 @@ export function initBugHunt({ api, $, esc, ago, toast, openAgent }) {
         : rows.length
           ? `<div class="issues-scroll"><table class="issues today-table"><tbody>${rows.map(findingRow).join('')}</tbody></table></div>`
           : `<p class="hint issues-empty">${esc(empty[filter] ?? 'None here.')}</p>`}
-      ${filter === 'hunts' ? '' : '<p class="hint">Keys: j/k move (or click a row), Enter shows the evidence, a fix, i file it, x not a bug, s snooze until tomorrow, o bring back, r look again, [ ] filters, f bigger.</p>'}`;
+      ${filter === 'hunts' ? '' : '<p class="hint">Keys: j/k move (or click a row), Enter shows the evidence, a fix, i file it, x not a bug, s snooze until tomorrow, d done (a draft PR looked at), o bring back, r look again, [ ] filters, f bigger.</p>'}`;
     keys.redraw();
   }
   const render = holdWhilePicking(body, draw);
@@ -165,7 +191,7 @@ export function initBugHunt({ api, $, esc, ago, toast, openAgent }) {
     const before = ids.map((id) => [id, finding(id)?.status, finding(id)?.snoozeUntil]);
     try {
       await api('POST', '/findings/set', { ids, status, until });
-      const label = { open: 'Back on the list', notbug: 'Not a bug: it won\'t be reported again', snoozed: 'Snoozed', filed: 'Marked filed' }[status];
+      const label = { open: 'Back on the list', notbug: 'Not a bug: it won\'t be reported again', snoozed: 'Snoozed', filed: 'Marked filed', done: 'Done' }[status];
       const undo = undoing ? null : { label: 'Undo', run: async () => {
         for (const [id, st, u] of before) if (st && st !== 'fixing') await decide([id], st, st === 'snoozed' ? u : null, { undoing: true });
       } };
@@ -199,6 +225,7 @@ export function initBugHunt({ api, $, esc, ago, toast, openAgent }) {
       }
     }
     if (what === 'notbug') return decide([id], 'notbug');
+    if (what === 'done') return decide([id], 'done');
     if (what === 'snooze') return decide([id], 'snoozed', later(extra || 'day'));
     if (what === 'back') return decide([id], 'open');
     if (what === 'open-fix' && f.fixAgentId) return dialog.close(), openAgent(f.fixAgentId);
@@ -218,6 +245,7 @@ export function initBugHunt({ api, $, esc, ago, toast, openAgent }) {
       x: (r) => act(r.dataset.rowId, 'notbug'),
       s: (r) => act(r.dataset.rowId, 'snooze', 'day'),
       o: (r) => act(r.dataset.rowId, 'back'),
+      d: (r) => act(r.dataset.rowId, 'done'),
       r: Object.assign(() => load(), { needsRow: false }),
     },
   });
@@ -257,7 +285,7 @@ export function initBugHunt({ api, $, esc, ago, toast, openAgent }) {
     e.preventDefault();
     document.activeElement?.blur?.();
     const fd = new FormData(form);
-    const input = { project: fd.get('project'), path: fd.get('path'), name: fd.get('name'), focus: fd.get('focus'), kinds: fd.getAll('kind'), schedule: fd.get('schedule'), maxUsd: Number(fd.get('maxUsd')) };
+    const input = { project: fd.get('project'), path: fd.get('path'), name: fd.get('name'), focus: fd.get('focus'), kinds: fd.getAll('kind'), schedule: fd.get('schedule'), maxUsd: Number(fd.get('maxUsd')), autoFix: fd.get('autoFix') === 'on', fixAt: fd.get('fixAt'), fileIssues: fd.get('fileIssues') === 'on', testCommand: fd.get('testCommand') };
     try {
       const id = form.dataset.huntForm;
       await api(id === 'new' ? 'POST' : 'PUT', id === 'new' ? '/hunts' : `/hunts/${id}`, input);

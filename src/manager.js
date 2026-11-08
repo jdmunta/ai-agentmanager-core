@@ -111,7 +111,7 @@ import { assignedIssues, issueFields, issueSummary, jiraProblem, leadingIssue, l
 import { issueRows } from './issues.js';
 import { designRows } from './designs.js';
 import { reviewPath, reviewerPrompt } from './reviews.js';
-import { findingsPath, hunterPrompt } from './bughunt.js';
+import { findingsPath, fixPath, fixerPrompt, hunterPrompt } from './bughunt.js';
 import { reminderFor, reminderSettings } from './reminders.js';
 import { combine, facts as scoreFacts, improveMessage, scorecardMarkdown, scorecardPrompt } from './scorecard.js';
 import { CONTAINER_ENGINES, claudeToken, containerName, containerRunning, engineMounts, gitCommonDir, removeContainer, runArgs, stopContainer } from './container.js';
@@ -398,7 +398,7 @@ export class AgentManager extends EventEmitter {
     };
     // A recent agent gone quiet: follow up on it, or close its finished session (reminders.js).
     // A bug hunt's work goes to the Bugs list, not a follow-up.
-    v.followUp = agent.hunting ? null : reminderFor(v, reminderSettings(this.config));
+    v.followUp = agent.hunting || agent.fixing ? null : reminderFor(v, reminderSettings(this.config));
     return v;
   }
 
@@ -627,6 +627,7 @@ export class AgentManager extends EventEmitter {
     builds,
     reviewing,
     hunting,
+    fixing,
   }) {
     intent = (intent ?? '').trim();
     const staged = stagedFiles(attachments);
@@ -685,6 +686,8 @@ export class AgentManager extends EventEmitter {
       ...(!general && reviewing ? { reviewing } : {}),
       // Hunts for bugs, read-only (bughunt.js): { huntId, path, focus, kinds, since, covered }.
       ...(!general && hunting ? { hunting } : {}),
+      // Fixes a hunt's finding without you (bughunt.js): { findingId, testCommand }.
+      ...(!general && fixing ? { fixing } : {}),
       name: name?.trim() || jiraKey || slug,
       slug,
       intent,
@@ -1235,6 +1238,12 @@ export class AgentManager extends EventEmitter {
       const file = path.join(fs.realpathSync(briefDir(agent.id)), path.basename(findingsPath(agent.id)));
       writableDir ??= path.dirname(file);
       prompts.push(hunterPrompt(file, agent.hunting));
+    }
+    if (agent.fixing && task) {
+      fs.mkdirSync(briefDir(agent.id), { recursive: true });
+      const file = path.join(fs.realpathSync(briefDir(agent.id)), path.basename(fixPath(agent.id)));
+      writableDir ??= path.dirname(file);
+      prompts.push(fixerPrompt(file, agent.fixing));
     }
     if (planning) prompts.push(planningPrompt(agent));
     // What earlier agents learned in this repo, and the one command to add to it.

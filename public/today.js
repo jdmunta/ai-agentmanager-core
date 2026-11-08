@@ -61,6 +61,7 @@ export function initToday({ api, $, esc, ago, openAgent, showInbox, openActions,
     if (it.kind === 'pr-requested') return [btn('review', 'Review it', 'A reviewer agent reads it and finds what blocks approval (a)', true), link(it.url, 'PR')].join(' ');
     if (it.kind === 'pr-ready') return [btn('open-reviews', 'Open review', 'Pick what to post (Enter)', true), link(it.url, 'PR')].join(' ');
     if (it.kind === 'rule') return btn('inbox', 'Inbox', 'Decide in the inbox (Enter)', true);
+    if (it.kind === 'bug-pr') return [link(it.url, 'Open PR'), btn('done', 'Done', 'You looked at it: off the list (d)'), btn('bugs', 'Details', 'The bug and how the fix was checked (Enter)')].join(' ');
     if (it.kind === 'bug') return [btn('fix', 'Fix', 'Start an agent on it, with the failing test (a)', true), btn('skip', 'Snooze', 'Until tomorrow 9am (s)'), btn('notbug', 'Not a bug', "It won't be reported again"), btn('bugs', 'Evidence', 'See it in Bugs (Enter)')].join(' ');
     return [it.agentId ? btn('open', 'Open', "Open the agent's session (Enter)", it.score < 20) : '', link(it.url, it.issueKey ? 'Jira' : 'Link')].join(' ');
   }
@@ -212,9 +213,9 @@ export function initToday({ api, $, esc, ago, openAgent, showInbox, openActions,
         dialog.close();
         return openReviews();
       }
-      if (what === 'bugs' || (what === 'enter' && it.kind === 'bug')) {
+      if (what === 'bugs' || (what === 'enter' && (it.kind === 'bug' || it.kind === 'bug-pr'))) {
         dialog.close();
-        return openBugs?.();
+        return openBugs?.(it.kind === 'bug-pr' ? 'pr' : undefined);
       }
       if (what === 'enter') {
         if (it.kind === 'action') {
@@ -281,6 +282,9 @@ export function initToday({ api, $, esc, ago, openAgent, showInbox, openActions,
         t.setHours(9, 0, 0, 0);
         await api('POST', '/findings/set', { ids: [it.findingId], status: what === 'skip' ? 'snoozed' : 'notbug', until: what === 'skip' ? t.toISOString() : null });
         changedWith(what === 'skip' ? 'Snoozed until tomorrow 9am' : "Not a bug: it won't be reported again", what === 'skip' ? 'snoozed' : 'not a bug', () => api('POST', '/findings/set', { ids: [it.findingId], status: 'open' }));
+      } else if (it.kind === 'bug-pr' && what === 'done') {
+        await api('POST', '/findings/set', { ids: [it.findingId], status: 'done' });
+        changedWith('Done: off the list', 'done', () => api('POST', '/findings/set', { ids: [it.findingId], status: 'pr' }));
       } else if (it.kind === 'pr-requested' && (what === 'review' || what === 'assign')) {
         const a = await api('POST', '/reviews', { url: it.reviewUrl });
         toast?.(`Reviewer ${a.name ?? 'agent'} started`, 3000);
