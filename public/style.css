@@ -1148,6 +1148,26 @@ body.mapping .layout, body.mapping .watch-view { display: none; }
 .map-pick { padding: 6px 10px; margin-bottom: 8px; border-radius: 6px; background: var(--panel); font-size: 13px; }
 .map-warn .map-bug-list li { border-left: none; padding: 4px 0; margin: 0; background: none; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .map-bug-list { margin: 6px 0 0 !important; }
+.map-tile.speed { cursor: pointer; }
+.map-tile.speed.watched { background: color-mix(in srgb, var(--accent) 22%, var(--panel)); border-color: color-mix(in srgb, var(--accent) 60%, var(--border)); }
+.map-tile.speed.watched.slower { background: color-mix(in srgb, var(--red) 30%, var(--panel)); }
+.map-tile.speed.watched.faster { background: color-mix(in srgb, var(--green) 26%, var(--panel)); }
+.map-tile.speed.picked { outline: 2px solid var(--accent); outline-offset: -2px; z-index: 1; }
+.map-tile.speed:hover { filter: brightness(1.08); }
+.map-key.watched { background: color-mix(in srgb, var(--accent) 35%, var(--panel)); }
+.map-key.slower { background: color-mix(in srgb, var(--red) 45%, var(--panel)); }
+.map-key.faster { background: color-mix(in srgb, var(--green) 45%, var(--panel)); }
+.map-speed { display: inline-block; margin-top: 2px; padding: 0 6px; border-radius: 8px; font-size: 10.5px; font-weight: 700; background: var(--panel); border: 1px solid currentColor; color: var(--muted); }
+.map-speed.slower { color: var(--red); }
+.map-speed.faster { color: var(--green); }
+.bench-watch { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 6px; }
+.bench-watch input { flex: 1; min-width: 200px; }
+.map-warn .bench-runs li { display: block; }
+.bench-runs summary { cursor: pointer; }
+table.bench-cases { margin: 6px 0; border-collapse: collapse; font-size: 12px; width: 100%; }
+table.bench-cases th, table.bench-cases td { text-align: left; padding: 2px 8px 2px 0; border-bottom: 1px solid var(--border); }
+table.bench-cases tr.slower td:nth-child(5) { color: var(--red); font-weight: 600; }
+table.bench-cases tr.faster td:nth-child(5) { color: var(--green); font-weight: 600; }
 
 /* ---------- Jira: issues agents work on */
 .issues-dialog { width: min(1100px, calc(100% - 32px)); max-height: calc(100% - 32px); padding: 16px; }

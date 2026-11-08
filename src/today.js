@@ -59,7 +59,7 @@ const INBOX = {
  * The list: [{ id, kind, label, title, why, score, at, agentId?, url?, actionId?, issueKey?, reviewUrl? }],
  * most pressing first. Each source may be missing (turned off, or it couldn't be had).
  */
-export function todayItems({ inbox = [], issues = [], actions = [], reviews = [], findings = [], now = new Date() } = {}) {
+export function todayItems({ inbox = [], issues = [], actions = [], reviews = [], findings = [], slower = [], now = new Date() } = {}) {
   const items = [];
   // The issue each agent works on: named on its questions, and not listed twice.
   const issueOfAgent = new Map(issues.filter((r) => r.agent?.id).map((r) => [r.agent.id, r]));
@@ -119,6 +119,13 @@ export function todayItems({ inbox = [], issues = [], actions = [], reviews = []
     if (f.status !== 'open' || !['critical', 'high'].includes(f.severity)) continue;
     const failed = f.auto?.state === 'failed' ? ` · the automatic fix didn't hold up: ${f.auto.reason}` : '';
     items.push({ id: `bug:${f.id}`, kind: 'bug', label: 'Bug', title: f.title, why: `${f.severity === 'critical' ? 'Critical' : 'High'}: found by the ${f.hunt ?? 'bug'} hunt${f.file ? ` in ${f.file}${f.line ? `:${f.line}` : ''}` : ''}${f.evidence?.type === 'test' ? ' · a test fails' : ''}${failed}`, score: f.severity === 'critical' ? 28 : 38, at: f.at ?? null, findingId: f.id });
+  }
+  // An issue's change made a module slower in its micro benchmarks (benchmarks.js).
+  for (const r of slower) {
+    const worst = r.cases.filter((c) => c.change !== null).sort((a, b) => b.change - a.change)[0];
+    const title = `${r.issue ? `${r.issue}: ` : ''}${r.module || 'the repository'} is ${r.worst}% slower`;
+    const why = `Micro benchmarks${r.agent && r.agent !== r.issue ? ` by ${r.agent}` : ''}${worst ? `: ${worst.name} ${worst.before} → ${worst.after}${worst.unit ? ` ${worst.unit}` : ''}` : ''}${worst?.note ? ` · its note: ${worst.note}` : ''}`;
+    items.push({ id: `bench:${r.id}`, kind: 'bench', label: 'Slower', title, why, score: r.worst > 20 ? 27 : 36, at: r.at ?? null, agentId: r.agentId, runId: r.id, issueKey: r.issue ?? null });
   }
   return items.sort((x, y) => x.score - y.score || String(y.at ?? '').localeCompare(String(x.at ?? '')));
 }

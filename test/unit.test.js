@@ -1290,11 +1290,11 @@ test('jira: the issue a request starts with, the words after the link, and where
   assert.equal(await issueSummary({ key: 'ABC-2', site: 'https://jira.acme.com' }, { jira, fetchImpl: ok('Own site') }), 'Own site');
   assert.equal(calls.at(-1).auth, `Basic ${Buffer.from('me@acme.com:T').toString('base64')}`);
   assert.equal(await issueSummary({ key: 'ABC-3', site: 'http://169.254.169.254' }, { jira, fetchImpl: ok('Mine') }), 'Mine');
-  assert.equal(calls.at(-1).url, 'https://jira.acme.com/rest/api/3/issue/ABC-3?fields=summary,status,description', 'never the link\'s address');
+  assert.equal(calls.at(-1).url, 'https://jira.acme.com/rest/api/3/issue/ABC-3?fields=summary,status,description,components,labels', 'never the link\'s address');
   // None saved: public Atlassian Cloud issues, signed out; anywhere else not contacted at all.
   assert.equal(await issueSummary({ key: 'ABC-1', site: 'https://other.atlassian.net' }, { jira: {}, fetchImpl: ok('Cloud issue') }), 'Cloud issue');
   assert.equal(calls.at(-1).auth, null);
-  assert.equal(calls.at(-1).url, 'https://other.atlassian.net/rest/api/3/issue/ABC-1?fields=summary,status,description');
+  assert.equal(calls.at(-1).url, 'https://other.atlassian.net/rest/api/3/issue/ABC-1?fields=summary,status,description,components,labels');
   const n = calls.length;
   assert.equal(await issueSummary({ key: 'ABC-3', site: 'http://169.254.169.254' }, { jira: {}, fetchImpl: ok('x') }), null);
   assert.equal(calls.length, n);
@@ -3047,4 +3047,107 @@ test('actions: a question with a draft answer, edited, and snoozed until a time'
   assert.equal(acts.rows().find((r) => r.id === q.id).group, 'snoozed');
   acts.all.find((a) => a.id === q.id).snoozeUntil = new Date(Date.now() - 1).toISOString();
   assert.equal(acts.rows().find((r) => r.id === q.id).group, 'open');
+});
+
+test('module benchmarks: Jira issues match modules, a done agent that skipped one is asked once, numbers are kept and slower ones reach Today', async () => {
+  const { ModuleBenchmarks, matchModules, normalizeCase, normalizeResults, moduleDir, moduleBenchPrompt, inModule } = await import('../src/benchmarks.js');
+  const { todayItems: items } = await import('../src/today.js');
+  // Numbers: worse is positive whichever way is better; throughput is better higher.
+  assert.equal(normalizeCase({ name: 'put 1k', unit: 'ns/op', before: 1000, after: 1100 }).change, 10);
+  assert.equal(normalizeCase({ name: 'put 1k', unit: 'ns/op', before: 1000, after: 900 }).change, -10);
+  assert.equal(normalizeCase({ name: 'scan', unit: 'ops/s', before: 200, after: 100 }).change, 100);
+  assert.equal(normalizeCase({ name: 'new', unit: 'ms', after: 3 }).change, null);
+  assert.equal(normalizeCase({ name: 'bad', after: 'fast' }), null);
+  assert.equal(normalizeResults({ module: '../etc', cases: [{ name: 'x', after: 1 }] }), null);
+  assert.deepEqual(normalizeResults({ module: 'src/store/', cases: [{ name: 'x', after: 1 }] }).runs.map((r) => r.module), ['src/store']);
+  assert.ok(inModule('src/store/a.js', 'src/store') && !inModule('src/storage/a.js', 'src/store') && inModule('x.js', ''));
+  // Kept outside the repository, per project and module.
+  const dir = moduleDir('github.com/acme/app', 'src/store', '/h');
+  assert.match(dir, /^\/h\/bench\/app-[0-9a-f]{8}\/src__store$/);
+  assert.match(moduleBenchPrompt('/b/BENCHMARK.md', '/b/BENCH.json', [{ path: 'src/store', dir, existing: true }]), /src\/store: the benchmarks are kept in .*run them as they are[\s\S]*Never copy them into the repository[\s\S]*\/b\/BENCH\.json/);
+
+  const mods = [
+    { path: 'src/store', components: ['Storage'] },
+    { path: 'src/api', components: [] },
+  ];
+  assert.deepEqual(matchModules(mods, { components: ['storage'] }).map((m) => m.path), ['src/store']);
+  assert.deepEqual(matchModules(mods, { labels: ['api'] }).map((m) => m.path), ['src/api'], 'the folder name counts as a label');
+  assert.deepEqual(matchModules(mods, { text: 'https://x.atlassian.net/browse/AB-1 speed up `src/api/route.js`' }).map((m) => m.path), ['src/api']);
+  assert.deepEqual(matchModules(mods, { text: 'the api is slow' }), [], 'a word alone is not the folder');
+
+  const agents = new Map();
+  const data = {};
+  const store = { data, save() {}, get: (id) => agents.get(id) ?? null };
+  const told = [];
+  const manager = {
+    on() {},
+    off() {},
+    projectInfo: () => ({ key: 'github.com/acme/app' }),
+    issueKey: (a) => a.issue ?? null,
+    addBenchModules(id, list, opts) {
+      told.push({ id, paths: list.map((m) => m.path), ...opts });
+    },
+    tell: (id, text) => told.push({ id, text }),
+  };
+  const results = new Map();
+  let changed = [];
+  const b = new ModuleBenchmarks({ manager, store, home: '/nonexistent-agentmgr-home', read: (id) => results.get(id) ?? null, changedFiles: async () => changed });
+  assert.throws(() => b.watch({ project: 'github.com/acme/app', path: '../x' }), /inside the repository/);
+  const w = b.watch({ project: 'github.com/acme/app', path: 'src/store', components: 'Storage, storage , Persistence' });
+  assert.deepEqual(w.components, ['Storage', 'Persistence']);
+  assert.equal(b.watch({ project: 'github.com/acme/app', path: 'src/store' }).id, w.id, 'marked once');
+
+  const a = { id: 'a1', kind: 'task', name: 'AB-1', issue: 'AB-1', intent: 'https://x.atlassian.net/browse/AB-1' };
+  agents.set('a1', a);
+  assert.deepEqual(b.forIssue(a, { components: ['Storage'] }).map((m) => m.path), ['src/store']);
+  assert.deepEqual(b.forIssue({ ...a, issue: null }, { components: ['Storage'] }), [], 'only agents on an issue');
+  assert.deepEqual(b.forIssue({ ...a, hunting: {} }, { components: ['Storage'] }), [], 'not hunters');
+
+  // Done, its change touched the module, no numbers: asked, once.
+  changed = ['src/store/put.js', 'README.md'];
+  assert.deepEqual((await b.finished('a1')).asked, ['src/store']);
+  assert.deepEqual(told.at(-1), { id: 'a1', paths: ['src/store'], asked: true });
+  a.benchAsked = ['src/store'];
+  assert.deepEqual((await b.finished('a1')).asked, []);
+  // A change elsewhere isn't asked about.
+  agents.set('a2', { id: 'a2', kind: 'task', name: 'AB-2', issue: 'AB-2', intent: 'x' });
+  changed = ['src/api/x.js'];
+  assert.deepEqual((await b.finished('a2')).asked, []);
+
+  // Its numbers: kept per module, the worst case decides; slower than 5% shows in Today.
+  results.set('a1', normalizeResults({ modules: [{ module: 'src/store', command: 'node bench.js', cases: [{ name: 'put 1k', unit: 'ns/op', before: 1000, after: 1200, note: 'extra fsync' }, { name: 'get', unit: 'ns/op', before: 50, after: 49 }] }], env: 'M3, node 22' }));
+  assert.equal((await b.finished('a1')).recorded, 1);
+  assert.equal(b.record(a), 0, 'the same numbers are not kept twice');
+  const [run] = b.runs;
+  assert.deepEqual([run.issue, run.module, run.worst, run.env], ['AB-1', 'src/store', 20, 'M3, node 22']);
+  const today = items({ slower: b.slower() });
+  assert.equal(today.length, 1);
+  assert.deepEqual([today[0].kind, today[0].label, today[0].title, today[0].runId], ['bench', 'Slower', 'AB-1: src/store is 20% slower', run.id]);
+  assert.match(today[0].why, /^Micro benchmarks: put 1k 1000 → 1200 ns\/op · its note: extra fsync/);
+  // Asked to fix: the agent gets the slower cases.
+  b.askToFix(run.id);
+  assert.match(told.at(-1).text, /src\/store slower[\s\S]*put 1k: 1000 → 1200 ns\/op \(20% slower\)/);
+  assert.doesNotMatch(told.at(-1).text, /- get:/);
+  // It's fine: off Today, and back with Undo.
+  b.accept(run.id);
+  assert.equal(b.slower().length, 0);
+  b.accept(run.id, false);
+  assert.equal(b.slower().length, 1);
+  // A new run of the same agent replaces its last; marking it fine stays.
+  b.accept(run.id);
+  results.set('a1', normalizeResults({ module: 'src/store', cases: [{ name: 'put 1k', unit: 'ns/op', before: 1000, after: 1010 }] }));
+  assert.equal(b.record(a), 1);
+  assert.equal(b.runs.length, 1);
+  assert.deepEqual([b.runs[0].id, b.runs[0].worst, Boolean(b.runs[0].accepted)], [run.id, 1, true]);
+
+  // The Speed view: the module with its runs; runs elsewhere listed apart.
+  results.set('a2', normalizeResults({ module: 'src/api', cases: [{ name: 'route', unit: 'ms', before: 2, after: 1 }] }));
+  b.record(agents.get('a2'));
+  const sp = b.speed('github.com/acme/app');
+  assert.deepEqual(sp.modules.map((m) => [m.path, m.runs.length, m.existing]), [['src/store', 1, false]]);
+  assert.deepEqual(sp.other.map((r) => r.module), ['src/api']);
+  assert.deepEqual(b.speed('other').modules, []);
+  b.unwatch(w.id);
+  assert.equal(b.of('github.com/acme/app').length, 0);
+  assert.throws(() => b.unwatch(w.id), /No such module/);
 });

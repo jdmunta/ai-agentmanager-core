@@ -1673,6 +1673,51 @@ test('bughunt: fix automatically: the high finding gets its own fix agent, prove
   }
 });
 
+test('module benchmarks: a Jira issue in a benchmarked module gets its benchmarks, its numbers reach Today and the Speed view', async () => {
+  const http = await import('node:http');
+  const { briefDir } = await import('../src/brief.js');
+  const srv = http.createServer((req, res) => {
+    if (req.url.startsWith('/rest/api/3/issue/PERF-9')) return res.end(JSON.stringify({ fields: { summary: 'Puts are slow under load', components: [{ name: 'Storage' }], labels: ['perf'] } }));
+    res.statusCode = 404;
+    res.end('{}');
+  });
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+  const site = `http://127.0.0.1:${srv.address().port}`;
+  manager.jiraOptions = { allow: (s) => s === site };
+  const origin = makeOrigin('benched');
+  try {
+    assert.equal((await call('POST', '/projects', { shortcut: 'benched', repo: `file://${origin}`, base: 'main' })).status, 200);
+    const key = manager.resolveProject('benched').key;
+    assert.equal((await call('POST', '/benchmodules', { project: key, path: '../up' })).status, 400);
+    const w = (await call('POST', '/benchmodules', { project: key, path: 'src/store', components: 'Storage' })).body;
+    assert.deepEqual([w.path, w.components], ['src/store', ['Storage']]);
+    // The issue's component names the module: it's given to the agent before it starts.
+    const [a] = (await call('POST', '/agents', { intent: `${site}/browse/PERF-9 make puts faster`, project: 'benched', start: false })).body;
+    const given = await waitFor(async () => ((await agentNow(a.id)).benchModules?.length ? agentNow(a.id) : null), 5000, 'the module from the issue');
+    assert.deepEqual(given.benchModules, ['src/store']);
+    const ready = await waitFor(async () => ((await agentNow(a.id)).status !== 'preparing' ? agentNow(a.id) : null), 20000, 'its folder');
+    assert.equal((await call('POST', `/agents/${a.id}/start`, {})).status, 200);
+    await waitFor(async () => launches().some((l) => l.args.join(' ').includes('src/store: the benchmarks are kept in')), 20000, 'the benchmark instructions');
+    // Its numbers, as an agent leaves them; then it says it's done.
+    fs.writeFileSync(path.join(briefDir(a.id), 'BENCH.json'), JSON.stringify({ modules: [{ module: 'src/store', command: 'node put.bench.js', cases: [{ name: 'put 1k', unit: 'ns/op', before: 1000, after: 1300, note: 'one more copy' }] }], env: 'test' }));
+    manager.emit('finished', manager.store.get(a.id));
+    const item = await waitFor(async () => (await call('GET', '/today')).body.items.find((i) => i.kind === 'bench' && i.agentId === a.id), 5000, 'the slower run in Today');
+    assert.equal(item.title, 'PERF-9: src/store is 30% slower');
+    const speed = (await call('GET', `/codemap?layer=speed&project=${encodeURIComponent(key)}`)).body.speed;
+    assert.deepEqual(speed.modules.map((m) => [m.path, m.runs.map((r) => [r.issue, r.worst])]), [['src/store', [['PERF-9', 30]]]]);
+    assert.ok(fs.existsSync(speed.modules[0].dir), 'its folder is made, outside the repository');
+    assert.ok(!speed.modules[0].dir.startsWith(ready.workdir));
+    // It's fine: off Today.
+    assert.equal((await call('POST', `/benchruns/${item.runId}/accept`, {})).status, 200);
+    assert.ok(!(await call('GET', '/today')).body.items.some((i) => i.runId === item.runId));
+    assert.equal((await call('DELETE', `/benchmodules/${w.id}`)).status, 200);
+    await call('DELETE', `/agents/${a.id}`);
+  } finally {
+    manager.jiraOptions = null;
+    srv.close();
+  }
+});
+
 test('questions for you: listed with a drafted answer, edited, snoozed, and in Today', async () => {
   const q = (await call('POST', '/actions', { text: 'Answer Pat: retry limit?', source: 'slack', link: 'https://acme.slack.com/archives/C1/p1', from: 'Pat', question: 'What is the retry limit for uploads?', answer: 'Five attempts, with backoff (upload.js).', sources: 'src/upload.js' })).body;
   assert.equal(q.kind, 'question');

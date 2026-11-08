@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Micro benchmarks per module, for Jira issues.** The Map has a *Speed* view: click a folder where speed matters, *Benchmark this folder*, and optionally name the Jira components or labels that mean it. An agent on a Jira issue then benchmarks that module when its issue names it (a component or label, or the folder in the request), or when its change touches it: if it says it's done without having measured it, it's asked to once. It runs every case before and after its change on the same machine, and adds cases for what it changed. A module's benchmarks are kept on this computer, outside the repository, so the next issue on it runs the same ones and the numbers line up. Each issue's numbers show on the module (case, before, after, change), and the folder is coloured by what the last issue did to its speed. A case more than 5% slower shows in Today as *Slower*, with *Ask to fix* (the agent makes it as fast as before, or says why it can't be) and *It's fine*. Jira issues' components and labels are now read along with their summary.
+
 ## 1.31.0 (2026-11-08)
 
 - **Bugs on the Map.** The Map has a *Bugs* view (next to *Agents*): each folder is coloured by the bugs hunts found in it, the worst weighing most, plus a little for how often it changed in the last 30 days, and its bug count shows on it. Bugs that come with their path through the code (`file:line` steps) are drawn as arrows from folder to folder along it: the hot paths, thicker where more (and worse) bugs go the same way. Folders no hunt has looked at are hatched. Click a folder or an arrow for its bugs, with *Fix* and *Evidence*, or *Hunt here* to start a hunt on that folder.

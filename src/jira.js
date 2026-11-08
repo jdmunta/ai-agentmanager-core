@@ -226,8 +226,8 @@ export async function issueSummary(issue, opts = {}) {
 }
 
 /**
- * The issue's summary and workflow status ({ summary, status, category }: category is Jira's
- * "new", "indeterminate" or "done"), or null when it can't be had.
+ * The issue's summary and workflow status ({ summary, status, category, components, labels }:
+ * category is Jira's "new", "indeterminate" or "done"), or null when it can't be had.
  */
 export async function issueFields({ key, site }, { jira = loadJira(), fetchImpl = fetch, timeoutMs = 6000, allow = null } = {}) {
   const host = (() => {
@@ -245,7 +245,7 @@ export async function issueFields({ key, site }, { jira = loadJira(), fetchImpl 
   if (!allowed) return null;
   const headers = { accept: 'application/json' };
   if (configured) headers.authorization = authOf(jira);
-  const q = `${encodeURIComponent(key)}?fields=summary,status,description`;
+  const q = `${encodeURIComponent(key)}?fields=summary,status,description,components,labels`;
   try {
     // Your site as saved: it may have a path (https://host/jira) that the link's origin leaves out.
     const res = await jiraGet(fetchImpl, configured ? jira.site : site, { path: `/rest/api/3/issue/${q}` }, configured ? { path: `/rest/api/2/issue/${q}` } : null, { headers, signal: AbortSignal.timeout(timeoutMs) });
@@ -258,7 +258,10 @@ export async function issueFields({ key, site }, { jira = loadJira(), fetchImpl 
     const status = typeof f.status?.name === 'string' ? f.status.name.slice(0, 60) : null;
     if (!summary && !status) return null;
     const synopsis = synopsisOf(f.description);
-    return { summary, status, category: typeof f.status?.statusCategory?.key === 'string' ? f.status.statusCategory.key : null, ...(synopsis ? { synopsis } : {}) };
+    // What part of the product it's in: the issue's components and labels.
+    const components = (Array.isArray(f.components) ? f.components : []).map((c) => c?.name).filter((n) => typeof n === 'string').map((n) => n.slice(0, 80));
+    const labels = (Array.isArray(f.labels) ? f.labels : []).filter((n) => typeof n === 'string').map((n) => n.slice(0, 80));
+    return { summary, status, category: typeof f.status?.statusCategory?.key === 'string' ? f.status.statusCategory.key : null, ...(synopsis ? { synopsis } : {}), ...(components.length ? { components } : {}), ...(labels.length ? { labels } : {}) };
   } catch (e) {
     if (configured) problem = { at: new Date().toISOString(), reason: reasonOf(jira.site, null, e) };
     return null;
