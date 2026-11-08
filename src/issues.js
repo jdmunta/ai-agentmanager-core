@@ -34,9 +34,11 @@ export const GROUPS = {
  * the list). Any of them can be changed later; skipped, done and removed issues aren't proposed or
  * started by the assistant.
  */
-export const ACTIONS = ['assign', 'skip', 'done', 'remove'];
-const SET_ASIDE = { skip: 'skipped', done: 'done', remove: 'removed' };
-const ACTION_NOTE = { skip: 'Skipped by you', done: 'Marked done by you', remove: 'Removed by you' };
+export const ACTIONS = ['assign', 'skip', 'snooze', 'done', 'remove'];
+const SET_ASIDE = { skip: 'skipped', snooze: 'snoozed', done: 'done', remove: 'removed' };
+const ACTION_NOTE = { skip: 'Skipped by you', snooze: 'Snoozed by you', done: 'Marked done by you', remove: 'Removed by you' };
+// A snooze whose time has come is no decision any more.
+const expired = (e, t = Date.now()) => e?.action === 'snooze' && !(Date.parse(e.until ?? '') > t);
 
 /** The issue an agent works on: { key, url }, from the link its request starts with or one in it. */
 export function issueOf(v) {
@@ -105,6 +107,7 @@ function designOf(v, read) {
 export function issueRows(views, jira = new Map(), read = () => null, proposed = [], actions = {}, assigned = []) {
   const rank = Object.fromEntries(Object.keys(GROUPS).map((k, i) => [k, i]));
   const rows = [];
+  actions = Object.fromEntries(Object.entries(actions).filter(([, e]) => !expired(e)));
   // What the search for issues assigned to you found: their summaries stand in where nothing else has one.
   const mine = new Map(assigned.map((i) => [i.key, i]));
   // Issues proposed for agents, not started yet: they wait for you to tick them.
@@ -113,6 +116,7 @@ export function issueRows(views, jira = new Map(), read = () => null, proposed =
     const action = actions[p.key]?.action ?? (p.status === 'dismissed' ? 'remove' : null);
     rows.push({
       actionAt: actions[p.key]?.at ?? null,
+      snoozeUntil: actions[p.key]?.action === 'snooze' ? actions[p.key].until : null,
       key: p.key,
       url: p.url,
       title: j?.summary ?? mine.get(p.key)?.summary ?? p.title,
@@ -142,6 +146,7 @@ export function issueRows(views, jira = new Map(), read = () => null, proposed =
     const design = designOf(v, read);
     rows.push({
       actionAt: actions[issue.key]?.at ?? null,
+      snoozeUntil: actions[issue.key]?.action === 'snooze' ? actions[issue.key].until : null,
       key: issue.key,
       url: issue.url,
       title: j?.summary ?? mine.get(issue.key)?.summary ?? issue.title,
@@ -167,6 +172,7 @@ export function issueRows(views, jira = new Map(), read = () => null, proposed =
     const action = actions[i.key]?.action ?? null;
     rows.push({
       actionAt: actions[i.key]?.at ?? null,
+      snoozeUntil: actions[i.key]?.action === 'snooze' ? actions[i.key].until : null,
       key: i.key,
       url: i.url,
       title: i.summary,
@@ -244,7 +250,9 @@ export class ProposedIssues {
 
   /** Your action per issue key: { action, at }. */
   get actions() {
-    return (this.store.data.issueActions ??= {});
+    const all = (this.store.data.issueActions ??= {});
+    for (const [k, e] of Object.entries(all)) if (expired(e)) delete all[k];
+    return all;
   }
 
   /** Skip, done or remove when you set one; dismissed before actions existed counts as remove. */
@@ -276,8 +284,10 @@ export class ProposedIssues {
    * Set your action on issues (null clears it). Assign starts an agent from the proposal when none
    * works on the issue yet. Returns { set: [keys], started: [{ key, agent }], failed: [{ key, reason }] }.
    */
-  setAction(keys = [], action = null) {
+  setAction(keys = [], action = null, { until = null } = {}) {
     if (action !== null && !ACTIONS.includes(action)) throw err(400, `The action is one of ${ACTIONS.join(', ')}, or none to clear it`);
+    const wakeAt = action === 'snooze' ? Date.parse(until ?? '') : null;
+    if (action === 'snooze' && !(Number.isFinite(wakeAt) && wakeAt > Date.now())) throw err(400, 'Snooze until a time to come');
     const set = [];
     const started = [];
     const failed = [];
@@ -307,7 +317,7 @@ export class ProposedIssues {
         agent = r.started[0].agent;
       }
       // Assign is what an agent on it means anyway; only the others are kept.
-      if (SET_ASIDE[action]) this.actions[key] = { action, at: new Date().toISOString() };
+      if (SET_ASIDE[action]) this.actions[key] = { action, at: new Date().toISOString(), ...(action === 'snooze' ? { until: new Date(wakeAt).toISOString() } : {}) };
       else delete this.actions[key];
       if (p?.status === 'dismissed') p.status = 'waiting';
       set.push(key);

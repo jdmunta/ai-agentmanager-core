@@ -18,7 +18,7 @@ export const SOURCES = {
   comments: 'new comments and mentions on Jira issues the person owns',
   slack: 'Slack messages to the person (direct messages and mentions) that ask for work',
   linear: 'Linear issues newly assigned to the person',
-  actions: 'things asked of the person in Slack and in meeting notes (Notes by Gemini), for their Actions list',
+  actions: 'things asked of the person in Slack and in meeting notes (Notes by Gemini), and questions put to them or that they are copied on, with draft answers, for their Actions list',
 };
 
 /**
@@ -149,6 +149,10 @@ export function assistantPrompt(s, dir, bin = `node ${BIN}`, features = features
         `Find what is asked of ${who}, or what they agreed to do: in Gemini's notes, the action items and suggested next steps that name them. ` +
         `For each one, add it to their list: ${am} actions add --source <${[features.slack && 'slack', features.gemini && 'gemini'].filter(Boolean).join('|')}> --link "<the message or doc link>" --from "<who asked>" [--due "<when, if said>"] --context "<one or two sentences of background>" "<the action in one line, starting with a verb>". ` +
         `Adding the same one twice is harmless. Don't act on them, start agents for them or reply: the person decides under Actions.`,
+      `Questions for them: also find questions put to ${who} that are still unanswered: asked of them directly, or in a thread, email or document where they are mentioned, copied (CC) or tagged. ` +
+        `Add each one with its exact words: ${am} actions add --source <${[features.slack && 'slack', features.gemini && 'gemini'].filter(Boolean).join('|')}> --link "<link>" --from "<who asked>" --question "<the question, in their words>" [--cc when they are only copied or mentioned] "Answer <who>: <the question in a few words>". ` +
+        `Then prepare an answer they can send: read the whole thread, and find the answer in the code of their projects, Jira, docs and earlier messages, checking facts rather than guessing. ` +
+        `Record it, short, in their voice and ready to paste: ${am} actions answer <id> --sources "<links or files you used>" "<the answer>". When only someone else can answer, say so in the draft (who, and what to ask). Never send it yourself.`,
     );
   }
   if (s.sources.includes('slack')) {

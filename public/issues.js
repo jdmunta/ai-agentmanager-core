@@ -15,18 +15,20 @@ const FILTERS = [
   ['agent', 'Agents on it'],
   ['done', 'Done'],
   ['skipped', 'Skipped'],
+  ['snoozed', 'Snoozed'],
   ['all', 'All'],
   ['removed', 'Removed'],
 ];
 const ACTIONS = [
   ['assign', 'Assign', 'An agent works on it (assigning one not started yet starts its agent)'],
   ['skip', 'Skip', 'Not now: under Skipped, and not proposed or started again'],
+  ['snooze', 'Snooze', 'Until tomorrow 9am: then back on the list'],
   ['done', 'Done', 'Handled (by you or elsewhere): under Done'],
   ['remove', 'Remove', 'Off the list (under Removed, to bring back)'],
 ];
 const CHECKS = { passed: ['✓', 'Checks pass'], failed: ['✗', 'Checks failing'], running: ['●', 'Checks running'] };
 
-export function initIssues({ api, $, esc, ago, openAgent, openDoc, toast }) {
+export function initIssues({ api, $, esc, ago, openAgent, openDoc, openChanges, toast }) {
   const dialog = $('#issues-dialog');
   const ext = (label, url, title = '') => `<a href="${esc(url)}" target="_blank" rel="noopener" title="${esc(title)}">${esc(label)} ↗</a>`;
   const body = $('#issues-body');
@@ -118,7 +120,7 @@ export function initIssues({ api, $, esc, ago, openAgent, openDoc, toast }) {
     return `<tr data-row-id="${esc(r.key)}" class="stage-${esc(r.stage)} action-${esc(r.action)}">${box}${actionCell(r)}
         <td>${issue}${aboutIssue(r)}</td>
         <td>${status}</td>
-        <td class="issue-note">${esc(r.note)}</td>
+        <td class="issue-note">${esc(r.note)}${r.snoozeUntil ? `<div class="hint">until ${esc(new Date(r.snoozeUntil).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' }))}</div>` : ''}${r.stage === 'review' && !r.pr ? `<div class="issue-ship"><button class="small" data-issue-ship="changes" data-agent="${esc(r.agent.id)}" title="The diff, to look over first">See changes</button> <button class="small primary" data-issue-ship="pr" data-agent="${esc(r.agent.id)}" title="Commit what is left, push and open the pull request">Open PR</button></div>` : ''}</td>
         <td class="nowrap">${plan}</td>
         <td class="nowrap">${design}</td>
         <td>${pr}</td>
@@ -154,7 +156,7 @@ export function initIssues({ api, $, esc, ago, openAgent, openDoc, toast }) {
             : filter === 'removed'
               ? 'Nothing removed. Set an issue back to another action here to bring it back.'
               : 'None here.';
-    const backAll = ['skipped', 'done', 'removed'].includes(filter) ? setAsideShown().length : 0;
+    const backAll = ['skipped', 'snoozed', 'done', 'removed'].includes(filter) ? setAsideShown().length : 0;
     body.innerHTML = `
       <div class="issues-head">
         <h2>Jira</h2>
@@ -189,7 +191,7 @@ export function initIssues({ api, $, esc, ago, openAgent, openDoc, toast }) {
 
   /** The issues shown that you skipped, marked done or removed (not those done in Jira). */
   function setAsideShown() {
-    const g = { skipped: 'skip', done: 'done', removed: 'remove' }[filter];
+    const g = { skipped: 'skip', snoozed: 'snooze', done: 'done', removed: 'remove' }[filter];
     return (data?.rows ?? []).filter((r) => r.group === filter && r.action === g).map((r) => r.key);
   }
   expandable(dialog, draw);
@@ -199,7 +201,7 @@ export function initIssues({ api, $, esc, ago, openAgent, openDoc, toast }) {
     // What each was before, to take the change back.
     const before = new Map(keys.map((k) => [k, data?.rows.find((x) => x.key === k)?.action ?? null]));
     try {
-      const r = await api('POST', '/issues/action', { keys, action: action || null });
+      const r = await api('POST', '/issues/action', { keys, action: action || null, ...(action === 'snooze' ? { until: tomorrow9() } : {}) });
       for (const k of r.set) ticked.delete(k);
       const bad = r.failed.map((x) => `${x.key}: ${x.reason}`).join('; ');
       const label = ACTIONS.find(([v]) => v === action)?.[1] ?? 'Cleared';
@@ -213,6 +215,30 @@ export function initIssues({ api, $, esc, ago, openAgent, openDoc, toast }) {
       toast?.(`${what}${bad ? `. Not changed: ${bad}` : ''}`, bad ? 8000 : undo ? 6000 : 3000, undo);
     } catch (err) {
       toast?.(err.message, 6000);
+    }
+    load();
+  }
+
+  /** Tomorrow at 9 in the morning. */
+  function tomorrow9() {
+    const t = new Date();
+    t.setDate(t.getDate() + 1);
+    t.setHours(9, 0, 0, 0);
+    return t.toISOString();
+  }
+
+  /** Done with no pull request: look at the changes, or open one. */
+  async function ship(agentId, what) {
+    if (what === 'changes') {
+      dialog.close();
+      return openChanges?.(agentId);
+    }
+    try {
+      toast?.('Opening its pull request…', 3000);
+      const r = await api('POST', `/agents/${agentId}/ship`, {});
+      toast?.(r.url ? 'Pull request opened' : 'Pushed', 6000, r.url ? { label: 'Open it', run: () => window.open(r.url, '_blank', 'noopener') } : undefined);
+    } catch (e) {
+      toast?.(e.message, 8000);
     }
     load();
   }
@@ -232,6 +258,7 @@ export function initIssues({ api, $, esc, ago, openAgent, openDoc, toast }) {
       s: (r) => setAction([r.dataset.rowId], 'skip'),
       d: (r) => setAction([r.dataset.rowId], 'done'),
       x: (r) => setAction([r.dataset.rowId], 'remove'),
+      z: (r) => setAction([r.dataset.rowId], 'snooze'),
       o: (r) => setAction([r.dataset.rowId], null),
       Enter: (r) => r.querySelector('a.issue-key')?.click(),
       r: Object.assign(() => load({ fresh: true }), { needsRow: false }),
@@ -277,6 +304,8 @@ export function initIssues({ api, $, esc, ago, openAgent, openDoc, toast }) {
   }
 
   body.addEventListener('click', async (e) => {
+    const sh = e.target.closest('[data-issue-ship]');
+    if (sh) return ship(sh.dataset.agent, sh.dataset.issueShip);
     const o = e.target.closest('[data-issue-open]');
     if (o) {
       dialog.close();

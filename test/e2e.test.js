@@ -1618,6 +1618,33 @@ test('bughunt: a hunt runs a read-only agent, its checked findings are listed, a
   await call('POST', `/agents/${fx.body.agent.id}/stop`);
 });
 
+test('questions for you: listed with a drafted answer, edited, snoozed, and in Today', async () => {
+  const q = (await call('POST', '/actions', { text: 'Answer Pat: retry limit?', source: 'slack', link: 'https://acme.slack.com/archives/C1/p1', from: 'Pat', question: 'What is the retry limit for uploads?', answer: 'Five attempts, with backoff (upload.js).', sources: 'src/upload.js' })).body;
+  assert.equal(q.kind, 'question');
+  assert.equal(q.answer.text, 'Five attempts, with backoff (upload.js).');
+  const cc = (await call('POST', '/actions', { text: 'Answer Sam: rollout date?', source: 'slack', link: 'https://acme.slack.com/archives/C1/p2', from: 'Sam', question: 'When does it roll out?', cc: true })).body;
+  assert.equal(cc.cc, true);
+  let today = (await call('GET', '/today')).body.items.filter((i) => i.kind === 'ask');
+  assert.deepEqual(today.map((i) => [i.title, i.label]), [['What is the retry limit for uploads?', 'Asked you'], ['When does it roll out?', "CC'd"]]);
+  assert.match(today[0].why, /Pat asked you · in Slack · answer drafted/);
+  assert.match(today[1].why, /no answer drafted yet/);
+  // The assistant's draft (from its session) and yours, edited.
+  const mine = (await call('PUT', `/actions/${cc.id}/answer`, { text: 'Next Tuesday.' })).body;
+  assert.deepEqual([mine.answer.text, mine.answer.by], ['Next Tuesday.', 'you']);
+  const theirs = await call('PUT', `/actions/${cc.id}/answer`, { text: 'Tuesday, after the freeze.', sources: 'Jira REL-4' }, { 'x-agentmgr': '1', 'x-agentmgr-agent': 'assistant' });
+  assert.equal(theirs.body.answer.by, 'assistant');
+  // Snooze: off the list until then; a time gone by is refused.
+  assert.equal((await call('POST', '/actions/set', { ids: [q.id], state: 'snooze', until: '2001-01-01' })).status, 400);
+  const until = new Date(Date.now() + 3_600_000).toISOString();
+  assert.deepEqual((await call('POST', '/actions/set', { ids: [q.id], state: 'snooze', until })).body.set, [q.id]);
+  const t2 = (await call('GET', '/today')).body;
+  assert.ok(!t2.items.some((i) => i.actionId === q.id));
+  assert.ok(t2.aside.some((a) => a.actionId === q.id && a.label === 'Snoozed' && a.until === until));
+  const rows = (await call('GET', '/actions')).body.rows;
+  assert.equal(rows.find((r) => r.id === q.id).group, 'snoozed');
+  for (const id of [q.id, cc.id]) await call('POST', '/actions/set', { ids: [id], state: 'remove' });
+});
+
 test('support: a report is kept with its screenshot, and links to a filled-in GitHub issue', async () => {
   assert.equal((await call('POST', '/support', { kind: 'bug', title: '', details: 'x' })).status, 400);
   assert.equal((await call('POST', '/support', { kind: 'other', title: 'x', details: 'x' })).status, 400);
@@ -3972,6 +3999,13 @@ test('review changes: diff with new files, comments to the agent, commit, push',
   assert.match(pr.body.error, /^Pushed, but opening the pull request failed/);
   assert.match(execFileSync('git', ['branch', '--list'], { cwd: origin }).toString(), new RegExp(c.branch.replace(/[/.]/g, '\\$&')));
   assert.equal((await call('GET', `/agents/${a.id}/changes`)).body.unpushed, 0);
+  // Done with no pull request: Open PR commits what's left (titled after the request), pushes and opens one.
+  fs.writeFileSync(path.join(ready.workdir, 'more.txt'), 'more\n');
+  const shipped = await call('POST', `/agents/${a.id}/ship`, {});
+  assert.ok([200, 502].includes(shipped.status), JSON.stringify(shipped.body));
+  c = (await call('GET', `/agents/${a.id}/changes`)).body;
+  assert.equal(c.uncommitted, 0, 'committed before pushing');
+  assert.equal(c.unpushed, 0, 'and pushed');
 
   const gen = (await call('GET', '/agents')).body.find((x) => x.kind === 'general');
   if (gen) assert.equal((await call('GET', `/agents/${gen.id}/changes`)).status, 400);

@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- **Questions for you, with answers ready.** The assistant now also finds questions put to you in Slack (and email and meeting notes, with those on), including ones you're only copied or mentioned on, and prepares an answer for each: it reads the thread and checks the code of your projects, Jira and docs. They show in Today (*Asked you* is pressing, *CC'd* can wait) and under Actions → Questions, with the draft to *Copy*, *Edit*, or *Draft again*, and *Thread* to open where it was asked. A question without a draft has *Draft an answer*, which starts a session that researches it. Nothing is ever sent for you. (`agentmgr actions add --question … [--cc]`, `agentmgr actions answer <id> "<text>"`.)
+- **Answer agents right in Today.** An agent's question shows the choices it offered as buttons (or press 1–6) and a box to type an answer; a permission prompt shows its options. No need to open the session.
+- **Finish work with no pull request.** When an agent is done but opened no pull request, Today and the Jira list offer *See changes* (the diff), *Open PR* (commits what's left, pushes and opens one, titled after the issue) and, in Today, *Send back* with a note.
+- **Snooze everywhere.** Actions, Jira issues and questions can be snoozed until tomorrow 9am (*Snooze*, or `z`); they come back by themselves. Snoozed ones are under the new *Snoozed* filters and in Today's *Set aside*, with *Bring back*.
+- Typing in a box in Today, the Jira, Actions or Bugs list is no longer interrupted when the list refreshes.
+
 ## 1.28.0 (2026-11-07)
 
 - **Bug hunts.** *Bugs* (or `b`) runs agents that look for bugs in the background, in a project or one folder of it: in what changed since the last run, or the whole module a part at a time, for any bug or the kinds you pick (races, error handling, leaks, security, data). A hunt runs by hand (*Hunt now*) or every night, one at a time, and stops at its cost limit. The hunter reads the code and runs the tests on its own copy and never commits or pushes. Each bug must come with evidence (a failing test, or the path through the code), and the AI judge checks each one against the code: only those that hold up are listed, worst first, and nothing is reported twice. On each: *Fix* starts an agent with the finding and its test, *File it* opens a filled-in GitHub issue (or copies it as Markdown), *Not a bug* keeps it from coming back, *Snooze* hides it until tomorrow or Monday. Critical and high ones show in Today.

@@ -255,6 +255,7 @@ export function initBugHunt({ api, $, esc, ago, toast, openAgent }) {
     const form = e.target.closest('[data-hunt-form]');
     if (!form) return;
     e.preventDefault();
+    document.activeElement?.blur?.();
     const fd = new FormData(form);
     const input = { project: fd.get('project'), path: fd.get('path'), name: fd.get('name'), focus: fd.get('focus'), kinds: fd.getAll('kind'), schedule: fd.get('schedule'), maxUsd: Number(fd.get('maxUsd')) };
     try {

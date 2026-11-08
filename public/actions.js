@@ -11,7 +11,9 @@ const PROJECT = 'agentmgr.actionsProject';
 const FILTERS = [
   ['open', 'Open'],
   ['assigned', 'Assigned'],
+  ['questions', 'Questions'],
   ['skipped', 'Skipped'],
+  ['snoozed', 'Snoozed'],
   ['done', 'Done'],
   ['all', 'All'],
   ['removed', 'Removed'],
@@ -20,12 +22,14 @@ const STATES = [
   ['open', '—', 'Not decided yet'],
   ['assign', 'Assign', 'An agent does it (in the project picked above)'],
   ['skip', 'Skip', 'Not now'],
-  ['done', 'Done', 'Handled'],
+  ['snooze', 'Snooze', 'Until tomorrow 9am: then open again'],
+  ['done', 'Done', 'Handled (or answered)'],
   ['remove', 'Remove', 'Not mine, or not needed: off the list (under Removed)'],
 ];
 const ICON = { slack: '💬', gemini: '📝', other: '•' };
 
 export function initActions({ api, $, esc, ago, toast, openAgent, projects = () => [] }) {
+  let editing = null; // the question whose answer is being edited
   const dialog = $('#actions-dialog');
   const body = $('#actions-body');
   let data = null;
@@ -59,6 +63,13 @@ export function initActions({ api, $, esc, ago, toast, openAgent, projects = () 
     if (btn && f) btn.hidden = !f.slack && !f.gemini;
   }
 
+  /** A question's drafted answer: shown, copied, edited, or asked for. */
+  function answerHtml(r) {
+    if (editing === r.id) return `<form class="today-draft-edit" data-act-edit="${esc(r.id)}"><textarea rows="4">${esc(r.answer?.text ?? '')}</textarea><div><button class="small primary">Save</button> <button type="button" class="small" data-act-answer="cancel">Cancel</button></div></form>`;
+    if (!r.answer) return `<div class="today-draft"><button class="small" data-act-answer="draft" title="A session reads the thread, finds the answer in your code, Jira and docs, and drafts it">Draft an answer</button> <button class="link" data-act-answer="edit">Write one</button></div>`;
+    return `<div class="today-draft"><div class="today-draft-text">${esc(r.answer.text)}</div><div class="hint">${r.answer.by === 'you' ? 'Your edit' : 'Drafted by the assistant'}${r.answer.sources ? ` · from ${esc(r.answer.sources)}` : ''} · <button class="link" data-act-answer="copy">Copy</button> · <button class="link" data-act-answer="edit">Edit</button> · <button class="link" data-act-answer="draft">Draft again</button></div></div>`;
+  }
+
   function row(r) {
     const opts = STATES.map(([v, label, title]) => `<option value="${v}" title="${esc(title)}" ${r.status === v ? 'selected' : ''}>${label}</option>`).join('');
     const where = r.link ? `<a href="${esc(r.link)}" target="_blank" rel="noopener" title="Open where it was asked">${esc(r.sourceLabel)} ↗</a>` : esc(r.sourceLabel);
@@ -69,7 +80,7 @@ export function initActions({ api, $, esc, ago, toast, openAgent, projects = () 
       : `<button class="small" data-act-discuss="${esc(r.id)}" title="Talk it through with Claude: what it asks, and what to do (c)">💬 Discuss</button>`;
     return `<tr data-row-id="${esc(r.id)}" class="action-${esc(r.status)}">
       <td class="issue-action"><select data-act-state="${esc(r.id)}" class="act-${esc(r.status === 'assign' ? 'none' : r.status)}" aria-label="Your decision">${opts}</select></td>
-      <td><div class="action-text">${esc(r.text)}</div>${r.context ? `<div class="issue-synopsis" title="${esc(r.context)}">${esc(r.context)}</div>` : ''}<div class="hint action-meta">${meta}</div></td>
+      <td>${r.kind === 'question' ? `<span class="tag">${r.cc ? "CC'd" : 'Asked you'}</span> ` : ''}<div class="action-text">${esc(r.kind === 'question' ? r.question : r.text)}</div>${r.context ? `<div class="issue-synopsis" title="${esc(r.context)}">${esc(r.context)}</div>` : ''}<div class="hint action-meta">${meta}${r.snoozeUntil ? ` · until ${esc(new Date(r.snoozeUntil).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' }))}` : ''}</div>${r.kind === 'question' ? answerHtml(r) : ''}</td>
       <td class="nowrap">${talk}${agent ? `<div class="hint">Agent: ${agent}</div>` : ''}</td>
     </tr>`;
   }
@@ -80,7 +91,7 @@ export function initActions({ api, $, esc, ago, toast, openAgent, projects = () 
       body.innerHTML = '<p class="hint">Loading…</p>';
       return;
     }
-    const inGroup = (r, g) => (g === 'all' ? r.group !== 'removed' : r.group === g);
+    const inGroup = (r, g) => (g === 'all' ? r.group !== 'removed' : g === 'questions' ? r.kind === 'question' && r.group === 'open' : r.group === g);
     const count = (g) => data.rows.filter((r) => inGroup(r, g)).length;
     const rows = data.rows.filter((r) => inGroup(r, filter));
     const f = data.features ?? {};
@@ -95,12 +106,12 @@ export function initActions({ api, $, esc, ago, toast, openAgent, projects = () 
           <option value="">pick a project</option>
           ${list.map((p) => `<option value="${esc(p.key)}" ${p.key === project ? 'selected' : ''}>${esc(p.name ?? p.key)}</option>`).join('')}
         </select></label>
-        ${['skipped', 'done', 'removed'].includes(filter) && rows.length ? `<button class="small" data-act="back-all" title="Every one here back to open, undecided">Bring all ${rows.length} back</button>` : ''}
+        ${['skipped', 'snoozed', 'done', 'removed'].includes(filter) && rows.length ? `<button class="small" data-act="back-all" title="Every one here back to open, undecided">Bring all ${rows.length} back</button>` : ''}
         <button class="small" data-act="refresh" title="Look again (r)">↻</button>
         ${expandButton(dialog)}
         <button class="small" data-act="close" title="Close (Esc)">Close</button>
       </div>
-      <p class="hint">What's asked of you in ${esc(from || 'Slack and meeting notes')}, found by the assistant on its checks. Decide on the left; <b>Discuss</b> talks one through with Claude. Keys: j/k move, a assign, s skip, d done, x remove, o open again, c discuss, Enter opens the source, f bigger.</p>
+      <p class="hint">What's asked of you in ${esc(from || 'Slack and meeting notes')}, found by the assistant on its checks. Decide on the left; <b>Discuss</b> talks one through with Claude. Questions put to you come with a drafted answer to edit, copy and send yourself. Keys: j/k move, a assign, s skip, z snooze, d done, x remove, o open again, c discuss, Enter opens the source, f bigger.</p>
       ${rows.length
         ? `<div class="issues-scroll"><table class="issues actions-table">
             <thead><tr><th class="issue-action">Decision</th><th>Action</th><th></th></tr></thead>
@@ -124,7 +135,7 @@ export function initActions({ api, $, esc, ago, toast, openAgent, projects = () 
     // What each was before, to take the change back.
     const before = new Map(ids.map((id) => [id, data?.rows.find((x) => x.id === id)?.status ?? 'open']));
     try {
-      const r = await api('POST', '/actions/set', { ids, state, project: project || null });
+      const r = await api('POST', '/actions/set', { ids, state, project: project || null, ...(state === 'snooze' ? { until: tomorrow9() } : {}) });
       const bad = r.failed.map((x) => x.reason).join('; ');
       const label = STATES.find(([v]) => v === state)?.[1] ?? state;
       const msg = r.started.length ? `Agent ${r.started.map((x) => x.agent.name).join(', ')} started` : bad ? `Not changed: ${bad}` : state === 'open' ? (ids.length > 1 ? `${r.set.length} open again` : 'Open again') : label;
@@ -135,6 +146,34 @@ export function initActions({ api, $, esc, ago, toast, openAgent, projects = () 
       toast?.(err.message, 6000);
     } finally {
       busy = false;
+    }
+    load();
+  }
+
+  /** Tomorrow at 9 in the morning. */
+  function tomorrow9() {
+    const t = new Date();
+    t.setDate(t.getDate() + 1);
+    t.setHours(9, 0, 0, 0);
+    return t.toISOString();
+  }
+
+  async function answerAct(id, what) {
+    const r = data?.rows.find((x) => x.id === id);
+    if (!r) return;
+    try {
+      if (what === 'edit') return (editing = id), render();
+      if (what === 'cancel') return (editing = null), render();
+      if (what === 'copy') {
+        const ok = await navigator.clipboard?.writeText(r.answer?.text ?? '').then(() => true, () => false);
+        return toast?.(ok ? 'Copied: paste it in the thread' : "Couldn't copy: select the text instead", 3000, r.link ? { label: 'Open thread', run: () => window.open(r.link, '_blank', 'noopener') } : undefined);
+      }
+      if (what === 'draft') {
+        const x = await api('POST', `/actions/${id}/draft`, {});
+        toast?.(x.existing ? 'A session is drafting it already' : 'Drafting: a session reads the thread and finds the answer', 5000, { label: 'Watch', run: () => (dialog.close(), openAgent(x.agent.id)) });
+      }
+    } catch (e) {
+      toast?.(e.message, 6000);
     }
     load();
   }
@@ -164,6 +203,7 @@ export function initActions({ api, $, esc, ago, toast, openAgent, projects = () 
       s: (r) => set([r.dataset.rowId], 'skip'),
       d: (r) => set([r.dataset.rowId], 'done'),
       x: (r) => set([r.dataset.rowId], 'remove'),
+      z: (r) => set([r.dataset.rowId], 'snooze'),
       o: (r) => set([r.dataset.rowId], 'open'),
       c: (r) => discuss(r.dataset.rowId),
       Enter: (r) => r.querySelector('.action-meta a')?.click(),
@@ -185,7 +225,24 @@ export function initActions({ api, $, esc, ago, toast, openAgent, projects = () 
     }
   });
 
+  body.addEventListener('submit', async (e) => {
+    const f = e.target.closest('[data-act-edit]');
+    if (!f) return;
+    e.preventDefault();
+    document.activeElement?.blur?.();
+    try {
+      await api('PUT', `/actions/${f.dataset.actEdit}/answer`, { text: f.querySelector('textarea').value });
+      editing = null;
+      toast?.('Answer saved', 2000);
+    } catch (err) {
+      return toast?.(err.message, 6000);
+    }
+    load();
+  });
+
   body.addEventListener('click', (e) => {
+    const an = e.target.closest('[data-act-answer]');
+    if (an) return answerAct(e.target.closest('tr[data-row-id]')?.dataset.rowId, an.dataset.actAnswer);
     const o = e.target.closest('[data-act-open]');
     if (o) {
       dialog.close();
