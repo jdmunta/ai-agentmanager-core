@@ -54,6 +54,7 @@ import { about, latestRelease } from './about.js';
 import { Support } from './support.js';
 import { ghBin, leadingJiraKey } from './tracker.js';
 import { BugHunts } from './bughunt.js';
+import { ModuleBenchmarks } from './benchmarks.js';
 import * as git from './git.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -140,6 +141,16 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
     });
   const hunts = new BugHunts({ manager, store, judge: manager.judge, git: huntGit, log: (m) => console.log(`[agentmgr] ${m}`) });
   hunts.startTimer();
+  // Micro benchmarks of the modules where speed matters, for the Jira issues that change them.
+  const benches = new ModuleBenchmarks({
+    manager,
+    store,
+    changedFiles: async (a) => {
+      const base = await review.base(a);
+      return base ? Object.keys((await git.changes(a.workdir, base.sha))?.files ?? {}) : [];
+    },
+    log: (m) => console.log(`[agentmgr] ${m}`),
+  });
   const races = new Races({ manager, store });
   const review = new Review({ manager });
   // The walkthrough explains the same diff the review screen shows.
@@ -859,7 +870,12 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
     return stats(store.list(), { days, projectOf: (a) => manager.projectInfo(a)?.name ?? null });
   }));
   // ?layer=bugs adds where the bug hunts found bugs: heat per folder, and the paths through the code.
-  api.get('/codemap', wrap((req) => manager.codeMap(req.query.project ? String(req.query.project) : null, { bugs: req.query.layer === 'bugs' ? { findings: hunts.findings, hunts: hunts.hunts } : null })));
+  api.get('/codemap', wrap((req) => manager.codeMap(req.query.project ? String(req.query.project) : null, { bugs: req.query.layer === 'bugs' ? { findings: hunts.findings, hunts: hunts.hunts } : null, speed: req.query.layer === 'speed' ? benches : null })));
+  // Modules to benchmark, and what their benchmarks found (benchmarks.js).
+  api.post('/benchmodules', wrap((req) => benches.watch(req.body ?? {})));
+  api.delete('/benchmodules/:id', wrap((req) => benches.unwatch(req.params.id)));
+  api.post('/benchruns/:id/accept', wrap((req) => benches.accept(req.params.id, req.body?.accepted !== false)));
+  api.post('/benchruns/:id/fix', wrap((req) => benches.askToFix(req.params.id)));
   // Issues agents work on, for the summary; ?group=you|agent|done and ?format=markdown to paste.
   api.get('/issues', wrap(async (req) => {
     // ?fresh=1 (the ↻ button) asks Jira again: the issues assigned to you and each issue's status.
@@ -976,7 +992,7 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
       got('reviews', () => reviews.rows()),
     ]);
     const findings = hunts.list().findings.filter((x) => x.status === 'open' || x.status === 'pr');
-    const items = todayItems({ inbox, issues, actions, reviews: prs, findings });
+    const items = todayItems({ inbox, issues, actions, reviews: prs, findings, slower: benches.slower() });
     return { items, aside: todayAside({ issues, actions }), speech: todaySpeech(items), features: f, errors };
   }));
   // Support tickets: kept on this computer, each with a filled-in link to a new GitHub issue.
@@ -1419,6 +1435,7 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
     value.close();
     reviews.close();
     hunts.close();
+    benches.close();
     autopilot.close();
     goals.close();
     worklog.close();

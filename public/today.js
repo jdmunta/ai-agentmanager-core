@@ -61,6 +61,7 @@ export function initToday({ api, $, esc, ago, openAgent, showInbox, openActions,
     if (it.kind === 'pr-requested') return [btn('review', 'Review it', 'A reviewer agent reads it and finds what blocks approval (a)', true), link(it.url, 'PR')].join(' ');
     if (it.kind === 'pr-ready') return [btn('open-reviews', 'Open review', 'Pick what to post (Enter)', true), link(it.url, 'PR')].join(' ');
     if (it.kind === 'rule') return btn('inbox', 'Inbox', 'Decide in the inbox (Enter)', true);
+    if (it.kind === 'bench') return [btn('fix', 'Ask to fix', 'Ask the agent to make it as fast as before, or say why it can\'t be (a)', true), btn('done', "It's fine", 'The slowdown is expected: off the list (d)'), btn('open', 'Open', "Open the agent's session (Enter)")].join(' ');
     if (it.kind === 'bug-pr') return [link(it.url, 'Open PR'), btn('done', 'Done', 'You looked at it: off the list (d)'), btn('bugs', 'Details', 'The bug and how the fix was checked (Enter)')].join(' ');
     if (it.kind === 'bug') return [btn('fix', 'Fix', 'Start an agent on it, with the failing test (a)', true), btn('skip', 'Snooze', 'Until tomorrow 9am (s)'), btn('notbug', 'Not a bug', "It won't be reported again"), btn('bugs', 'Evidence', 'See it in Bugs (Enter)')].join(' ');
     return [it.agentId ? btn('open', 'Open', "Open the agent's session (Enter)", it.score < 20) : '', link(it.url, it.issueKey ? 'Jira' : 'Link')].join(' ');
@@ -282,6 +283,13 @@ export function initToday({ api, $, esc, ago, openAgent, showInbox, openActions,
         t.setHours(9, 0, 0, 0);
         await api('POST', '/findings/set', { ids: [it.findingId], status: what === 'skip' ? 'snoozed' : 'notbug', until: what === 'skip' ? t.toISOString() : null });
         changedWith(what === 'skip' ? 'Snoozed until tomorrow 9am' : "Not a bug: it won't be reported again", what === 'skip' ? 'snoozed' : 'not a bug', () => api('POST', '/findings/set', { ids: [it.findingId], status: 'open' }));
+      } else if (it.kind === 'bench' && (what === 'fix' || what === 'assign')) {
+        await api('POST', `/benchruns/${it.runId}/fix`, {});
+        toast?.('Asked the agent to fix it, or say why it can\'t be', 4000);
+        return;
+      } else if (it.kind === 'bench' && what === 'done') {
+        await api('POST', `/benchruns/${it.runId}/accept`, { accepted: true });
+        changedWith("It's fine: off the list", 'accepted', () => api('POST', `/benchruns/${it.runId}/accept`, { accepted: false }));
       } else if (it.kind === 'bug-pr' && what === 'done') {
         await api('POST', '/findings/set', { ids: [it.findingId], status: 'done' });
         changedWith('Done: off the list', 'done', () => api('POST', '/findings/set', { ids: [it.findingId], status: 'pr' }));

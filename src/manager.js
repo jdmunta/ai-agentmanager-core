@@ -107,8 +107,9 @@ import { spawn } from 'node:child_process';
 import * as git from './git.js';
 import { bugHeat, buildMap, touchedFiles } from './codemap.js';
 import { parseDiff } from '../public/review.js';
-import { assignedIssues, issueFields, issueSummary, jiraProblem, leadingIssue, loadJira, wordsAfterLink } from './jira.js';
-import { issueRows } from './issues.js';
+import { assignedIssues, issueFields, jiraProblem, leadingIssue, loadJira, wordsAfterLink } from './jira.js';
+import { issueOf, issueRows } from './issues.js';
+import { askMessage, moduleBenchPrompt, resultsPath } from './benchmarks.js';
 import { designRows } from './designs.js';
 import { reviewPath, reviewerPrompt } from './reviews.js';
 import { findingsPath, fixPath, fixerPrompt, hunterPrompt } from './bughunt.js';
@@ -736,6 +737,9 @@ export class AgentManager extends EventEmitter {
     // and until then by the words after the link.
     const issue = leadingIssue(intent);
     if (issue) agent.synopsis = { text: wordsAfterLink(intent), source: 'request', key: issue.key };
+    // Modules where speed matters that the request names: benchmarked (benchmarks.js).
+    const named = this.benchModules?.forIssue(agent) ?? [];
+    if (named.length) agent.benchModules = named.map((m) => m.path);
     this.store.put(agent);
     this.registerProject(agent);
     this.changed(agent);
@@ -758,8 +762,14 @@ export class AgentManager extends EventEmitter {
     const agent = this.store.get(this.store.resolve(ref)?.id ?? ref);
     const issue = agent && leadingIssue(agent.intent);
     if (!issue) return null;
-    const summary = await issueSummary(issue, this.jiraOptions ?? {});
+    const fields = await issueFields(issue, this.jiraOptions ?? {});
+    const summary = fields?.summary ?? null;
     const cur = this.store.get(agent.id);
+    // Its components and labels may name modules to benchmark.
+    if (cur && fields) {
+      const mods = this.benchModules?.forIssue(cur, { components: fields.components, labels: fields.labels }) ?? [];
+      if (mods.length) this.addBenchModules(cur.id, mods);
+    }
     if (!summary || !cur) return null;
     const bug = cur.bugs?.[issue.key];
     this.patch(cur.id, {
@@ -768,6 +778,40 @@ export class AgentManager extends EventEmitter {
     });
     this.writeIntent(cur.id);
     return summary;
+  }
+
+  /** The Jira issue (or other tracker key) an agent works on, or null. */
+  issueKey(agent) {
+    return agent ? issueOf({ ...agent, bugs: Object.values(agent.bugs ?? {}) })?.key ?? null : null;
+  }
+
+  /**
+   * More modules for an agent to benchmark ([{ path, dir, existing }], benchmarks.js). A running
+   * agent is told now; one not started yet gets them with its instructions. `asked`: it said it was
+   * done without them.
+   */
+  addBenchModules(id, modules, { asked = false } = {}) {
+    const agent = this.store.get(id);
+    if (!agent) return null;
+    const have = new Set(agent.benchModules ?? []);
+    const fresh = modules.filter((m) => !have.has(m.path));
+    if (!fresh.length && !asked) return null;
+    this.patch(id, {
+      benchModules: [...have, ...fresh.map((m) => m.path)],
+      ...(asked ? { benchAsked: [...new Set([...(agent.benchAsked ?? []), ...modules.map((m) => m.path)])] } : {}),
+    });
+    for (const m of modules) fs.mkdirSync(m.dir, { recursive: true });
+    const { md, json } = this.benchFiles(id);
+    if (asked) this.tell(id, askMessage(md, json, modules), { source: 'benchmarks' });
+    else if (this.runtimes.get(id)?.pty && fresh.length) this.tell(id, `This issue is about ${fresh.map((m) => m.path || 'the repository').join(', ')}, where speed matters. ${moduleBenchPrompt(md, json, fresh)}`, { source: 'benchmarks' });
+    return this.view(this.store.get(id));
+  }
+
+  /** Where an agent writes its benchmark results: BENCHMARK.md and BENCH.json in its brief folder. */
+  benchFiles(id) {
+    fs.mkdirSync(briefDir(id), { recursive: true });
+    const dir = fs.realpathSync(briefDir(id));
+    return { md: path.join(dir, path.basename(benchPath(id))), json: path.join(dir, path.basename(resultsPath(id))) };
   }
 
   /** INTENT.md for a task agent: the request as given and where it came from (see brief.js). */
@@ -807,7 +851,7 @@ export class AgentManager extends EventEmitter {
    * The code map of a project (the one with the most going on, unless named). With `bugs`
    * ({ findings, hunts } of the bug hunts), it also has the bugs layer (codemap.js bugHeat).
    */
-  async codeMap(projectKey, { bugs = null } = {}) {
+  async codeMap(projectKey, { bugs = null, speed = null } = {}) {
     const withCode = this.store.list().filter((a) => a.workdir && !NO_REPO.has(a.kind) && fs.existsSync(a.workdir));
     const groups = new Map();
     for (const a of withCode) {
@@ -834,6 +878,8 @@ export class AgentManager extends EventEmitter {
       return { id: a.id, name: a.name, busy: rt?.busy, attention: rt?.attention, changed: this.changeSets.get(a.id)?.files ?? {}, touched };
     });
     const out = { project: { key: g.key, name: g.name }, projects: list, map: buildMap({ files, agents }) };
+    // The Speed view: modules to benchmark and their issues' numbers (benchmarks.js).
+    if (speed) out.speed = speed.speed(g.key);
     if (bugs) {
       // Hunts and findings name the project by its shortcut.
       const mine = (shortcut) => this.resolveProject(shortcut)?.key === g.key;
@@ -1253,7 +1299,16 @@ export class AgentManager extends EventEmitter {
       const dir = fs.realpathSync(briefDir(agent.id));
       writableDir ??= dir;
       if (agent.demoPage) prompts.push(demoPagePrompt(path.join(dir, path.basename(demoPath(agent.id)))));
-      if (agent.benchmarks) prompts.push(benchmarksPrompt(path.join(dir, path.basename(benchPath(agent.id))), path.join(dir, 'bench')));
+      if (agent.benchmarks && !agent.benchModules?.length) prompts.push(benchmarksPrompt(path.join(dir, path.basename(benchPath(agent.id))), path.join(dir, 'bench')));
+    }
+    // Modules where speed matters: their kept benchmarks, run before and after (benchmarks.js).
+    const benchMods = task && !planning && agent.benchModules?.length && this.benchModules ? this.benchModules.forAgent(agent) : [];
+    if (benchMods.length) {
+      const { md, json } = this.benchFiles(agent.id);
+      writableDir ??= path.dirname(md);
+      for (const m of benchMods) fs.mkdirSync(m.dir, { recursive: true });
+      writableDir = [writableDir, ...benchMods.map((m) => fs.realpathSync(m.dir))].flat();
+      prompts.push(moduleBenchPrompt(md, json, benchMods));
     }
     if (agent.reviewing && task) {
       fs.mkdirSync(briefDir(agent.id), { recursive: true });
