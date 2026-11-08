@@ -273,6 +273,16 @@ if (prompt.startsWith('Bug hunt:') && briefDir) {
   const brief = path.join(briefDir, 'BRIEF.md');
   fs.writeFileSync(brief, fs.readFileSync(brief, 'utf8').replace('Status: working', 'Status: done'));
 }
+// "Bug fix:": an automatic fix: a change with its test, and FIX.json saying it's proven.
+if (prompt.startsWith('Bug fix:') && briefDir) {
+  fs.writeFileSync('fix.txt', 'capped at 5 attempts\n');
+  fs.writeFileSync(
+    path.join(briefDir, 'FIX.json'),
+    JSON.stringify({ fixed: true, why: 'Capped the attempts.', test: { file: 'upload.test.js', before: 'fail', after: 'pass' }, suite: { command: 'npm test', passed: true, output: 'ok' } }),
+  );
+  const brief = path.join(briefDir, 'BRIEF.md');
+  fs.writeFileSync(brief, fs.readFileSync(brief, 'utf8').replace('Status: working', 'Status: done'));
+}
 // "#stuck": the same command failing the same way three times.
 if (prompt.includes('#stuck')) {
   for (let i = 0; i < 3; i++) {

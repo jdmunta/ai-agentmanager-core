@@ -5,6 +5,12 @@
 // so the list stays worth reading. Bugs already reported, or that you said aren't bugs, aren't
 // reported again. From the list: Fix (an agent starts on it, with the failing test), File it (a
 // filled-in issue to submit), Not a bug, or Snooze.
+//
+// With "Fix automatically" on a hunt, the serious ones are fixed without you: an agent fixes each
+// on its own branch (its test must go from failing to passing, and the whole suite must pass), the
+// judge reviews the change against the finding, and what holds up is opened as a draft pull
+// request for you to review. Nothing is merged. A fix that doesn't hold up stays in the list with
+// the reason (and, when you asked for it, is filed as an issue so it isn't lost).
 
 import crypto from 'node:crypto';
 import fs from 'node:fs';
@@ -13,6 +19,8 @@ import { briefDir } from './brief.js';
 
 export const FINDINGS_FILE = 'FINDINGS.json';
 export const findingsPath = (agentId) => path.join(briefDir(agentId), FINDINGS_FILE);
+export const FIX_FILE = 'FIX.json';
+export const fixPath = (agentId) => path.join(briefDir(agentId), FIX_FILE);
 
 export const FOCUS = { changes: 'What changed since the last run', module: 'The whole module, a part at a time' };
 export const KINDS = {
@@ -26,11 +34,14 @@ export const KINDS = {
 };
 export const SEVERITIES = ['critical', 'high', 'medium', 'low'];
 export const SCHEDULES = { manual: 'Only when you press Hunt now', nightly: 'Every night (1–5am), when no hunt is running' };
-export const STATUSES = ['open', 'fixing', 'filed', 'notbug', 'snoozed', 'dropped'];
+export const STATUSES = ['open', 'fixing', 'pr', 'done', 'filed', 'notbug', 'snoozed', 'dropped'];
 
 const MAX_FINDINGS = 500;
 const MAX_RUNS = 20;
 const KEEP_AT = 0.6;
+// Fix automatically: at most this many pull requests a run, and never for less than this each.
+export const MAX_AUTO_PRS = 3;
+const MIN_FIX_USD = 0.5;
 const err = (status, message) => Object.assign(new Error(message), { status });
 const clip = (s, n) => {
   const t = String(s ?? '').trim();
@@ -189,6 +200,84 @@ export function fixIntent(f) {
     .join('\n\n');
 }
 
+/** What an automatic fix agent is asked to do: the finding (its request). */
+export function autoFixIntent(f) {
+  return `Bug fix: ${f.title}\n\n${fixIntent(f)}`;
+}
+
+/** An automatic fix agent's instructions: proven, unattended, and a report in `file`. */
+export function fixerPrompt(file, fixing = {}) {
+  return [
+    `This fix runs without the user: nobody will answer questions, so decide yourself, and keep the change as small as the fix needs. ${fixing.testCommand ? `The project's tests run with: ${fixing.testCommand}` : "Find how the project's tests run (package.json, Makefile, CI config)."}`,
+    "1. Add a test for the bug to the project's tests and run it: it must fail before the fix. 2. Fix it. 3. Run that test again (it must pass) and then the whole test suite (it must pass). Don't commit, push or open a pull request: that's done for you once the fix is checked.",
+    `Write what happened to ${file} as JSON:\n` +
+      '{ "fixed": true|false, "why": "<one or two sentences: the fix, or why you could not fix it or it is not a bug>",\n' +
+      '  "test": { "file": "<the test file>", "before": "fail|pass", "after": "fail|pass" },\n' +
+      '  "suite": { "command": "<how you ran all the tests>", "passed": true|false, "output": "<the last lines it printed>" } }',
+    'Then set your status as done in the brief.',
+  ].join('\n\n');
+}
+
+/** FIX.json, cleaned up, or null. */
+export function normalizeFix(raw) {
+  if (!raw || typeof raw !== 'object' || typeof raw.fixed !== 'boolean') return null;
+  const pf = (v) => (v === 'pass' || v === 'fail' ? v : null);
+  return {
+    fixed: raw.fixed,
+    why: clip(raw.why, 1000),
+    test: { file: raw.test?.file ? clip(raw.test.file, 300) : null, before: pf(raw.test?.before), after: pf(raw.test?.after) },
+    suite: { command: raw.suite?.command ? clip(raw.suite.command, 300) : null, passed: raw.suite?.passed === true, output: clip(raw.suite?.output, 2000) },
+  };
+}
+
+/** A fix agent's FIX.json, or null. */
+export function readFix(agentId) {
+  try {
+    const text = fs.readFileSync(fixPath(agentId), 'utf8');
+    return normalizeFix(JSON.parse(text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1)));
+  } catch {
+    return null;
+  }
+}
+
+/** Why a fix's own report doesn't hold up, or null when it does. */
+export function fixProblem(report) {
+  if (!report) return 'The fix agent wrote no report';
+  if (!report.fixed) return `The fix agent didn't fix it${report.why ? `: ${report.why}` : ''}`;
+  if (report.test.before !== 'fail') return "Its test didn't fail before the fix, so it doesn't show the bug";
+  if (report.test.after !== 'pass') return "Its test still fails after the fix";
+  if (!report.suite.passed) return 'The test suite fails with the fix';
+  return null;
+}
+
+/** The judge's question: does this change fix the finding, and nothing else? */
+export function fixCheckPrompt(f, diff) {
+  return [
+    'An agent fixed the bug below without a person watching. Review its change before it goes to the user as a pull request: does it fix the bug at its cause, with a test that shows the bug, without changing other behaviour or weakening other tests? Reject changes that only hide the symptom, skip or loosen tests, or do unrelated things.',
+    `Bug: ${f.title}\nWhere: ${f.file ?? '?'}${f.line ? `:${f.line}` : ''}\nHow it fails: ${f.why}`,
+    `The change:\n${String(diff ?? '').slice(0, 30_000)}`,
+    'Reply with JSON only: { "ok": true|false, "confidence": <0 to 1>, "reason": "<one or two sentences>" }',
+  ].join('\n\n');
+}
+
+/** The draft pull request's description: the finding, how the fix was checked. */
+export function fixPrBody(f, report, check, testCommand = null) {
+  return [
+    `Fixes a bug found by a bug hunt.`,
+    findingMarkdown(f).replace(/\n\n_Found by a bug hunt in AI Agent Manager\._$/, ''),
+    '**How the fix was checked**',
+    [
+      `- The test${report.test.file ? ` (\`${report.test.file}\`)` : ''} failed before the fix and passes after it.`,
+      `- The whole suite passes${report.suite.command ? ` (\`${report.suite.command}\`)` : ''}.`,
+      testCommand ? `- Run again here before this pull request: \`${testCommand}\` passes.` : null,
+      check ? `- The AI judge reviewed the change: ${check.reason || 'it holds up'} (confidence ${Math.round(check.confidence * 100)}%).` : null,
+    ]
+      .filter(Boolean)
+      .join('\n'),
+    '_Opened as a draft by AI Agent Manager. Nothing was merged: look it over, then mark it ready._',
+  ].join('\n\n');
+}
+
 /** The finding as an issue, in Markdown. */
 export function findingMarkdown(f) {
   return [
@@ -218,9 +307,17 @@ export function issueLinkFor(repo, f) {
 }
 
 export class BugHunts {
-  /** `judge` is the AI judge (ask(key, agent, prompt, validate)); `read` gives a hunter's findings (tests). */
-  constructor({ manager, store, judge = null, log = () => {}, read = readFindings }) {
+  /**
+   * `judge` is the AI judge (ask(key, agent, prompt, validate)); `read` gives a hunter's findings
+   * and `readFix` a fix agent's report (tests). `git` does what fixing automatically needs:
+   * { diff(agentId), commit(agentId, message), pr(agentId, { title, body, draft }),
+   *   test(agentId, command) → { passed, output }, fileIssue(project, { title, body }) → url }.
+   */
+  constructor({ manager, store, judge = null, log = () => {}, read = readFindings, readFix: rf = readFix, git = null }) {
     this.read = read;
+    this.readFix = rf;
+    this.git = git;
+    this.settling = new Set();
     this.manager = manager;
     this.store = store;
     this.judge = judge;
@@ -228,6 +325,7 @@ export class BugHunts {
     this.checking = new Set();
     this.onFinished = (agent) => {
       if (agent?.hunting) this.ingest(agent.id).catch((e) => this.log(`bughunt: ${e.message}`));
+      else if (agent && this.autoFinding(agent.id)) this.settle(agent.id).catch((e) => this.log(`bughunt: ${e.message}`));
     };
     manager.on('finished', this.onFinished);
     this.timer = null;
@@ -265,7 +363,23 @@ export class BugHunts {
     const raw = input.maxUsd === undefined ? prev.maxUsd ?? 5 : Number(input.maxUsd);
     if (!(Number.isFinite(raw) && raw > 0 && raw <= 500)) throw err(400, 'The cost limit per run is a number of dollars, up to 500');
     const p = cleanPath(input.path ?? prev.path ?? '');
-    return { project, path: p, focus, kinds, schedule, maxUsd: Math.round(raw * 100) / 100, name: clip(input.name ?? prev.name ?? '', 80) || `${project}${p ? `/${p}` : ''}` };
+    const fixAt = input.fixAt ?? prev.fixAt ?? 'high';
+    if (!SEVERITIES.includes(fixAt)) throw err(400, `Fix automatically from ${SEVERITIES.join(', ')}`);
+    const flag = (k) => Boolean(input[k] ?? prev[k] ?? false);
+    const testCommand = clip(input.testCommand ?? prev.testCommand ?? '', 300) || null;
+    return {
+      project,
+      path: p,
+      focus,
+      kinds,
+      schedule,
+      maxUsd: Math.round(raw * 100) / 100,
+      name: clip(input.name ?? prev.name ?? '', 80) || `${project}${p ? `/${p}` : ''}`,
+      autoFix: flag('autoFix'),
+      fixAt,
+      fileIssues: flag('fileIssues'),
+      testCommand,
+    };
   }
 
   add(input) {
@@ -365,18 +479,139 @@ export class BugHunts {
         this.manager.stop(agentId);
       } catch {}
       this.log(`bughunt: ${agent.name}: ${kept} kept of ${found} new`);
-      return { found, kept };
+      return h?.autoFix ? { found, kept, fixing: this.autoFix(h, agentId) } : { found, kept };
     } finally {
       this.checking.delete(agentId);
     }
   }
 
-  /** Runs that ended without saying done (stopped, out of budget): their findings are taken in too. */
+  /**
+   * Runs that ended without saying done (stopped, out of budget): their findings are taken in too.
+   * Likewise automatic fixes: one that stopped is settled as it stands.
+   */
   async sweep() {
     for (const a of this.store.list()) {
-      if (!a.hunting || a.hunting.ingestedAt) continue;
       const rt = this.manager.runtimes?.get(a.id);
-      if (a.brief?.status === 'done' || (a.desired !== 'running' && !rt?.pty)) await this.ingest(a.id).catch(() => {});
+      const ended = a.brief?.status === 'done' || (a.desired !== 'running' && !rt?.pty);
+      if (a.hunting && !a.hunting.ingestedAt) {
+        if (ended) await this.ingest(a.id).catch(() => {});
+      } else if (ended && this.autoFinding(a.id)) await this.settle(a.id).catch(() => {});
+    }
+  }
+
+  /** The finding an automatic fix agent is working on, while it is. */
+  autoFinding(agentId) {
+    return this.findings.find((f) => f.auto?.agentId === agentId && f.auto.state === 'fixing') ?? null;
+  }
+
+  /**
+   * Fix automatically: the run's new findings at or above the hunt's severity, worst first, up to
+   * MAX_AUTO_PRS, each by its own agent on its own branch. What's left of the run's cost limit is
+   * shared between them. Returns the ids of the findings being fixed.
+   */
+  autoFix(h, hunterId) {
+    const rank = (s) => SEVERITIES.indexOf(s);
+    const picked = this.findings
+      .filter((f) => f.foundBy === hunterId && f.status === 'open' && rank(f.severity) <= rank(h.fixAt ?? 'high'))
+      .sort((a, b) => rank(a.severity) - rank(b.severity))
+      .slice(0, MAX_AUTO_PRS);
+    if (!picked.length) return [];
+    const spent = Number(this.manager.get?.(hunterId)?.costUsd) || 0;
+    const each = Math.floor(((h.maxUsd - spent) / picked.length) * 100) / 100;
+    const started = [];
+    for (const f of picked) {
+      if (!this.git || each < MIN_FIX_USD) {
+        f.auto = { state: 'failed', at: now(), reason: this.git ? `The run's cost limit ($${h.maxUsd}) was used up by the hunt` : "Pull requests can't be opened from here" };
+        continue;
+      }
+      try {
+        const agent = this.manager.create({
+          project: f.project,
+          intent: autoFixIntent(f),
+          fixing: { findingId: f.id, testCommand: h.testCommand ?? null },
+          name: `fix-${f.title}`.toLowerCase().replace(/[^a-z0-9-]+/g, '-').slice(0, 40),
+          worktree: true,
+          planReview: false,
+          designDoc: false,
+          demoPage: false,
+          benchmarks: false,
+        });
+        this.manager.patch(agent.id, { budgetUsd: each });
+        f.fixAgentId = agent.id;
+        f.status = 'fixing';
+        f.auto = { state: 'fixing', agentId: agent.id, at: now(), budgetUsd: each };
+        started.push(f.id);
+        this.log(`bughunt: fixing "${f.title}" automatically (${agent.name}, up to $${each})`);
+      } catch (e) {
+        f.auto = { state: 'failed', at: now(), reason: `Couldn't start a fix: ${e.message}` };
+      }
+    }
+    this.store.save();
+    return started;
+  }
+
+  /**
+   * An automatic fix ended: its report, the tests (when the hunt has a test command) and the judge
+   * decide. What holds up is committed and opened as a draft pull request; what doesn't stays in
+   * the list with the reason, and is filed as an issue when the hunt says so. Safe to call twice.
+   */
+  async settle(agentId) {
+    const f = this.autoFinding(agentId);
+    if (!f || this.settling.has(agentId)) return null;
+    this.settling.add(agentId);
+    const h = this.hunts.find((x) => x.id === f.huntId) ?? null;
+    const agent = this.store.get(agentId);
+    try {
+      const report = this.readFix(agentId);
+      let problem = fixProblem(report);
+      const diff = problem ? '' : await this.git.diff(agentId).catch(() => '');
+      if (!problem && !diff.trim()) problem = 'The fix agent changed nothing';
+      if (!problem && h?.testCommand) {
+        const t = await this.git.test(agentId, h.testCommand).catch((e) => ({ passed: false, output: e.message }));
+        if (!t.passed) problem = `The tests fail with the fix (${h.testCommand})${t.output ? `: ${clip(t.output.split('\n').slice(-6).join(' '), 300)}` : ''}`;
+      }
+      let check = null;
+      // With the judge off (Settings), the tests decide alone.
+      if (!problem && this.judge && this.judge.enabled !== false) {
+        check = await this.judge.ask(`fix:${f.id}`, agent, fixCheckPrompt(f, diff), (d) => typeof d.ok === 'boolean').catch(() => null);
+        if (!check) problem = "The judge couldn't review the change";
+        else if (!(check.ok && check.confidence >= KEEP_AT)) problem = `The judge didn't accept the change: ${clip(check.reason, 400) || 'no reason given'}`;
+      }
+      if (!problem) {
+        const title = `Fix: ${f.title}`.slice(0, 100);
+        try {
+          await this.git.commit(agentId, title).catch((e) => {
+            if (!/nothing to commit/i.test(e.message)) throw e;
+          });
+          const pr = await this.git.pr(agentId, { title, body: fixPrBody(f, report, check, h?.testCommand ?? null), draft: true });
+          f.status = 'pr';
+          f.prUrl = pr.url ?? null;
+          f.auto = { ...f.auto, state: 'pr', doneAt: now(), check: check ? { confidence: check.confidence, reason: clip(check.reason, 600) } : null };
+          this.log(`bughunt: "${f.title}": draft pull request ${f.prUrl ?? '(no link)'}`);
+        } catch (e) {
+          problem = `Fixed, but the pull request couldn't be opened: ${e.message}`;
+        }
+      }
+      if (problem) {
+        f.status = 'open';
+        f.auto = { ...f.auto, state: 'failed', doneAt: now(), reason: clip(problem, 600) };
+        this.log(`bughunt: "${f.title}": automatic fix didn't hold up: ${problem}`);
+        if (h?.fileIssues && !f.issueUrl) {
+          try {
+            f.issueUrl = await this.git.fileIssue(f.project, { title: f.title, body: `${findingMarkdown(f)}\n\n_An automatic fix was tried and didn't hold up: ${clip(problem, 400)}_` });
+            if (f.issueUrl) f.status = 'filed';
+          } catch (e) {
+            f.auto.issueError = clip(e.message, 300);
+          }
+        }
+      }
+      this.store.save();
+      try {
+        this.manager.stop(agentId);
+      } catch {}
+      return { status: f.status, problem: problem ?? null, prUrl: f.prUrl ?? null };
+    } finally {
+      this.settling.delete(agentId);
     }
   }
 
@@ -400,9 +635,9 @@ export class BugHunts {
     this.timer.unref?.();
   }
 
-  /** Your decision on findings: open, notbug, snoozed (until a time), filed. */
+  /** Your decision on findings: open, notbug, snoozed (until a time), filed, done (its fix looked at). */
   set(ids = [], status, { until = null } = {}) {
-    if (!['open', 'notbug', 'snoozed', 'filed'].includes(status)) throw err(400, 'The decision is open, notbug, snoozed or filed');
+    if (!['open', 'notbug', 'snoozed', 'filed', 'done', 'pr'].includes(status)) throw err(400, 'The decision is open, notbug, snoozed, filed or done');
     let snoozeUntil = null;
     if (status === 'snoozed') {
       const t = Date.parse(until ?? '');
@@ -412,7 +647,8 @@ export class BugHunts {
     const set = [];
     for (const id of new Set(ids)) {
       const f = this.findings.find((x) => x.id === id);
-      if (!f) continue;
+      // Back to its draft pull request (Undo) only when it has one.
+      if (!f || (status === 'pr' && !f.prUrl)) continue;
       f.prev = f.status;
       f.status = status;
       f.snoozeUntil = snoozeUntil;

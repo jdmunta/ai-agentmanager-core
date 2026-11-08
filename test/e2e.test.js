@@ -1618,6 +1618,45 @@ test('bughunt: a hunt runs a read-only agent, its checked findings are listed, a
   await call('POST', `/agents/${fx.body.agent.id}/stop`);
 });
 
+test('bughunt: fix automatically: the high finding gets its own fix agent, proven and tested, then the pull request step', async () => {
+  const origin = makeOrigin('autofixed');
+  // No gh here at all: the real one is never asked to open a pull request.
+  const savedGh = process.env.AGENTMGR_GH_BIN;
+  process.env.AGENTMGR_GH_BIN = path.join(home, 'no-such-gh');
+  try {
+    assert.equal((await call('POST', '/projects', { shortcut: 'autofixed', repo: `file://${origin}`, base: 'main' })).status, 200);
+    assert.equal((await call('POST', '/hunts', { project: 'autofixed', autoFix: true, fixAt: 'nope' })).status, 400);
+    const h = (await call('POST', '/hunts', { project: 'autofixed', path: 'src', maxUsd: 4, autoFix: true, fixAt: 'high', testCommand: 'test -f fix.txt' })).body;
+    assert.deepEqual([h.autoFix, h.fixAt, h.fileIssues, h.testCommand], [true, 'high', false, 'test -f fix.txt']);
+    const run = await call('POST', `/hunts/${h.id}/run`);
+    assert.equal(run.status, 200, JSON.stringify(run.body));
+    // The high finding (the medium one isn't kept without a judge) gets a fix agent of its own.
+    const fixing = await waitFor(async () => (await call('GET', '/hunts')).body.findings.find((f) => f.huntId === h.id && f.auto), 20000, 'a fix started');
+    assert.equal(fixing.title, 'Upload retries forever on a dead server');
+    const fixer = await agentNow(fixing.auto.agentId);
+    assert.match(fixer.intent, /^Bug fix: Upload retries forever/);
+    assert.equal(fixer.fixing.testCommand, 'test -f fix.txt');
+    assert.equal(fixer.planReview, null, 'no plan review: nobody is there to approve it');
+    assert.ok(fixer.budgetUsd > 0 && fixer.budgetUsd <= 4);
+    const told = () => fs.readFileSync(process.env.FAKE_CLAUDE_LOG, 'utf8').trim().split('\n').map((l) => JSON.parse(l)).some((l) => l.args.join(' ').includes('This fix runs without the user'));
+    await waitFor(async () => told(), 20000, 'the fixer got its instructions');
+    // Its report holds up and the test command passes in its folder (the judge is off here); the
+    // repository isn't on GitHub, so the pull request can't be opened: the finding stays, with why.
+    const settled = await waitFor(async () => {
+      const f = (await call('GET', '/hunts')).body.findings.find((x) => x.id === fixing.id);
+      return f.auto.state === 'fixing' ? null : f;
+    }, 20000, 'the fix settled');
+    assert.equal(settled.status, 'open');
+    assert.match(settled.auto.reason, /pull request couldn't be opened/);
+    assert.ok((await call('GET', '/today')).body.items.some((i) => i.findingId === fixing.id && /automatic fix didn't hold up/.test(i.why)));
+    assert.equal((await call('DELETE', `/hunts/${h.id}`)).status, 200);
+    await call('DELETE', `/agents/${fixer.id}`);
+  } finally {
+    if (savedGh === undefined) delete process.env.AGENTMGR_GH_BIN;
+    else process.env.AGENTMGR_GH_BIN = savedGh;
+  }
+});
+
 test('questions for you: listed with a drafted answer, edited, snoozed, and in Today', async () => {
   const q = (await call('POST', '/actions', { text: 'Answer Pat: retry limit?', source: 'slack', link: 'https://acme.slack.com/archives/C1/p1', from: 'Pat', question: 'What is the retry limit for uploads?', answer: 'Five attempts, with backoff (upload.js).', sources: 'src/upload.js' })).body;
   assert.equal(q.kind, 'question');
