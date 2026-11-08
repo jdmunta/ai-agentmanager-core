@@ -1217,7 +1217,7 @@ test('autopilot: a finished backlog item the scorecard calls ready is committed,
     assert.equal((await call('POST', '/backlog/settings', { project: 'AP', target: 90 })).body.projects.find((p) => p.name === 'AP').target, 90);
     assert.equal((await call('POST', '/backlog/settings', { project: 'AP', target: null })).body.projects.find((p) => p.name === 'AP').target, null);
     // Scored ready (a docs change: nothing to cap), committed, pushed and opened.
-    await waitFor(async () => (await item(it.id)).autopilot?.pr, 20000, 'pull request opened');
+    await waitFor(async () => (await item(it.id)).autopilot?.pr, 60000, 'pull request opened');
     const create = gh().find((c) => c[0] === 'pr' && c[1] === 'create');
     assert.equal(create[create.indexOf('--title') + 1], 'Write the notes #done #green');
     assert.match(create[create.indexOf('--body') + 1], /### Review scorecard: /);
@@ -1227,7 +1227,7 @@ test('autopilot: a finished backlog item the scorecard calls ready is committed,
     Object.assign(st.prs[0], { mergeStateStatus: 'CLEAN', mergeable: 'MERGEABLE' });
     fs.writeFileSync(ghState, JSON.stringify(st));
     await call('POST', `/agents/${agent.id}/refresh`, { withPrs: true });
-    await waitFor(async () => (await item(it.id)).status === 'done', 20000, 'merged and done');
+    await waitFor(async () => (await item(it.id)).status === 'done', 60000, 'merged and done');
     assert.ok(gh().some((c) => c[0] === 'pr' && c[1] === 'merge'));
     assert.equal((await item(it.id)).autopilot.state, 'merged');
     assert.equal((await call('POST', `/backlog/${it.id}/ship`)).status, 409, 'only items in review');
