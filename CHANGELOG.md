@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- **Bugs on the Map.** The Map has a *Bugs* view (next to *Agents*): each folder is coloured by the bugs hunts found in it, the worst weighing most, plus a little for how often it changed in the last 30 days, and its bug count shows on it. Bugs that come with their path through the code (`file:line` steps) are drawn as arrows from folder to folder along it: the hot paths, thicker where more (and worse) bugs go the same way. Folders no hunt has looked at are hatched. Click a folder or an arrow for its bugs, with *Fix* and *Evidence*, or *Hunt here* to start a hunt on that folder.
+
 ## 1.30.0 (2026-11-07)
 
 - **Bug hunts fix what they find.** Turn on *Fix automatically* on a hunt, and the bugs it finds at or above the severity you pick (high and up by default) are fixed without you: each by its own agent on its own branch, which must add a test that fails before the fix and passes after, and pass the whole suite. The hunt's test command (optional) is run on the fix too, and the AI judge, when it's on, reviews the change. Only then is a **draft** pull request opened, with the bug, the test and the checks in its description; nothing is merged. They show in Today as *Fix ready* and under Bugs → *Draft PRs*. At most 3 a run, within the hunt's cost limit. A fix that doesn't hold up stays in the list with the reason, and with *file it as an issue* on, it's filed on GitHub so it isn't lost.

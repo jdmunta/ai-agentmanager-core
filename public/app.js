@@ -203,7 +203,7 @@ const watchUi = initWatch({
 $('#watch-btn').onclick = () => (mapUi.isOpen() && mapUi.show(false), watchUi.show(!watchUi.isOpen()));
 
 // Map: where each agent is in the code, and who is about to collide.
-const mapUi = initCodeMap({ api, $, esc, agents, toast: (m, ms) => toast(m, ms), openAgent: (id) => (showTab('agents'), select(id)) });
+const mapUi = initCodeMap({ api, $, esc, agents, toast: (m, ms, a) => toast(m, ms, a), openAgent: (id) => (showTab('agents'), select(id)), openBugs: () => bugsUi.open({ show: 'open' }) });
 $('#map-btn').onclick = () => (watchUi.isOpen() && watchUi.show(false), mapUi.show(!mapUi.isOpen()));
 
 // The standup: each agent's news read aloud, stopping on the ones that need you.

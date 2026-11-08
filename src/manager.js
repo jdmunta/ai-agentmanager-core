@@ -105,7 +105,7 @@ async function repoLayout(dir) {
 }
 import { spawn } from 'node:child_process';
 import * as git from './git.js';
-import { buildMap, touchedFiles } from './codemap.js';
+import { bugHeat, buildMap, touchedFiles } from './codemap.js';
 import { parseDiff } from '../public/review.js';
 import { assignedIssues, issueFields, issueSummary, jiraProblem, leadingIssue, loadJira, wordsAfterLink } from './jira.js';
 import { issueRows } from './issues.js';
@@ -803,7 +803,11 @@ export class AgentManager extends EventEmitter {
    * The codebase map of one project (its key, else the one with the most running agents): its
    * folders, and where each of its agents is changing and reading code now (codemap.js).
    */
-  async codeMap(projectKey) {
+  /**
+   * The code map of a project (the one with the most going on, unless named). With `bugs`
+   * ({ findings, hunts } of the bug hunts), it also has the bugs layer (codemap.js bugHeat).
+   */
+  async codeMap(projectKey, { bugs = null } = {}) {
     const withCode = this.store.list().filter((a) => a.workdir && !NO_REPO.has(a.kind) && fs.existsSync(a.workdir));
     const groups = new Map();
     for (const a of withCode) {
@@ -829,7 +833,20 @@ export class AgentManager extends EventEmitter {
       } catch {}
       return { id: a.id, name: a.name, busy: rt?.busy, attention: rt?.attention, changed: this.changeSets.get(a.id)?.files ?? {}, touched };
     });
-    return { project: { key: g.key, name: g.name }, projects: list, map: buildMap({ files, agents }) };
+    const out = { project: { key: g.key, name: g.name }, projects: list, map: buildMap({ files, agents }) };
+    if (bugs) {
+      // Hunts and findings name the project by its shortcut.
+      const mine = (shortcut) => this.resolveProject(shortcut)?.key === g.key;
+      const hunts = (bugs.hunts ?? []).filter((h) => mine(h.project));
+      out.project.shortcut = Object.values(this.store.data.projects ?? {}).find((p) => p.key === g.key)?.shortcut ?? null;
+      out.heat = bugHeat({
+        files,
+        findings: (bugs.findings ?? []).filter((f) => mine(f.project)),
+        churn: await this.churn(root),
+        hunts: hunts.map((h) => ({ path: h.path, focus: h.focus, covered: h.covered ?? [], ran: (h.runs ?? []).some((r) => r.status === 'done') })),
+      });
+    }
+    return out;
   }
 
   /**
@@ -887,6 +904,17 @@ export class AgentManager extends EventEmitter {
   }
 
   /** A repository's tracked files, for the map (kept a few minutes). */
+  /** The commits of the last 30 days, each as the files it changed (kept ten minutes). */
+  async churn(dir) {
+    this.churns ??= new Map();
+    const hit = this.churns.get(dir);
+    if (hit && Date.now() - hit.at < 10 * 60_000) return hit.commits;
+    const out = await git.run('git', ['log', '--since=30.days', '--name-only', '--format=%x01', '--no-renames', '-n', '2000'], { cwd: dir, timeout: 30_000 }).catch(() => '');
+    const commits = out.split('\x01').map((c) => c.split('\n').filter(Boolean)).filter((c) => c.length);
+    this.churns.set(dir, { at: Date.now(), commits });
+    return commits;
+  }
+
   async repoFiles(dir) {
     this.fileLists ??= new Map();
     const hit = this.fileLists.get(dir);

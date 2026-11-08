@@ -2497,6 +2497,45 @@ test('voice answers: yes, no and an option number pick a prompt choice', async (
   assert.equal(choiceFor('maybe later', choices), null);
 });
 
+test('codebase map, bugs view: heat by severity and changes, paths through the code, cold spots', async () => {
+  const { bugHeat, resolveFile, traceFiles } = await import('../src/codemap.js');
+  const files = ['src/api/routes.js', 'src/api/auth.js', 'src/db/pool.js', 'lib/retry/index.js', 'docs/a.md', 'README.md'];
+  assert.equal(resolveFile('./src/db/pool.js', files), 'src/db/pool.js');
+  assert.equal(resolveFile('/home/ci/work/app/src/db/pool.js', files), 'src/db/pool.js', 'an absolute path, by its end');
+  assert.equal(resolveFile('pool.js', files), 'src/db/pool.js', 'a unique name');
+  assert.equal(resolveFile('index.js', [...files, 'lib/x/index.js']), null, 'two of them: neither');
+  assert.deepEqual(traceFiles('routes.js:12 -> src/api/auth.js:40 -> auth.js:41 → src/db/pool.js:7 (no release)', files), ['src/api/routes.js', 'src/api/auth.js', 'src/db/pool.js']);
+  const trace = (detail) => ({ type: 'trace', detail });
+  const heat = bugHeat({
+    files,
+    // Six commits to retry; two to the pool (one of them also to a file since deleted).
+    churn: [...Array(6).fill(['lib/retry/index.js']), ['src/db/pool.js', 'gone.js'], ['src/db/pool.js'], ['docs/a.md', 'README.md', 'src/api/auth.js', 'src/api/routes.js']],
+    hunts: [{ path: 'src', focus: 'module', covered: ['src/api'], ran: true }, { path: 'docs', focus: 'changes', ran: false }],
+    findings: [
+      { id: 'a', status: 'open', severity: 'critical', title: 'Pool leak', file: 'src/db/pool.js', line: 7, evidence: trace('src/api/routes.js:12 -> src/api/auth.js:40 -> src/db/pool.js:7') },
+      { id: 'b', status: 'pr', severity: 'high', title: 'Auth bypass', file: 'src/db/pool.js', evidence: trace('routes.js:3 -> pool.js:9'), prUrl: 'https://x/pull/1' },
+      { id: 'c', status: 'open', severity: 'low', title: 'Typo in retry', file: 'lib/retry/index.js', evidence: { type: 'test', detail: 'FAIL' } },
+      { id: 'd', status: 'notbug', severity: 'critical', title: 'Not one', file: 'src/api/auth.js', evidence: trace('') },
+      { id: 'e', status: 'open', severity: 'high', title: 'Somewhere else', file: 'other/repo.js', evidence: trace('') },
+    ],
+  });
+  // Critical 8 + high 4, plus 2 changes at a quarter each; not-a-bug and unknown files left out.
+  assert.equal(heat.modules['src/db'].score, 12.5);
+  assert.deepEqual(heat.modules['src/db'].bugs, { critical: 1, high: 1, medium: 0, low: 0 });
+  assert.deepEqual(heat.modules['src/db'].files, [{ file: 'src/db/pool.js', score: 12 }]);
+  assert.equal(heat.modules['lib/retry'].score, 2.5, 'low 1 + 6 changes');
+  assert.equal(heat.modules['src/api'].score, 0.25, 'one commit, however many of its files');
+  assert.equal(heat.modules['src/api'].churn, 1);
+  assert.equal(heat.max, 12.5);
+  assert.deepEqual(heat.findings.map((f) => f.id), ['a', 'b', 'c']);
+  // Paths: routes → auth stays in src/api (no arrow); src/api → src/db carries both bugs.
+  assert.deepEqual(heat.paths, [{ from: 'src/api', to: 'src/db', weight: 12, findings: ['a', 'b'] }]);
+  // Covered: what a hunt that ran went through; a hunt that never ran covers nothing.
+  assert.deepEqual(['src/api', 'src/db', 'lib/retry', 'docs', '.'].map((k) => heat.modules[k].covered), [true, false, false, false, false]);
+  assert.equal(heat.hunted, true);
+  assert.equal(bugHeat({ files }).hunted, false);
+});
+
 test('codebase map: folders, who changes or reads what, and who is heading for a collision', async () => {
   const { moduleOf, touchedFiles, buildMap } = await import('../src/codemap.js');
   assert.equal(moduleOf('src/engines/claude.js'), 'src/engines');

@@ -1126,6 +1126,28 @@ body.mapping .layout, body.mapping .watch-view { display: none; }
 .map-agents { display: flex; flex-wrap: wrap; gap: 6px 12px; margin-top: 8px; }
 .map-agent { display: inline-flex; align-items: center; gap: 6px; background: none; border: none; padding: 2px 0; cursor: pointer; font-size: 13px; color: inherit; }
 #map-btn.active { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+/* Map, Bugs view: heat, the paths bugs take, cold spots */
+.map-layers { display: inline-flex; gap: 4px; }
+.map-layers .chip { font-size: 12px; padding: 3px 12px; border-radius: 999px; border: 1px solid var(--border); background: var(--panel); color: inherit; cursor: pointer; }
+.map-layers .chip.active { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+.map-key.heat { background: linear-gradient(90deg, color-mix(in srgb, var(--red) 12%, var(--panel)), var(--red)); }
+.map-key.arrow { height: 0; border-top: 3px solid var(--accent); }
+.map-key.cold { background: repeating-linear-gradient(45deg, var(--border) 0 2px, transparent 2px 5px); border: 1px solid var(--border); }
+.map-tile.heat { cursor: pointer; background: color-mix(in srgb, var(--red) calc(var(--heat) * 70%), color-mix(in srgb, var(--border) 45%, var(--panel))); }
+.map-tile.heat.cold { background-image: repeating-linear-gradient(45deg, color-mix(in srgb, var(--border) 80%, transparent) 0 2px, transparent 2px 7px); }
+.map-tile.heat.picked { outline: 2px solid var(--accent); outline-offset: -2px; z-index: 1; }
+.map-tile.heat:hover { filter: brightness(1.08); }
+.map-bugs { display: inline-block; margin-top: 2px; padding: 0 6px; border-radius: 8px; font-size: 10.5px; font-weight: 700; background: var(--panel); border: 1px solid currentColor; }
+.map-bugs.critical, .map-bugs.high { color: var(--red); }
+.map-bugs.medium { color: var(--amber, #c98a12); }
+.map-bugs.low { color: var(--muted); }
+.bug-paths path.bug-path { fill: none; stroke: var(--accent); stroke-linecap: round; opacity: 0.8; pointer-events: stroke; cursor: pointer; }
+.bug-paths path.bug-path:hover, .bug-paths path.bug-path.picked { opacity: 1; stroke: var(--text, currentColor); }
+.bug-paths marker path { fill: var(--accent); }
+.bug-paths marker.picked path { fill: var(--text, currentColor); }
+.map-pick { padding: 6px 10px; margin-bottom: 8px; border-radius: 6px; background: var(--panel); font-size: 13px; }
+.map-warn .map-bug-list li { border-left: none; padding: 4px 0; margin: 0; background: none; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.map-bug-list { margin: 6px 0 0 !important; }
 
 /* ---------- Jira: issues agents work on */
 .issues-dialog { width: min(1100px, calc(100% - 32px)); max-height: calc(100% - 32px); padding: 16px; }
