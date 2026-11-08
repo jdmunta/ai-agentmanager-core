@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.29.0 (2026-11-07)
 
 - **Questions for you, with answers ready.** The assistant now also finds questions put to you in Slack (and email and meeting notes, with those on), including ones you're only copied or mentioned on, and prepares an answer for each: it reads the thread and checks the code of your projects, Jira and docs. They show in Today (*Asked you* is pressing, *CC'd* can wait) and under Actions → Questions, with the draft to *Copy*, *Edit*, or *Draft again*, and *Thread* to open where it was asked. A question without a draft has *Draft an answer*, which starts a session that researches it. Nothing is ever sent for you. (`agentmgr actions add --question … [--cc]`, `agentmgr actions answer <id> "<text>"`.)
 - **Answer agents right in Today.** An agent's question shows the choices it offered as buttons (or press 1–6) and a box to type an answer; a permission prompt shows its options. No need to open the session.
