@@ -21,6 +21,7 @@ import { initPlaybooks } from '/playbooks.js';
 import { initSetup } from '/setup.js';
 import { initUpdate } from '/update.js';
 import { initMenu } from '/menu.js';
+import { initSupport } from '/support.js';
 import { initCode } from '/code.js';
 import { initMachine } from '/machine.js';
 import { initWatch } from '/watch.js';
@@ -136,7 +137,9 @@ function toast(msg, ms = 2600, action) {
     };
     el.append(' ', b);
   }
-  document.body.append(el);
+  // Over an open window (a modal one leaves the page behind it unclickable), else on the page.
+  const top = [...document.querySelectorAll('dialog[open]')].filter((d) => d.matches(':modal')).at(-1);
+  (top ?? document.body).append(el);
   setTimeout(() => el.remove(), ms);
 }
 
@@ -158,6 +161,8 @@ initWorklog({ api, esc, toast, $ });
 initSetup({ api, esc, $ });
 const updateUi = initUpdate({ api, esc, toast, $ });
 initMenu({ api, esc, toast, $ });
+const supportUi = initSupport({ api, $, esc, toast });
+$('#support-btn').onclick = () => supportUi.open();
 initMachine({ api, esc, toast, $, Terminal, FitAddon });
 let sidePane = null; // the split view's right pane (set up once the terminal is)
 const codeUi = initCode({ api, esc, toast, $, agents, isOpen: () => term.kind === 'code' || Boolean(sidePane?.showing('code')) });
@@ -209,7 +214,7 @@ const standupUi = initStandup({
   needsFor: (a) => needsFor(a),
   needCard: (it, o) => needCard(it, o),
   onNeed: (e) => onNeed(e),
-  toast: (m, ms) => toast(m, ms),
+  toast: (m, ms, a) => toast(m, ms, a),
   openAgent: (id) => (showTab('agents'), select(id)),
 });
 // Jira: every issue an agent works on, the ones waiting for your review first.
@@ -218,7 +223,7 @@ const issuesUi = initIssues({
   $,
   esc,
   ago,
-  toast: (m, ms) => toast(m, ms),
+  toast: (m, ms, a) => toast(m, ms, a),
   openAgent: (id) => (showTab('agents'), select(id)),
   openDoc: (id, kind) => (showTab('agents'), select(id), openDoc(id, kind)),
 });
@@ -229,7 +234,7 @@ const actionsUi = initActions({
   $,
   esc,
   ago,
-  toast: (m, ms) => toast(m, ms),
+  toast: (m, ms, a) => toast(m, ms, a),
   openAgent: (id) => (showTab('agents'), select(id)),
   projects: () => projectsState.map((p) => ({ key: p.shortcut, name: p.name })),
 });
@@ -252,7 +257,7 @@ const todayUi = initToday({
   $,
   esc,
   ago,
-  toast: (m, ms) => toast(m, ms),
+  toast: (m, ms, a) => toast(m, ms, a),
   openAgent: (id) => (showTab('agents'), select(id)),
   showInbox: () => showTab('inbox'),
   openActions: () => actionsUi.open(),
@@ -266,7 +271,7 @@ const designsUi = initDesigns({
   $,
   esc,
   ago,
-  toast: (m, ms) => toast(m, ms),
+  toast: (m, ms, a) => toast(m, ms, a),
   openAgent: (id) => (showTab('agents'), select(id)),
   openDoc: (id) => (showTab('agents'), select(id), openDoc(id, 'designdoc')),
 });

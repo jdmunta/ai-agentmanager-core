@@ -88,13 +88,15 @@ const authOf = (jira) => (jira.email ? `Basic ${Buffer.from(`${jira.email}:${jir
 /** The reason in words for an answer that isn't ok, or a fetch that threw. */
 function reasonOf(site, res, e) {
   if (res) {
+    if (res.status >= 300 && res.status < 400) return `${site} sent the request on to ${res.movedTo ?? 'another address'} (a sign-in page?): put your Atlassian address (https://yourcompany.atlassian.net) in Settings → Jira`;
     const why = {
       401: 'the email or API token is not accepted (Settings → Jira)',
       403: 'no permission; if you mistyped the token a few times, Jira may want you to sign in once in the browser',
       404: 'no Jira API at that address (is the site right?)',
+      issue404: 'no such issue, or the account in Settings can\'t see it (is the email the one you sign in to Jira with?)',
       429: 'too many requests; trying again later',
-    }[res.status];
-    return `${site} answered ${res.status}${why ? `: ${why}` : ''}`;
+    }[res.forIssue && res.status === 404 ? 'issue404' : res.status];
+    return `${site} answered ${res.status}${res.forIssue ? ` for ${res.forIssue}` : ''}${why ? `: ${why}` : ''}`;
   }
   const m = String(e?.cause?.message ?? e?.message ?? e ?? '');
   if (e?.name === 'TimeoutError' || /abort|timeout/i.test(m)) return `${site} did not answer in time (VPN off?)`;
@@ -107,9 +109,29 @@ function reasonOf(site, res, e) {
  * isn't there. Returns the response, or throws.
  */
 async function jiraGet(fetchImpl, site, v3, v2, init) {
-  const res = await fetchImpl(`${site}${v3.path}`, { ...init, ...v3.init });
+  const res = await follow(fetchImpl, `${site}${v3.path}`, { ...init, ...v3.init });
   if (res.status !== 404 || !v2) return res;
-  return fetchImpl(`${site}${v2.path}`, { ...init, ...v2.init });
+  return follow(fetchImpl, `${site}${v2.path}`, { ...init, ...v2.init });
+}
+
+/**
+ * A site on its own domain (jira.company.com) may send API calls on to its Atlassian Cloud
+ * address: followed once, to the same host or an *.atlassian.net one only, so the token never goes
+ * anywhere else. Any other redirect (a sign-in page) comes back as it is.
+ */
+async function follow(fetchImpl, url, init) {
+  const res = await fetchImpl(url, { ...init, redirect: 'manual' });
+  if (!(res.status >= 300 && res.status < 400)) return res;
+  const where = res.headers?.get?.('location');
+  const to = (() => {
+    try {
+      return where ? new URL(where, url) : null;
+    } catch {
+      return null;
+    }
+  })();
+  if (!to || to.protocol !== 'https:' || !(to.host === new URL(url).host || /\.atlassian\.net$/.test(to.host))) return Object.assign(res, { movedTo: to?.host ?? null });
+  return fetchImpl(to.href, { ...init, redirect: 'manual' });
 }
 
 /**
@@ -130,7 +152,7 @@ export async function assignedIssues({ jira = loadJira(), fetchImpl = fetch, tim
       jira.site,
       { path: '/rest/api/3/search/jql', init: { method: 'POST', body: JSON.stringify({ jql, fields, maxResults: max }) } },
       { path: `/rest/api/2/search?${q}`, init: { method: 'GET' } },
-      { headers, redirect: 'error', signal: AbortSignal.timeout(timeoutMs) },
+      { headers, signal: AbortSignal.timeout(timeoutMs) },
     );
     if (!res.ok) {
       problem = { at: new Date().toISOString(), reason: reasonOf(jira.site, res) };
@@ -215,18 +237,20 @@ export async function issueFields({ key, site }, { jira = loadJira(), fetchImpl 
       return '';
     }
   })();
-  const configured = jira.site && new URL(jira.site).host === host;
+  // With your site saved, the issue is asked of it, whatever address the link has: links often use
+  // the site's own domain (jira.company.com) while the API is on its Atlassian address, or the
+  // other way round. Without one, only public Atlassian Cloud issues are asked for, signed out.
+  const configured = Boolean(jira.site && jira.token);
   const allowed = configured || /\.atlassian\.net$/.test(host) || allow?.(site);
   if (!allowed) return null;
   const headers = { accept: 'application/json' };
-  if (configured && jira.token) headers.authorization = authOf(jira);
+  if (configured) headers.authorization = authOf(jira);
   const q = `${encodeURIComponent(key)}?fields=summary,status,description`;
   try {
     // Your site as saved: it may have a path (https://host/jira) that the link's origin leaves out.
-    const res = await jiraGet(fetchImpl, configured ? jira.site : site, { path: `/rest/api/3/issue/${q}` }, configured ? { path: `/rest/api/2/issue/${q}` } : null, { headers, redirect: 'error', signal: AbortSignal.timeout(timeoutMs) });
+    const res = await jiraGet(fetchImpl, configured ? jira.site : site, { path: `/rest/api/3/issue/${q}` }, configured ? { path: `/rest/api/2/issue/${q}` } : null, { headers, signal: AbortSignal.timeout(timeoutMs) });
     if (!res.ok) {
-      // Your own site refusing (not a missing issue) is worth saying.
-      if (configured && res.status !== 404) problem = { at: new Date().toISOString(), reason: reasonOf(jira.site, res) };
+      if (configured) problem = { at: new Date().toISOString(), reason: reasonOf(jira.site, Object.assign(res, { forIssue: key })) };
       return null;
     }
     const f = (await res.json())?.fields ?? {};

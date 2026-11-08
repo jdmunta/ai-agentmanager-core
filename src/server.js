@@ -26,7 +26,7 @@ import { Repeats } from './repeats.js';
 import { Updates } from './update.js';
 import { identity } from './identity.js';
 import { WorkLog, summaryMarkdown } from './worklog.js';
-import { todayItems, todaySpeech } from './today.js';
+import { todayAside, todayItems, todaySpeech } from './today.js';
 import { Studio } from './studio.js';
 import { Memory } from './memory.js';
 import { doctor } from './doctor.js';
@@ -51,6 +51,7 @@ import { Standup } from './standup.js';
 import { Value, valueSlack } from './value.js';
 import { Store } from './store.js';
 import { about, latestRelease } from './about.js';
+import { Support } from './support.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
@@ -912,8 +913,26 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
       got('reviews', () => reviews.rows()),
     ]);
     const items = todayItems({ inbox, issues, actions, reviews: prs });
-    return { items, speech: todaySpeech(items), features: f, errors };
+    return { items, aside: todayAside({ issues, actions }), speech: todaySpeech(items), features: f, errors };
   }));
+  // Support tickets: kept on this computer, each with a filled-in link to a new GitHub issue.
+  const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
+  const support = new Support({
+    issuesUrl: pkg.bugs?.url ?? 'https://github.com/jdmunta/ai-agentmanager-core/issues',
+    about: () => ({ version: pkgVersion, features: featuresOf(config), agents: store.list().length }),
+  });
+  api.get('/support', wrap(() => ({ tickets: support.list() })));
+  api.post('/support', wrap((req) => support.create({ ...req.body, browser: req.headers['user-agent'] ?? null })));
+  // The screenshot comes as the image itself (not JSON): up to 10 MB.
+  api.put('/support/:id/screenshot', express.raw({ type: 'image/*', limit: '10mb' }), wrap((req) => support.addScreenshot(req.params.id, req.body, req.headers['content-type'])));
+  api.get('/support/:id/screenshot', (req, res) => {
+    try {
+      const { file, type } = support.screenshot(req.params.id);
+      res.type(type).sendFile(file);
+    } catch (e) {
+      res.status(e.status ?? 500).json({ error: e.message });
+    }
+  });
   api.get('/standup', wrap(() => standup.view()));
   api.post('/standup', wrap(async () => ({ ...standup.view(), latest: await standup.make({ reason: 'asked' }) })));
   api.put('/standup', wrap((req) => {

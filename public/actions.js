@@ -95,6 +95,7 @@ export function initActions({ api, $, esc, ago, toast, openAgent, projects = () 
           <option value="">pick a project</option>
           ${list.map((p) => `<option value="${esc(p.key)}" ${p.key === project ? 'selected' : ''}>${esc(p.name ?? p.key)}</option>`).join('')}
         </select></label>
+        ${['skipped', 'done', 'removed'].includes(filter) && rows.length ? `<button class="small" data-act="back-all" title="Every one here back to open, undecided">Bring all ${rows.length} back</button>` : ''}
         <button class="small" data-act="refresh" title="Look again (r)">↻</button>
         ${expandButton(dialog)}
         <button class="small" data-act="close" title="Close (Esc)">Close</button>
@@ -117,20 +118,32 @@ export function initActions({ api, $, esc, ago, toast, openAgent, projects = () 
   const render = holdWhilePicking(body, draw);
   expandable(dialog, draw);
 
-  async function set(ids, state) {
+  async function set(ids, state, { undoing = false } = {}) {
     if (busy) return;
     busy = true;
+    // What each was before, to take the change back.
+    const before = new Map(ids.map((id) => [id, data?.rows.find((x) => x.id === id)?.status ?? 'open']));
     try {
       const r = await api('POST', '/actions/set', { ids, state, project: project || null });
       const bad = r.failed.map((x) => x.reason).join('; ');
       const label = STATES.find(([v]) => v === state)?.[1] ?? state;
-      toast?.(r.started.length ? `Agent ${r.started.map((x) => x.agent.name).join(', ')} started` : bad ? `Not changed: ${bad}` : state === 'open' ? 'Open again' : label, bad ? 8000 : 2500);
+      const msg = r.started.length ? `Agent ${r.started.map((x) => x.agent.name).join(', ')} started` : bad ? `Not changed: ${bad}` : state === 'open' ? (ids.length > 1 ? `${r.set.length} open again` : 'Open again') : label;
+      // An agent once started stays; anything else can be taken back.
+      const undo = !undoing && r.set.length && !r.started.length ? { label: 'Undo', run: () => undoTo(r.set.map((id) => [id, before.get(id)])) } : null;
+      toast?.(msg, bad ? 8000 : undo ? 6000 : 2500, undo);
     } catch (err) {
       toast?.(err.message, 6000);
     } finally {
       busy = false;
     }
     load();
+  }
+
+  /** Set each action back to what it was: [[id, status]]. */
+  async function undoTo(pairs) {
+    for (const state of new Set(pairs.map(([, st]) => st))) {
+      await set(pairs.filter(([, st]) => st === state).map(([id]) => id), state, { undoing: true });
+    }
   }
 
   async function discuss(id) {
@@ -191,6 +204,7 @@ export function initActions({ api, $, esc, ago, toast, openAgent, projects = () 
     const b = e.target.closest('[data-act]')?.dataset.act;
     if (b === 'close') return dialog.close();
     if (b === 'refresh') return load();
+    if (b === 'back-all') return set(data.rows.filter((r) => r.group === filter).map((r) => r.id), 'open');
   });
 
   function open() {

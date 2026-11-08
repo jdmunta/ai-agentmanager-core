@@ -27,7 +27,7 @@ import { commentsMessage, parseBaseRef, prBase } from '../src/review.js';
 import { parseDiff } from '../public/review.js';
 import { normalizeReview, parsePrUrl, recheckMessage, reviewDraft, reviewRows, reviewerPrompt, Reviews } from '../src/reviews.js';
 import { reviewerSpeech } from '../public/reviews.js';
-import { dueAt, dueWords, todayItems, todaySpeech } from '../src/today.js';
+import { dueAt, dueWords, todayAside, todayItems, todaySpeech } from '../src/today.js';
 import { VERDICTS, gapsOf, leadPrompt, readCoverage, readVerdict, subagents, summarize, teamPrompt } from '../src/teams.js';
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'agentmgr-unit-'));
@@ -1285,17 +1285,35 @@ test('jira: the issue a request starts with, the words after the link, and where
   const calls = [];
   const ok = (summary) => async (url, opts) => (calls.push({ url, auth: opts.headers.authorization ?? null }), { ok: true, json: async () => ({ fields: { summary } }) });
   const jira = { site: 'https://jira.acme.com', email: 'me@acme.com', token: 'T' };
-  // Atlassian Cloud: fetched, without the token (it belongs to another site).
-  assert.equal(await issueSummary({ key: 'ABC-1', site: 'https://other.atlassian.net' }, { jira, fetchImpl: ok('Cloud issue') }), 'Cloud issue');
-  assert.equal(calls.at(-1).auth, null);
-  assert.equal(calls.at(-1).url, 'https://other.atlassian.net/rest/api/3/issue/ABC-1?fields=summary,status,description');
-  // The configured site: with the email and token.
+  // Your site saved: every issue is asked of it, with the email and token, whatever address its link has
+  // (links often use the site's own domain while the API answers on its Atlassian address).
   assert.equal(await issueSummary({ key: 'ABC-2', site: 'https://jira.acme.com' }, { jira, fetchImpl: ok('Own site') }), 'Own site');
   assert.equal(calls.at(-1).auth, `Basic ${Buffer.from('me@acme.com:T').toString('base64')}`);
-  // Anywhere else: not contacted at all.
+  assert.equal(await issueSummary({ key: 'ABC-3', site: 'http://169.254.169.254' }, { jira, fetchImpl: ok('Mine') }), 'Mine');
+  assert.equal(calls.at(-1).url, 'https://jira.acme.com/rest/api/3/issue/ABC-3?fields=summary,status,description', 'never the link\'s address');
+  // None saved: public Atlassian Cloud issues, signed out; anywhere else not contacted at all.
+  assert.equal(await issueSummary({ key: 'ABC-1', site: 'https://other.atlassian.net' }, { jira: {}, fetchImpl: ok('Cloud issue') }), 'Cloud issue');
+  assert.equal(calls.at(-1).auth, null);
+  assert.equal(calls.at(-1).url, 'https://other.atlassian.net/rest/api/3/issue/ABC-1?fields=summary,status,description');
   const n = calls.length;
-  assert.equal(await issueSummary({ key: 'ABC-3', site: 'http://169.254.169.254' }, { jira, fetchImpl: ok('x') }), null);
+  assert.equal(await issueSummary({ key: 'ABC-3', site: 'http://169.254.169.254' }, { jira: {}, fetchImpl: ok('x') }), null);
   assert.equal(calls.length, n);
+  // A site on its own domain that sends the API on to its Atlassian address: followed there, and only there.
+  const hops = [];
+  const moved = (to) => async (url, opts) => {
+    hops.push([url.replace(/\?.*/, ''), opts.headers.authorization ? 'auth' : null, opts.redirect]);
+    return url.startsWith('https://jira.acme.com/') ? { ok: false, status: 302, headers: new Headers({ location: to }) } : { ok: true, status: 200, json: async () => ({ fields: { summary: 'Moved' } }) };
+  };
+  assert.equal(await issueSummary({ key: 'ABC-4', site: 'https://jira.acme.com' }, { jira, fetchImpl: moved('https://acme.atlassian.net/rest/api/3/issue/ABC-4?fields=summary') }), 'Moved');
+  assert.deepEqual(hops, [['https://jira.acme.com/rest/api/3/issue/ABC-4', 'auth', 'manual'], ['https://acme.atlassian.net/rest/api/3/issue/ABC-4', 'auth', 'manual']]);
+  hops.length = 0;
+  const { jiraProblem } = await import('../src/jira.js');
+  assert.equal(await issueSummary({ key: 'ABC-5', site: 'https://jira.acme.com' }, { jira, fetchImpl: moved('https://login.example.com/sso') }), null);
+  assert.equal(hops.length, 1, 'not followed to the sign-in page');
+  assert.match(jiraProblem().reason, /sent the request on to login\.example\.com/);
+  // Your site saying it can't find an issue is said too: often the email isn't your Jira account's.
+  await issueSummary({ key: 'ABC-6', site: 'https://jira.acme.com' }, { jira, fetchImpl: async () => ({ ok: false, status: 404 }) });
+  assert.match(jiraProblem().reason, /answered 404 for ABC-6: no such issue, or the account in Settings can't see it/);
   // No access, bad JSON, offline: no summary.
   assert.equal(await issueSummary({ key: 'A-1', site: 'https://x.atlassian.net' }, { jira, fetchImpl: async () => ({ ok: false }) }), null);
   assert.equal(await issueSummary({ key: 'A-1', site: 'https://x.atlassian.net' }, { jira, fetchImpl: async () => ({ ok: true, json: async () => ({}) }) }), null);
@@ -2655,4 +2673,50 @@ test('today: due dates said in words, and what needs you ranked with why', () =>
   const one = todayItems({ inbox: [{ kind: 'question', key: 'q:a3:1', agentId: 'a3', agentName: 'paging', title: 'Cursor or offset?' }], issues: [{ key: 'OPS-8', title: 'Paging', group: 'you', note: 'Needs your answer', agent: { id: 'a3' } }] });
   assert.deepEqual(one.map((i) => [i.id, i.why]), [['q:a3:1', 'paging asked · OPS-8: Paging']]);
   assert.deepEqual(todaySpeech([]), ['Nothing needs you right now.']);
+});
+
+test('support: a ticket becomes a filled-in GitHub issue link, with the setup but no names or folders', async () => {
+  const { aboutThis, issueLink, ticketMarkdown } = await import('../src/support.js');
+  const info = aboutThis({ version: '9.9.9', browser: 'Chrome', features: { jira: true, slack: false, gemini: true }, agents: 4 });
+  assert.deepEqual(info.on, ['jira', 'gemini']);
+  const text = JSON.stringify(info);
+  for (const secret of [os.hostname(), os.userInfo().username, os.homedir()]) assert.ok(!text.includes(secret), `no ${secret}`);
+  const t = { kind: 'bug', title: 'Skip fails', details: 'Clicked Skip on OPS-1.', screenshot: 'screenshot.png', info };
+  const md = ticketMarkdown(t);
+  assert.match(md, /^Clicked Skip on OPS-1\./);
+  assert.match(md, /pasted below/);
+  assert.match(md, /AI Agent Manager 9\.9\.9/);
+  const u = new URL(issueLink('https://github.com/acme/app/issues/', t));
+  assert.equal(u.origin + u.pathname, 'https://github.com/acme/app/issues/new');
+  assert.equal(u.searchParams.get('title'), 'Skip fails');
+  assert.equal(u.searchParams.get('labels'), 'bug');
+  assert.equal(u.searchParams.get('body'), md);
+  assert.equal(new URL(issueLink('https://github.com/acme/app/issues', { ...t, kind: 'idea' })).searchParams.get('labels'), 'enhancement');
+  // Long details are cut to keep the link working; the setup stays.
+  const long = issueLink('https://github.com/acme/app/issues', { ...t, details: 'word '.repeat(5000) });
+  assert.ok(long.length <= 7600, `link is ${long.length}`);
+  assert.match(new URL(long).searchParams.get('body'), /cut short[\s\S]*AI Agent Manager 9\.9\.9/);
+});
+
+test('today: what you skipped, marked done or removed is listed to bring back, newest first', () => {
+  const aside = todayAside({
+    issues: [
+      { key: 'OPS-1', title: 'Fix it', action: 'skip', actionAt: '2026-11-07T10:00:00Z' },
+      { key: 'OPS-2', title: null, action: 'remove', actionAt: '2026-11-07T12:00:00Z' },
+      { key: 'OPS-3', title: 'Merged', action: 'assign', group: 'done' },
+      { key: 'OPS-4', title: 'New', action: null },
+    ],
+    actions: [
+      { id: 'a1', text: 'Send the plan', status: 'done', updatedAt: '2026-11-07T11:00:00Z' },
+      { id: 'a2', text: 'Open one', status: 'open' },
+      { id: 'a3', text: 'Assigned', status: 'assign' },
+    ],
+  });
+  assert.deepEqual(aside.map((a) => [a.id, a.label, a.title]), [
+    ['issue:OPS-2', 'Removed', 'OPS-2'],
+    ['action:a1', 'Done', 'Send the plan'],
+    ['issue:OPS-1', 'Skipped', 'OPS-1: Fix it'],
+  ]);
+  assert.equal(aside[1].actionId, 'a1');
+  assert.equal(aside[2].issueKey, 'OPS-1');
 });

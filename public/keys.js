@@ -43,6 +43,7 @@ export const SHORTCUTS = [
     [['o'], 'Undecided again (Actions) or clear (Jira)', null],
     [['c'], 'Discuss it with Claude (Actions)', null],
     [['Enter'], 'Open the issue or where it was asked', null],
+    [['u'], 'Undo the last change (Today); or Undo on the message', null],
     [['r'], 'Look again', null],
   ]],
   ['In the standup', [

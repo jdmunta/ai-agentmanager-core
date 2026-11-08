@@ -17,6 +17,8 @@ export function initToday({ api, $, esc, ago, openAgent, showInbox, openActions,
   let loading = false;
   let again = null;
   let loadedAt = 0;
+  let undo = null; // { label, run }: the last change made here, to take back (u)
+  let asideOpen = false;
 
   async function load({ quiet = false, fresh = false } = {}) {
     if (loading) return;
@@ -85,10 +87,59 @@ export function initToday({ api, $, esc, ago, openAgent, showInbox, openActions,
       ${items.length
         ? `<div class="issues-scroll"><table class="issues today-table"><tbody>${items.map(row).join('')}</tbody></table></div>`
         : '<p class="hint issues-empty">Nothing needs you right now: no agent is waiting on you, nothing is due, and no review is waiting.</p>'}
-      <p class="hint">Keys: j/k move (or click a row), Enter opens, a assign or review, d done, s skip, c discuss, r look again, f bigger.${off.length ? ` Not included (off in Settings → What you use): ${esc(off.join(', '))}.` : ''}${data.errors?.length ? ` Couldn't get: ${esc(data.errors.map((e) => `${e.source === 'jira' ? 'Jira' : e.source} (${e.error})`).join('; '))}.` : ''}</p>`;
+      ${asideHtml()}
+      <p class="hint">Keys: j/k move (or click a row), Enter opens, a assign or review, d done, s skip, c discuss, u undo, r look again, f bigger.${off.length ? ` Not included (off in Settings → What you use): ${esc(off.join(', '))}.` : ''}${data.errors?.length ? ` Couldn't get: ${esc(data.errors.map((e) => `${e.source === 'jira' ? 'Jira' : e.source} (${e.error})`).join('; '))}.` : ''}</p>`;
     keys.redraw();
   }
   const render = holdWhilePicking(body, draw);
+
+  /** What you skipped, marked done or removed: each can be brought back, or all of them. */
+  function asideHtml() {
+    const aside = data?.aside ?? [];
+    if (!aside.length) return '';
+    const rows = aside
+      .map((a) => `<tr data-aside-id="${esc(a.id)}"><td class="nowrap"><span class="today-label">${esc(a.label)}</span></td><td><div class="today-title">${esc(a.title)}</div>${a.at ? `<div class="hint">${esc(ago(a.at))}</div>` : ''}</td><td class="nowrap today-acts"><button class="small" data-today-back="${esc(a.id)}" title="Back on the list, undecided">Bring back</button></td></tr>`)
+      .join('');
+    return `<details class="today-aside" ${asideOpen ? 'open' : ''}><summary>Set aside: skipped, done or removed (${aside.length})</summary>
+      <div class="today-aside-head"><span class="hint">Brought back, an item is undecided again and shows in Today and its own list.</span><button class="small" data-today-back="all" title="Bring every one back">Bring all ${aside.length} back</button></div>
+      <table class="issues today-table"><tbody>${rows}</tbody></table></details>`;
+  }
+
+  /** Back to undecided: issues to no action, actions to open. Returns how to set them aside again. */
+  async function bringBack(list) {
+    const issues = list.filter((a) => a.kind === 'issue');
+    const acts = list.filter((a) => a.kind === 'action');
+    if (issues.length) await api('POST', '/issues/action', { keys: issues.map((a) => a.issueKey), action: null });
+    if (acts.length) await api('POST', '/actions/set', { ids: acts.map((a) => a.actionId), state: 'open' });
+    return async () => {
+      for (const state of new Set(list.map((a) => a.state))) {
+        const same = list.filter((a) => a.state === state);
+        const keys = same.filter((a) => a.kind === 'issue').map((a) => a.issueKey);
+        const ids = same.filter((a) => a.kind === 'action').map((a) => a.actionId);
+        if (keys.length) await api('POST', '/issues/action', { keys, action: state });
+        if (ids.length) await api('POST', '/actions/set', { ids, state });
+      }
+    };
+  }
+
+  /** Remember how to take back a change, and offer it on the toast. */
+  function changedWith(msg, label, run) {
+    undo = { label, run };
+    toast?.(msg, 6000, { label: 'Undo', run: takeBack });
+  }
+
+  async function takeBack() {
+    if (!undo) return toast?.('Nothing to undo', 2000);
+    const u = undo;
+    undo = null;
+    try {
+      await u.run();
+      toast?.(`Undone: ${u.label}`, 2500);
+    } catch (e) {
+      toast?.(e.message, 6000);
+    }
+    load();
+  }
   expandable(dialog, draw);
 
   const itemOf = (id) => data?.items.find((i) => i.id === id) ?? null;
@@ -124,7 +175,8 @@ export function initToday({ api, $, esc, ago, openAgent, showInbox, openActions,
       }
       if (it.kind === 'action' && ['done', 'skip'].includes(what)) {
         const r = await api('POST', '/actions/set', { ids: [it.actionId], state: what });
-        toast?.(r.failed.length ? `Not changed: ${r.failed.map((x) => x.reason).join('; ')}` : what === 'done' ? 'Done' : 'Skipped', 2500);
+        if (r.failed.length) toast?.(`Not changed: ${r.failed.map((x) => x.reason).join('; ')}`, 6000);
+        else changedWith(what === 'done' ? 'Done' : 'Skipped', `${what === 'done' ? 'done' : 'skipped'} "${it.title}"`, () => api('POST', '/actions/set', { ids: [it.actionId], state: 'open' }));
       } else if (it.kind === 'action' && what === 'discuss') {
         const r = await api('POST', `/actions/${it.actionId}/discuss`, {});
         dialog.close();
@@ -132,7 +184,8 @@ export function initToday({ api, $, esc, ago, openAgent, showInbox, openActions,
       } else if (it.kind === 'issue-new' && ['assign', 'skip'].includes(what)) {
         const r = await api('POST', '/issues/action', { keys: [it.issueKey], action: what });
         const bad = r.failed.map((x) => x.reason).join('; ');
-        toast?.(bad ? `Not changed: ${bad}` : r.started.length ? `Started an agent on ${it.title}` : `${it.title}: skipped`, bad ? 6000 : 3000);
+        if (bad || r.started.length) toast?.(bad ? `Not changed: ${bad}` : `Started an agent on ${it.title}`, bad ? 6000 : 3000);
+        else changedWith(`${it.title}: skipped`, `skipped ${it.issueKey}`, () => api('POST', '/issues/action', { keys: [it.issueKey], action: null }));
       } else if (it.kind === 'pr-requested' && (what === 'review' || what === 'assign')) {
         const a = await api('POST', '/reviews', { url: it.reviewUrl });
         toast?.(`Reviewer ${a.name ?? 'agent'} started`, 3000);
@@ -152,10 +205,26 @@ export function initToday({ api, $, esc, ago, openAgent, showInbox, openActions,
       s: (r) => act(itemOf(r.dataset.rowId), 'skip'),
       c: (r) => act(itemOf(r.dataset.rowId), 'discuss'),
       r: Object.assign(() => load({ fresh: true }), { needsRow: false }),
+      u: Object.assign(() => takeBack(), { needsRow: false }),
     },
   });
 
-  body.addEventListener('click', (e) => {
+  body.addEventListener('toggle', (e) => {
+    if (e.target.matches?.('.today-aside')) asideOpen = e.target.open;
+  }, true);
+  body.addEventListener('click', async (e) => {
+    const back = e.target.closest('[data-today-back]')?.dataset.todayBack;
+    if (back) {
+      const list = back === 'all' ? data?.aside ?? [] : (data?.aside ?? []).filter((a) => a.id === back);
+      if (!list.length) return;
+      try {
+        const again = await bringBack(list);
+        changedWith(list.length === 1 ? `Back on the list: ${list[0].title}` : `${list.length} back on the list`, list.length === 1 ? 'brought back' : `brought ${list.length} back`, again);
+      } catch (err) {
+        toast?.(err.message, 6000);
+      }
+      return load();
+    }
     const b = e.target.closest('[data-today]')?.dataset.today;
     if (!b) return;
     if (b === 'close') return dialog.close();

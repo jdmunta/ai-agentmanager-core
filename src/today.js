@@ -112,3 +112,22 @@ export function todaySpeech(items, max = 8) {
   items.slice(0, max).forEach((it, i) => parts.push(`${i + 1}. ${it.label}. ${say(it.title)} ${say(it.why)}`));
   return parts;
 }
+
+const ASIDE = { skip: 'Skipped', done: 'Done', remove: 'Removed' };
+
+/**
+ * What you set aside from Today's lists (skipped, done, removed), newest first, so any of it can be
+ * brought back: [{ id, kind: 'issue' | 'action', state, label, title, at, issueKey?, actionId? }].
+ */
+export function todayAside({ issues = [], actions = [], max = 50 } = {}) {
+  const out = [];
+  for (const r of issues) {
+    if (!ASIDE[r.action]) continue;
+    out.push({ id: `issue:${r.key}`, kind: 'issue', state: r.action, label: ASIDE[r.action], title: r.title ? `${r.key}: ${r.title}` : r.key, at: r.actionAt ?? r.updatedAt ?? null, issueKey: r.key });
+  }
+  for (const a of actions) {
+    if (!ASIDE[a.status]) continue;
+    out.push({ id: `action:${a.id}`, kind: 'action', state: a.status, label: ASIDE[a.status], title: a.text, at: a.updatedAt ?? null, actionId: a.id });
+  }
+  return out.sort((x, y) => String(y.at ?? '').localeCompare(String(x.at ?? ''))).slice(0, max);
+}
