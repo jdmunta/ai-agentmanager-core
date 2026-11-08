@@ -82,7 +82,8 @@ export function holdWhilePicking(body, render) {
   let waiting = false;
   const picking = () => {
     const f = document.activeElement;
-    return f?.tagName === 'SELECT' && body.contains(f);
+    // A menu open, or a box being typed in: drawing again would close it or lose the place.
+    return (f?.tagName === 'SELECT' || f?.tagName === 'TEXTAREA' || (f?.tagName === 'INPUT' && !['checkbox', 'radio', 'button', 'submit'].includes(f.type))) && body.contains(f);
   };
   body.addEventListener('focusout', () => {
     if (!waiting) return;

@@ -52,6 +52,7 @@ import { Value, valueSlack } from './value.js';
 import { Store } from './store.js';
 import { about, latestRelease } from './about.js';
 import { Support } from './support.js';
+import { leadingJiraKey } from './tracker.js';
 import { BugHunts } from './bughunt.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -607,6 +608,21 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
   api.post('/agents/:id/changes/comments', wrap((req) => review.comment(req.params.id, req.body ?? {})));
   api.post('/agents/:id/changes/commit', wrap((req) => review.commit(req.params.id, req.body ?? {})));
   api.post('/agents/:id/changes/pr', wrap((req) => review.pr(req.params.id, req.body ?? {})));
+  // Done but no pull request: commit what's left, push and open one, titled after the issue or request.
+  api.post('/agents/:id/ship', wrap(async (req) => {
+    const a = manager.mustGet(req.params.id);
+    const key = leadingJiraKey(a.intent);
+    const words = a.synopsis?.text ?? a.brief?.title ?? String(a.intent ?? '').replace(/^<?https?:\/\/\S+>?\s*/, '').split('\n')[0];
+    const title = String(req.body?.title ?? '').trim() || `${key ? `${key}: ` : ''}${words || a.name}`.slice(0, 100);
+    try {
+      await review.commit(a.id, { message: title });
+    } catch (e) {
+      if (e.status !== 409 || !/nothing to commit/i.test(e.message)) throw e;
+    }
+    const r = await review.pr(a.id, { title });
+    await manager.refresh(a.id, { withPrs: true }).catch(() => {});
+    return { url: r.url ?? null, title };
+  }));
   api.post('/agents/:id/fork', wrap((req) => manager.fork(req.params.id, req.body ?? {})));
 
   api.get('/races', wrap(() => races.list()));
@@ -826,7 +842,11 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
   // My actions: what's asked of you in Slack and meeting notes (the assistant adds them).
   api.get('/actions', wrap(() => ({ rows: myActions.rows(), features: featuresOf(config) })));
   api.post('/actions', wrap((req) => myActions.add({ ...req.body, by: req.headers['x-agentmgr-agent'] ? 'assistant' : 'you' })));
-  api.post('/actions/set', wrap((req) => myActions.set(Array.isArray(req.body?.ids) ? req.body.ids.map(String) : [], String(req.body?.state ?? ''), { project: req.body?.project ?? null })));
+  api.post('/actions/set', wrap((req) => myActions.set(Array.isArray(req.body?.ids) ? req.body.ids.map(String) : [], String(req.body?.state ?? ''), { project: req.body?.project ?? null, until: req.body?.until ?? null })));
+  // The draft answer to a question: the assistant's (from its session) or yours, edited.
+  api.put('/actions/:id/answer', wrap((req) => myActions.answer(req.params.id, { text: req.body?.text, sources: req.body?.sources ?? null, by: req.headers['x-agentmgr-agent'] ? 'assistant' : 'you' })));
+  // A session that researches the question and records a draft answer.
+  api.post('/actions/:id/draft', wrap((req) => myActions.draft(req.params.id, `node ${JSON.stringify(path.join(__dirname, '..', 'bin', 'agentmgr.js'))}`, manager.listProjects().map((p) => ({ name: p.name ?? p.shortcut, dir: p.dir ?? null, repo: p.repo ?? null })))));
   api.post('/actions/:id/discuss', wrap((req) => myActions.discuss(req.params.id, `node ${JSON.stringify(path.join(__dirname, '..', 'bin', 'agentmgr.js'))}`)));
   // The parts you use: Jira, Slack, meeting notes. Off hides its list and the assistant skips it.
   api.get('/features', wrap(() => ({ features: featuresOf(config), me: assistant.settings.me })));
@@ -839,7 +859,7 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
     return { features: featuresOf(config), me: assistant.settings.me };
   }));
   // Your action on issues: assign (starts an agent from the proposal), skip, done, remove, or null to clear.
-  api.post('/issues/action', wrap((req) => proposed.setAction(Array.isArray(req.body?.keys) ? req.body.keys.map(String) : [], req.body?.action ?? null)));
+  api.post('/issues/action', wrap((req) => proposed.setAction(Array.isArray(req.body?.keys) ? req.body.keys.map(String) : [], req.body?.action ?? null, { until: req.body?.until ?? null })));
   // Design docs of all agents; the same ?group= and ?format=markdown.
   api.get('/designs', wrap((req) => {
     const v = manager.designs();

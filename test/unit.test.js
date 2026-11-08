@@ -1459,7 +1459,15 @@ test('issues: your action on each issue (assign, skip, done, remove) is kept and
   assert.deepEqual(q.setAction(['OPS-1'], 'skip'), { set: ['OPS-1'], started: [], failed: [] });
   q.setAction(['OPS-2'], 'done');
   q.setAction(['OPS-3', 'OPS-9'], 'remove');
-  assert.throws(() => q.setAction(['OPS-4'], 'later'), /one of assign, skip, done, remove/);
+  assert.throws(() => q.setAction(['OPS-4'], 'later'), /one of assign, skip, snooze, done, remove/);
+  // Snooze: until a time to come; once it passes, the issue is undecided again.
+  assert.throws(() => q.setAction(['OPS-4'], 'snooze'), /time to come/);
+  q.setAction(['OPS-4'], 'snooze', { until: new Date(Date.now() + 60_000).toISOString() });
+  assert.equal(q.setAside('OPS-4'), 'snooze');
+  assert.equal(issueRows([], new Map(), () => null, q.listed(), q.actions).find((r) => r.key === 'OPS-4').group, 'snoozed');
+  q.actions['OPS-4'].until = new Date(Date.now() - 1000).toISOString();
+  assert.equal(q.setAside('OPS-4'), null);
+  assert.equal(q.actions['OPS-4'], undefined);
   // Assign needs a link to start from; skip, done and remove take any issue key (the Jira list may show it from an agent).
   assert.match(q.setAction(['NOPE-1'], 'assign').failed[0].reason, /no link for it/);
   assert.deepEqual(q.setAction(['nope'], 'skip').failed, [{ key: 'nope', reason: 'not an issue key' }]);
@@ -2826,4 +2834,63 @@ test('bughunt: findings are read, fingerprinted, checked, and not reported twice
   agents.get(started.agent.id).hunting.ingestedAt = 'x';
   assert.equal(await hunts.tick(noon), null, 'not by day');
   assert.equal(await hunts.tick(night), null, 'not twice a day');
+});
+
+test('today: answering agents from the list, shipping finished work, and questions for you', () => {
+  const now = new Date('2026-11-09T10:00:00');
+  const items = todayItems({
+    now,
+    inbox: [
+      { kind: 'prompt', key: 'prompt:a1', agentId: 'a1', agentName: 'x', title: 'Allow npm test?', prompt: { choices: [{ key: '1', label: 'Yes' }, { key: '2', label: 'No' }] } },
+      { kind: 'question', key: 'q:a2:q1', agentId: 'a2', agentName: 'y', title: 'Which DB?', question: { id: 'q1', options: ['Postgres', 'SQLite'], default: 'Postgres' } },
+      { kind: 'waiting', key: 'waiting:a3', agentId: 'a3', agentName: 'z', title: 'Proceed?', waiting: { choices: ['Go'] } },
+    ],
+    issues: [
+      { key: 'OPS-1', title: 'Fix', group: 'you', stage: 'review', pr: null, agent: { id: 'a4' }, note: 'Done, no pull request: review it in the session' },
+      { key: 'OPS-2', title: 'PR', group: 'you', stage: 'review', pr: { url: 'u' }, agent: { id: 'a5' }, note: 'Ready for your review' },
+    ],
+    actions: [
+      { id: 'q1', group: 'open', kind: 'question', question: 'Retry limit?', text: 'Answer Pat', from: 'Pat', sourceLabel: 'Slack', answer: { text: 'Five.' } },
+      { id: 'q2', group: 'open', kind: 'question', question: 'Rollout?', text: 'Answer Sam', cc: true, from: 'Sam', sourceLabel: 'Slack' },
+    ],
+  });
+  const by = (id) => items.find((i) => i.id === id);
+  assert.deepEqual(by('prompt:a1').answer, { via: 'key', choices: [{ key: '1', label: 'Yes' }, { key: '2', label: 'No' }] });
+  assert.deepEqual(by('q:a2:q1').answer, { via: 'question', qid: 'q1', choices: ['Postgres', 'SQLite'], reply: true, default: 'Postgres' });
+  assert.deepEqual(by('waiting:a3').answer, { via: 'waiting', choices: ['Go'], reply: true });
+  assert.equal(by('issue:OPS-1').ship, true);
+  assert.match(by('issue:OPS-1').why, /no pull request yet/);
+  assert.equal(by('issue:OPS-2').ship, undefined);
+  assert.deepEqual([by('action:q1').kind, by('action:q1').label, by('action:q1').draft.text], ['ask', 'Asked you', 'Five.']);
+  assert.match(by('action:q1').why, /Pat asked you · in Slack · answer drafted/);
+  assert.equal(by('action:q2').label, "CC'd");
+  assert.ok(by('action:q1').score < 32 && by('action:q2').score > 32, 'asked directly is pressing; copied can wait');
+});
+
+test('actions: a question with a draft answer, edited, and snoozed until a time', async () => {
+  const { MyActions, draftPrompt } = await import('../src/actions.js');
+  const store = { data: {}, save() {} };
+  const made = [];
+  const acts = new MyActions({ store, manager: { createGeneral: (o) => (made.push(o), { id: `g${made.length}`, name: o.name }) } });
+  const q = acts.add({ text: 'Answer Pat', source: 'slack', link: 'https://x.slack.com/p1', from: 'Pat', question: 'Retry limit?', cc: true });
+  assert.deepEqual([q.kind, q.question, q.cc], ['question', 'Retry limit?', true]);
+  acts.answer(q.id, { text: 'Five.', sources: 'upload.js', by: 'assistant' });
+  assert.deepEqual([acts.rows()[0].answer.text, acts.rows()[0].answer.by], ['Five.', 'assistant']);
+  acts.answer(q.id, { text: '' });
+  assert.equal(acts.rows()[0].answer, null, 'empty clears it');
+  // A plain action given an answer becomes a question.
+  const t = acts.add({ text: 'Check the numbers', source: 'slack' });
+  assert.equal(acts.answer(t.id, { text: 'They add up.' }).kind, 'question');
+  // Draft: a session that researches and records, never sends; once per question.
+  const d = acts.draft(q.id, 'am', [{ name: 'app', dir: '/src/app' }]);
+  assert.equal(acts.draft(q.id, 'am').existing, false, 'the fake store has no agents, so it starts again');
+  assert.match(made[0].question, /copied on[\s\S]*Retry limit\?[\s\S]*app at \/src\/app[\s\S]*am actions answer [0-9a-f]+ --sources/);
+  assert.match(draftPrompt(q), /Don't send anything/);
+  assert.ok(d.agent.id);
+  // Snooze: until a time to come; open again once it passes.
+  assert.throws(() => acts.set([q.id], 'snooze'), /time to come/);
+  acts.set([q.id], 'snooze', { until: new Date(Date.now() + 60_000).toISOString() });
+  assert.equal(acts.rows().find((r) => r.id === q.id).group, 'snoozed');
+  acts.all.find((a) => a.id === q.id).snoozeUntil = new Date(Date.now() - 1).toISOString();
+  assert.equal(acts.rows().find((r) => r.id === q.id).group, 'open');
 });

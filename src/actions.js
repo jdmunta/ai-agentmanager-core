@@ -2,13 +2,15 @@
 // found by the assistant on its checks and kept in one list, so nothing is missed or has to be
 // remembered. Each one has your decision on it, as for Jira issues: assign (an agent does it),
 // skip, done or remove, kept in state.json and changeable any time; Discuss opens a conversation
-// about it. Nothing is ever sent to Slack or anywhere else from here.
+// about it. Questions put to you (or that you're CC'd on) come with an answer the assistant drafted
+// from your code, Jira and docs, to edit and send yourself; Snooze hides one until a time. Nothing
+// is ever sent to Slack or anywhere else from here.
 
 import crypto from 'node:crypto';
 
 export const ACTION_SOURCES = { slack: 'Slack', gemini: 'Meeting notes', other: 'Other' };
-export const ACTION_STATES = ['open', 'assign', 'skip', 'done', 'remove'];
-const GROUP = { open: 'open', assign: 'assigned', skip: 'skipped', done: 'done', remove: 'removed' };
+export const ACTION_STATES = ['open', 'assign', 'skip', 'snooze', 'done', 'remove'];
+const GROUP = { open: 'open', assign: 'assigned', snooze: 'snoozed', skip: 'skipped', done: 'done', remove: 'removed' };
 const MAX = 500;
 const err = (status, message) => Object.assign(new Error(message), { status });
 const clip = (s, n) => {
@@ -28,6 +30,25 @@ export function actionIntent(a) {
     .filter(Boolean)
     .join('\n')
     .trim();
+}
+
+/** What "Draft an answer" starts with: research the question, record a draft, never send it. */
+export function draftPrompt(a, bin = 'agentmgr', projects = []) {
+  return [
+    `Prepare an answer for me to a question I was ${a.cc ? 'copied on' : 'asked'}. Don't send anything: I'll edit and send it myself.`,
+    '',
+    `The question: ${a.question || a.text}`,
+    a.from ? `Asked by: ${a.from}` : '',
+    a.link ? `Where: ${ACTION_SOURCES[a.source] ?? a.source}, ${a.link}` : '',
+    a.context ? `Context: ${a.context}` : '',
+    '',
+    'Read the thread first (your Slack, Gmail or Google Drive tools) for the whole picture. Then find the answer from the sources: ' +
+      `${projects.length ? `the code in my projects (${projects.map((p) => `${p.name} at ${p.dir ?? p.repo}`).join('; ')}), ` : ''}Jira, docs and earlier messages. ` +
+      'Check facts against the code or docs rather than guessing, and say how sure you are. When something can only be answered by someone else, say who and what to ask.',
+    `Record the draft, in my voice, short and ready to paste: ${bin} actions answer ${a.id} --sources "<links or files you used>" "<the answer>". Then tell me here what you found and anything I should check before sending.`,
+  ]
+    .filter((l) => l !== '')
+    .join('\n');
 }
 
 /** What Discuss starts with: a conversation to decide what to do about the action. */
@@ -65,7 +86,7 @@ export class MyActions {
   }
 
   /** Add one (the assistant does, on its checks). The same action from the same place is kept once. */
-  add({ text, source = 'other', link = null, from = null, when = null, due = null, context = null, by = null } = {}) {
+  add({ text, source = 'other', link = null, from = null, when = null, due = null, context = null, by = null, question = null, cc = false, answer = null, sources = null } = {}) {
     const t = clip(text, 400);
     if (t.length < 3) throw err(400, 'Say what the action is');
     if (!ACTION_SOURCES[source]) throw err(400, `The source is one of ${Object.keys(ACTION_SOURCES).join(', ')}`);
@@ -84,6 +105,9 @@ export class MyActions {
       when: when && !Number.isNaN(Date.parse(when)) ? new Date(when).toISOString() : new Date().toISOString(),
       due: due ? clip(due, 40) : null,
       context: context ? clip(context, 1000) : null,
+      // A question put to you (cc: you're copied or mentioned, not asked): its words, and a draft answer.
+      ...(question || cc ? { kind: 'question', question: question ? clip(question, 1000) : t, cc: Boolean(cc) } : {}),
+      ...(answer ? { answer: { text: String(answer).trim().slice(0, 4000), sources: sources ? clip(sources, 600) : null, by: by ?? 'you', at: new Date().toISOString() } } : {}),
       by: by ?? null,
       status: 'open',
       at: new Date().toISOString(),
@@ -101,6 +125,7 @@ export class MyActions {
   /** The list, open ones first, newest first within: rows with their group and agents. */
   rows() {
     const order = Object.fromEntries(Object.values(GROUP).map((g, i) => [g, i]));
+    this.wake();
     return this.all
       .map((a) => {
         const agent = a.agentId ? this.manager.store?.get?.(a.agentId) ?? null : null;
@@ -117,6 +142,11 @@ export class MyActions {
           context: a.context,
           status: a.status,
           group: GROUP[a.status] ?? 'open',
+          kind: a.kind ?? 'task',
+          question: a.question ?? null,
+          cc: Boolean(a.cc),
+          answer: a.answer ?? null,
+          snoozeUntil: a.status === 'snooze' ? a.snoozeUntil ?? null : null,
           agent: agent ? { id: agent.id, name: agent.name } : null,
           discussion: talk ? { id: talk.id, name: talk.name } : null,
           updatedAt: a.updatedAt ?? a.at,
@@ -129,8 +159,10 @@ export class MyActions {
    * Your decision on actions: open (undecided again), assign (starts an agent; `project` picks
    * where), skip, done or remove. { set: [ids], started: [{ id, agent }], failed: [{ id, reason }] }.
    */
-  set(ids = [], state, { project = null } = {}) {
+  set(ids = [], state, { project = null, until = null } = {}) {
     if (!ACTION_STATES.includes(state)) throw err(400, `The decision is one of ${ACTION_STATES.join(', ')}`);
+    const wakeAt = state === 'snooze' ? Date.parse(until ?? '') : null;
+    if (state === 'snooze' && !(Number.isFinite(wakeAt) && wakeAt > Date.now())) throw err(400, 'Snooze until a time to come');
     const set = [];
     const started = [];
     const failed = [];
@@ -152,11 +184,50 @@ export class MyActions {
         }
       }
       a.status = state;
+      a.snoozeUntil = state === 'snooze' ? new Date(wakeAt).toISOString() : null;
       a.updatedAt = new Date().toISOString();
       set.push(id);
     }
     this.store.save();
     return { set, started, failed };
+  }
+
+  /** Snoozed ones whose time has come are open again. */
+  wake(t = Date.now()) {
+    let n = 0;
+    for (const a of this.all) {
+      if (a.status === 'snooze' && (!a.snoozeUntil || Date.parse(a.snoozeUntil) <= t)) {
+        a.status = 'open';
+        a.snoozeUntil = null;
+        n += 1;
+      }
+    }
+    if (n) this.store.save();
+    return n;
+  }
+
+  /** The draft answer to a question (the assistant's, or yours edited); empty text clears it. */
+  answer(id, { text, sources = null, by = 'you' } = {}) {
+    const a = this.find(id);
+    const t = String(text ?? '').trim().slice(0, 4000);
+    if (!t) delete a.answer;
+    else a.answer = { text: t, sources: sources ? clip(sources, 600) : a.answer?.sources ?? null, by, at: new Date().toISOString() };
+    // An answer makes it a question, if it wasn't one.
+    if (t && !a.kind) Object.assign(a, { kind: 'question', question: a.text, cc: false });
+    a.updatedAt = new Date().toISOString();
+    this.store.save();
+    return a;
+  }
+
+  /** A session that researches the question and records a draft answer (or the one already started). */
+  draft(id, bin, projects = []) {
+    const a = this.find(id);
+    const prev = a.draftId ? this.manager.store?.get?.(a.draftId) : null;
+    if (prev) return { agent: { id: prev.id, name: prev.name }, existing: true };
+    const agent = this.manager.createGeneral({ question: draftPrompt(a, bin, projects), name: `Answer: ${clip(a.question || a.text, 40)}` });
+    a.draftId = agent.id;
+    this.store.save();
+    return { agent: { id: agent.id, name: agent.name }, existing: false };
   }
 
   /** A conversation about the action (a general session), or the one already started. */

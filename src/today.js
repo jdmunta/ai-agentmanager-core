@@ -70,19 +70,28 @@ export function todayItems({ inbox = [], issues = [], actions = [], reviews = []
     const r = i.agentId ? issueOfAgent.get(i.agentId) : null;
     if (r && ['prompt', 'waiting', 'question'].includes(i.kind)) asking.add(r.key);
     const about = !r?.title ? '' : i.agentName === r.key ? ` · ${r.title}` : ` · ${r.key}: ${r.title}`;
-    items.push({ id: i.key, kind: i.kind, label: k.label, title: String(i.title ?? '').slice(0, 300), why: k.why(i) + about, score: k.score + (i.priority ?? 2) / 10, at: i.at ?? null, agentId: i.agentId ?? null, ...(r ? { url: r.url ?? null, issueKey: r.key } : {}) });
+    items.push({ id: i.key, kind: i.kind, label: k.label, title: String(i.title ?? '').slice(0, 300), why: k.why(i) + about, score: k.score + (i.priority ?? 2) / 10, at: i.at ?? null, agentId: i.agentId ?? null, ...(r ? { url: r.url ?? null, issueKey: r.key } : {}), ...answerOf(i) });
   }
   for (const r of issues) {
     if (asking.has(r.key)) continue;
     const title = r.title ? `${r.key}: ${r.title}` : r.key;
     if (r.group === 'you') {
-      items.push({ id: `issue:${r.key}`, kind: 'issue-review', label: 'Jira', title, why: r.note, score: 25, at: r.updatedAt ?? null, agentId: r.agent?.id ?? null, url: r.url ?? null, issueKey: r.key });
+      // Done with no pull request yet: shipped from here (commit, push, open one) after a look at the changes.
+      const ship = r.stage === 'review' && !r.pr && Boolean(r.agent);
+      items.push({ id: `issue:${r.key}`, kind: 'issue-review', label: 'Jira', title, why: ship ? 'Done, no pull request yet: look at the changes, then open one' : r.note, score: 25, at: r.updatedAt ?? null, agentId: r.agent?.id ?? null, url: r.url ?? null, issueKey: r.key, ...(ship ? { ship: true } : {}) });
     } else if (r.group === 'new') {
       items.push({ id: `issue:${r.key}`, kind: 'issue-new', label: r.type && !/^(story|task|bug|sub-?task)$/i.test(r.type) ? r.type : 'Jira', title, why: r.stage === 'assigned' ? 'Assigned to you in Jira, not started' : 'Proposed for an agent, not started', score: 50, at: r.updatedAt ?? null, url: r.url ?? null, issueKey: r.key });
     }
   }
   for (const a of actions) {
     if (a.group !== 'open') continue;
+    // A question put to you: asked directly is pressing; copied or mentioned can wait a little.
+    if (a.kind === 'question') {
+      const at = dueAt(a.due, now);
+      const why = [a.cc ? `you're copied${a.from ? `; ${a.from} asked` : ''}` : a.from ? `${a.from} asked you` : 'asked of you', a.sourceLabel && `in ${a.sourceLabel}`, dueWords(at, now), a.answer ? 'answer drafted' : 'no answer drafted yet'].filter(Boolean).join(' · ');
+      items.push({ id: `action:${a.id}`, kind: 'ask', label: a.cc ? "CC'd" : 'Asked you', title: a.question || a.text, why, score: a.cc ? 44 : at && at.getTime() < now.getTime() + DAY ? 16 : 22, at: a.when ?? null, url: a.link ?? null, actionId: a.id, draft: a.answer ?? null });
+      continue;
+    }
     const at = dueAt(a.due, now);
     const words = dueWords(at, now);
     const late = at && at.getTime() < now.getTime();
@@ -118,7 +127,15 @@ export function todaySpeech(items, max = 8) {
   return parts;
 }
 
-const ASIDE = { skip: 'Skipped', done: 'Done', remove: 'Removed' };
+const ASIDE = { skip: 'Skipped', snooze: 'Snoozed', done: 'Done', remove: 'Removed' };
+
+/** How an agent's question is answered from Today: the choices it offered, and where an answer goes. */
+function answerOf(i) {
+  if (i.kind === 'prompt') return { answer: { via: 'key', choices: (i.prompt?.choices ?? []).slice(0, 6).map((c) => ({ key: c.key, label: c.label })) } };
+  if (i.kind === 'waiting') return { answer: { via: 'waiting', choices: (i.waiting?.choices ?? []).slice(0, 6), reply: true } };
+  if (i.kind === 'question') return { answer: { via: 'question', qid: i.question?.id, choices: (i.question?.options ?? []).slice(0, 6), reply: true, default: i.question?.default ?? null } };
+  return {};
+}
 
 /**
  * What you set aside from Today's lists (skipped, done, removed), newest first, so any of it can be
@@ -128,11 +145,11 @@ export function todayAside({ issues = [], actions = [], max = 50 } = {}) {
   const out = [];
   for (const r of issues) {
     if (!ASIDE[r.action]) continue;
-    out.push({ id: `issue:${r.key}`, kind: 'issue', state: r.action, label: ASIDE[r.action], title: r.title ? `${r.key}: ${r.title}` : r.key, at: r.actionAt ?? r.updatedAt ?? null, issueKey: r.key });
+    out.push({ id: `issue:${r.key}`, kind: 'issue', state: r.action, label: ASIDE[r.action], title: r.title ? `${r.key}: ${r.title}` : r.key, at: r.actionAt ?? r.updatedAt ?? null, issueKey: r.key, until: r.snoozeUntil ?? null });
   }
   for (const a of actions) {
     if (!ASIDE[a.status]) continue;
-    out.push({ id: `action:${a.id}`, kind: 'action', state: a.status, label: ASIDE[a.status], title: a.text, at: a.updatedAt ?? null, actionId: a.id });
+    out.push({ id: `action:${a.id}`, kind: 'action', state: a.status, label: ASIDE[a.status], title: a.question || a.text, at: a.updatedAt ?? null, actionId: a.id, until: a.snoozeUntil ?? null });
   }
   return out.sort((x, y) => String(y.at ?? '').localeCompare(String(x.at ?? ''))).slice(0, max);
 }

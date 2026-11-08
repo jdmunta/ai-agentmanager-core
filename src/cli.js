@@ -757,9 +757,13 @@ export async function main(argv) {
     .option('--from <who>', 'who asked')
     .option('--due <when>', 'when it is due, if said')
     .option('--context <text>', 'a sentence or two of background')
+    .option('--question <words>', 'a question put to you: its words (the action then is to answer it)')
+    .option('--cc', "you're copied or mentioned on it, not asked directly")
+    .option('--answer <text>', 'a draft answer, to edit and send yourself')
+    .option('--sources <text>', 'with --answer: the links or files it is based on')
     .action(async (words, opts) => {
       await daemon();
-      const a = await api('POST', '/actions', { text: words.join(' '), source: opts.source, link: opts.link, from: opts.from, due: opts.due, context: opts.context });
+      const a = await api('POST', '/actions', { text: words.join(' '), source: opts.source, link: opts.link, from: opts.from, due: opts.due, context: opts.context, question: opts.question, cc: Boolean(opts.cc), answer: opts.answer, sources: opts.sources });
       console.log(a.duplicate ? dim(`Already listed: ${a.id}`) : `${green('+')} ${bold(a.id)} ${a.text}`);
     });
   actionsCmd
@@ -774,6 +778,17 @@ export async function main(argv) {
       for (const x of r.started) console.log(`${green('✓')} ${bold(x.id)} → agent ${x.agent.name} (${x.agent.id})`);
       if (r.set.length) console.log(`${green('✓')} ${r.set.join(', ')}: ${state}`);
       for (const x of r.failed) console.log(`${red('!')} ${bold(x.id)}: ${x.reason}`);
+    });
+  actionsCmd
+    .command('answer')
+    .description('Record a draft answer to a question (to edit and send yourself; nothing is sent)')
+    .argument('<id>')
+    .argument('<text...>', 'the answer')
+    .option('--sources <text>', 'the links or files it is based on')
+    .action(async (id, words, opts) => {
+      await daemon();
+      await api('PUT', `/actions/${id}/answer`, { text: words.join(' '), sources: opts.sources });
+      console.log(`${green('✓')} ${bold(id)}: draft answer saved`);
     });
   actionsCmd
     .command('discuss')

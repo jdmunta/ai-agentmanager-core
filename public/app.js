@@ -227,6 +227,7 @@ const issuesUi = initIssues({
   toast: (m, ms, a) => toast(m, ms, a),
   openAgent: (id) => (showTab('agents'), select(id)),
   openDoc: (id, kind) => (showTab('agents'), select(id), openDoc(id, kind)),
+  openChanges: (id) => (showTab('agents'), select(id), reviewUi.open(id)),
 });
 $('#issues-btn').onclick = () => issuesUi.open();
 // Actions: what's asked of you in Slack and meeting notes.
@@ -265,6 +266,7 @@ const todayUi = initToday({
   openIssues: () => issuesUi.open(),
   openReviews: () => reviewsUi.open(),
   openBugs: () => bugsUi.open({ show: 'open' }),
+  openChanges: (id) => (showTab('agents'), select(id), reviewUi.open(id)),
 });
 $('#today-btn').onclick = () => todayUi.open();
 // Designs: every agent's design doc, the ones waiting for your review first.

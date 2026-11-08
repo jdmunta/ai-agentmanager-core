@@ -41,6 +41,8 @@ export const SHORTCUTS = [
     [['s'], 'Skip', null],
     [['d'], 'Done', null],
     [['x'], 'Remove', null],
+    [['z'], 'Snooze until tomorrow 9am', null],
+    [['1–6'], "Pick one of an agent's answers (Today)", null],
     [['o'], 'Undecided again (Actions) or clear (Jira)', null],
     [['c'], 'Discuss it with Claude (Actions)', null],
     [['Enter'], 'Open the issue or where it was asked', null],

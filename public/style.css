@@ -1337,3 +1337,16 @@ tr.bug-detail pre { white-space: pre-wrap; max-height: 280px; overflow: auto; pa
 .today-bug .today-label { color: var(--red); }
 #bugs-dialog td.today-acts { white-space: normal; text-align: right; }
 #bugs-dialog td.today-acts > * { margin: 2px 0; }
+
+/* Answering from the lists */
+.today-answer { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 6px; }
+.today-reply { display: flex; gap: 6px; flex: 1 1 260px; }
+.today-reply input { flex: 1; min-width: 0; }
+.today-draft { margin-top: 6px; }
+.today-draft-text { white-space: pre-wrap; padding: 6px 10px; border-left: 3px solid var(--accent, currentColor); font-size: 13px; }
+.today-draft-edit { margin-top: 6px; display: grid; gap: 6px; }
+.today-draft-edit textarea { width: 100%; font: inherit; font-size: 13px; resize: vertical; }
+.issue-ship { margin-top: 6px; display: flex; gap: 6px; flex-wrap: wrap; }
+.today-ask .today-label { color: var(--accent, currentColor); }
+table.today-table td.today-acts { white-space: normal; text-align: right; width: 34%; }
+table.today-table td.today-acts > * { margin: 2px 0; }
