@@ -1573,6 +1573,31 @@ test('issues: the Jira summary lists agents\' issues with their Jira status, wai
   }
 });
 
+test('support: a report is kept with its screenshot, and links to a filled-in GitHub issue', async () => {
+  assert.equal((await call('POST', '/support', { kind: 'bug', title: '', details: 'x' })).status, 400);
+  assert.equal((await call('POST', '/support', { kind: 'other', title: 'x', details: 'x' })).status, 400);
+  const t = (await call('POST', '/support', { kind: 'bug', title: 'Skip fails', details: 'Skip said not on the list.' })).body;
+  assert.match(t.id, /^\d{14}-\w+$/);
+  assert.equal(t.screenshot, null);
+  assert.match(t.issueUrl, /^https:\/\/github\.com\/jdmunta\/ai-agentmanager-core\/issues\/new\?/);
+  assert.ok(fs.existsSync(path.join(t.folder, 'ticket.md')));
+  // The screenshot comes as the image itself; only images are taken.
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFBQIAX8jx0gAAAABJRU5ErkJggg==', 'base64');
+  const put = (type, body, id = t.id) => fetch(`${base}/api/support/${id}/screenshot`, { method: 'PUT', headers: { 'content-type': type, 'x-agentmgr': '1' }, body });
+  assert.equal((await put('text/plain', 'hi')).status, 415);
+  assert.equal((await put('image/png', png, 'nope')).status, 404);
+  assert.equal((await put('image/png', png, 'a.b')).status, 400);
+  const withShot = await (await put('image/png', png)).json();
+  assert.equal(withShot.screenshot, 'screenshot.png');
+  assert.match(new URL(withShot.issueUrl).searchParams.get('body'), /pasted below/);
+  const got = await fetch(`${base}/api/support/${t.id}/screenshot`);
+  assert.equal(got.headers.get('content-type'), 'image/png');
+  assert.deepEqual(Buffer.from(await got.arrayBuffer()), png);
+  const { tickets } = (await call('GET', '/support')).body;
+  assert.equal(tickets[0].id, t.id);
+  assert.equal(tickets[0].title, 'Skip fails');
+});
+
 test('today: what needs you from every list, ranked with why; decided from there; lists turned off are left out', async () => {
   const a = (await call('POST', '/actions', { text: 'Send Sam the rollout plan', source: 'slack', link: 'https://acme.slack.com/archives/C1/p77', from: 'Sam', due: 'today' })).body;
   try {

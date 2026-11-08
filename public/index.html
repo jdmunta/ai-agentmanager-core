@@ -61,6 +61,7 @@
             <div class="menu-sep"></div>
             <div class="menu-theme"><span>Theme</span><span class="seg" role="radiogroup" aria-label="Theme"><button type="button" data-theme-set="auto" title="Follow this device's setting">Auto</button><button type="button" data-theme-set="light">Light</button><button type="button" data-theme-set="dark">Dark</button></span></div>
             <div class="menu-sep"></div>
+            <button role="menuitem" id="support-btn" title="Tell us about a problem or an idea, with a screenshot">Report a problem or idea…</button>
             <button role="menuitem" id="keys-btn" title="Quick actions from the keyboard">Keyboard shortcuts… <kbd>?</kbd></button>
             <button role="menuitem" id="menu-about">About and updates…</button>
           </div>
@@ -834,6 +835,28 @@
         <button type="button" id="about-install" class="primary" hidden>Update and restart</button>
         <button type="button" id="about-close" class="primary">Close</button>
       </div>
+    </dialog>
+
+    <dialog id="support-dialog" class="support-dialog" aria-label="Report a problem or idea">
+      <form id="support-form" class="alerts-body">
+        <h2>Report a problem or idea</h2>
+        <div class="support-kind" role="radiogroup" aria-label="What it is">
+          <label class="check"><input type="radio" name="kind" value="bug" checked /> Something is wrong</label>
+          <label class="check"><input type="radio" name="kind" value="idea" /> An improvement</label>
+        </div>
+        <label>Title <input name="title" maxlength="200" required autocomplete="off" placeholder="In a few words" /></label>
+        <label>Details <textarea name="details" rows="7" maxlength="20000" required></textarea></label>
+        <div class="support-label">Screenshot <span class="hint">(optional)</span></div>
+        <div id="support-shot" class="support-shot"></div>
+        <p class="hint">It's kept on this computer, and GitHub opens with a new issue filled in for you to look over and submit. GitHub issues are public, so check the screenshot and the text for anything private first. Your version, OS and which lists are turned on are added; no names, folders or tokens.</p>
+        <p id="support-error" class="error" hidden></p>
+        <div class="dialog-actions">
+          <button type="button" data-support="close" class="ghost">Cancel</button>
+          <button type="submit" class="primary">Save and open on GitHub</button>
+        </div>
+        <div id="support-earlier"></div>
+      </form>
+      <div id="support-done" class="alerts-body" hidden></div>
     </dialog>
 
     <dialog id="settings-dialog" class="settings-dialog">

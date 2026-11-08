@@ -154,11 +154,13 @@ export function initIssues({ api, $, esc, ago, openAgent, openDoc, toast }) {
             : filter === 'removed'
               ? 'Nothing removed. Set an issue back to another action here to bring it back.'
               : 'None here.';
+    const backAll = ['skipped', 'done', 'removed'].includes(filter) ? setAsideShown().length : 0;
     body.innerHTML = `
       <div class="issues-head">
         <h2>Jira</h2>
         <div class="chips" role="tablist">${FILTERS.map(([k, label]) => `<button class="chip ${k === filter ? 'active' : ''}" role="tab" aria-selected="${k === filter}" data-issues-filter="${k}">${label} <span class="count">${count(k)}</span></button>`).join('')}</div>
         <span class="spacer"></span>
+        ${backAll ? `<button class="small" data-issues="back-all" title="Clear your action on every one here: back to undecided">Bring all ${backAll} back</button>` : ''}
         <button class="small" data-issues="copy" title="Copy this list as a Markdown table, to paste into Slack, Jira or a doc" ${rows.length ? '' : 'disabled'}>Copy</button>
         <button class="small" data-issues="refresh" title="Look again now">↻</button>
         ${expandButton(dialog)}
@@ -184,10 +186,18 @@ export function initIssues({ api, $, esc, ago, openAgent, openDoc, toast }) {
     keys.redraw();
   }
   const render = holdWhilePicking(body, draw);
+
+  /** The issues shown that you skipped, marked done or removed (not those done in Jira). */
+  function setAsideShown() {
+    const g = { skipped: 'skip', done: 'done', removed: 'remove' }[filter];
+    return (data?.rows ?? []).filter((r) => r.group === filter && r.action === g).map((r) => r.key);
+  }
   expandable(dialog, draw);
 
   /** Set your action on issues; assign starts the agents of ones not started yet. */
-  async function setAction(keys, action) {
+  async function setAction(keys, action, { undoing = false } = {}) {
+    // What each was before, to take the change back.
+    const before = new Map(keys.map((k) => [k, data?.rows.find((x) => x.key === k)?.action ?? null]));
     try {
       const r = await api('POST', '/issues/action', { keys, action: action || null });
       for (const k of r.set) ticked.delete(k);
@@ -198,11 +208,20 @@ export function initIssues({ api, $, esc, ago, openAgent, openDoc, toast }) {
         return t ? `${k} (${t.length > 60 ? `${t.slice(0, 59)}…` : t})` : k;
       };
       const what = r.started.length ? `Started ${r.started.map((x) => named(x.key)).join(', ')}` : r.set.length ? `${r.set.map(named).join(', ')}: ${label}` : 'Nothing changed';
-      toast?.(`${what}${bad ? `. Not changed: ${bad}` : ''}`, bad ? 8000 : 3000);
+      // An agent once started stays; anything else can be taken back.
+      const undo = !undoing && r.set.length && !r.started.length ? { label: 'Undo', run: () => undoTo(r.set.map((k) => [k, before.get(k)])) } : null;
+      toast?.(`${what}${bad ? `. Not changed: ${bad}` : ''}`, bad ? 8000 : undo ? 6000 : 3000, undo);
     } catch (err) {
       toast?.(err.message, 6000);
     }
     load();
+  }
+
+  /** Set each issue back to what it was: [[key, action]]. */
+  async function undoTo(pairs) {
+    for (const action of new Set(pairs.map(([, a]) => a))) {
+      await setAction(pairs.filter(([, a]) => a === action).map(([k]) => k), action === 'assign' ? null : action, { undoing: true });
+    }
   }
 
   const keys = rowKeys(dialog, {
@@ -282,6 +301,7 @@ export function initIssues({ api, $, esc, ago, openAgent, openDoc, toast }) {
     if (b === 'start') return startTicked();
     if (b === 'dismiss') return setAction([...ticked], 'remove');
     if (b === 'skip') return setAction([...ticked], 'skip');
+    if (b === 'back-all') return setAction(setAsideShown(), null);
     if (b === 'copy') {
       try {
         const { markdown } = await api('GET', `/issues?group=${encodeURIComponent(filter)}&format=markdown`);

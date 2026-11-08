@@ -112,6 +112,7 @@ export function issueRows(views, jira = new Map(), read = () => null, proposed =
     const j = jira.get(p.key) ?? null;
     const action = actions[p.key]?.action ?? (p.status === 'dismissed' ? 'remove' : null);
     rows.push({
+      actionAt: actions[p.key]?.at ?? null,
       key: p.key,
       url: p.url,
       title: j?.summary ?? mine.get(p.key)?.summary ?? p.title,
@@ -140,6 +141,7 @@ export function issueRows(views, jira = new Map(), read = () => null, proposed =
     const note = ACTION_NOTE[action] ? `${ACTION_NOTE[action]} (${where.charAt(0).toLowerCase()}${where.slice(1)})` : where;
     const design = designOf(v, read);
     rows.push({
+      actionAt: actions[issue.key]?.at ?? null,
       key: issue.key,
       url: issue.url,
       title: j?.summary ?? mine.get(issue.key)?.summary ?? issue.title,
@@ -164,6 +166,7 @@ export function issueRows(views, jira = new Map(), read = () => null, proposed =
     listed.add(i.key);
     const action = actions[i.key]?.action ?? null;
     rows.push({
+      actionAt: actions[i.key]?.at ?? null,
       key: i.key,
       url: i.url,
       title: i.summary,
