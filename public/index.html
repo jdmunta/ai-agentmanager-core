@@ -36,6 +36,7 @@
         <button id="actions-btn" title="Actions: what's asked of you in Slack and in meeting notes, found by the assistant; decide on each one">Actions <span id="actions-count" class="badge ready"></span></button>
         <button id="issues-btn" title="Jira: every issue an agent works on, with its Jira status, pull request and agent, the ones waiting for your review first">Jira <span id="issues-count" class="badge ready"></span></button>
         <button id="designs-btn" title="Designs: every agent's design doc with its summary and links, the ones waiting for your review first">Designs <span id="designs-count" class="badge ready"></span></button>
+        <button id="bugs-btn" title="Bugs: background hunts in a project or folder, and what they found, checked and worst first">Bugs <span id="bugs-count" class="badge"></span></button>
         <button id="reviews-btn" title="Reviews: pull requests you review. Reviewer agents ask the critical questions and find what blocks approval; you post what you pick">Reviews <span id="reviews-count" class="badge ready"></span></button>
         <button id="value-btn" title="Value: what the delivered work is worth, by day, week, month and quarter, against the AI cost and your time; reports for management">Value</button>
         <button id="map-btn" title="The codebase map: where each agent is changing and reading code, and who is about to collide">Map</button>
@@ -394,6 +395,9 @@
     </dialog>
     <dialog id="designs-dialog" class="issues-dialog" aria-label="Design docs">
       <div id="designs-body"></div>
+    </dialog>
+    <dialog id="bugs-dialog" class="issues-dialog" aria-label="Bugs">
+      <div id="bugs-body"></div>
     </dialog>
     <dialog id="reviews-dialog" class="issues-dialog" aria-label="Reviews">
       <div id="reviews-body"></div>

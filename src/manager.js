@@ -111,6 +111,7 @@ import { assignedIssues, issueFields, issueSummary, jiraProblem, leadingIssue, l
 import { issueRows } from './issues.js';
 import { designRows } from './designs.js';
 import { reviewPath, reviewerPrompt } from './reviews.js';
+import { findingsPath, hunterPrompt } from './bughunt.js';
 import { reminderFor, reminderSettings } from './reminders.js';
 import { combine, facts as scoreFacts, improveMessage, scorecardMarkdown, scorecardPrompt } from './scorecard.js';
 import { CONTAINER_ENGINES, claudeToken, containerName, containerRunning, engineMounts, gitCommonDir, removeContainer, runArgs, stopContainer } from './container.js';
@@ -396,7 +397,8 @@ export class AgentManager extends EventEmitter {
       },
     };
     // A recent agent gone quiet: follow up on it, or close its finished session (reminders.js).
-    v.followUp = reminderFor(v, reminderSettings(this.config));
+    // A bug hunt's work goes to the Bugs list, not a follow-up.
+    v.followUp = agent.hunting ? null : reminderFor(v, reminderSettings(this.config));
     return v;
   }
 
@@ -624,6 +626,7 @@ export class AgentManager extends EventEmitter {
     isolation,
     builds,
     reviewing,
+    hunting,
   }) {
     intent = (intent ?? '').trim();
     const staged = stagedFiles(attachments);
@@ -680,6 +683,8 @@ export class AgentManager extends EventEmitter {
       ...(builds ? { builds: { name: String(builds.name), engine: String(builds.engine ?? 'claude') } } : {}),
       // Reviews someone else's pull request (reviews.js): { url, slug, number, title }.
       ...(!general && reviewing ? { reviewing } : {}),
+      // Hunts for bugs, read-only (bughunt.js): { huntId, path, focus, kinds, since, covered }.
+      ...(!general && hunting ? { hunting } : {}),
       name: name?.trim() || jiraKey || slug,
       slug,
       intent,
@@ -696,11 +701,11 @@ export class AgentManager extends EventEmitter {
       model: model || null,
       // Review the implementation plan before the agent implements it: null = no review.
       // Team members get their review from the team instead.
-      planReview: !general && !team && !builds && !reviewing && (planReview ?? this.config.planReview ?? false) ? { status: 'writing' } : null,
+      planReview: !general && !team && !builds && !reviewing && !hunting && (planReview ?? this.config.planReview ?? false) ? { status: 'writing' } : null,
       // Write and publish a design doc (Google Doc + Artifact) after the plan, updated at the end.
-      designDoc: !general && !team && !builds && !reviewing && Boolean(designDoc ?? this.config.designDoc ?? true),
-      demoPage: !general && !team && !builds && !reviewing && Boolean(demoPage ?? this.config.demoPage ?? false),
-      benchmarks: !general && !team && !builds && !reviewing && Boolean(benchmarks ?? this.config.benchmarks ?? false),
+      designDoc: !general && !team && !builds && !reviewing && !hunting && Boolean(designDoc ?? this.config.designDoc ?? true),
+      demoPage: !general && !team && !builds && !reviewing && !hunting && Boolean(demoPage ?? this.config.demoPage ?? false),
+      benchmarks: !general && !team && !builds && !reviewing && !hunting && Boolean(benchmarks ?? this.config.benchmarks ?? false),
       status: 'preparing',
       desired: start ? 'running' : 'stopped',
       error: null,
@@ -1194,7 +1199,7 @@ export class AgentManager extends EventEmitter {
     }
     // SPEC.md before changing code, and PLAN.md kept as it goes (unless the plan review asks for the plan).
     // A session building an agent keeps its analysis in the agent's folder instead.
-    if (task && this.config.specs !== false && !agent.builds && !agent.reviewing) {
+    if (task && this.config.specs !== false && !agent.builds && !agent.reviewing && !agent.hunting) {
       fs.mkdirSync(briefDir(agent.id), { recursive: true });
       const dir = fs.realpathSync(briefDir(agent.id));
       writableDir ??= dir;
@@ -1224,6 +1229,12 @@ export class AgentManager extends EventEmitter {
       const file = path.join(fs.realpathSync(briefDir(agent.id)), path.basename(reviewPath(agent.id)));
       writableDir ??= path.dirname(file);
       prompts.push(reviewerPrompt(file, agent.reviewing));
+    }
+    if (agent.hunting && task) {
+      fs.mkdirSync(briefDir(agent.id), { recursive: true });
+      const file = path.join(fs.realpathSync(briefDir(agent.id)), path.basename(findingsPath(agent.id)));
+      writableDir ??= path.dirname(file);
+      prompts.push(hunterPrompt(file, agent.hunting));
     }
     if (planning) prompts.push(planningPrompt(agent));
     // What earlier agents learned in this repo, and the one command to add to it.
@@ -2205,6 +2216,9 @@ export class AgentManager extends EventEmitter {
       // Asked to improve: its next update of the brief as done is scored again (also with auto off).
       const improved = brief.status === 'done' && agent.improving && brief.updatedAt !== agent.improving.briefAt;
       // The agent says it is done: have the judge check the work before the person looks.
+      if (finished) this.emit('finished', this.store.get(id));
+      // A bug hunt's findings are checked one by one instead (bughunt.js).
+      if (agent.hunting) return;
       if (finished && this.judge.enabled) this.requestReview(id, { trigger: 'brief' }).catch(() => {});
       // ...and score it for the reviewer ("scorecard": { "auto": false } in config.json turns this off).
       if ((improved || (finished && this.config.scorecard?.auto !== false)) && !NO_REPO.has(agent.kind) && this.changesSource) this.summarize(id, 'scorecard').catch(() => {});

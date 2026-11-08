@@ -1321,3 +1321,19 @@ table.issues tr.kb-on td:first-child { box-shadow: inset 3px 0 0 var(--accent); 
 .support-shot-acts { display: flex; justify-content: flex-end; margin-top: 6px; }
 #support-earlier ul { margin: 6px 0; padding-left: 18px; font-size: 13px; }
 #support-earlier summary { cursor: pointer; font-size: 13px; }
+
+/* Bugs */
+.bug-sev { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 11px; font-weight: 600; border: 1px solid currentColor; }
+.bug-sev.critical, .bug-sev.high { color: var(--red); }
+.bug-sev.medium { color: var(--amber, #c98a12); }
+.bug-sev.low { color: var(--muted); }
+tr.bug-detail td { padding: 4px 12px 14px; font-size: 13px; }
+tr.bug-detail pre { white-space: pre-wrap; max-height: 280px; overflow: auto; padding: 8px; border: 1px solid var(--border); border-radius: 6px; font-size: 12px; }
+.hunt-running { margin: 0 0 8px; padding: 6px 10px; border-left: 3px solid var(--accent, currentColor); font-size: 13px; }
+.hunt-form { padding: 8px 0; }
+.hunt-form h3 { margin: 0; font-size: 15px; }
+.hunt-kinds { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 4px 16px; }
+#bugs-btn.hunting::after { content: ' ●'; color: var(--accent, currentColor); }
+.today-bug .today-label { color: var(--red); }
+#bugs-dialog td.today-acts { white-space: normal; text-align: right; }
+#bugs-dialog td.today-acts > * { margin: 2px 0; }

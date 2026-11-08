@@ -32,6 +32,7 @@ import { initToday } from '/today.js';
 import { reviewSpeech } from '/prvoice.js';
 import { initDesigns } from '/designs.js';
 import { initReviews } from '/reviews.js';
+import { initBugHunt } from '/bughunt.js';
 import { drawDiagram } from '/diagram.js';
 import { initValue } from '/value.js';
 import { initCodeMap } from '/codemap.js';
@@ -263,6 +264,7 @@ const todayUi = initToday({
   openActions: () => actionsUi.open(),
   openIssues: () => issuesUi.open(),
   openReviews: () => reviewsUi.open(),
+  openBugs: () => bugsUi.open({ show: 'open' }),
 });
 $('#today-btn').onclick = () => todayUi.open();
 // Designs: every agent's design doc, the ones waiting for your review first.
@@ -279,6 +281,9 @@ $('#designs-btn').onclick = () => designsUi.open();
 // Reviews: other people's pull requests, reviewed by agents for you.
 const reviewsUi = initReviews({ api, $, esc, ago, toast: (m, ms) => toast(m, ms), openAgent: (id) => (showTab('agents'), select(id)) });
 $('#reviews-btn').onclick = () => reviewsUi.open();
+// Bugs: background bug hunts and what they found.
+const bugsUi = initBugHunt({ api, $, esc, ago, toast: (m, ms, a) => toast(m, ms, a), openAgent: (id) => (showTab('agents'), select(id)) });
+$('#bugs-btn').onclick = () => bugsUi.open();
 // Value: what the delivered work is worth, for you and for management.
 const valueUi = initValue({ api, $, esc, toast: (m, ms) => toast(m, ms), openAgent: (id) => (showTab('agents'), select(id)) });
 $('#value-btn').onclick = () => valueUi.open();
@@ -330,6 +335,7 @@ function shortcut(act) {
   if (act === 'results') return $('#spend-btn').click();
   if (act === 'designs') return designsUi.open();
   if (act === 'reviews') return reviewsUi.open();
+  if (act === 'bugs') return bugsUi.open();
   if (act === 'value') return valueUi.open();
   if (act === 'today') return todayUi.open();
   if (act.startsWith('tab:')) return showTab(act.slice(4));
@@ -4239,6 +4245,7 @@ function handleEvent(msg) {
     todayUi.changed();
     designsUi.changed();
     if (msg.agent.reviewing) reviewsUi.changed();
+    if (msg.agent.hunting) bugsUi.changed();
     // The detail, terminal and document views show one agent; another agent's update leaves them be.
     return invalidate([
       'list', 'backlog', 'land', 'inbox', 'race', 'team',
