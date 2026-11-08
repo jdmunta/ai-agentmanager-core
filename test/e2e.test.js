@@ -1575,7 +1575,15 @@ test('issues: the Jira summary lists agents\' issues with their Jira status, wai
 
 test('bughunt: a hunt runs a read-only agent, its checked findings are listed, and can be fixed or set aside', async () => {
   const origin = makeOrigin('hunted');
-  assert.equal((await call('POST', '/projects', { shortcut: 'hunted', repo: `file://${origin}`, base: 'main' })).status, 200);
+  // The file the hunter's bug is in, so the map can place it.
+  const seed = path.join(home, 'hunted-seed');
+  fs.mkdirSync(path.join(seed, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(seed, 'src', 'upload.js'), 'retry()\n');
+  execFileSync('git', ['add', '.'], { cwd: seed });
+  execFileSync('git', ['-c', 'commit.gpgsign=false', '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '-m', 'upload'], { cwd: seed });
+  execFileSync('git', ['push', '-q', 'origin', 'main'], { cwd: seed });
+  const proj = await call('POST', '/projects', { shortcut: 'hunted', repo: `file://${origin}`, base: 'main' });
+  assert.equal(proj.status, 200);
   assert.equal((await call('POST', '/hunts', { project: 'hunted', path: '../x' })).status, 400);
   const h = (await call('POST', '/hunts', { project: 'hunted', path: 'src', focus: 'changes', kinds: ['correctness', 'bogus'], maxUsd: 2 })).body;
   assert.deepEqual(h.kinds, ['correctness']);
@@ -1595,6 +1603,14 @@ test('bughunt: a hunt runs a read-only agent, its checked findings are listed, a
   assert.equal(got.running, null);
   const log = fs.readFileSync(process.env.FAKE_CLAUDE_LOG, 'utf8').trim().split('\n').map((l) => JSON.parse(l)).filter((l) => l.args.join(' ').includes('You are hunting for bugs'));
   assert.ok(log.length, 'the hunter got its instructions');
+  // On the map's Bugs view: src is hot with the one kept bug, and covered by the hunt that ran.
+  const map = (await call('GET', `/codemap?project=${encodeURIComponent(proj.body.key)}&layer=bugs`)).body;
+  assert.equal(map.project.shortcut, 'hunted');
+  assert.deepEqual(map.heat.modules.src.bugs, { critical: 0, high: 1, medium: 0, low: 0 });
+  assert.equal(map.heat.modules.src.covered, true);
+  assert.equal(map.heat.modules['.'].covered, false, 'the hunt was on src only');
+  assert.deepEqual(map.heat.findings.map((f) => [f.file, f.severity]), [['src/upload.js', 'high']]);
+  assert.equal((await call('GET', `/codemap?project=${encodeURIComponent(proj.body.key)}`)).body.heat, undefined, 'only when asked');
   // In Today, as a bug; Not a bug takes it off, and a later run doesn't bring it back.
   const bug = got.findings[0];
   assert.ok((await call('GET', '/today')).body.items.some((i) => i.kind === 'bug' && i.findingId === bug.id));

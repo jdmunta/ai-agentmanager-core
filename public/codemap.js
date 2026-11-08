@@ -1,8 +1,13 @@
 // Map: a repository's folders as tiles sized by their files, with each agent as a badge on the
 // folders it is changing (solid) or reading (ring) now. A red line joins two agents that changed
 // the same file; a dashed one runs from an agent reading a file to the agent that changed it.
+// The Bugs view colours each folder by the bugs hunts found there (worst weigh most) and how much it
+// changed lately, draws the paths through the code those bugs take as arrows between folders, and
+// hatches the folders no hunt has looked at. Click a folder or an arrow for its bugs, or Hunt here.
 
 const SAVED = 'agentmgr.mapProject';
+const LAYER = 'agentmgr.mapLayer';
+const SEV = { critical: 'Critical', high: 'High', medium: 'Medium', low: 'Low' };
 const EVERY_MS = 8000;
 
 const hue = (id) => [...String(id)].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 360, 17);
@@ -53,14 +58,17 @@ export function squarify(items, x, y, w, h) {
   return out;
 }
 
-export function initCodeMap({ api, $, esc, agents, openAgent, toast }) {
+export function initCodeMap({ api, $, esc, agents, openAgent, openBugs, toast }) {
   const view = $('#map-view');
   let open = false;
   let data = null;
   let timer = null;
   let project = null;
+  let layer = 'agents';
+  let picked = null; // in the Bugs view: { module } or { from, to }
   try {
     project = localStorage.getItem(SAVED) || null;
+    layer = localStorage.getItem(LAYER) === 'bugs' ? 'bugs' : 'agents';
   } catch {}
 
   const nameOf = (id) => data?.map.agents.find((a) => a.id === id)?.name ?? agents.get(id)?.name ?? id;
@@ -68,7 +76,8 @@ export function initCodeMap({ api, $, esc, agents, openAgent, toast }) {
 
   async function load() {
     try {
-      data = await api('GET', `/codemap${project ? `?project=${encodeURIComponent(project)}` : ''}`);
+      const q = new URLSearchParams({ ...(project ? { project } : {}), ...(layer === 'bugs' ? { layer } : {}) });
+      data = await api('GET', `/codemap${q.size ? `?${q}` : ''}`);
       if (data.project && data.project.key !== project) project = data.project.key;
     } catch (e) {
       toast?.(e.message, 5000);
@@ -92,10 +101,14 @@ export function initCodeMap({ api, $, esc, agents, openAgent, toast }) {
     $('#map-bar').innerHTML = `
       <b>Map</b>
       ${projects.length ? `<select data-map-set="project" aria-label="Project">${projects.map((p) => `<option value="${esc(p.key)}" ${p.key === data?.project?.key ? 'selected' : ''}>${esc(p.name)} (${p.running} running)</option>`).join('')}</select>` : ''}
-      <span class="map-legend"><span class="map-key solid"></span>changing <span class="map-key ring"></span>reading <span class="map-key red"></span>same file changed <span class="map-key dash"></span>reading what another changed</span>
+      <span class="chips map-layers" role="tablist"><button class="chip ${layer === 'agents' ? 'active' : ''}" data-map-layer="agents" role="tab" aria-selected="${layer === 'agents'}">Agents</button><button class="chip ${layer === 'bugs' ? 'active' : ''}" data-map-layer="bugs" role="tab" aria-selected="${layer === 'bugs'}" title="Where hunts found bugs, and the paths through the code they take">Bugs</button></span>
+      ${layer === 'bugs'
+        ? '<span class="map-legend"><span class="map-key heat"></span>bugs (worst weigh most) and recent changes <span class="map-key arrow"></span>path a bug takes <span class="map-key cold"></span>no hunt has looked here</span>'
+        : '<span class="map-legend"><span class="map-key solid"></span>changing <span class="map-key ring"></span>reading <span class="map-key red"></span>same file changed <span class="map-key dash"></span>reading what another changed</span>'}
       <span class="spacer"></span>
       <button class="small" data-map="refresh" title="Look again now (it refreshes every few seconds)">↻</button>
       <button class="small" data-map="close" title="Back (Esc)">Close</button>`;
+    if (layer === 'bugs') return drawBugs();
     const warn = (m?.links ?? []).filter((l) => l.kind !== 'near');
     $('#map-warn').innerHTML = warn.length ? `<ul>${warn.map(sentence).join('')}</ul>` : m?.agents.length ? '<p class="hint">No agents are on the same code.</p>' : '';
     const box = $('#map-box');
@@ -165,6 +178,129 @@ export function initCodeMap({ api, $, esc, agents, openAgent, toast }) {
     svg.innerHTML = lines.join('');
   }
 
+  const finding = (id) => data?.heat?.findings.find((f) => f.id === id);
+
+  /** The Bugs view: folders by heat, arrows along bugs' paths, cold spots hatched. */
+  function drawBugs() {
+    const m = data?.map;
+    const heat = data?.heat;
+    const box = $('#map-box');
+    $('#map-agents').innerHTML = '';
+    if (!m || !heat || !m.modules.length) {
+      box.innerHTML = `<p class="hint map-empty">${data?.project ? 'No files to show for this project yet.' : 'No projects with a repository yet.'}</p>`;
+      $('#map-warn').innerHTML = '';
+      return;
+    }
+    const of = (key) => heat.modules[key] ?? { score: 0, bugs: {}, churn: 0, covered: false, files: [], findings: [] };
+    // Hot folders get more room, so their names and counts show.
+    const items = m.modules.map((mod) => ({ ...mod, weight: Math.max(1, mod.files) + of(mod.key).score * 3 })).sort((a, b) => b.weight - a.weight);
+    const W = box.clientWidth;
+    const H = Math.max(320, view.clientHeight - box.offsetTop - 24);
+    box.style.height = `${H}px`;
+    const big = items.slice(0, 100);
+    const rest = items.slice(100);
+    if (rest.length) big.push({ key: `${rest.length} more folders`, files: rest.reduce((s2, x) => s2 + x.files, 0), weight: rest.reduce((s2, x) => s2 + x.weight, 0), more: true });
+    const rects = squarify(big, 0, 0, W, H);
+    const at = new Map(rects.map((r) => [r.item.key, r]));
+    const tiles = rects
+      .map(({ x, y, w, h, item }) => {
+        const t = of(item.key);
+        const n = Object.values(t.bugs).reduce((a, b) => a + b, 0);
+        const r = heat.max ? t.score / heat.max : 0;
+        const worst = ['critical', 'high', 'medium', 'low'].find((k) => t.bugs[k]);
+        const cold = heat.hunted && !t.covered && !item.more;
+        const sel = picked?.module === item.key || picked?.from === item.key || picked?.to === item.key;
+        const tip = `${item.key}: ${item.files} files${n ? ` · ${n} bug${n === 1 ? '' : 's'}` : ''}${t.churn ? ` · changed ${t.churn}× in 30 days` : ''}${cold ? ' · no hunt has looked here' : ''}`;
+        return `<div class="map-tile heat ${n ? 'buggy' : ''} ${cold ? 'cold' : ''} ${sel ? 'picked' : ''} ${item.more ? 'more' : ''}" data-map-mod="${esc(item.more ? '' : item.key)}" style="left:${x}px;top:${y}px;width:${w}px;height:${h}px;--heat:${r.toFixed(3)}" title="${esc(tip)}">
+            ${w > 46 && h > 22 ? `<span class="map-name">${esc(item.key === '.' ? '(top level)' : item.key)}</span>` : ''}
+            ${n && w > 40 && h > 38 ? `<span class="map-bugs ${worst}">${n} bug${n === 1 ? '' : 's'}</span>` : w > 46 && h > 38 ? `<span class="map-count">${item.files}</span>` : ''}
+          </div>`;
+      })
+      .join('');
+    // Arrows from the middle of one folder to the next, thicker the more (and worse) bugs go that way.
+    const maxW = Math.max(1, ...heat.paths.map((p) => p.weight));
+    const mid = (r) => [r.x + r.w / 2, r.y + r.h / 2];
+    const arrows = heat.paths
+      .map((p, i) => {
+        const a = at.get(p.from);
+        const b = at.get(p.to);
+        if (!a || !b || a === b) return '';
+        const [x1, y1] = mid(a);
+        const [x2, y2] = mid(b);
+        // A slight curve, so arrows both ways between two folders don't overlap.
+        const cx = (x1 + x2) / 2 - (y2 - y1) * 0.15;
+        const cy = (y1 + y2) / 2 + (x2 - x1) * 0.15;
+        const sel = picked?.from === p.from && picked?.to === p.to;
+        const sw = 1.5 + (4.5 * p.weight) / maxW;
+        // Each arrow its own head, sized to its width.
+        const head = Math.max(10, Math.min(20, sw * 3)).toFixed(1);
+        return `<marker id="map-arrow-${i}" class="${sel ? 'picked' : ''}" viewBox="0 0 10 10" refX="7" refY="5" markerUnits="userSpaceOnUse" markerWidth="${head}" markerHeight="${head}" orient="auto"><path d="M0,0 L10,5 L0,10 z" /></marker><path class="bug-path ${sel ? 'picked' : ''}" data-map-path="${i}" d="M${x1},${y1} Q${cx},${cy} ${x2},${y2}" stroke-width="${sw.toFixed(1)}" marker-end="url(#map-arrow-${i})"><title>${esc(`${p.from} → ${p.to}: ${p.findings.length} bug${p.findings.length === 1 ? '' : 's'}`)}</title></path>`;
+      })
+      .join('');
+    box.innerHTML = `${tiles}<svg class="map-links bug-paths" width="${W}" height="${H}">${arrows}</svg>`;
+    $('#map-warn').innerHTML = bugPanel(of);
+  }
+
+  function bugRow(f) {
+    return `<li data-map-finding="${esc(f.id)}"><span class="bug-sev ${esc(f.severity)}">${esc(SEV[f.severity] ?? f.severity)}</span> ${esc(f.title)} <span class="hint">${esc(f.file)}${f.line ? `:${f.line}` : ''}${f.status === 'pr' ? ' · draft PR' : f.status === 'fixing' ? ' · being fixed' : f.status === 'snoozed' ? ' · snoozed' : ''}</span>
+      ${f.status === 'open' ? '<button class="small" data-map-bug="fix" title="Start an agent on it">Fix</button>' : ''}
+      ${f.prUrl ? `<a class="small-link" href="${esc(f.prUrl)}" target="_blank" rel="noopener">PR ↗</a>` : ''}
+      <button class="small" data-map-bug="evidence" title="See it in Bugs">Evidence</button></li>`;
+  }
+
+  /** Under the map: the picked folder's or path's bugs, else the hottest folders. */
+  function bugPanel(of) {
+    const heat = data.heat;
+    const hunt = data.project?.shortcut ? `<button class="small primary" data-map-hunt title="A hunt on this folder, the whole module a part at a time">Hunt here</button>` : '';
+    if (picked?.module !== undefined) {
+      const t = of(picked.module);
+      const list = t.findings.map(finding).filter(Boolean);
+      const name = picked.module === '.' ? '(top level)' : picked.module;
+      return `<div class="map-pick"><b>${esc(name)}</b> <span class="hint">${list.length ? `${list.length} bug${list.length === 1 ? '' : 's'}` : 'no bugs found'}${t.churn ? ` · changed ${t.churn}× in 30 days` : ''}${heat.hunted && !t.covered ? ' · no hunt has looked here yet' : ''}${t.files.length ? ` · hottest: ${t.files.map((x) => `<code>${esc(x.file)}</code>`).join(', ')}` : ''}</span> ${hunt} <button class="small" data-map-unpick>×</button>
+        ${list.length ? `<ul class="map-bug-list">${list.map(bugRow).join('')}</ul>` : ''}</div>`;
+    }
+    if (picked?.from !== undefined) {
+      const p = heat.paths.find((x) => x.from === picked.from && x.to === picked.to);
+      const list = (p?.findings ?? []).map(finding).filter(Boolean);
+      return `<div class="map-pick"><b>${esc(picked.from)} → ${esc(picked.to)}</b> <span class="hint">the path ${list.length === 1 ? 'this bug takes' : `${list.length} bugs take`} through the code</span> <button class="small" data-map-unpick>×</button>
+        <ul class="map-bug-list">${list.map(bugRow).join('')}</ul></div>`;
+    }
+    const hot = Object.entries(heat.modules).filter(([, t]) => t.findings.length).sort((a, b) => b[1].score - a[1].score).slice(0, 5);
+    if (!heat.hunted) return '<p class="hint">No bug hunts on this project yet: set one up under Bugs (b), and what it finds shows here. Folders are coloured by recent changes until then.</p>';
+    if (!hot.length) return `<p class="hint">No open bugs in this project.${heat.findings.length ? '' : ' Hatched folders are ones no hunt has looked at.'} Click a folder to hunt there.</p>`;
+    return `<p class="hint">Hottest: ${hot.map(([k, t]) => `<button class="link" data-map-mod="${esc(k)}">${esc(k === '.' ? '(top level)' : k)}</button> (${t.findings.length})`).join(', ')}. ${heat.paths.length ? 'Arrows are the paths bugs take through the code; click one for its bugs.' : ''} Hatched folders are ones no hunt has looked at.</p>`;
+  }
+
+  async function bugAct(id, what) {
+    if (what === 'evidence') {
+      show(false);
+      return openBugs?.();
+    }
+    if (what === 'fix') {
+      try {
+        const r = await api('POST', `/findings/${id}/fix`, {});
+        toast?.(r.existing ? `${r.agent.name} is on it already` : `Agent ${r.agent.name} started on it`, 4000, { label: 'Open', run: () => (show(false), openAgent(r.agent.id)) });
+      } catch (e) {
+        toast?.(e.message, 6000);
+      }
+      load();
+    }
+  }
+
+  /** Hunt the picked folder: its hunt if there is one, else a new whole-module hunt; then run it. */
+  async function huntHere() {
+    const folder = picked?.module === '.' ? '' : picked?.module ?? '';
+    try {
+      const { hunts } = await api('GET', '/hunts');
+      let h = hunts.find((x) => x.project === data.project.shortcut && x.path === folder);
+      h ??= await api('POST', '/hunts', { project: data.project.shortcut, path: folder, focus: 'module' });
+      const r = await api('POST', `/hunts/${h.id}/run`, {});
+      toast?.(`${r.agent.name} is hunting in ${folder || 'the whole project'}. Its findings come in when it's done.`, 5000);
+    } catch (e) {
+      toast?.(e.message, 6000);
+    }
+  }
+
   function show(on) {
     open = on;
     view.hidden = !on;
@@ -179,6 +315,28 @@ export function initCodeMap({ api, $, esc, agents, openAgent, toast }) {
   }
 
   view.addEventListener('click', (e) => {
+    const lay = e.target.closest('[data-map-layer]');
+    if (lay) {
+      layer = lay.dataset.mapLayer;
+      picked = null;
+      try {
+        localStorage.setItem(LAYER, layer);
+      } catch {}
+      return load();
+    }
+    if (layer === 'bugs') {
+      const ba = e.target.closest('[data-map-bug]');
+      if (ba) return bugAct(ba.closest('[data-map-finding]')?.dataset.mapFinding, ba.dataset.mapBug);
+      if (e.target.closest('[data-map-hunt]')) return huntHere();
+      if (e.target.closest('[data-map-unpick]')) return (picked = null), draw();
+      const path = e.target.closest('[data-map-path]');
+      if (path) {
+        const p = data.heat.paths[Number(path.dataset.mapPath)];
+        return (picked = p ? { from: p.from, to: p.to } : null), draw();
+      }
+      const mod = e.target.closest('[data-map-mod]');
+      if (mod?.dataset.mapMod) return (picked = picked?.module === mod.dataset.mapMod ? null : { module: mod.dataset.mapMod }), draw();
+    }
     const o = e.target.closest('[data-map-open]');
     if (o) {
       show(false);
@@ -191,6 +349,7 @@ export function initCodeMap({ api, $, esc, agents, openAgent, toast }) {
   view.addEventListener('change', (e) => {
     if (e.target.dataset.mapSet !== 'project') return;
     project = e.target.value;
+    picked = null;
     try {
       localStorage.setItem(SAVED, project);
     } catch {}

@@ -858,7 +858,8 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
     const days = req.query.days === undefined ? 30 : Math.max(0, Math.min(3650, Math.floor(Number(req.query.days)) || 0));
     return stats(store.list(), { days, projectOf: (a) => manager.projectInfo(a)?.name ?? null });
   }));
-  api.get('/codemap', wrap((req) => manager.codeMap(req.query.project ? String(req.query.project) : null)));
+  // ?layer=bugs adds where the bug hunts found bugs: heat per folder, and the paths through the code.
+  api.get('/codemap', wrap((req) => manager.codeMap(req.query.project ? String(req.query.project) : null, { bugs: req.query.layer === 'bugs' ? { findings: hunts.findings, hunts: hunts.hunts } : null })));
   // Issues agents work on, for the summary; ?group=you|agent|done and ?format=markdown to paste.
   api.get('/issues', wrap(async (req) => {
     // ?fresh=1 (the ↻ button) asks Jira again: the issues assigned to you and each issue's status.
