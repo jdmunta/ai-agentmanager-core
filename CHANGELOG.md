@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.28.0 (2026-11-08)
 
 - **Bug hunts.** *Bugs* (or `b`) runs agents that look for bugs in the background, in a project or one folder of it: in what changed since the last run, or the whole module a part at a time, for any bug or the kinds you pick (races, error handling, leaks, security, data). A hunt runs by hand (*Hunt now*) or every night, one at a time, and stops at its cost limit. The hunter reads the code and runs the tests on its own copy and never commits or pushes. Each bug must come with evidence (a failing test, or the path through the code), and the AI judge checks each one against the code: only those that hold up are listed, worst first, and nothing is reported twice. On each: *Fix* starts an agent with the finding and its test, *File it* opens a filled-in GitHub issue (or copies it as Markdown), *Not a bug* keeps it from coming back, *Snooze* hides it until tomorrow or Monday. Critical and high ones show in Today.
 
