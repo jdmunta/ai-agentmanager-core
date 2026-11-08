@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.31.0 (2026-11-08)
 
 - **Bugs on the Map.** The Map has a *Bugs* view (next to *Agents*): each folder is coloured by the bugs hunts found in it, the worst weighing most, plus a little for how often it changed in the last 30 days, and its bug count shows on it. Bugs that come with their path through the code (`file:line` steps) are drawn as arrows from folder to folder along it: the hot paths, thicker where more (and worse) bugs go the same way. Folders no hunt has looked at are hatched. Click a folder or an arrow for its bugs, with *Fix* and *Evidence*, or *Hunt here* to start a hunt on that folder.
 
