@@ -4249,14 +4249,24 @@ test('landing: open a PR, failing checks and requested changes go back to the ag
     assert.equal(g(dir, 'status', '--porcelain'), '', 'merge aborted');
     await call('POST', `/agents/${a.id}/stop`);
 
-    // Approved and green: Merge.
+    // Approved and green, and the Eval is 100% on an older commit: ready, but not sure.
+    const sureEval = (h) => ({ items: [{ key: 'rerun', state: 'ok' }], confidence: 100, pending: [], rerun: { command: 'npm test', passed: true, head: h, clean: true, at: new Date().toISOString() } });
+    manager.patch(a.id, { eval: sureEval(head) });
     setPr({ reviewDecision: 'APPROVED', mergeStateStatus: 'CLEAN' });
     await call('POST', `/agents/${a.id}/refresh`);
     rows = (await call('GET', '/landing')).body.rows;
-    assert.equal(rows.find((r) => r.agent.id === a.id).land, 'ready');
-    const merged = await call('POST', `/agents/${a.id}/land/merge`, {});
-    assert.equal(merged.status, 200, JSON.stringify(merged.body));
-    assert.deepEqual(ghCalls().find((c) => c[1] === 'merge'), ['pr', 'merge', opened.body.url, '--rebase', '--delete-branch']);
+    let row = rows.find((r) => r.agent.id === a.id);
+    assert.equal(row.land, 'ready');
+    assert.equal(row.confidence, 100);
+    assert.match(row.sure.why, /different commit/);
+    assert.equal((await call('PUT', '/landing', { mergeWhenSure: true })).body.settings.mergeWhenSure, true);
+    await call('POST', `/agents/${a.id}/refresh`);
+    assert.ok(!ghCalls().some((c) => c[1] === 'merge'), 'not merged on an Eval of another commit');
+    // Tested on the commit the PR is at: merged on its own, once.
+    manager.patch(a.id, { eval: sureEval('f'.repeat(40)) });
+    manager.emit('evaluated', manager.store.get(a.id));
+    await waitFor(async () => (await agentNow(a.id)).landing?.sure?.[`${opened.body.url}@${'f'.repeat(40)}`]?.merged || null, 10000, 'merged on the Eval');
+    assert.deepEqual(ghCalls().filter((c) => c[1] === 'merge'), [['pr', 'merge', opened.body.url, '--rebase', '--delete-branch']]);
     now = await agentNow(a.id);
     assert.equal(now.prs.find((p) => p.url === opened.body.url).state, 'MERGED');
     assert.equal((await call('POST', `/agents/${a.id}/land/merge`, {})).status, 404, 'nothing open any more');
@@ -4264,7 +4274,7 @@ test('landing: open a PR, failing checks and requested changes go back to the ag
     if (saved.bin === undefined) delete process.env.AGENTMGR_GH_BIN;
     else process.env.AGENTMGR_GH_BIN = saved.bin;
     process.env.AGENTMGR_NO_GH = saved.noGh;
-    await call('PUT', '/landing', { maxFixes: 3, mergeMethod: 'squash' });
+    await call('PUT', '/landing', { maxFixes: 3, mergeMethod: 'squash', mergeWhenSure: false });
     await call('POST', `/agents/${a.id}/stop`);
   }
 });

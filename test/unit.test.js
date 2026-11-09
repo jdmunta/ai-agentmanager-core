@@ -8,7 +8,7 @@ import { repoNameFromUrl, isRemoteUrl } from '../src/git.js';
 import { AgentManager, slugify } from '../src/manager.js';
 import { STATE_VERSION, Store } from '../src/store.js';
 import { checkSummary, claudeProjectDir, compactPr, extractRefs, landState, leadingJiraKey, scanTranscript } from '../src/tracker.js';
-import { checksMessage, landingSettings, reviewMessage } from '../src/landing.js';
+import { checksMessage, landingSettings, reviewMessage, sureToMerge } from '../src/landing.js';
 import { issueIntent, prCommand, tokenMatches, triggerSettings } from '../src/triggers.js';
 import { budgetSettings, costOf, dayKey } from '../src/budgets.js';
 import { sourceOf, stats } from '../src/stats.js';
@@ -897,10 +897,28 @@ test('landing: check summary, where a PR stands, settings and messages', () => {
   assert.equal(landState({ ...pr, mergeState: 'BLOCKED', checks: { state: 'running' } }), 'waiting');
   assert.equal(landState({ ...pr, mergeState: 'BLOCKED', review: 'REVIEW_REQUIRED' }), 'waiting');
   assert.equal(landState({ url: 'u' }), null);
-  assert.deepEqual(landingSettings({}), { fixChecks: true, fixReviews: true, fixComments: true, maxFixes: 3, mergeMethod: 'squash', deleteBranch: true });
-  assert.deepEqual(landingSettings({ landing: { fixChecks: false, maxFixes: 99, mergeMethod: 'octopus' } }), { fixChecks: false, fixReviews: true, fixComments: true, maxFixes: 20, mergeMethod: 'squash', deleteBranch: true });
+  assert.deepEqual(landingSettings({}), { fixChecks: true, fixReviews: true, fixComments: true, maxFixes: 3, mergeMethod: 'squash', deleteBranch: true, mergeWhenSure: false, sureNeedsApproval: true });
+  assert.deepEqual(landingSettings({ landing: { fixChecks: false, maxFixes: 99, mergeMethod: 'octopus' } }), { fixChecks: false, fixReviews: true, fixComments: true, maxFixes: 20, mergeMethod: 'squash', deleteBranch: true, mergeWhenSure: false, sureNeedsApproval: true });
   assert.match(checksMessage({ url: 'https://x/pull/4', number: 4, checks: { failed: ['unit', 'lint'] } }), /failing on your pull request https:\/\/x\/pull\/4 \(unit, lint\)[\s\S]*gh pr checks 4/);
   assert.match(reviewMessage({ url: 'https://x/pull/4', number: 4 }), /requested changes[\s\S]*gh pr view 4 --comments/);
+});
+
+test('sure to merge: 100% with the tests run on the commit the PR is at, approved and ready', () => {
+  const head = 'a'.repeat(40);
+  const pr = { url: 'u', state: 'OPEN', head, review: 'APPROVED', mergeable: 'MERGEABLE', mergeState: 'CLEAN', checks: { state: 'passed' } };
+  const agent = (ev) => ({ eval: { items: [{}], confidence: 100, pending: [], rerun: { passed: true, head, clean: true }, ...ev } });
+  assert.deepEqual(sureToMerge(agent(), pr), { sure: true, why: '100% on its latest commit, approved and ready' });
+  const why = (a, p = pr, o) => sureToMerge(a, p, o).why;
+  assert.equal(why({}), 'No Eval yet');
+  assert.equal(why(agent({ confidence: 97 })), 'The Eval is 97%');
+  assert.equal(why(agent({ rerun: { running: true } })), 'Its tests are running');
+  assert.equal(why(agent({ rerun: { passed: false, head } })), "The app's own test run didn't pass");
+  assert.match(why(agent({ rerun: { passed: true, head: 'b'.repeat(40), clean: true } })), /different commit/);
+  assert.match(why(agent({ rerun: { passed: true, head, clean: false } })), /uncommitted/);
+  assert.equal(why(agent(), { ...pr, review: 'REVIEW_REQUIRED' }), 'No reviewer has approved it');
+  assert.equal(sureToMerge(agent(), { ...pr, review: null }, { needApproval: false }).sure, true);
+  assert.match(why(agent(), { ...pr, mergeState: 'BEHIND' }), /\(behind\)/);
+  assert.match(why(agent(), { ...pr, checks: { state: 'failed' } }), /\(fix\)/);
 });
 
 test('review feedback: new comments from people the repo trusts, not agent replies, approvals or resolved threads', async () => {

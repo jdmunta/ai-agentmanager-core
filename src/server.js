@@ -166,6 +166,11 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
       const [head, status, diff] = await Promise.all([git.run('git', ['rev-parse', 'HEAD'], opts), git.run('git', ['status', '--porcelain'], opts), git.run('git', ['diff', 'HEAD'], opts)]);
       return stateHash(head.trim(), status, diff);
     },
+    commit: async (a) => {
+      const opts = { cwd: a.workdir, timeout: 30_000 };
+      const [head, status] = await Promise.all([git.run('git', ['rev-parse', 'HEAD'], opts), git.run('git', ['status', '--porcelain'], opts)]);
+      return { head: head.trim(), clean: !status.trim() };
+    },
     changes: (a) => review.get(a.id),
     // Claude Code's session: the test runs in it. Other engines keep theirs differently.
     transcript: (a) => (engineOf(a).id === 'claude' && a.workdir ? readTail(engineOf(a).sessionFile(a.workdir, a.sessionId)) : null),

@@ -1,16 +1,18 @@
 // Landing: getting agents' pull requests merged. Failing checks and requested changes are sent
 // back to the agent that owns the PR (a few times per PR at most), new review comments are sent
 // to it for as long as the PR is open, a branch that fell behind is brought up to date with the
-// branch it targets, and ready PRs are merged with one click.
+// branch it targets, and ready PRs are merged with one click. A PR whose Eval is 100% on its latest
+// commit is "sure": listed first, and merged on its own when that is turned on.
 import os from 'node:os';
 import * as git from './git.js';
 import { NO_REPO } from './manager.js';
-import { AGENT_MARK, ghBin, newFeedback, prFeedback } from './tracker.js';
+import { AGENT_MARK, ghBin, landState, newFeedback, prFeedback } from './tracker.js';
 import { triggerSettings } from './triggers.js';
 import { parseBaseRef } from './review.js';
+import { sureToMerge as sureOf } from '../public/sure.js';
 
 export const MERGE_METHODS = ['squash', 'merge', 'rebase'];
-export const LANDING_DEFAULTS = { fixChecks: true, fixReviews: true, fixComments: true, maxFixes: 3, mergeMethod: 'squash', deleteBranch: true };
+export const LANDING_DEFAULTS = { fixChecks: true, fixReviews: true, fixComments: true, maxFixes: 3, mergeMethod: 'squash', deleteBranch: true, mergeWhenSure: false, sureNeedsApproval: true };
 // Rounds of review comments sent per PR: a stop in case an agent's own replies keep coming back.
 const COMMENT_ROUNDS = 30;
 const QUOTE_MAX = 1500;
@@ -30,8 +32,11 @@ export function landingSettings(config = {}) {
     maxFixes: Number.isFinite(n) && n >= 0 ? Math.min(20, Math.floor(n)) : LANDING_DEFAULTS.maxFixes,
     mergeMethod: MERGE_METHODS.includes(c.mergeMethod) ? c.mergeMethod : LANDING_DEFAULTS.mergeMethod,
     deleteBranch: c.deleteBranch !== false,
+    mergeWhenSure: c.mergeWhenSure === true,
+    sureNeedsApproval: c.sureNeedsApproval !== false,
   };
 }
+
 
 export function checksMessage(pr) {
   const names = pr.checks?.failed?.length ? pr.checks.failed.join(', ') : 'some checks';
@@ -84,6 +89,9 @@ export function updateMessage(base) {
   return `Your branch is behind ${base}. Merge ${base} into it (git fetch, then git merge ${base}), resolve any conflicts keeping both sides' intent, run the tests, then commit and push.`;
 }
 
+/** sureToMerge with where the pull request stands worked out here. */
+export const sureToMerge = (agent, pr, opts = {}) => sureOf(agent, pr, { ...opts, land: landState(pr) });
+
 export class Landing {
   constructor({ manager, store, config = {}, log = (m) => console.log(`[agentmgr] ${m}`) }) {
     this.manager = manager;
@@ -92,6 +100,8 @@ export class Landing {
     this.log = log;
     this.onPrs = (agent) => this.react(agent).catch((e) => this.log(`landing: ${e.message}`));
     manager.on('prs', this.onPrs);
+    this.onEvaluated = (agent) => agent && this.mergeIfSure(agent).catch((e) => this.log(`landing: ${e.message}`));
+    manager.on('evaluated', this.onEvaluated);
     // Running agents' PRs are refreshed by the manager; closed agents with an open PR every few minutes.
     this.timer = setInterval(() => this.refreshClosed().catch(() => {}), (config.landingRefreshMin ?? 6) * 60_000);
     this.timer.unref?.();
@@ -100,6 +110,7 @@ export class Landing {
   close() {
     clearInterval(this.timer);
     this.manager.off('prs', this.onPrs);
+    this.manager.off('evaluated', this.onEvaluated);
   }
 
   get settings() {
@@ -109,8 +120,11 @@ export class Landing {
   update(patch = {}) {
     if (patch.mergeMethod !== undefined && !MERGE_METHODS.includes(patch.mergeMethod)) throw err(400, `mergeMethod must be one of ${MERGE_METHODS.join(', ')}`);
     if (patch.maxFixes !== undefined && !(Number(patch.maxFixes) >= 0)) throw err(400, 'maxFixes must be 0 or more');
+    const was = this.settings.mergeWhenSure;
     const next = landingSettings({ landing: { ...this.config.landing, ...patch } });
     this.config.landing = next;
+    // Just turned on: what is already sure merges now, not on its next change.
+    if (next.mergeWhenSure && !was) for (const a of this.store.list()) this.mergeIfSure(a).catch((e) => this.log(`landing: ${e.message}`));
     return next;
   }
 
@@ -147,6 +161,36 @@ export class Landing {
       else if (s.fixReviews && pr.review === 'CHANGES_REQUESTED' && !watched?.changesRequested) send('review', reviewMessage(pr));
     }
     if (sent) this.store.save();
+    await this.mergeIfSure(agent);
+  }
+
+  /**
+   * Merge the agent's pull requests that are sure to merge, when that is turned on. Tried once per
+   * commit: a failure (a policy, branch protection) is kept and shown, not retried until it changes.
+   */
+  async mergeIfSure(agent) {
+    const s = this.settings;
+    if (!s.mergeWhenSure || NO_REPO.has(agent.kind)) return;
+    for (const pr of this.openPrs(agent)) {
+      if (!sureToMerge(agent, pr, { needApproval: s.sureNeedsApproval }).sure) continue;
+      const cur = this.store.get(agent.id);
+      if (!cur) return;
+      const tried = ((cur.landing ??= { sent: {} }).sure ??= {});
+      const key = `${pr.url}@${pr.head}`;
+      if (tried[key]) continue;
+      tried[key] = { at: new Date().toISOString() };
+      this.store.save();
+      try {
+        await this.merge(agent.id, { url: pr.url });
+        tried[key].merged = true;
+        this.log(`landing: merged ${pr.url}: its Eval is 100% on its latest commit`);
+      } catch (e) {
+        tried[key].error = e.message;
+        this.log(`landing: couldn't merge ${pr.url} on its Eval: ${e.message}`);
+      }
+      // Through patch, so open screens show the merge or why it didn't happen.
+      if (this.store.get(agent.id)) this.manager.patch(agent.id, { landing: this.store.get(agent.id).landing });
+    }
   }
 
   /**
@@ -198,11 +242,13 @@ export class Landing {
       for (const pr of view.prs.filter((p) => p.state === 'OPEN' && p.source !== 'mentioned')) {
         const fixes = Object.keys(agent.landing?.sent ?? {}).filter((k) => k.startsWith(`${pr.url}#`)).length;
         const comments = agent.landing?.comments?.[pr.url]?.count ?? 0;
-        rows.push({ agent: { id: agent.id, name: agent.name, priority: view.priority, busy: view.runtime.busy, running: view.runtime.running }, pr, land: pr.land ?? 'waiting', fixes, comments });
+        const sure = sureToMerge(agent, pr, { needApproval: this.settings.sureNeedsApproval });
+        const tried = agent.landing?.sure?.[`${pr.url}@${pr.head}`] ?? null;
+        rows.push({ agent: { id: agent.id, name: agent.name, priority: view.priority, busy: view.runtime.busy, running: view.runtime.running }, pr, land: pr.land ?? 'waiting', fixes, comments, confidence: agent.eval?.confidence ?? null, sure, tried });
       }
     }
     const rank = (r) => (LAND_ORDER.includes(r.land) ? LAND_ORDER.indexOf(r.land) : LAND_ORDER.length);
-    return { settings: this.settings, rows: rows.sort((a, b) => rank(a) - rank(b) || a.agent.priority - b.agent.priority) };
+    return { settings: this.settings, rows: rows.sort((a, b) => rank(a) - rank(b) || Number(b.sure.sure) - Number(a.sure.sure) || a.agent.priority - b.agent.priority) };
   }
 
   agentPr(ref, url) {
