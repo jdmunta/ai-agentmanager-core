@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.35.0 (2026-11-09)
 
 - **Flaky CI is caught before it reaches the agent.** When GitHub Actions checks fail on an agent's pull request, the failed jobs are run once more on the same commit (`gh run rerun --failed`) before the agent is told. If they pass, the checks are marked **Flaky** on the pull request's row in the Land tab and nothing is sent; if they fail again, the agent is told, and that it failed twice. Checks from other CI systems, and a re-run GitHub refuses, go to the agent straight away as before. Once per commit; turn it off in the Land tab's settings.
 
