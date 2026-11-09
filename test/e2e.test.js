@@ -4377,6 +4377,7 @@ test('landing: failed GitHub Actions checks are run once more before the agent h
     // Fails: the failed job's run is run again, and the agent isn't told yet.
     const first = `${prUrl}@${'a'.repeat(40)}`;
     await waitFor(async () => (await landing()).reruns?.[first] || null, 10000, 'the re-run');
+    await waitFor(async () => reruns().length || null, 10000, 'gh asked to run it again');
     assert.deepEqual(reruns(), [['run', 'rerun', '777', '--failed', '--repo', 'acme/demo']]);
     assert.deepEqual(Object.keys((await landing()).sent ?? {}), []);
     // GitHub starts it, and it passes: flaky, and still nothing sent.
