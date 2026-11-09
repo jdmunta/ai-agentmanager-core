@@ -3151,3 +3151,127 @@ test('module benchmarks: Jira issues match modules, a done agent that skipped on
   assert.equal(b.of('github.com/acme/app').length, 0);
   assert.throws(() => b.unwatch(w.id), /No such module/);
 });
+
+test('eval: test runs from the session, confidence by fixed rules (100 only when everything holds up), gaps, and the run again', async () => {
+  const { testRuns, evaluate, evalMarkdown, gapsMessage, usualCommand, detectTestCommand, Evals } = await import('../src/eval.js');
+  const { todayItems: items } = await import('../src/today.js');
+  const line = (o) => JSON.stringify(o);
+  const use = (id, command, timestamp) => line({ type: 'assistant', timestamp, message: { content: [{ type: 'tool_use', id, name: 'Bash', input: { command } }] } });
+  const result = (id, content, is_error = false) => line({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: id, content, is_error }] } });
+  const transcript = [
+    '{"cut line',
+    use('1', 'npm run build'),
+    result('1', 'built'),
+    use('2', 'npm test', '2026-11-08T10:00:00Z'),
+    result('2', 'Exit code 1\n# pass 10\n# fail 2', true),
+    use('3', 'npm test', '2026-11-08T10:05:00Z'),
+    result('3', [{ type: 'text', text: '# pass 12\n# fail 0' }]),
+    use('4', 'go test ./pkg/...'),
+    result('4', 'ok  \tpkg/a\t0.2s'),
+  ].join('\n');
+  const runs = testRuns(transcript);
+  assert.deepEqual(runs.map((r) => [r.command, r.passed, r.counts?.failed]), [['npm test', false, 2], ['npm test', true, 0], ['go test ./pkg/...', true, 0]], 'only test commands, with their results');
+  assert.equal(usualCommand(runs), 'npm test');
+  const files = { 'package.json': '{"scripts":{"test":"node --test"}}', Makefile: 'test:\n\tgo test' };
+  assert.equal(detectTestCommand({ exists: (n) => n in files, read: (n) => files[n] }), 'npm test');
+  assert.equal(detectTestCommand({ exists: (n) => n === 'go.mod', read: () => '' }), 'go test ./...');
+  assert.equal(detectTestCommand({ exists: () => false, read: () => '' }), null);
+
+  // Everything holds up: 100.
+  const all = {
+    runs,
+    rerun: { command: 'npm test', passed: true, counts: { passed: 12, failed: 0 }, state: 's1', at: 'x' },
+    state: 's1',
+    scorecard: { criteria: [{ criterion: 'Retries stop after 5', status: 'met', evidence: 'test/upload.test.js' }] },
+    hasSpec: true,
+    ci: 'passed',
+    review: { verdict: 'complete', summary: 'Does what was asked' },
+    checks: [{ state: 'passed' }],
+    codeFiles: 2,
+    testFiles: 1,
+    testCommand: 'npm test',
+  };
+  const full = evaluate(all);
+  assert.equal(full.confidence, 100);
+  assert.deepEqual(full.pending, []);
+  assert.match(evalMarkdown(full, 'AB-1'), /Confidence: 100%[\s\S]*✅ \| Tests run again[\s\S]*Retries stop after 5 — test\/upload\.test\.js[\s\S]*Nothing pending/);
+  // The code changed after the run: not 100 until it's run again.
+  const stale = evaluate({ ...all, state: 's2' });
+  assert.ok(stale.confidence < 100);
+  assert.match(stale.pending.join('\n'), /code changed after the last run/);
+  // One criterion only verified, CI failing, no tests for the code: well below, each named.
+  const weak = evaluate({ ...all, scorecard: { criteria: [...all.scorecard.criteria, { criterion: 'Logs the cause', status: 'unverified' }] }, ci: 'failed', ciFailed: ['lint'], testFiles: 0 });
+  assert.ok(weak.confidence < 80, String(weak.confidence));
+  assert.match(weak.pending.join('\n'), /no test changed or added[\s\S]*CI on the pull request: Failing: lint[\s\S]*Not verified: Logs the cause/);
+  // Never 100 with something pending, however small; na items don't count.
+  const almost = evaluate({ ...all, checks: [{ state: 'passed' }, { state: 'pending' }] });
+  assert.ok(almost.confidence > 90 && almost.confidence < 100, String(almost.confidence));
+  const noPr = evaluate({ ...all, ci: null, checks: [] });
+  assert.equal(noPr.confidence, 100, 'no pull request yet and no checks listed: not counted');
+  // No run, no criteria, no review: low, and says what's missing.
+  const none = evaluate({ runs: [], codeFiles: 1, testCommand: null });
+  assert.equal(none.confidence, 0);
+  assert.match(none.pending.join('\n'), /No test command found[\s\S]*No acceptance criteria written[\s\S]*ran no tests[\s\S]*Not reviewed yet/);
+  assert.match(gapsMessage(weak), /^The Eval of this change is \d+% confident. To make it 100%/);
+  // Benchmarks: a slower run counts against it until it's marked fine.
+  const slow = evaluate({ ...all, bench: { modules: ['src/store'], runs: [{ module: 'src/store', worst: 20, accepted: null }] } });
+  assert.match(slow.pending.join('\n'), /src\/store 20% slower/);
+  assert.equal(evaluate({ ...all, bench: { modules: ['src/store'], runs: [{ module: 'src/store', worst: 20, accepted: 'x' }] } }).confidence, 100);
+
+  // The class: finished → run again → worked out, with a fake manager and runner.
+  const agents = new Map();
+  const data = { projects: { app: { shortcut: 'app', key: 'k', testCommand: 'make test' } } };
+  const store = { data, save() {}, list: () => [...agents.values()], get: (id) => agents.get(id) ?? null };
+  const told = [];
+  const manager = {
+    on() {},
+    off() {},
+    judge: { enabled: true },
+    issueKey: (a) => a.issue ?? null,
+    projectInfo: () => ({ key: 'k' }),
+    mustGet: (id) => agents.get(id),
+    patch: (id, f) => Object.assign(agents.get(id), f),
+    tell: (id, text) => told.push({ id, text }),
+  };
+  let state = 's1';
+  const ran = [];
+  const ev = new Evals({
+    manager,
+    store,
+    run: async (a, command) => (ran.push(command), { passed: true, output: '# pass 12\n# fail 0' }),
+    state: async () => state,
+    changes: async () => ({ files: [{ path: 'src/up.js' }, { path: 'test/up.test.js' }] }),
+    transcript: () => transcript,
+  });
+  agents.set('a1', { id: 'a1', kind: 'task', name: 'AB-1', issue: 'AB-1', workdir: '/nonexistent-agentmgr-dir', prs: {}, brief: { status: 'done', checks: [] }, aiReview: { verdict: 'complete' }, docs: { scorecard: { at: 't', data: all.scorecard } } });
+  assert.ok(!ev.eligible({ ...agents.get('a1'), issue: null }), 'only Jira work');
+  await assert.rejects(ev.verify('a1'), /no folder/);
+  agents.get('a1').workdir = process.cwd();
+  const v = await ev.verify('a1');
+  assert.deepEqual(ran, ['make test'], "the project's own command");
+  assert.equal(v.eval.rerun.passed, true);
+  assert.equal(v.eval.rerun.counts.passed, 12);
+  // No spec here: the criteria come from the scorecard only, so it's the one gap.
+  assert.equal(v.eval.items.find((i) => i.key === 'rerun').state, 'ok');
+  assert.match(v.markdown, /### Eval: AB-1/);
+  // Not sure yet (agents done but under 100) shows in Today; "Seen" takes it off until it changes.
+  const a = agents.get('a1');
+  a.eval = { ...a.eval, confidence: 80, pending: ['CI on the pull request: Checks still running'] };
+  const unsure = ev.unsure();
+  assert.deepEqual(unsure.map((x) => x.id), ['a1']);
+  const t = items({ unsure: unsure.map((x) => ({ id: x.id, issue: 'AB-1', confidence: x.eval.confidence, pending: x.eval.pending, at: 'x' })) });
+  assert.deepEqual([t[0].kind, t[0].title, t[0].agentId], ['eval', 'AB-1: 80% confident', 'a1']);
+  ev.seen('a1');
+  assert.equal(ev.unsure().length, 0);
+  ev.seen('a1', false);
+  assert.equal(ev.unsure().length, 1);
+  ev.closeGaps('a1');
+  assert.match(told.at(-1).text, /80% confident[\s\S]*Checks still running/);
+  // The code changes: the run is stale until it's run again.
+  state = 's2';
+  const after = await ev.compute('a1');
+  assert.equal(after.eval.items.find((i) => i.key === 'rerun').state, 'pending');
+  // Its test command, set for the project.
+  assert.deepEqual(ev.setTestCommand('a1', '  npm test  '), { testCommand: 'npm test' });
+  ev.close();
+});

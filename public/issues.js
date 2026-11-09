@@ -4,6 +4,7 @@
 // agents start only for the ticked ones. Each issue has your action on its left (assign, skip, done,
 // remove), kept by the daemon across restarts and updates, and changeable any time.
 
+import { evalChip } from './eval.js';
 import { listenHtml } from './speak.js';
 import { holdWhilePicking, rowKeys } from './rowkeys.js';
 import { expandButton, expandable } from './expand.js';
@@ -119,7 +120,7 @@ export function initIssues({ api, $, esc, ago, openAgent, openDoc, openChanges, 
       : '<span class="hint">—</span>';
     return `<tr data-row-id="${esc(r.key)}" class="stage-${esc(r.stage)} action-${esc(r.action)}">${box}${actionCell(r)}
         <td>${issue}${aboutIssue(r)}</td>
-        <td>${status}</td>
+        <td>${status}${r.eval ? `<div>${evalChip(r.eval, esc, `data-issue-doc="eval" data-agent="${esc(r.agent.id)}"`)}</div>` : ''}</td>
         <td class="issue-note">${esc(r.note)}${r.snoozeUntil ? `<div class="hint">until ${esc(new Date(r.snoozeUntil).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' }))}</div>` : ''}${r.stage === 'review' && !r.pr ? `<div class="issue-ship"><button class="small" data-issue-ship="changes" data-agent="${esc(r.agent.id)}" title="The diff, to look over first">See changes</button> <button class="small primary" data-issue-ship="pr" data-agent="${esc(r.agent.id)}" title="Commit what is left, push and open the pull request">Open PR</button></div>` : ''}</td>
         <td class="nowrap">${plan}</td>
         <td class="nowrap">${design}</td>

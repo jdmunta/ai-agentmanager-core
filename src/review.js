@@ -181,6 +181,27 @@ export class Review {
     return { url: pr.url, edited: again };
   }
 
+  /** The Eval as a comment on the agent's open pull request (edited in place when posted before). */
+  async postEval(ref, markdown) {
+    const agent = this.agentWithRepo(ref);
+    if (!markdown) throw err(409, 'Work the Eval out first');
+    const pr = Object.values(agent.prs ?? {}).find((p) => p.state === 'OPEN');
+    if (!pr) throw err(409, 'No open pull request for this agent');
+    this.manager.plugins.check('agent.pr', { agent: this.manager.auditView(agent), title: 'eval comment', draft: false });
+    const opts = { cwd: agent.workdir, timeout: 60_000 };
+    const args = ['pr', 'comment', pr.url, '--body', markdown];
+    const again = agent.eval?.postedTo === pr.url;
+    try {
+      await git.run(ghBin(), again ? [...args, '--edit-last'] : args, opts);
+    } catch (e) {
+      if (!again) throw err(502, `Posting the Eval failed: ${e.message.replace(/^gh .*? failed: /, '')}`);
+      await git.run(ghBin(), args, opts);
+    }
+    const cur = this.manager.store.get(agent.id);
+    this.manager.patch(agent.id, { eval: { ...cur.eval, postedTo: pr.url, postedAt: new Date().toISOString() } });
+    return { url: pr.url, edited: again };
+  }
+
   /** Send the comments to the agent as one message (typed in when it is idle). */
   comment(ref, { comments = [], note = '' } = {}) {
     const agent = this.agentWithRepo(ref);

@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+- **Eval for each Jira change, with a confidence.** When an agent on a Jira issue says it's done, the app runs the project's tests again itself, on the change as it is (the test command is found in the project's files, or set once per project), and works out an *Eval* from evidence, not from the agent's word. It covers:
+  - the tests the agent actually ran in its session and their results;
+  - the app's own test run;
+  - each acceptance criterion and what proves it;
+  - CI on the pull request and the AI judge's review;
+  - the brief's checks and the micro benchmarks;
+  - what is still pending.
+  The **confidence** comes from fixed rules over these: it is **100% only when** the tests pass when run again on the code as it is now, every criterion is met, CI and the judge agree, and nothing is pending. A change made after the run takes it below 100% until the tests run again. It shows as a percentage on the agent, in the Jira list and, for issues done but under 100%, in Today. From the Eval: *Close the gaps* sends what's pending to the agent, *Run tests again*, *Copy for Jira* (Markdown), and *Post to PR* (a comment, only when you press it).
+
 ## 1.32.0 (2026-11-08)
 
 - **Micro benchmarks per module, for Jira issues.** The Map has a *Speed* view: click a folder where speed matters, *Benchmark this folder*, and optionally name the Jira components or labels that mean it. An agent on a Jira issue then benchmarks that module when its issue names it (a component or label, or the folder in the request), or when its change touches it: if it says it's done without having measured it, it's asked to once. It runs every case before and after its change on the same machine, and adds cases for what it changed. A module's benchmarks are kept on this computer, outside the repository, so the next issue on it runs the same ones and the numbers line up. Each issue's numbers show on the module (case, before, after, change), and the folder is coloured by what the last issue did to its speed. A case more than 5% slower shows in Today as *Slower*, with *Ask to fix* (the agent makes it as fast as before, or says why it can't be) and *It's fine*. Jira issues' components and labels are now read along with their summary.

@@ -55,6 +55,8 @@ import { Support } from './support.js';
 import { ghBin, leadingJiraKey } from './tracker.js';
 import { BugHunts } from './bughunt.js';
 import { ModuleBenchmarks } from './benchmarks.js';
+import { Evals, readTail, stateHash } from './eval.js';
+import { engineOf } from './engines/index.js';
 import * as git from './git.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -131,13 +133,15 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
       const keep = (d) => (out = (out + d).slice(-4000));
       child.stdout.on('data', keep);
       child.stderr.on('data', keep);
+      let timedOut = false;
       const timer = setTimeout(() => {
+        timedOut = true;
         try {
           process.kill(-child.pid, 'SIGKILL');
         } catch {}
       }, 15 * 60_000);
       child.on('error', (e) => (clearTimeout(timer), resolve({ passed: false, output: e.message })));
-      child.on('close', (code) => (clearTimeout(timer), resolve({ passed: code === 0, output: out })));
+      child.on('close', (code) => (clearTimeout(timer), resolve({ passed: code === 0 && !timedOut, output: out, timedOut })));
     });
   const hunts = new BugHunts({ manager, store, judge: manager.judge, git: huntGit, log: (m) => console.log(`[agentmgr] ${m}`) });
   hunts.startTimer();
@@ -151,6 +155,23 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
     },
     log: (m) => console.log(`[agentmgr] ${m}`),
   });
+  // Eval: the tests run, the checks done and what's pending for each Jira change, with a confidence.
+  const evals = new Evals({
+    manager,
+    store,
+    benches,
+    run: (a, command) => runCommand(a, command),
+    state: async (a) => {
+      const opts = { cwd: a.workdir, timeout: 30_000 };
+      const [head, status, diff] = await Promise.all([git.run('git', ['rev-parse', 'HEAD'], opts), git.run('git', ['status', '--porcelain'], opts), git.run('git', ['diff', 'HEAD'], opts)]);
+      return stateHash(head.trim(), status, diff);
+    },
+    changes: (a) => review.get(a.id),
+    // Claude Code's session: the test runs in it. Other engines keep theirs differently.
+    transcript: (a) => (engineOf(a).id === 'claude' && a.workdir ? readTail(engineOf(a).sessionFile(a.workdir, a.sessionId)) : null),
+    log: (m) => console.log(`[agentmgr] ${m}`),
+  });
+  evals.startTimer();
   const races = new Races({ manager, store });
   const review = new Review({ manager });
   // The walkthrough explains the same diff the review screen shows.
@@ -876,6 +897,18 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
   api.delete('/benchmodules/:id', wrap((req) => benches.unwatch(req.params.id)));
   api.post('/benchruns/:id/accept', wrap((req) => benches.accept(req.params.id, req.body?.accepted !== false)));
   api.post('/benchruns/:id/fix', wrap((req) => benches.askToFix(req.params.id)));
+  api.get('/agents/:id/eval', wrap(async (req) => (manager.mustGet(req.params.id).eval ? evals.view(manager.mustGet(req.params.id).id) : evals.compute(manager.mustGet(req.params.id).id))));
+  api.post('/agents/:id/eval', wrap((req) => evals.compute(manager.mustGet(req.params.id).id)));
+  api.post('/agents/:id/eval/verify', wrap(async (req) => {
+    const a = manager.mustGet(req.params.id);
+    // Answered at once; the run's result comes with the agent's next update.
+    evals.verify(a.id).catch((e) => console.log(`[agentmgr] eval: ${e.message}`));
+    return { started: true };
+  }));
+  api.put('/agents/:id/eval/command', wrap((req) => evals.setTestCommand(req.params.id, req.body?.command)));
+  api.post('/agents/:id/eval/gaps', wrap((req) => evals.closeGaps(req.params.id)));
+  api.post('/agents/:id/eval/seen', wrap((req) => evals.seen(req.params.id, req.body?.seen !== false)));
+  api.post('/agents/:id/eval/post', wrap((req) => review.postEval(req.params.id, evals.view(manager.mustGet(req.params.id).id)?.markdown)));
   // Issues agents work on, for the summary; ?group=you|agent|done and ?format=markdown to paste.
   api.get('/issues', wrap(async (req) => {
     // ?fresh=1 (the ↻ button) asks Jira again: the issues assigned to you and each issue's status.
@@ -992,7 +1025,7 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
       got('reviews', () => reviews.rows()),
     ]);
     const findings = hunts.list().findings.filter((x) => x.status === 'open' || x.status === 'pr');
-    const items = todayItems({ inbox, issues, actions, reviews: prs, findings, slower: benches.slower() });
+    const items = todayItems({ inbox, issues, actions, reviews: prs, findings, slower: benches.slower(), unsure: evals.unsure().map((a) => ({ id: a.id, name: a.name, issue: manager.issueKey(a), confidence: a.eval.confidence, pending: a.eval.pending, at: a.eval.at })) });
     return { items, aside: todayAside({ issues, actions }), speech: todaySpeech(items), features: f, errors };
   }));
   // Support tickets: kept on this computer, each with a filled-in link to a new GitHub issue.
@@ -1436,6 +1469,7 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
     reviews.close();
     hunts.close();
     benches.close();
+    evals.close();
     autopilot.close();
     goals.close();
     worklog.close();
