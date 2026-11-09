@@ -68,6 +68,11 @@ if (group === 'pr' && cmd === 'list') {
   state.reviews = [...(state.reviews ?? []), { path: args.find((a) => a.startsWith('repos/')), ...payload }];
   save();
   console.log(JSON.stringify({ id: 1, html_url: 'https://github.com/acme/demo/pull/5#pullrequestreview-1', state: 'PENDING' }));
+} else if (group === 'run' && cmd === 'rerun') {
+  if (state.rerunFails) {
+    console.error(state.rerunFails);
+    process.exit(1);
+  }
 } else if (group === 'pr' && cmd === 'comment') {
   console.log(`${args[2]}#issuecomment-1`);
 } else {

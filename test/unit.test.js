@@ -8,7 +8,7 @@ import { repoNameFromUrl, isRemoteUrl } from '../src/git.js';
 import { AgentManager, slugify } from '../src/manager.js';
 import { STATE_VERSION, Store } from '../src/store.js';
 import { checkSummary, claudeProjectDir, compactPr, extractRefs, landState, leadingJiraKey, scanTranscript } from '../src/tracker.js';
-import { checksMessage, landingSettings, reviewMessage, sureToMerge } from '../src/landing.js';
+import { checksMessage, landingSettings, repoOf, reviewMessage, sureToMerge } from '../src/landing.js';
 import { issueIntent, prCommand, tokenMatches, triggerSettings } from '../src/triggers.js';
 import { budgetSettings, costOf, dayKey } from '../src/budgets.js';
 import { sourceOf, stats } from '../src/stats.js';
@@ -897,8 +897,15 @@ test('landing: check summary, where a PR stands, settings and messages', () => {
   assert.equal(landState({ ...pr, mergeState: 'BLOCKED', checks: { state: 'running' } }), 'waiting');
   assert.equal(landState({ ...pr, mergeState: 'BLOCKED', review: 'REVIEW_REQUIRED' }), 'waiting');
   assert.equal(landState({ url: 'u' }), null);
-  assert.deepEqual(landingSettings({}), { fixChecks: true, fixReviews: true, fixComments: true, maxFixes: 3, mergeMethod: 'squash', deleteBranch: true, mergeWhenSure: false, sureNeedsApproval: true });
-  assert.deepEqual(landingSettings({ landing: { fixChecks: false, maxFixes: 99, mergeMethod: 'octopus' } }), { fixChecks: false, fixReviews: true, fixComments: true, maxFixes: 20, mergeMethod: 'squash', deleteBranch: true, mergeWhenSure: false, sureNeedsApproval: true });
+  assert.deepEqual(landingSettings({}), { fixChecks: true, fixReviews: true, fixComments: true, maxFixes: 3, mergeMethod: 'squash', deleteBranch: true, mergeWhenSure: false, sureNeedsApproval: true, rerunFailed: true });
+  assert.deepEqual(landingSettings({ landing: { fixChecks: false, maxFixes: 99, mergeMethod: 'octopus' } }), { fixChecks: false, fixReviews: true, fixComments: true, maxFixes: 20, mergeMethod: 'squash', deleteBranch: true, mergeWhenSure: false, sureNeedsApproval: true, rerunFailed: true });
+  assert.equal(landingSettings({ landing: { rerunFailed: false } }).rerunFailed, false);
+  // Failed GitHub Actions checks carry their run, to run again; other CI doesn't.
+  assert.deepEqual(checkSummary([{ name: 'test', status: 'COMPLETED', conclusion: 'FAILURE', detailsUrl: 'https://github.com/o/r/actions/runs/42/job/7' }, { name: 'e2e', status: 'COMPLETED', conclusion: 'FAILURE', detailsUrl: 'https://github.com/o/r/actions/runs/42/job/8' }, { context: 'ci/ext', state: 'FAILURE', targetUrl: 'https://ci.example/1' }]), { state: 'failed', failed: ['test', 'e2e', 'ci/ext'], running: 0, total: 3, runs: ['42'] });
+  assert.equal(repoOf('https://github.com/o/r/pull/4'), 'o/r');
+  assert.equal(repoOf('https://git.corp.example/o/r/pull/4'), 'git.corp.example/o/r');
+  assert.equal(repoOf('https://github.com/o/r/issues/4'), null);
+  assert.match(checksMessage({ url: 'u', checks: { failed: ['test'] } }, { again: true }), /run again and failed again/);
   assert.match(checksMessage({ url: 'https://x/pull/4', number: 4, checks: { failed: ['unit', 'lint'] } }), /failing on your pull request https:\/\/x\/pull\/4 \(unit, lint\)[\s\S]*gh pr checks 4/);
   assert.match(reviewMessage({ url: 'https://x/pull/4', number: 4 }), /requested changes[\s\S]*gh pr view 4 --comments/);
 });

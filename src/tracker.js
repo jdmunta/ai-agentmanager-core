@@ -226,19 +226,28 @@ const PR_FIELDS = 'number,title,url,state,isDraft,headRefOid,reviewDecision,merg
 const FAILED = new Set(['FAILURE', 'ERROR', 'TIMED_OUT', 'CANCELLED', 'ACTION_REQUIRED', 'STARTUP_FAILURE']);
 const PASSED = new Set(['SUCCESS', 'NEUTRAL', 'SKIPPED']);
 
-/** gh's statusCheckRollup -> { state: passed|failed|running|none, failed: [names], running, total } */
+/**
+ * gh's statusCheckRollup -> { state: passed|failed|running|none, failed: [names], running, total },
+ * plus runs: the GitHub Actions run ids of the failed checks (when there are any), to re-run them.
+ */
 export function checkSummary(rollup) {
   const list = Array.isArray(rollup) ? rollup : [];
   const failed = [];
+  const runs = new Set();
   let running = 0;
   for (const c of list) {
     // Check runs have status/conclusion; commit statuses have state.
     const result = c.conclusion || (c.status && c.status !== 'COMPLETED' ? 'PENDING' : null) || c.state || 'PENDING';
-    if (FAILED.has(result)) failed.push(c.name || c.context || 'check');
-    else if (!PASSED.has(result)) running += 1;
+    if (FAILED.has(result)) {
+      failed.push(c.name || c.context || 'check');
+      const run = /\/actions\/runs\/(\d+)/.exec(c.detailsUrl ?? '')?.[1];
+      if (run) runs.add(run);
+    } else if (!PASSED.has(result)) running += 1;
   }
   const state = !list.length ? 'none' : failed.length ? 'failed' : running ? 'running' : 'passed';
-  return { state, failed: failed.slice(0, 10), running, total: list.length };
+  const out = { state, failed: failed.slice(0, 10), running, total: list.length };
+  if (runs.size) out.runs = [...runs].slice(0, 5);
+  return out;
 }
 
 /** Where a pull request stands on its way in: merged, closed, draft, fix, behind, ready or waiting. */

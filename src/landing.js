@@ -2,7 +2,8 @@
 // back to the agent that owns the PR (a few times per PR at most), new review comments are sent
 // to it for as long as the PR is open, a branch that fell behind is brought up to date with the
 // branch it targets, and ready PRs are merged with one click. A PR whose Eval is 100% on its latest
-// commit is "sure": listed first, and merged on its own when that is turned on.
+// commit is "sure": listed first, and merged on its own when that is turned on. Failed GitHub Actions
+// checks are re-run once per commit before the agent hears of them: a check that passes then is flaky.
 import os from 'node:os';
 import * as git from './git.js';
 import { NO_REPO } from './manager.js';
@@ -12,12 +13,14 @@ import { parseBaseRef } from './review.js';
 import { sureToMerge as sureOf } from '../public/sure.js';
 
 export const MERGE_METHODS = ['squash', 'merge', 'rebase'];
-export const LANDING_DEFAULTS = { fixChecks: true, fixReviews: true, fixComments: true, maxFixes: 3, mergeMethod: 'squash', deleteBranch: true, mergeWhenSure: false, sureNeedsApproval: true };
+export const LANDING_DEFAULTS = { fixChecks: true, fixReviews: true, fixComments: true, maxFixes: 3, mergeMethod: 'squash', deleteBranch: true, mergeWhenSure: false, sureNeedsApproval: true, rerunFailed: true };
 // Rounds of review comments sent per PR: a stop in case an agent's own replies keep coming back.
 const COMMENT_ROUNDS = 30;
 const QUOTE_MAX = 1500;
 const MESSAGE_MAX = 9000;
 const LAND_ORDER = ['ready', 'fix', 'behind', 'waiting', 'draft'];
+// A re-run that GitHub hasn't been seen starting by then: take the failure as it stands.
+const RERUN_WAIT_MS = 15 * 60_000;
 
 const err = (status, message) => Object.assign(new Error(message), { status });
 
@@ -34,14 +37,14 @@ export function landingSettings(config = {}) {
     deleteBranch: c.deleteBranch !== false,
     mergeWhenSure: c.mergeWhenSure === true,
     sureNeedsApproval: c.sureNeedsApproval !== false,
+    rerunFailed: c.rerunFailed !== false,
   };
 }
 
-
-export function checksMessage(pr) {
+export function checksMessage(pr, { again = false } = {}) {
   const names = pr.checks?.failed?.length ? pr.checks.failed.join(', ') : 'some checks';
   return [
-    `CI is failing on your pull request ${pr.url} (${names}).`,
+    `CI is failing on your pull request ${pr.url} (${names}).${again ? ' They were run again and failed again, so this is unlikely to be a flaky test.' : ''}`,
     `Look at the failures (\`gh pr checks ${pr.number ?? pr.url}\`, and \`gh run view <run id> --log-failed\` for the logs), fix the cause, run the relevant tests locally, then commit and push.`,
     'If a failure is unrelated to your change (a flaky test or a broken main), say so instead of changing unrelated code.',
   ].join('\n');
@@ -87,6 +90,13 @@ export function feedbackMessage(pr, items) {
 
 export function updateMessage(base) {
   return `Your branch is behind ${base}. Merge ${base} into it (git fetch, then git merge ${base}), resolve any conflicts keeping both sides' intent, run the tests, then commit and push.`;
+}
+
+/** gh's --repo for a pull request's URL: owner/repo, with the host when it isn't github.com. */
+export function repoOf(url) {
+  const m = /^https?:\/\/([^/]+)\/([^/]+)\/([^/]+)\/pull\/\d+/.exec(url ?? '');
+  if (!m) return null;
+  return m[1] === 'github.com' ? `${m[2]}/${m[3]}` : `${m[1]}/${m[2]}/${m[3]}`;
 }
 
 /** sureToMerge with where the pull request stands worked out here. */
@@ -145,6 +155,7 @@ export class Landing {
     for (const pr of this.openPrs(agent)) {
       const watched = s.fixComments ? await this.sendFeedback(agent, pr) : null;
       if (watched?.sent) sent = true;
+      if (this.trackRerun(agent, pr)) sent = true;
       if (!pr.head || !s.maxFixes) continue;
       const count = Object.keys(agent.landing.sent).filter((k) => k.startsWith(`${pr.url}#`)).length;
       if (count >= s.maxFixes) continue;
@@ -156,12 +167,66 @@ export class Landing {
         this.log(`landing: told ${agent.name} about ${kind} on ${pr.url}`);
         sent = true;
       };
-      if (s.fixChecks && pr.checks?.state === 'failed') send('checks', checksMessage(pr));
+      if (s.fixChecks && pr.checks?.state === 'failed') {
+        const rerun = s.rerunFailed ? await this.rerunOnce(agent, pr) : null;
+        if (rerun?.started) sent = true;
+        if (!rerun?.waiting) send('checks', checksMessage(pr, { again: Boolean(rerun?.again) }));
+      }
       // A review requesting changes that comments are watched for was sent with them.
       else if (s.fixReviews && pr.review === 'CHANGES_REQUESTED' && !watched?.changesRequested) send('review', reviewMessage(pr));
     }
-    if (sent) this.store.save();
+    if (sent && this.store.get(agent.id)) this.manager.patch(agent.id, { landing: agent.landing });
     await this.mergeIfSure(agent);
+  }
+
+  /**
+   * Failed checks on this commit: re-run the failed GitHub Actions jobs once, and hold the message
+   * until they finish. { waiting } while they run, { again } when they failed again, null to tell
+   * the agent now (nothing to re-run, or the re-run couldn't start).
+   */
+  async rerunOnce(agent, pr) {
+    const key = `${pr.url}@${pr.head}`;
+    const reruns = (agent.landing.reruns ??= {});
+    const rec = reruns[key];
+    if (!rec) {
+      const runs = pr.checks?.runs ?? [];
+      const repo = repoOf(pr.url);
+      if (!runs.length || !repo) return null;
+      reruns[key] = { at: new Date().toISOString(), runs, checks: pr.checks.failed ?? [] };
+      try {
+        for (const id of runs) await git.run(ghBin(), ['run', 'rerun', id, '--failed', '--repo', repo], { cwd: os.tmpdir(), timeout: 60_000 });
+      } catch (e) {
+        reruns[key].error = e.message.replace(/^\S+ run rerun .*? failed: /, '');
+        this.log(`landing: couldn't re-run the failed checks on ${pr.url}: ${reruns[key].error}`);
+        return { started: true };
+      }
+      this.log(`landing: re-running the failed checks on ${pr.url} once before telling ${agent.name}`);
+      return { waiting: true, started: true };
+    }
+    if (rec.error) return null;
+    if (rec.result === 'failed') return { again: true };
+    // Still the failure from before the re-run: GitHub hasn't shown it starting yet.
+    if (!rec.restarted && Date.now() - Date.parse(rec.at) < RERUN_WAIT_MS) return { waiting: true };
+    rec.result = 'failed';
+    rec.doneAt = new Date().toISOString();
+    return { again: true };
+  }
+
+  /** A re-run under way: note when it starts, and a pass as flaky checks. True when something changed. */
+  trackRerun(agent, pr) {
+    const rec = agent.landing.reruns?.[`${pr.url}@${pr.head}`];
+    if (!rec || rec.result || rec.error) return false;
+    const state = pr.checks?.state;
+    if (state === 'running' && !rec.restarted) {
+      rec.restarted = true;
+      return true;
+    }
+    if (state === 'passed') {
+      Object.assign(rec, { result: 'passed', flaky: rec.checks, doneAt: new Date().toISOString() });
+      this.log(`landing: ${rec.checks.join(', ') || 'checks'} on ${pr.url} passed on a re-run: flaky`);
+      return true;
+    }
+    return false;
   }
 
   /**
