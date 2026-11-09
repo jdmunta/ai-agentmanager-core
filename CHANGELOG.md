@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.34.0 (2026-11-08)
 
 - **Merge on the Eval.** A pull request is *sure to merge* when its agent's Eval is 100%, the app's own test run passed on the very commit the pull request is at with nothing left uncommitted, a reviewer approved it, and GitHub has it ready. The Land tab lists these first, marked **Sure to merge** with the Eval's percentage; a ready pull request that isn't sure says why (for example "The tests ran on a different commit than the pull request is at"). Turn on **Merge on the Eval** in the Land tab's settings and these merge on their own: each commit is tried once, your policies and branch protection still apply, and a merge that fails says why on the pull request's row. Off by default; the approval requirement can be turned off.
 
