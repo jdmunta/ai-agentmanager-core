@@ -330,17 +330,19 @@ export class Evals {
     if (!command) return this.compute(agent.id);
     this.running.add(agent.id);
     this.manager.patch(agent.id, { eval: { ...(agent.eval ?? {}), rerun: { command, running: true, at: now() } } });
+    let rerun = null;
     try {
       const started = Date.now();
       const st = await this.state(agent).catch(() => null);
       const res = await this.run(agent, command);
-      const rerun = { command, passed: Boolean(res.passed), counts: countsOf(res.output), tail: clip(String(res.output ?? '').split('\n').slice(-15).join('\n'), 2000), timedOut: Boolean(res.timedOut), state: st, at: now(), ms: Date.now() - started };
-      const cur = this.store.get(agent.id);
-      if (cur) this.manager.patch(agent.id, { eval: { ...(cur.eval ?? {}), rerun } });
+      rerun = { command, passed: Boolean(res.passed), counts: countsOf(res.output), tail: clip(String(res.output ?? '').split('\n').slice(-15).join('\n'), 2000), timedOut: Boolean(res.timedOut), state: st, at: now(), ms: Date.now() - started };
+    } catch (e) {
+      rerun = { command, passed: false, counts: null, tail: clip(String(e?.message ?? e), 2000), timedOut: false, state: null, at: now(), ms: 0 };
     } finally {
       this.running.delete(agent.id);
     }
-    return this.compute(agent.id);
+    // The run and what it means are kept together, so no one sees one without the other.
+    return this.compute(agent.id, rerun);
   }
 
   runsOf(agent) {
@@ -349,9 +351,10 @@ export class Evals {
   }
 
   /** Work the Eval out from what is known now (no test run), and keep it on the agent. */
-  async compute(id) {
-    const agent = this.store.get(id);
-    if (!agent) return null;
+  async compute(id, rerun) {
+    const stored = this.store.get(id);
+    if (!stored) return null;
+    const agent = rerun ? { ...stored, eval: { ...(stored.eval ?? {}), rerun } } : stored;
     const runs = this.runsOf(agent);
     const ch = await this.changes(agent).catch(() => ({ files: [] }));
     const TEST = /(^|\/)(tests?|__tests__|spec|specs)\/|[._-](test|spec)\.[a-z]+$|_test\.go$|Test\.java$/i;
@@ -383,7 +386,9 @@ export class Evals {
     ev.testCommand = this.testCommand(agent, runs ?? []);
     const cur = this.store.get(id);
     if (!cur) return null;
-    this.manager.patch(id, { eval: { ...ev, rerun: cur.eval?.rerun ?? null, postedTo: cur.eval?.postedTo ?? null } });
+    // A test run ended while this was worked out: the one it ended with has the newer answer.
+    if (!rerun && (cur.eval?.rerun?.at ?? null) !== (agent.eval?.rerun?.at ?? null)) return this.view(id);
+    this.manager.patch(id, { eval: { ...ev, rerun: rerun ?? cur.eval?.rerun ?? null, postedTo: cur.eval?.postedTo ?? null } });
     return this.view(id);
   }
 
