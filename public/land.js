@@ -50,6 +50,17 @@ export function initLand({ api, esc, toast, agents, $, scoreBadge = () => '', se
     return ` <span class="hint" title="Last sent ${esc(new Date(c.lastAt).toLocaleString())}">${c.count} review comment${c.count === 1 ? '' : 's'} sent</span>`;
   }
 
+  // Failed checks being run again before the agent hears of them, and checks that passed on a re-run.
+  function rerunHint(a, pr) {
+    const recs = Object.entries(a.landing?.reruns ?? {}).filter(([k]) => k.startsWith(`${pr.url}@`)).map(([, v]) => v);
+    const now = a.landing?.reruns?.[`${pr.url}@${pr.head}`];
+    const flaky = [...new Set(recs.filter((r) => r.result === 'passed').flatMap((r) => r.flaky ?? []))];
+    let out = '';
+    if (now && !now.result && !now.error) out += ` <span class="hint" title="The failed GitHub Actions jobs run once more before the agent is told">Re-running ${esc((now.checks ?? []).join(', ') || 'failed checks')}</span>`;
+    if (flaky.length) out += ` <span class="hint" title="Failed, then passed when run again on the same commit">Flaky: ${esc(flaky.join(', '))}</span>`;
+    return out;
+  }
+
   // Why a ready pull request isn't sure, or why merging it on its own didn't work.
   function sureHint(a, pr, land, sure) {
     const tried = a.landing?.sure?.[`${pr.url}@${pr.head}`];
@@ -63,7 +74,7 @@ export function initLand({ api, esc, toast, agents, $, scoreBadge = () => '', se
     return `<li class="agent land-row" data-agent="${a.id}" data-url="${esc(pr.url)}">
       <div class="line1"><span class="prio p${a.priority ?? 2}">P${a.priority ?? 2}</span>
         <a class="name" href="${esc(pr.url)}" target="_blank" rel="noopener" title="${esc(pr.title ?? pr.url)}">#${esc(pr.number ?? '')} ${esc(pr.title ?? pr.url)}</a></div>
-      <div class="line2"><button class="link" data-land="goto">${esc(a.name)}</button>${a.runtime?.busy ? ' <span class="hint">working</span>' : ''}${commentsHint(a.landing?.comments?.[pr.url])}${sureHint(a, pr, land, sure)}</div>
+      <div class="line2"><button class="link" data-land="goto">${esc(a.name)}</button>${a.runtime?.busy ? ' <span class="hint">working</span>' : ''}${commentsHint(a.landing?.comments?.[pr.url])}${sureHint(a, pr, land, sure)}${rerunHint(a, pr)}</div>
       <div class="land-chips">${scoreBadge(a.docs?.scorecard, esc)} ${evalChip(a.eval, esc)} ${sure.sure ? `<span class="tag open" title="${esc(sure.why)}">Sure to merge</span>` : ''} ${prChips(pr, esc)}</div>
       <div class="bl-actions">
         <button class="small" data-land="review" title="Its diff, line comments for the agent, commit and push">Review</button>
@@ -97,6 +108,7 @@ export function initLand({ api, esc, toast, agents, $, scoreBadge = () => '', se
         : '<p class="hint land-empty">No open pull requests from agents. Open one from <b>Review changes</b> on an agent, or let the agent open it.</p>'}
       ${s ? `<details class="land-settings"><summary>When checks fail or reviewers comment</summary>
         <label class="check"><input type="checkbox" data-set="fixChecks" ${s.fixChecks ? 'checked' : ''}> Send failing checks to the agent</label>
+        <label class="check"><input type="checkbox" data-set="rerunFailed" ${s.rerunFailed ? 'checked' : ''}> First run failed GitHub Actions jobs once more on the same commit: one that passes then is marked flaky and not sent</label>
         <label class="check"><input type="checkbox" data-set="fixReviews" ${s.fixReviews ? 'checked' : ''}> Send requested changes to the agent</label>
         <label class="check"><input type="checkbox" data-set="fixComments" ${s.fixComments ? 'checked' : ''}> Send new review comments to the agent while the pull request is open (from the repo's members and review bots)</label>
         <label>At most <input type="number" min="0" max="20" data-set="maxFixes" value="${s.maxFixes}"> times per pull request</label>

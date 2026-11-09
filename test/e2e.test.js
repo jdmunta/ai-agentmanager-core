@@ -4346,6 +4346,91 @@ test('landing: new review comments on an open pull request are sent to its agent
   }
 });
 
+test('landing: failed GitHub Actions checks are run once more before the agent hears; a pass then is flaky, a second failure is sent', async () => {
+  const ghState = path.join(home, 'fake-gh-flaky.json');
+  const ghLog = path.join(home, 'fake-gh-flaky.log');
+  const saved = { bin: process.env.AGENTMGR_GH_BIN, noGh: process.env.AGENTMGR_NO_GH, st: process.env.FAKE_GH_STATE, log: process.env.FAKE_GH_LOG };
+  Object.assign(process.env, { AGENTMGR_GH_BIN: path.join(here, 'fake-gh.js'), FAKE_GH_STATE: ghState, FAKE_GH_LOG: ghLog });
+  delete process.env.AGENTMGR_NO_GH;
+  const prUrl = 'https://github.com/acme/demo/pull/13';
+  const pr = { number: 13, url: prUrl, title: 'Cache fix', state: 'OPEN', headRefName: 'nope', headRefOid: 'a'.repeat(40), createdAt: new Date().toISOString(), mergeable: 'MERGEABLE', mergeStateStatus: 'UNSTABLE', reviewDecision: '' };
+  const checks = (conclusion, status = 'COMPLETED') => [
+    { name: 'test', status, conclusion, detailsUrl: 'https://github.com/acme/demo/actions/runs/777/job/1' },
+    { name: 'lint', status: 'COMPLETED', conclusion: 'SUCCESS', detailsUrl: 'https://github.com/acme/demo/actions/runs/778/job/2' },
+  ];
+  const write = (patch) => {
+    Object.assign(pr, patch);
+    fs.writeFileSync(ghState, JSON.stringify({ prs: [pr] }));
+  };
+  const reruns = () => fs.readFileSync(ghLog, 'utf8').trim().split('\n').map((l) => JSON.parse(l)).filter((c) => c[0] === 'run');
+  const landing = async () => (await agentNow(a.id)).landing ?? {};
+  const refresh = () => call('POST', `/agents/${a.id}/refresh`, { withPrs: true });
+  write({ statusCheckRollup: checks('FAILURE') });
+  fs.writeFileSync(ghLog, '');
+  await call('PUT', '/landing', { fixComments: false });
+  const dir = path.join(home, 'flaky-pr');
+  fs.mkdirSync(dir, { recursive: true });
+  const [a] = (await call('POST', '/agents', { intent: 'Cache fix', dir, start: false })).body;
+  try {
+    await waitFor(async () => ((await agentNow(a.id)).status === 'stopped' ? true : null), 20000);
+    await call('POST', `/agents/${a.id}/links`, { type: 'pr', value: prUrl });
+    // Fails: the failed job's run is run again, and the agent isn't told yet.
+    const first = `${prUrl}@${'a'.repeat(40)}`;
+    await waitFor(async () => (await landing()).reruns?.[first] || null, 10000, 'the re-run');
+    await waitFor(async () => reruns().length || null, 10000, 'gh asked to run it again');
+    assert.deepEqual(reruns(), [['run', 'rerun', '777', '--failed', '--repo', 'acme/demo']]);
+    assert.deepEqual(Object.keys((await landing()).sent ?? {}), []);
+    // GitHub starts it, and it passes: flaky, and still nothing sent.
+    write({ statusCheckRollup: checks(null, 'IN_PROGRESS') });
+    await refresh();
+    await waitFor(async () => (await landing()).reruns[first].restarted || null, 10000, 'the re-run starting');
+    write({ statusCheckRollup: checks('SUCCESS') });
+    await refresh();
+    const passed = (await waitFor(async () => ((await landing()).reruns[first].result ? landing() : null), 10000, 'the re-run passing')).reruns[first];
+    assert.deepEqual([passed.result, passed.flaky], ['passed', ['test']]);
+    assert.deepEqual(Object.keys((await landing()).sent ?? {}), []);
+    assert.equal(reruns().length, 1, 'once per commit');
+
+    // A new commit fails, and fails again when run again: the agent is told.
+    const second = `${prUrl}@${'b'.repeat(40)}`;
+    write({ headRefOid: 'b'.repeat(40), statusCheckRollup: checks('FAILURE') });
+    await refresh();
+    await waitFor(async () => (await landing()).reruns?.[second] || null, 10000, 'the second re-run');
+    write({ statusCheckRollup: checks(null, 'QUEUED') });
+    await refresh();
+    await waitFor(async () => (await landing()).reruns[second].restarted || null, 10000, 'the second re-run starting');
+    write({ statusCheckRollup: checks('FAILURE') });
+    await refresh();
+    const told = await waitFor(async () => ((await landing()).sent?.[`${prUrl}#checks@${'b'.repeat(40)}`] ? landing() : null), 10000, 'told after failing again');
+    assert.equal(told.reruns[second].result, 'failed');
+    assert.equal(reruns().length, 2);
+
+    // A re-run GitHub refuses: told at once.
+    write({ headRefOid: 'c'.repeat(40), statusCheckRollup: checks('FAILURE'), });
+    fs.writeFileSync(ghState, JSON.stringify({ prs: [pr], rerunFails: 'run 777 cannot be rerun; its workflow file may be broken' }));
+    await call('POST', `/agents/${a.id}/stop`);
+    await refresh();
+    const refused = await waitFor(async () => ((await landing()).sent?.[`${prUrl}#checks@${'c'.repeat(40)}`] ? landing() : null), 10000, 'told when the re-run is refused');
+    assert.match(refused.reruns[`${prUrl}@${'c'.repeat(40)}`].error, /cannot be rerun/);
+
+    // Turned off: told at once, nothing run again.
+    assert.equal((await call('PUT', '/landing', { rerunFailed: false })).body.settings.rerunFailed, false);
+    write({ headRefOid: 'd'.repeat(40), statusCheckRollup: checks('FAILURE') });
+    await call('POST', `/agents/${a.id}/stop`);
+    await refresh();
+    await waitFor(async () => (await landing()).sent?.[`${prUrl}#checks@${'d'.repeat(40)}`] || null, 10000, 'told with re-runs off');
+    assert.equal(reruns().length, 3);
+  } finally {
+    await call('PUT', '/landing', { fixComments: true, rerunFailed: true });
+    await call('POST', `/agents/${a.id}/stop`);
+    await call('DELETE', `/agents/${a.id}`);
+    for (const [k, v] of [['AGENTMGR_GH_BIN', saved.bin], ['AGENTMGR_NO_GH', saved.noGh], ['FAKE_GH_STATE', saved.st], ['FAKE_GH_LOG', saved.log]]) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  }
+});
+
 test('triggers: labeled GitHub issues start agents once, trusted /agent PR comments reach the agent, the webhook needs its token', async () => {
   const ghState = path.join(home, 'fake-gh-triggers.json');
   const ghLog = path.join(home, 'fake-gh-triggers.log');
