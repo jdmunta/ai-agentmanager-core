@@ -159,6 +159,8 @@ export function issueRows(views, jira = new Map(), read = () => null, proposed =
       agent: { id: v.id, name: v.name, project: v.projectInfo?.name ?? null, running: Boolean(v.runtime?.running), busy: Boolean(v.runtime?.busy), from: v.startedBy ? 'assistant' : v.trigger?.source ?? null },
       pr: pr ? { url: pr.url, number: pr.number ?? null, title: pr.title ?? null, state: pr.state, checks: pr.checks?.state ?? null, review: pr.review ?? null } : null,
       aiReview: v.aiReview?.verdict ?? null,
+      // The Eval's confidence (eval.js), and what's pending.
+      eval: v.eval?.items || v.eval?.rerun?.running ? { items: v.eval.items ?? null, confidence: v.eval.confidence ?? null, pending: v.eval.pending ?? [], rerun: v.eval.rerun ? { running: Boolean(v.eval.rerun.running) } : null } : null,
       plan: planOf(v, read),
       design,
       updatedAt: v.activeAt ?? v.createdAt ?? null,

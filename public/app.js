@@ -9,6 +9,7 @@ import { initSide } from '/side.js';
 import { openCopy, pasteInto } from '/termclip.js';
 import { initBuilt } from '/built.js';
 import { addTools, download, htmlFile, initExport } from '/export.js';
+import { evalChip, evalHtml } from '/eval.js';
 import { badgeHtml as scoreBadge, chipHtml as scoreChip, improveHtml, scorecardHtml, scorecardSpeech } from '/scorecard.js';
 import { bindListen, listenHtml, play, speakable, now as speaking, stop as stopSpeaking } from '/speak.js';
 import { initReview } from '/review.js';
@@ -267,6 +268,7 @@ const todayUi = initToday({
   openReviews: () => reviewsUi.open(),
   openBugs: (show = 'open') => bugsUi.open({ show }),
   openChanges: (id) => (showTab('agents'), select(id), reviewUi.open(id)),
+  openEval: (id) => (showTab('agents'), select(id), openDoc(id, 'eval')),
 });
 $('#today-btn').onclick = () => todayUi.open();
 // Designs: every agent's design doc, the ones waiting for your review first.
@@ -497,7 +499,7 @@ const INSIGHT_ICONS = { why: '🎯', what: '📦', how: '🛠', now: '📍' };
 const DOCS = { analysis: 'Analysis', design: 'Design', flow: 'Flow', proposal: 'Proposal', humanai: 'Human vs AI', diagrams: 'Diagrams', scorecard: 'Scorecard' };
 // Optional extras that "Write all" leaves out.
 const DOC_EXTRAS = new Set(['diagrams', 'scorecard']);
-const DOC_TITLES = { ...DOCS, plan: 'Plan', intent: 'Intent', spec: 'Spec', designdoc: 'Design doc', benchmark: 'Benchmark' };
+const DOC_TITLES = { ...DOCS, eval: 'Eval', plan: 'Plan', intent: 'Intent', spec: 'Spec', designdoc: 'Design doc', benchmark: 'Benchmark' };
 // The agent's intent, spec and plan files (read from the daemon when opened; kept here by agent and kind).
 const SPEC_KINDS = { intent: 'Intent', spec: 'Spec', plan: 'Plan', designdoc: 'Design doc', benchmark: 'Benchmark' };
 // What each optional file is, for its button before it's written.
@@ -513,7 +515,7 @@ async function loadSpec(agentId, kind) {
 }
 /** What the document dialog shows: a stakeholder document, or the agent's plan under review. */
 const docOf = (a, kind) =>
-  isSpecKind(a, kind) ? specCache.get(`${a?.id}:${kind}`) : kind === 'plan' ? a?.planReview && { markdown: a.planReview.markdown, at: a.planReview.updatedAt } : a?.docs?.[kind];
+  kind === 'eval' ? (a?.eval?.markdown ? { markdown: a.eval.markdown, at: a.eval.at } : null) : isSpecKind(a, kind) ? specCache.get(`${a?.id}:${kind}`) : kind === 'plan' ? a?.planReview && { markdown: a.planReview.markdown, at: a.planReview.updatedAt } : a?.docs?.[kind];
 
 const VERDICT = { agree: '✓ Agrees', partly: '≈ Partly agrees', disagree: '✗ Disagrees', keep: '✓ Keep', ai: '🤖 AI could answer', reword: '✎ Reword' };
 const CONFIDENCE = { high: 'High confidence', medium: 'Medium confidence', low: 'Low confidence' };
@@ -629,6 +631,7 @@ function renderDocDialog() {
   const specKind = isSpecKind(a, docView.kind);
   $('#doc-title').textContent = `${label} · ${a?.name ?? ''}`;
   const body = $('#doc-body');
+  if (docView.kind === 'eval') return renderEval(a, body, d);
   body.classList.toggle('diagrams-view', docView.kind === 'diagrams');
   if (d?.pending) {
     body.innerHTML = `<p class="hint">${docView.kind === 'humanai' ? 'Splitting the open questions and answering the AI ones, then asking a second model to check…' : docView.kind === 'diagrams' ? "Drawing the diagrams from the documents and the agent's work so far…" : `Writing the ${label.toLowerCase()} document from the agent's work so far…`}</p>`;
@@ -675,12 +678,60 @@ function openDoc(agentId, kind) {
   $('#doc-body').dataset.rendered = '';
   $('#doc-dialog').showModal();
   const a = agents.get(agentId);
-  if (isSpecKind(a, kind)) {
+  if (kind === 'eval') {
+    if (!a?.eval?.items) api('POST', `/agents/${agentId}/eval`).catch((e) => toast(e.message, 6000));
+  } else if (isSpecKind(a, kind)) {
     specCache.delete(`${agentId}:${kind}`);
     loadSpec(agentId, kind).then(() => docView?.agentId === agentId && docView.kind === kind && renderDocDialog());
   } else if (kind !== 'plan' && !a.docs?.[kind]?.markdown && !a.docs?.[kind]?.pending) generateDoc();
   renderDocDialog();
 }
+
+/** The Eval in the document dialog: drawn again when it or its test run changes. */
+function renderEval(a, body, d) {
+  body.classList.remove('diagrams-view');
+  const ev = a?.eval;
+  const version = `${ev?.at}:${ev?.rerun?.at}:${Boolean(ev?.rerun?.running)}`;
+  if (body.dataset.rendered !== version) {
+    body.innerHTML = evalHtml(ev, esc, { canPost: Object.values(a?.prs ?? {}).some((p) => p.state === 'OPEN') });
+    body.dataset.rendered = version;
+  }
+  $('#doc-meta').textContent = ev?.at ? `Worked out ${ago(ev.at)}${ev.postedTo ? ' · posted on the pull request' : ''}` : '';
+  for (const id of ['doc-copy', 'doc-download', 'doc-print']) $(`#${id}`).disabled = !d?.markdown;
+  $('#doc-html').hidden = true;
+  $('#doc-listen').innerHTML = '';
+  $('#doc-print').hidden = true;
+  $('#doc-regen').hidden = true;
+  $('#doc-bg').hidden = true;
+  $('#doc-foot').hidden = true;
+}
+
+$('#doc-body').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-eval]');
+  if (!b || docView?.kind !== 'eval') return;
+  const id = docView.agentId;
+  const what = b.dataset.eval;
+  if (what === 'copy') {
+    return navigator.clipboard.writeText(agents.get(id)?.eval?.markdown ?? '').then(
+      () => toast('Eval copied as Markdown; paste it in the Jira issue'),
+      () => toast('Copy failed: your browser blocked clipboard access'),
+    );
+  }
+  if (what === 'verify') return act(() => api('POST', `/agents/${id}/eval/verify`), 'Running the tests again on the change');
+  if (what === 'gaps') return act(() => api('POST', `/agents/${id}/eval/gaps`), 'Sent the gaps to the agent; the Eval is worked out again when it is done');
+  if (what === 'post') return act(async () => toast((await api('POST', `/agents/${id}/eval/post`)).edited ? 'Eval updated on the pull request' : 'Eval posted on the pull request', 4000));
+});
+$('#doc-body').addEventListener('submit', (e) => {
+  const f = e.target.closest('[data-eval-command]');
+  if (!f || docView?.kind !== 'eval') return;
+  e.preventDefault();
+  const id = docView.agentId;
+  act(async () => {
+    const r = await api('PUT', `/agents/${id}/eval/command`, { command: f.command.value });
+    await api('POST', `/agents/${id}/eval/verify`);
+    toast(r.testCommand ? `Saved; running ${r.testCommand}` : 'Saved', 4000);
+  });
+});
 
 function generateDoc() {
   const { agentId, kind } = docView;
@@ -835,8 +886,9 @@ const OUTCOME = {
 
 /** The scorecard before you review: the score, Improve, and the full card. */
 function scoreStrip(a) {
-  if (!a.docs?.scorecard?.data && !a.improving) return '';
-  return `<div class="sc-strip">${scoreBadge(a.docs?.scorecard, esc, { improving: a.improving })} ${improveHtml(a)} ${a.docs?.scorecard?.data ? '<button class="small ghost" data-doc="scorecard">Scorecard</button>' : ''}</div>`;
+  const ev = a.eval?.items || a.eval?.rerun?.running ? `${evalChip(a.eval, esc, 'data-doc="eval"')}` : '';
+  if (!a.docs?.scorecard?.data && !a.improving && !ev) return '';
+  return `<div class="sc-strip">${ev} ${scoreBadge(a.docs?.scorecard, esc, { improving: a.improving })} ${improveHtml(a)} ${a.docs?.scorecard?.data ? '<button class="small ghost" data-doc="scorecard">Scorecard</button>' : ''}${ev ? '<button class="small ghost" data-doc="eval">Eval</button>' : ''}</div>`;
 }
 
 /** End result, status and blockers: first thing a reviewer reads. */
@@ -983,7 +1035,7 @@ function agentItem(a, { project = false } = {}) {
       ${a.prs.length ? `<span>${a.prs.length} PR</span>` : ''}
       ${a.bugs.length ? `<span>${a.bugs.length} bug</span>` : ''}
       ${a.usage?.total ? `<span title="${esc(usageTitle(a.usage))}">${fmtTokens(ioOf(a.usage))} tok</span>` : ''}
-      ${scoreChip(a, esc)}
+      ${scoreChip(a, esc)}${evalChip(a.eval, esc)}
       ${(a.brief?.references ?? []).filter((r) => r.key && r.url).map((r) => `<span class="tag key-ref" title="${esc(r.title || r.url)}">${esc(r.label)}</span>`).join('')}
       ${a.brief?.summary?.total
         ? `<span class="${a.brief.summary.failed ? 'fail' : ''}" title="${esc(checksSummary(a.brief))}">✓${a.brief.summary.passed}/${a.brief.summary.total}${a.brief.summary.failed ? ` ✗${a.brief.summary.failed}` : ''}</span>`

@@ -1718,6 +1718,47 @@ test('module benchmarks: a Jira issue in a benchmarked module gets its benchmark
   }
 });
 
+test('eval: a Jira agent that says it is done gets its tests run again, an Eval with a confidence, and a Today item until it is sure', async () => {
+  const origin = makeOrigin('evaled');
+  assert.equal((await call('POST', '/projects', { shortcut: 'evaled', repo: `file://${origin}`, base: 'main' })).status, 200);
+  const [a] = (await call('POST', '/agents', { intent: 'https://jira.example.test/browse/QA-3 make uploads stop retrying', project: 'evaled', start: false })).body;
+  await waitFor(async () => ((await agentNow(a.id)).status !== 'preparing' ? true : null), 20000, 'its folder');
+  // The project's test command, run in the agent's folder.
+  assert.deepEqual((await call('PUT', `/agents/${a.id}/eval/command`, { command: 'test -f README.md && echo "# pass 3" && echo "# fail 0"' })).body, { testCommand: 'test -f README.md && echo "# pass 3" && echo "# fail 0"' });
+  manager.patch(a.id, { brief: { status: 'done', checks: [{ state: 'passed', text: 'unit tests' }] } });
+  manager.emit('finished', manager.store.get(a.id));
+  const done = await waitFor(async () => {
+    const e = (await call('GET', `/agents/${a.id}/eval`)).body.eval;
+    return e?.items && e.rerun && !e.rerun.running ? e : null;
+  }, 20000, 'the Eval');
+  assert.equal(done.rerun.passed, true);
+  assert.deepEqual(done.rerun.counts, { passed: 3, failed: 0 });
+  assert.equal(done.items.find((i) => i.key === 'rerun').state, 'ok');
+  // No criteria, no review, no tests from the agent: not sure, and it says why.
+  assert.ok(done.confidence < 100);
+  assert.match(done.pending.join('\n'), /No acceptance criteria written/);
+  assert.match(done.markdown, /### Eval: QA-3/);
+  const item = await waitFor(async () => (await call('GET', '/today')).body.items.find((i) => i.kind === 'eval' && i.agentId === a.id), 5000, 'the Eval in Today');
+  assert.equal(item.title, `QA-3: ${done.confidence}% confident`);
+  // The Jira list shows it too.
+  const row = (await call('GET', '/issues')).body.rows.find((r) => r.key === 'QA-3');
+  assert.equal(row.eval.confidence, done.confidence);
+  // Seen: off Today until it changes. No pull request to post on.
+  assert.equal((await call('POST', `/agents/${a.id}/eval/seen`, {})).status, 200);
+  assert.ok(!(await call('GET', '/today')).body.items.some((i) => i.kind === 'eval' && i.agentId === a.id));
+  assert.equal((await call('POST', `/agents/${a.id}/eval/post`, {})).status, 409);
+  // A failing command: the run fails and the Eval says so.
+  await call('PUT', `/agents/${a.id}/eval/command`, { command: 'echo "# pass 2"; echo "# fail 1"; exit 1' });
+  assert.equal((await call('POST', `/agents/${a.id}/eval/verify`, {})).body.started, true);
+  const failed = await waitFor(async () => {
+    const e = (await call('GET', `/agents/${a.id}/eval`)).body.eval;
+    return e?.rerun && !e.rerun.running && e.rerun.passed === false ? e : null;
+  }, 20000, 'the failing run');
+  assert.equal(failed.items.find((i) => i.key === 'rerun').state, 'failed');
+  assert.match(failed.items.find((i) => i.key === 'rerun').detail, /1 failed, 2 passed/);
+  await call('DELETE', `/agents/${a.id}`);
+});
+
 test('questions for you: listed with a drafted answer, edited, snoozed, and in Today', async () => {
   const q = (await call('POST', '/actions', { text: 'Answer Pat: retry limit?', source: 'slack', link: 'https://acme.slack.com/archives/C1/p1', from: 'Pat', question: 'What is the retry limit for uploads?', answer: 'Five attempts, with backoff (upload.js).', sources: 'src/upload.js' })).body;
   assert.equal(q.kind, 'question');

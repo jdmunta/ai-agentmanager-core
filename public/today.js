@@ -10,7 +10,7 @@ import { expandButton, expandable } from './expand.js';
 // Up to this score an item is pressing: it counts on the button.
 const PRESSING = 32;
 
-export function initToday({ api, $, esc, ago, openAgent, showInbox, openActions, openIssues, openReviews, openBugs, openChanges, toast }) {
+export function initToday({ api, $, esc, ago, openAgent, showInbox, openActions, openIssues, openReviews, openBugs, openChanges, openEval, toast }) {
   const dialog = $('#today-dialog');
   const body = $('#today-body');
   let data = null;
@@ -61,6 +61,7 @@ export function initToday({ api, $, esc, ago, openAgent, showInbox, openActions,
     if (it.kind === 'pr-requested') return [btn('review', 'Review it', 'A reviewer agent reads it and finds what blocks approval (a)', true), link(it.url, 'PR')].join(' ');
     if (it.kind === 'pr-ready') return [btn('open-reviews', 'Open review', 'Pick what to post (Enter)', true), link(it.url, 'PR')].join(' ');
     if (it.kind === 'rule') return btn('inbox', 'Inbox', 'Decide in the inbox (Enter)', true);
+    if (it.kind === 'eval') return [btn('gaps', 'Close the gaps', 'Send what is pending to the agent, to bring it to 100% (a)', true), btn('eval', 'Eval', 'What was run and verified, and what is pending (Enter)'), btn('done', 'Seen', 'Off the list until its confidence changes (d)'), btn('open', 'Open', "Open the agent's session")].join(' ');
     if (it.kind === 'bench') return [btn('fix', 'Ask to fix', 'Ask the agent to make it as fast as before, or say why it can\'t be (a)', true), btn('done', "It's fine", 'The slowdown is expected: off the list (d)'), btn('open', 'Open', "Open the agent's session (Enter)")].join(' ');
     if (it.kind === 'bug-pr') return [link(it.url, 'Open PR'), btn('done', 'Done', 'You looked at it: off the list (d)'), btn('bugs', 'Details', 'The bug and how the fix was checked (Enter)')].join(' ');
     if (it.kind === 'bug') return [btn('fix', 'Fix', 'Start an agent on it, with the failing test (a)', true), btn('skip', 'Snooze', 'Until tomorrow 9am (s)'), btn('notbug', 'Not a bug', "It won't be reported again"), btn('bugs', 'Evidence', 'See it in Bugs (Enter)')].join(' ');
@@ -201,7 +202,7 @@ export function initToday({ api, $, esc, ago, openAgent, showInbox, openActions,
   async function act(it, what) {
     if (!it) return;
     try {
-      if (what === 'open' || (what === 'enter' && it.agentId && !['pr-ready', 'rule'].includes(it.kind))) {
+      if (what === 'open' || (what === 'enter' && it.agentId && !['pr-ready', 'rule', 'eval'].includes(it.kind))) {
         if (!it.agentId) return;
         dialog.close();
         return openAgent(it.agentId);
@@ -213,6 +214,10 @@ export function initToday({ api, $, esc, ago, openAgent, showInbox, openActions,
       if (what === 'open-reviews' || (what === 'enter' && it.kind.startsWith('pr-'))) {
         dialog.close();
         return openReviews();
+      }
+      if (it.kind === 'eval' && (what === 'eval' || what === 'enter')) {
+        dialog.close();
+        return openEval?.(it.agentId);
       }
       if (what === 'bugs' || (what === 'enter' && (it.kind === 'bug' || it.kind === 'bug-pr'))) {
         dialog.close();
@@ -283,6 +288,13 @@ export function initToday({ api, $, esc, ago, openAgent, showInbox, openActions,
         t.setHours(9, 0, 0, 0);
         await api('POST', '/findings/set', { ids: [it.findingId], status: what === 'skip' ? 'snoozed' : 'notbug', until: what === 'skip' ? t.toISOString() : null });
         changedWith(what === 'skip' ? 'Snoozed until tomorrow 9am' : "Not a bug: it won't be reported again", what === 'skip' ? 'snoozed' : 'not a bug', () => api('POST', '/findings/set', { ids: [it.findingId], status: 'open' }));
+      } else if (it.kind === 'eval' && (what === 'gaps' || what === 'assign')) {
+        await api('POST', `/agents/${it.agentId}/eval/gaps`, {});
+        toast?.('Sent the gaps to the agent; the Eval is worked out again when it is done', 4000);
+        return;
+      } else if (it.kind === 'eval' && what === 'done') {
+        await api('POST', `/agents/${it.agentId}/eval/seen`, { seen: true });
+        changedWith('Seen: off the list until its confidence changes', 'seen', () => api('POST', `/agents/${it.agentId}/eval/seen`, { seen: false }));
       } else if (it.kind === 'bench' && (what === 'fix' || what === 'assign')) {
         await api('POST', `/benchruns/${it.runId}/fix`, {});
         toast?.('Asked the agent to fix it, or say why it can\'t be', 4000);
