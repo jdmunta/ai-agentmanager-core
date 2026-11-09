@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.33.0 (2026-11-08)
 
 - **Eval for each Jira change, with a confidence.** When an agent on a Jira issue says it's done, the app runs the project's tests again itself, on the change as it is (the test command is found in the project's files, or set once per project), and works out an *Eval* from evidence, not from the agent's word. It covers:
   - the tests the agent actually ran in its session and their results;
