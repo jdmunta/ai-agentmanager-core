@@ -264,11 +264,13 @@ export class Evals {
    * `state(agent)` → a hash of its code as it is; `changes(agent)` → { files: [{ path }] };
    * `transcript(agent)` → its session's text (Claude Code), or null when it can't be read.
    */
-  constructor({ manager, store, run, state, changes = async () => ({ files: [] }), transcript, benches = null, log = () => {} }) {
+  constructor({ manager, store, run, state, commit = async () => null, changes = async () => ({ files: [] }), transcript, benches = null, log = () => {} }) {
     this.manager = manager;
     this.store = store;
     this.run = run;
     this.state = state;
+    // The commit the tests ran on, and whether nothing was left uncommitted: merging relies on it.
+    this.commit = commit;
     this.changes = changes;
     this.transcript = transcript;
     this.benches = benches;
@@ -334,8 +336,9 @@ export class Evals {
     try {
       const started = Date.now();
       const st = await this.state(agent).catch(() => null);
+      const at = await this.commit(agent).catch(() => null);
       const res = await this.run(agent, command);
-      rerun = { command, passed: Boolean(res.passed), counts: countsOf(res.output), tail: clip(String(res.output ?? '').split('\n').slice(-15).join('\n'), 2000), timedOut: Boolean(res.timedOut), state: st, at: now(), ms: Date.now() - started };
+      rerun = { command, passed: Boolean(res.passed), counts: countsOf(res.output), tail: clip(String(res.output ?? '').split('\n').slice(-15).join('\n'), 2000), timedOut: Boolean(res.timedOut), state: st, head: at?.head ?? null, clean: at?.clean ?? null, at: now(), ms: Date.now() - started };
     } catch (e) {
       rerun = { command, passed: false, counts: null, tail: clip(String(e?.message ?? e), 2000), timedOut: false, state: null, at: now(), ms: 0 };
     } finally {
@@ -389,6 +392,7 @@ export class Evals {
     // A test run ended while this was worked out: the one it ended with has the newer answer.
     if (!rerun && (cur.eval?.rerun?.at ?? null) !== (agent.eval?.rerun?.at ?? null)) return this.view(id);
     this.manager.patch(id, { eval: { ...ev, rerun: rerun ?? cur.eval?.rerun ?? null, postedTo: cur.eval?.postedTo ?? null } });
+    this.manager.emit?.('evaluated', this.store.get(id));
     return this.view(id);
   }
 

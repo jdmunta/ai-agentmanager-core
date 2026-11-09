@@ -1,7 +1,10 @@
 // Land tab: every agent's open pull request, grouped by what it needs to get merged, with
-// Review, Update, Ask to fix and Merge. Settings for sending failures back to agents at the bottom.
+// Review, Update, Ask to fix and Merge. Ones whose Eval is 100% on their latest commit come first.
+// Settings for sending failures back to agents, and for merging on the Eval, at the bottom.
 
 import { listenHtml } from './speak.js';
+import { evalChip } from './eval.js';
+import { sureToMerge } from './sure.js';
 const SHORT = { ready: 'ready', fix: 'to fix', behind: 'behind', waiting: 'waiting', draft: 'draft' };
 const GROUPS = [
   ['ready', 'Ready to merge'],
@@ -35,10 +38,10 @@ export function initLand({ api, esc, toast, agents, $, scoreBadge = () => '', se
     for (const a of agents.values()) {
       for (const pr of a.prs ?? []) {
         if (pr.state !== 'OPEN' || pr.source === 'mentioned') continue;
-        out.push({ a, pr, land: pr.land ?? 'waiting' });
+        out.push({ a, pr, land: pr.land ?? 'waiting', sure: sureToMerge(a, pr, { needApproval: settings?.sureNeedsApproval ?? true }) });
       }
     }
-    return out.sort((x, y) => (x.a.priority ?? 2) - (y.a.priority ?? 2));
+    return out.sort((x, y) => Number(y.sure.sure) - Number(x.sure.sure) || (x.a.priority ?? 2) - (y.a.priority ?? 2));
   };
 
   // Review comments sent to the agent so far, and when last.
@@ -47,13 +50,21 @@ export function initLand({ api, esc, toast, agents, $, scoreBadge = () => '', se
     return ` <span class="hint" title="Last sent ${esc(new Date(c.lastAt).toLocaleString())}">${c.count} review comment${c.count === 1 ? '' : 's'} sent</span>`;
   }
 
-  function rowHtml({ a, pr, land }) {
+  // Why a ready pull request isn't sure, or why merging it on its own didn't work.
+  function sureHint(a, pr, land, sure) {
+    const tried = a.landing?.sure?.[`${pr.url}@${pr.head}`];
+    if (tried?.error) return ` <span class="hint fail" title="${esc(tried.error)}">Couldn't merge on its own</span>`;
+    if (land === 'ready' && !sure.sure && a.eval?.items) return ` <span class="hint" title="Why it isn't merged on its Eval">${esc(sure.why)}</span>`;
+    return '';
+  }
+
+  function rowHtml({ a, pr, land, sure }) {
     const canFix = land === 'fix' || land === 'behind';
     return `<li class="agent land-row" data-agent="${a.id}" data-url="${esc(pr.url)}">
       <div class="line1"><span class="prio p${a.priority ?? 2}">P${a.priority ?? 2}</span>
         <a class="name" href="${esc(pr.url)}" target="_blank" rel="noopener" title="${esc(pr.title ?? pr.url)}">#${esc(pr.number ?? '')} ${esc(pr.title ?? pr.url)}</a></div>
-      <div class="line2"><button class="link" data-land="goto">${esc(a.name)}</button>${a.runtime?.busy ? ' <span class="hint">working</span>' : ''}${commentsHint(a.landing?.comments?.[pr.url])}</div>
-      <div class="land-chips">${scoreBadge(a.docs?.scorecard, esc)} ${prChips(pr, esc)}</div>
+      <div class="line2"><button class="link" data-land="goto">${esc(a.name)}</button>${a.runtime?.busy ? ' <span class="hint">working</span>' : ''}${commentsHint(a.landing?.comments?.[pr.url])}${sureHint(a, pr, land, sure)}</div>
+      <div class="land-chips">${scoreBadge(a.docs?.scorecard, esc)} ${evalChip(a.eval, esc)} ${sure.sure ? `<span class="tag open" title="${esc(sure.why)}">Sure to merge</span>` : ''} ${prChips(pr, esc)}</div>
       <div class="bl-actions">
         <button class="small" data-land="review" title="Its diff, line comments for the agent, commit and push">Review</button>
         ${listenHtml(`prvoice:${a.id}`, { title: 'Explain the review aloud: the PR, its checks, the AI review, the riskiest changes and what is left', label: 'Explain' })}
@@ -91,6 +102,11 @@ export function initLand({ api, esc, toast, agents, $, scoreBadge = () => '', se
         <label>At most <input type="number" min="0" max="20" data-set="maxFixes" value="${s.maxFixes}"> times per pull request</label>
         <label>Merge with <select data-set="mergeMethod">${['squash', 'merge', 'rebase'].map((m) => `<option ${m === s.mergeMethod ? 'selected' : ''}>${m}</option>`).join('')}</select></label>
         <label class="check"><input type="checkbox" data-set="deleteBranch" ${s.deleteBranch ? 'checked' : ''}> Delete the branch on GitHub after merging</label>
+      </details>
+      <details class="land-settings"><summary>Merge on the Eval</summary>
+        <label class="check"><input type="checkbox" data-set="mergeWhenSure" ${s.mergeWhenSure ? 'checked' : ''}> Merge a pull request on its own when its Eval is 100%, the app's own test run passed on the commit the pull request is at, and GitHub has it ready</label>
+        <label class="check"><input type="checkbox" data-set="sureNeedsApproval" ${s.sureNeedsApproval ? 'checked' : ''}> Only once a reviewer has approved it</label>
+        <p class="hint">Each commit is tried once, and your policies and branch protection still apply. When this is off, these pull requests are only listed first, marked <b>Sure to merge</b>.</p>
       </details>` : ''}`;
   }
 
