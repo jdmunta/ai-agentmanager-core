@@ -170,6 +170,8 @@ export class Builder {
   }
 
   saveMeta(name, patch) {
+    // The agent was deleted while something of it still ran (its tests, a package): nothing to keep.
+    if (!fs.existsSync(this.dir(name))) return null;
     const next = { ...this.meta(name), ...patch, updatedAt: now() };
     fs.writeFileSync(path.join(this.dir(name), 'build.json'), JSON.stringify(next, null, 2));
     return next;

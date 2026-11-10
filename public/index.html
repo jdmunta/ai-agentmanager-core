@@ -118,6 +118,7 @@
       </aside>
       <div class="splitter split-side" id="split-side" role="separator" aria-orientation="vertical" title="Drag to resize the list; double-click to reset"></div>
 
+      <div class="groups" id="groups">
       <section class="detail" id="detail">
         <div class="placeholder" id="placeholder">Select an agent to see its session, folder, repo, PRs and bugs.</div>
         <div id="detail-body" hidden></div>
@@ -138,6 +139,7 @@
             <input type="file" id="term-file" multiple hidden>
             <button id="term-fit" class="ghost small" title="Refit the terminal to the panel">Fit</button>
             <button id="term-split-btn" class="ghost small desk-only" title="Split: the terminal on the left, and Code, Docs (diagrams) or Changes on the right">◫ Split</button>
+            <button id="group-split" class="ghost small desk-only" title="Split the screen: a group to the right for another agent's session, as in VS Code (Ctrl+\; Ctrl+Shift+\ splits down). Or drag an agent from the list onto the right or bottom edge">⊞ Split screen</button>
             <button id="term-max" class="ghost small desk-only" title="Expand to fill the window (Ctrl+Shift+E)">⤢ Expand</button>
             <button id="term-full" class="ghost small desk-only" title="Full screen (Esc to leave)">⛶ Full screen</button>
             <button id="term-close" class="ghost small" title="Hide the terminal (the agent keeps running)">Hide terminal</button>
@@ -219,6 +221,7 @@
           </div>
         </div>
       </section>
+      </div>
     </main>
 
     <dialog id="new-dialog">

@@ -26,6 +26,7 @@ import { initSupport } from '/support.js';
 import { initCode } from '/code.js';
 import { initMachine } from '/machine.js';
 import { initWatch } from '/watch.js';
+import { initGroups } from '/groups.js';
 import { initStandup } from '/standup.js';
 import { initIssues } from '/issues.js';
 import { initActions } from '/actions.js';
@@ -202,6 +203,8 @@ const watchUi = initWatch({
   projectLabel: (a) => a.projectInfo?.name ?? 'Other',
   openAgent: (id) => (showTab('agents'), select(id), term.open(id)),
 });
+// Split screen: more groups beside the main panel, each with an agent's session (set up once the terminal is).
+let groupsUi = null;
 $('#watch-btn').onclick = () => (mapUi.isOpen() && mapUi.show(false), watchUi.show(!watchUi.isOpen()));
 
 // Map: where each agent is in the code, and who is about to collide.
@@ -2353,6 +2356,7 @@ const VIEWS = {
   detail: () => renderDetail(),
   overlay: () => term.syncOverlay(),
   watch: () => watchUi?.render(),
+  groups: () => groupsUi?.render(),
   standup: () => standupUi?.render(),
 };
 const ALL_VIEWS = Object.keys(VIEWS);
@@ -3609,7 +3613,11 @@ $('#agent-list').addEventListener('click', (e) => {
     return renderList();
   }
   const li = e.target.closest('li[data-id]');
-  if (li) select(li.dataset.id);
+  if (!li) return;
+  // With the screen split, the active group opens it (as in VS Code); the main one shows its details.
+  const group = groupsUi?.activeSplit();
+  if (group && agents.get(li.dataset.id)?.workdir) return groupsUi.load(group, li.dataset.id);
+  select(li.dataset.id);
 });
 
 const dropTarget = (e) => {
@@ -3622,7 +3630,7 @@ $('#agent-list').addEventListener('dragstart', (e) => {
   const li = e.target.closest?.('li[data-id][draggable="true"]');
   if (!li) return;
   dragging = li.dataset.id;
-  e.dataTransfer.effectAllowed = 'move';
+  e.dataTransfer.effectAllowed = 'copyMove'; // move: to another project; copy: into a split-screen group
   e.dataTransfer.setData('text/plain', agents.get(dragging)?.name ?? dragging);
   li.classList.add('dragging');
   document.body.classList.add('dragging-agent');
@@ -4305,6 +4313,7 @@ function handleEvent(msg) {
     return invalidate([
       'list', 'backlog', 'land', 'inbox', 'race', 'team',
       ...(watchUi.isOpen() ? ['watch'] : []),
+      ...(groupsUi?.count() ? ['groups'] : []),
       ...(standupUi.isOpen() ? ['standup'] : []),
       ...(docView?.agentId === id ? ['doc'] : []),
       ...(id === selectedId || msg.agent.forkOf?.agentId === selectedId ? ['detail'] : []),
@@ -4312,6 +4321,7 @@ function handleEvent(msg) {
     ]);
   } else if (msg.t === 'removed') {
     agents.delete(msg.id);
+    groupsUi?.removed(msg.id);
     if (selectedId === msg.id) select(null);
   } else if (msg.t === 'race') {
     races.set(msg.race.id, msg.race);
@@ -4944,6 +4954,29 @@ async function boot() {
   connectEvents();
   loadEngines();
 }
+
+groupsUi = initGroups({
+  $,
+  esc,
+  agents,
+  Terminal,
+  FitAddon,
+  openStream,
+  api,
+  upsert: (a) => upsert(a),
+  toast: (m, ms) => toast(m, ms),
+  statusOf: (a) => statusOf(a),
+  pillText: (st) => pillText(st),
+  engineLabel: (e) => ENGINE_LABEL[e] ?? 'Claude',
+  dragged: () => dragging,
+  openInMain: (id, kind = 'claude') => {
+    showTab('agents');
+    select(id);
+    if (kind !== 'claude' || agents.get(id)?.runtime.running) term.open(id, kind);
+  },
+  refitMain: () => term.refit(),
+});
+$('#group-split').onclick = () => groupsUi.split('row');
 
 boot();
 setInterval(renderDetail, 30_000); // keep "x ago" labels fresh
