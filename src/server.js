@@ -90,7 +90,7 @@ const HOOK_PATH = '/api/hooks/agents';
 const REPORT_PATH = '/api/agentkit/report';
 const NO_REPO_KINDS = new Set(['general', 'assistant']);
 
-export async function startServer({ port = PORT, host = HOST } = {}) {
+export async function startServer({ port = PORT, host = HOST, evalTimer = true } = {}) {
   ensureHome();
   const config = loadConfig();
   const store = new Store(paths.state);
@@ -176,7 +176,7 @@ export async function startServer({ port = PORT, host = HOST } = {}) {
     transcript: (a) => (engineOf(a).id === 'claude' && a.workdir ? readTail(engineOf(a).sessionFile(a.workdir, a.sessionId)) : null),
     log: (m) => console.log(`[agentmgr] ${m}`),
   });
-  evals.startTimer();
+  if (evalTimer) evals.startTimer();
   const races = new Races({ manager, store });
   const review = new Review({ manager });
   // The walkthrough explains the same diff the review screen shows.

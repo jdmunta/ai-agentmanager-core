@@ -64,7 +64,7 @@ fs.writeFileSync(
 );
 
 const { startServer } = await import('../src/server.js');
-const { server, manager, live, hubLink, playbooks: pbs } = await startServer({ port });
+const { server, manager, live, hubLink, playbooks: pbs } = await startServer({ port, evalTimer: false }); // Evals set by hand aren't redone by the minute timer mid-test
 const pbTick = () => pbs.tick();
 const base = `http://127.0.0.1:${port}`;
 
