@@ -82,8 +82,9 @@ const saveRecent = () => {
     localStorage.setItem('agentmgr.recentDays', String(recent.days));
   } catch {}
 };
-// How the agents list is ordered: recently used (the default), running first or newest first, one list each; or grouped by project.
-const ORDERS = ['recent', 'running', 'created', 'project'];
+// How the agents list is ordered: recently used (the default) or newest first, one list each; or grouped by project.
+// In each, open sessions come first: needing you, working, then waiting for a prompt.
+const ORDERS = ['recent', 'created', 'project'];
 let listOrder = (() => {
   try {
     const v = localStorage.getItem('agentmgr.listOrder');
@@ -988,8 +989,8 @@ const copyBtn = (value) => `<button class="link" data-copy="${esc(value)}" title
 
 // ------------------------------------------------------------------ list
 
-/** Agents waiting on you first, then running ones, then the rest. */
-const rank = (a) => (a.runtime.attention ? 0 : a.runtime.running ? 1 : 2);
+/** Agents needing you first, then working ones, then open sessions waiting for a prompt, then the rest. */
+const rank = (a) => (a.runtime.attention ? 0 : a.runtime.running && a.runtime.busy ? 1 : a.runtime.running ? 2 : 3);
 
 // Agents with no work and no input from you for a day sink below the active ones.
 const ACTIVE_MS = 24 * 3600 * 1000;
@@ -1063,12 +1064,12 @@ function projectGroups(list) {
   }
   const out = [...groups.values()];
   for (const g of out) {
-    // Active in the last day first; then highest priority, agents needing you, running ones, most recent.
+    // Open sessions first (needing you, working, waiting); then active in the last day, highest priority, most recent.
     g.agents.sort(
       (a, b) =>
+        rank(a) - rank(b) ||
         isActive(b) - isActive(a) ||
         (a.priority ?? 2) - (b.priority ?? 2) ||
-        rank(a) - rank(b) ||
         (b.activeAt ?? b.createdAt).localeCompare(a.activeAt ?? a.createdAt),
     );
     g.active = g.agents.filter(isActive).length;
@@ -1087,6 +1088,7 @@ function projectGroups(list) {
   return out.sort(
     (a, b) =>
       special(a) - special(b) ||
+      (b.waiting + b.running > 0) - (a.waiting + a.running > 0) ||
       (b.active > 0) - (a.active > 0) ||
       a.top - b.top ||
       b.waiting - a.waiting ||
@@ -1095,12 +1097,11 @@ function projectGroups(list) {
   );
 }
 
-/** One list, most recently used first (Running first: the running agents, then the rest; Newest first: by creation). */
+/** One list: open sessions first (needing you, working, waiting), then most recently used (Newest first: by creation). */
 const usedAt = (a) => a.activeAt ?? a.createdAt ?? '';
 function orderedAgents(list) {
-  const top = (a) => (listOrder === 'running' && !a.runtime.running ? 1 : 0);
   const at = listOrder === 'created' ? (a) => a.createdAt ?? '' : usedAt;
-  return [...list].sort((a, b) => top(a) - top(b) || at(b).localeCompare(at(a)));
+  return [...list].sort((a, b) => rank(a) - rank(b) || at(b).localeCompare(at(a)));
 }
 
 /** The project picker: every project with agents, by name; a project that's gone falls back to all. */
@@ -1135,9 +1136,9 @@ function renderList() {
             .toLowerCase()
             .includes(filterText),
   );
-  // The open agent stays in the list even when it's older.
+  // The open agent, and agents with an open session, stay in the list even when they're older.
   const since = recent.on ? Date.now() - recent.days * 86_400_000 : 0;
-  const shown = since ? list.filter((a) => a.id === selectedId || (Date.parse(a.createdAt) || 0) >= since) : list;
+  const shown = since ? list.filter((a) => a.id === selectedId || rank(a) < 3 || (Date.parse(a.createdAt) || 0) >= since) : list;
   const hidden = list.length - shown.length;
   $('#recent-bar').hidden = agents.size === 0;
   $('#recent-on').checked = recent.on;
