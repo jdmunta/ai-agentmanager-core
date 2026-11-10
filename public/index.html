@@ -29,6 +29,7 @@
       </div>
       <div class="top-actions">
         <input id="filter" type="search" placeholder="Filter agents" aria-label="Filter agents" />
+        <nav class="top-nav" id="top-nav" aria-label="Views">
         <button id="today-btn" title="Today: what needs you, from every list, most pressing first, and why (y)">Today <span id="today-count" class="badge ready"></span></button>
         <button id="assistant-btn" title="An always-on session that finds new work and starts agents for it">Assistant <span id="assistant-dot" class="assistant-dot" hidden></span></button>
         <button id="spend-btn" title="Results across agents (merge rate, time to PR, cost per merged PR), what they cost, and spending limits">Results <span id="spend-today" class="spend-today"></span></button>
@@ -43,6 +44,11 @@
         <button id="watch-btn" title="Running agents' sessions side by side, live: follow them all without clicking from one to the next">Watch</button>
         <button id="machine-btn" title="A terminal on this computer (your home folder), from any device you're signed in on">Terminal</button>
         <button id="ask-btn" title="A general session with no repo or folder, on Claude Code or another engine you have (Codex, Muse Code, …)">Ask Agent</button>
+        <div class="menu-wrap top-more" id="top-more" hidden>
+          <button id="top-more-btn" type="button" aria-haspopup="menu" aria-expanded="false">More ▾</button>
+          <div id="top-more-menu" class="menu" role="menu" hidden></div>
+        </div>
+        </nav>
         <button id="new-btn" class="primary">+ New agents</button>
         <div class="menu-wrap">
           <button id="menu-btn" class="menu-btn" type="button" aria-haspopup="menu" aria-expanded="false" title="Settings and preferences">
