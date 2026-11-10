@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.37.0 (2026-11-10)
+
+- **Split screen, as in VS Code.** The area beside the agents list splits right or down into groups, each showing an agent's session or one of its shells, next to the usual panel with the agent's details. Split with **⊞ Split screen** in the terminal bar, **Ctrl+\\** (Ctrl+Shift+\\ splits down) or the buttons on a group; up to six groups. Load a session into a group by dragging an agent onto it (onto its right or bottom edge to split there), from the group's menu (open sessions first), or by clicking an agent in the list while that group is active. In a group you can switch to its shells or open a new one, resume a closed session, or move it to the main panel. Dividers resize; the layout and what each group shows are kept per browser. Narrow screens show the main panel only.
+- Fixed: a built agent's test run or package that finished after the agent was deleted could crash on saving its state.
+
 ## 1.36.0 (2026-11-10)
 
 - **Open sessions are always at the top of the agents list.** Agents needing your input come first, then working ones, then open sessions waiting for a prompt, in every list order. In **By project**, projects with an open session come first and, inside each project, open sessions come before the rest. The *last N days* filter no longer hides an older agent whose session is open. The **Running first** order is gone, since every order now does this; a saved choice falls back to **Recently used**.
