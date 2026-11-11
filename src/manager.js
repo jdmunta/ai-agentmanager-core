@@ -126,6 +126,7 @@ import { leadPrompt, subagents, teamDir, teamPrompt } from './teams.js';
 import { assistantDir, currentPrompt } from './assistant.js';
 import { learnCommand, memoryKey, memoryPrompt, memoryText } from './memory.js';
 import { Rules, describeTool } from './rules.js';
+import { continuePrompt, findLimit } from './limits.js';
 import { runningClaude, scanClaudeSessions } from './sessions.js';
 import { builderAllowedTools, builderPrompt } from './builder.js';
 import { DRIVE_DOCS, DRIVE_TOOLS, docUrl, driveHtml, drivePrompt, folderUrl, parseDrive } from './drive.js';
@@ -390,6 +391,8 @@ export class AgentManager extends EventEmitter {
         attention: (rt?.pty && !rt.busy && rt.attention) || null,
         // What the AI judge read on an idle screen no rule matched: a question or an error.
         waiting: (rt?.pty && !rt.busy && !rt.attention && rt.waiting) || null,
+        // Stopped at a usage limit or a busy service (limits.js): { kind, text, resetAt, resumedAt }.
+        limited: (rt?.pty && !rt.busy && !rt.attention && rt.limited) || null,
         clients: rt?.clients.size ?? 0,
         shell: this.shellNumbers(agent.id).length > 0,
         shells: this.shellNumbers(agent.id),
@@ -1452,6 +1455,7 @@ export class AgentManager extends EventEmitter {
       if (!rt.busy) {
         rt.busy = true;
         rt.waiting = null;
+        rt.limited = null;
         rt.screenChecked = false;
         const a = this.store.get(agent.id);
         if (a) this.changed(a);
@@ -3293,6 +3297,10 @@ export class AgentManager extends EventEmitter {
       if (v.runtime.attention) {
         items.push({ ...base, kind: 'prompt', key: `prompt:${agent.id}`, title: v.runtime.attention, prompt: v.runtime.prompt, at: v.runtime.lastOutputAt });
       }
+      if (v.runtime.limited) {
+        const l = v.runtime.limited;
+        items.push({ ...base, kind: 'limit', key: `limit:${agent.id}`, title: `${engineOf(agent).label} ${l.kind === 'busy' ? 'is busy or failing' : 'hit a limit'}: ${l.text}`, limited: l, at: l.at });
+      }
       if (v.runtime.waiting) {
         items.push({ ...base, kind: 'waiting', key: `waiting:${agent.id}`, title: v.runtime.waiting.question || v.runtime.waiting.summary, waiting: v.runtime.waiting, at: v.runtime.waiting.at });
       }
@@ -3312,7 +3320,7 @@ export class AgentManager extends EventEmitter {
     for (const r of this.rules.view().suggestions) items.push({ kind: 'rule', key: `rule:${r.repo}:${r.rule}`, title: `Always allow ${r.label}?`, priority: 2, ...r });
     // Others' items (autopilot's held backlog work).
     for (const source of this.inboxSources) items.push(...source());
-    const order = { prompt: 0, waiting: 1, question: 1, rule: 2, review: 2, autopilot: 2, stuck: 3, conflict: 4, reminder: 5, repeat: 5 };
+    const order = { prompt: 0, limit: 1, waiting: 1, question: 1, rule: 2, review: 2, autopilot: 2, stuck: 3, conflict: 4, reminder: 5, repeat: 5 };
     return items.sort((a, b) => order[a.kind] - order[b.kind] || a.priority - b.priority);
   }
 
@@ -3470,6 +3478,68 @@ export class AgentManager extends EventEmitter {
     return { workdir, sourceDir: root, branch, worktree: true, repo: src.repo, baseRef: src.baseRef };
   }
 
+  // ------------------------------------------------------- limits
+
+  /** The limit at the end of an idle agent's screen, keeping when it was first seen and resumed. */
+  limitOf(id, rt, t = Date.now()) {
+    const found = findLimit(this.screenText(rt), t);
+    if (!found) return null;
+    const prev = rt.limited ?? rt.lastLimit;
+    // The same limit seen again before it was resumed (a repaint): keep its times.
+    if (prev && !prev.resumedAt && prev.text === found.text) return (rt.lastLimit = prev);
+    const agent = this.store.get(id);
+    if (agent) console.log(`[agentmgr] ${agent.name}: ${engineOf(agent).label} stopped at a limit (${found.text})${found.resetAt ? `; resets ${found.resetAt}` : ''}`);
+    return (rt.lastLimit = { ...found, at: new Date(t).toISOString(), resumedAt: null });
+  }
+
+  /**
+   * Agents stopped at a limit get "continue" once it resets (a busy service: a few minutes on),
+   * at most three times an hour each. config.json "limits": { "autoResume": false } turns it off.
+   */
+  resumeLimited(t = Date.now()) {
+    if (this.config.limits?.autoResume === false) return;
+    for (const [id, rt] of this.runtimes) {
+      const l = rt.limited;
+      if (!rt.pty || rt.busy || !l?.resetAt || l.resumedAt || t < Date.parse(l.resetAt) + (l.kind === 'limit' ? 60_000 : 0)) continue;
+      rt.limitResumes = (rt.limitResumes ?? []).filter((x) => t - x < 3_600_000);
+      if (rt.limitResumes.length >= 3) continue;
+      rt.limitResumes.push(t);
+      l.resumedAt = new Date(t).toISOString();
+      try {
+        this.tell(id, 'Continue where you left off.', { source: 'limit' });
+      } catch {}
+    }
+  }
+
+  /**
+   * Carry an agent's work on with another engine: a new agent in the same folder and branch,
+   * started with the request, the brief and the end of the conversation (a conversation can't
+   * move between engines). The new agent owns the folder from then on; the old one is closed.
+   */
+  async continueOn(ref, { engine } = {}) {
+    const src = this.mustGet(ref);
+    const target = engineOf(engine);
+    if (target.id === (src.engine ?? DEFAULT_ENGINE)) throw Object.assign(new Error(`${src.name} already runs on ${target.label}`), { status: 400 });
+    if (!installed(target, this.config)) throw Object.assign(new Error(notInstalled(target, this.config)), { status: 409 });
+    if (!src.workdir || src.sharedWith || NO_REPO.has(src.kind)) throw Object.assign(new Error('Only an agent with its own folder can continue on another engine'), { status: 409 });
+    if (this.store.list().some((a) => a.continuesFrom?.agentId === src.id)) {
+      throw Object.assign(new Error(`${src.name} already continues as another agent`), { status: 409 });
+    }
+    const ctx = await this.explainContext(src);
+    const limit = this.runtimes.get(src.id)?.limited?.text ?? null;
+    const intent = continuePrompt({ from: src.name, engineLabel: engineOf(src).label, limit, intent: src.intent, branch: src.branch ?? src.git?.branch, brief: ctx.briefMarkdown, digest: ctx.digest });
+    if (this.runtimes.get(src.id)?.pty) await this.stop(src.id);
+    const ws = { workdir: src.workdir, sourceDir: src.sourceDir, branch: src.branch, worktree: src.worktree, repo: src.repo, baseRef: src.baseRef };
+    const permissionMode = target.permissionModes.includes(src.permissionMode) ? src.permissionMode : undefined;
+    const name = `${src.name.replace(/-(claude|codex|antigravity|muse|acp-[\w-]+)$/, '')}-${target.id}`;
+    const agent = this.create({ intent, name, engine: target.id, permissionMode, project: src.project ?? undefined, priority: src.priority, start: true, workspace: async () => ws });
+    // The folder is the new agent's now: deleting the old one must not take it.
+    this.patch(src.id, { sharedWith: agent.id, worktree: false, continuedOn: { agentId: agent.id, name: agent.name, engine: target.id, at: now() } });
+    this.patch(agent.id, { continuesFrom: { agentId: src.id, name: src.name, engine: engineOf(src).id, at: now() } });
+    this.plugins.emit('agent.continued', { from: this.auditView(this.store.get(src.id)), to: this.auditView(this.store.get(agent.id)) });
+    return this.view(this.store.get(agent.id));
+  }
+
   tick() {
     this.tickCount++;
     const t = Date.now();
@@ -3480,18 +3550,21 @@ export class AgentManager extends EventEmitter {
         const a0 = this.store.get(id);
         rt.attention = (a0 ? engineOf(a0).attention : []).find(([re]) => re.test(screen))?.[1] ?? null;
         if (a0 && rt.attention === PERMISSION) this.autoAllow(a0, rt);
+        // Stopped at a usage limit or a busy service: shown, and resumed when it resets.
+        rt.limited = a0 && !rt.attention ? this.limitOf(id, rt, t) : null;
         const a = this.store.get(id);
         if (a) this.changed(a);
         // A turn just ended: remember the code and conversation at this point.
         if (a && !rt.planning && !rt.attention) this.checkpoint(id).catch(() => {});
       }
     }
+    this.resumeLimited(t);
     this.deliverOutbox(t);
     this.scanSignIns();
     if (this.judge.enabled) {
       const idleMs = this.judge.settings.idleSec * 1000;
       for (const [id, rt] of this.runtimes) {
-        if (!rt.pty || rt.busy || rt.attention || rt.planning || rt.screenChecked || this.outbox.get(id)?.length) continue;
+        if (!rt.pty || rt.busy || rt.attention || rt.limited || rt.planning || rt.screenChecked || this.outbox.get(id)?.length) continue;
         // A team member that finished its step is meant to sit idle until its next turn.
         if (this.idleExpected?.(id)) continue;
         if (!rt.lastOutputAt || t - rt.lastOutputAt < idleMs) continue;

@@ -1385,11 +1385,23 @@ function flags(a) {
 }
 
 const TRIAGED = { now: 'sent (AI: urgent)', digest: 'held for the digest', skip: 'dropped by the AI judge' };
-const NEED_ORDER = { approval: 0, prompt: 0, waiting: 1, plan: 1, question: 1, team: 1, rule: 2, review: 2, autopilot: 2, stuck: 3, conflict: 4, reminder: 5, close: 5, repeat: 5 };
+// Engines a limited agent can carry on with (installed ones), loaded once when a limit card shows.
+let limitEngines = null;
+function loadLimitEngines() {
+  limitEngines = [];
+  api('GET', '/engines')
+    .then((list) => {
+      limitEngines = list;
+      renderInbox();
+    })
+    .catch(() => (limitEngines = null));
+}
+const NEED_ORDER = { approval: 0, prompt: 0, limit: 1, waiting: 1, plan: 1, question: 1, team: 1, rule: 2, review: 2, autopilot: 2, stuck: 3, conflict: 4, reminder: 5, close: 5, repeat: 5 };
 /** What an agent needs from the user. `both`: overlaps on both agents (detail), else only the one that should rebase (inbox). */
 function needsFor(a, { both = false } = {}) {
   const items = [];
   if (a.runtime.attention) items.push({ a, kind: 'prompt', key: `prompt:${a.id}` });
+  if (a.runtime.limited) items.push({ a, kind: 'limit', key: `limit:${a.id}` });
   if (a.runtime.waiting) items.push({ a, kind: 'waiting', key: `waiting:${a.id}` });
   if (a.planReview?.status === 'review') items.push({ a, kind: 'plan', key: `plan:${a.id}` });
   if (a.aiReview?.verdict && !a.aiReview.seen) items.push({ a, kind: 'review', key: `review:${a.id}` });
@@ -1431,7 +1443,7 @@ function inboxItems() {
     .sort((x, y) => NEED_ORDER[x.kind] - NEED_ORDER[y.kind] || (x.a.priority ?? 2) - (y.a.priority ?? 2));
 }
 
-const NEED_LABEL = { reminder: 'Follow up', close: 'Close session?', repeat: 'Make it a playbook?', autopilot: 'Autopilot held', rule: 'Always allow?', approval: 'Approval', team: 'Team', prompt: 'Needs input', waiting: 'Waiting on you', plan: 'Plan review', question: 'Question', review: 'AI review', stuck: 'Stuck?', conflict: 'Overlap' };
+const NEED_LABEL = { limit: 'Limit', reminder: 'Follow up', close: 'Close session?', repeat: 'Make it a playbook?', autopilot: 'Autopilot held', rule: 'Always allow?', approval: 'Approval', team: 'Team', prompt: 'Needs input', waiting: 'Waiting on you', plan: 'Plan review', question: 'Question', review: 'AI review', stuck: 'Stuck?', conflict: 'Overlap' };
 /** Why the AI judge thinks so, as a small tag. */
 const aiTag = (confidence, what = 'AI') => `<span class="tag ai" title="Judged by a model from the agent's activity; your reactions tune later calls">🤖 ${what}${confidence != null ? ` ${Math.round(confidence * 100)}%` : ''}</span>`;
 /** What a permission prompt asks about: the command, file or tool. */
@@ -1497,6 +1509,14 @@ function needCard(it, { inDetail = false } = {}) {
         <button class="small" data-ib="key" data-key="esc" title="Escape">Esc</button>
         <button class="small ghost" data-ib="terminal">Open terminal</button>
       </div>`;
+  } else if (it.kind === 'limit') {
+    const l = a.runtime.limited;
+    const when = l.resetAt ? new Date(l.resetAt).toLocaleString([], { weekday: 'short', hour: 'numeric', minute: '2-digit' }) : null;
+    const others = (limitEngines ?? []).filter((e) => e.installed && e.id !== (a.engine ?? 'claude'));
+    if (!limitEngines) loadLimitEngines();
+    body = `<p class="need-title">${esc(l.text)}</p>
+      <p class="hint">${l.resumedAt ? `Told it to continue ${ago(l.resumedAt)}.` : when ? `It continues by itself ${l.kind === 'busy' ? 'at' : 'after the reset,'} ${esc(when)}.` : 'No reset time on screen: continue it yourself, or carry the work on with another engine.'}${others.length ? ' Another engine picks up the same folder and branch, with the request, the brief and the end of the conversation.' : ''}</p>
+      <div class="need-actions"><button class="small" data-ib="limit-resume" title="Type &quot;continue&quot; now">Continue now</button>${others.map((e) => `<button class="small" data-ib="limit-switch" data-engine="${esc(e.id)}">Continue on ${esc(e.label)}</button>`).join('')}<button class="small ghost" data-ib="terminal">Open terminal</button></div>`;
   } else if (it.kind === 'waiting') {
     const w = a.runtime.waiting;
     body = `<p class="need-title">${esc(w.question || w.summary)} ${aiTag(w.confidence, w.state === 'error' ? 'looks like an error' : 'read from its screen')}</p>
@@ -1685,6 +1705,17 @@ async function onNeed(e) {
         rulesState = await api('POST', `/rules/${accept ? 'accept' : 'dismiss'}`, { repo, rule });
         renderInbox();
       }, accept ? 'Allowed in this repo; agents there won\'t ask again' : 'Won\'t suggest it again');
+    }
+    case 'limit-resume':
+      return act(async () => upsert(await api('POST', `/agents/${id}/tell`, { text: 'Continue where you left off.' })), 'Told it to continue');
+    case 'limit-switch': {
+      const label = el.textContent.replace(/^Continue on /, '');
+      return act(async () => {
+        const n = await api('POST', `/agents/${id}/continue-on`, { engine: el.dataset.engine });
+        upsert(n);
+        showTab('agents');
+        select(n.id);
+      }, `Continuing on ${label}`);
     }
     case 'terminal':
       showTab('agents');
@@ -2222,6 +2253,8 @@ function renderDetail() {
     ${a.desktop && !running ? `<p class="hint">Continued in the <b>Claude desktop app</b> ${ago(a.desktop.at)}. Messages for it wait here; <b>Resume</b> picks up what was said there (close it in the desktop app first).</p>` : ''}
     ${a.movedTo ? `<p class="hint">Moved to <b>${esc(a.movedTo.machine)}</b> ${ago(a.movedTo.at)}: it continues there with the same conversation and work. This copy stays closed; delete it when you no longer need its folder.</p>` : ''}
     ${a.movedFrom ? `<p class="hint">Moved here from <b>${esc(a.movedFrom.machine ?? 'another machine')}</b> ${ago(a.movedFrom.at)}, with its conversation and uncommitted work.</p>` : ''}
+    ${a.continuedOn ? `<p class="hint">Continued on ${esc(a.continuedOn.engine)} as <a href="#${a.continuedOn.agentId}" data-goto="${a.continuedOn.agentId}">${esc(a.continuedOn.name)}</a> ${ago(a.continuedOn.at)}, in the same folder and branch.</p>` : ''}
+    ${a.continuesFrom ? `<p class="hint">Carries on <a href="#${a.continuesFrom.agentId}" data-goto="${a.continuesFrom.agentId}">${esc(a.continuesFrom.name)}</a>'s work (it ran on ${esc(a.continuesFrom.engine)}), from ${ago(a.continuesFrom.at)}.</p>` : ''}
     ${!running && a.closedBy === 'cap' ? `<p class="hint">Closed ${ago(a.closedAt)} to stay under the limit on open agents (Settings), as the one idle longest. Resume it any time${a.keep ? '' : ', or mark it Keep'}.</p>` : ''}
     ${!running && a.closedBy === 'cleanup' ? `<p class="hint">Closed by clean up ${ago(a.closedAt)}, after a while with no activity. Resume it any time${a.keep ? '' : ', or mark it Keep'}.</p>` : ''}
     ${a.status === 'preparing'

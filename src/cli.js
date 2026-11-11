@@ -1367,6 +1367,18 @@ export async function main(argv) {
     });
 
   program
+    .command('continue-on')
+    .description("Carry an agent's work on with another engine (when it hits a limit): a new agent in the same folder and branch")
+    .argument('<agent>')
+    .argument('<engine>', 'codex, antigravity, muse, claude, or an ACP engine (acp-<name>)')
+    .action(async (ref, engine) => {
+      await daemon();
+      const a = await resolveAgent(ref);
+      const n = await api('POST', `/agents/${a.id}/continue-on`, { engine });
+      console.log(`${green('+')} ${bold(n.name)} ${n.id}  continues ${a.name} on ${engine}, in ${a.workdir}`);
+    });
+
+  program
     .command('checkpoints')
     .description('Checkpoints saved at the end of each turn (fork from one with agentmgr fork -c)')
     .argument('<agent>')

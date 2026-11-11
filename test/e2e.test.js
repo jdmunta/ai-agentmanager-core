@@ -3787,6 +3787,53 @@ test('hub Google sign-in: PKCE, state and nonce, allowed accounts only; the toke
   }
 });
 
+test('limits: an agent stopped at a usage limit shows it, and continues on another engine in the same folder', async () => {
+  const codexLaunches = () => (fs.existsSync(process.env.FAKE_CODEX_LOG) ? fs.readFileSync(process.env.FAKE_CODEX_LOG, 'utf8').trim().split('\n').map((l) => JSON.parse(l)) : []);
+  const dir = path.join(home, 'limit-repo');
+  fs.mkdirSync(dir, { recursive: true });
+  execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: dir });
+  execFileSync('git', ['-c', 'commit.gpgsign=false', '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '--allow-empty', '-m', 'init'], { cwd: dir });
+  const [a] = (await call('POST', '/agents', { intent: 'Fix the cache #limit', dir, worktree: true, base: 'HEAD' })).body;
+  const ids = [a.id];
+  try {
+    const limited = await waitFor(async () => (await agentNow(a.id)).runtime.limited, 15000, 'limit seen');
+    assert.equal(limited.kind, 'limit');
+    assert.match(limited.text, /5-hour limit reached/);
+    assert.equal(new Date(limited.resetAt).getHours(), 23);
+    const item = (await call('GET', '/inbox')).body.find((x) => x.kind === 'limit' && x.agentId === a.id);
+    assert.match(item.title, /^Claude Code hit a limit/);
+
+    assert.equal((await call('POST', `/agents/${a.id}/continue-on`, { engine: 'claude' })).status, 400, 'already on it');
+    assert.equal((await call('POST', `/agents/${a.id}/continue-on`, { engine: 'nope' })).status, 400);
+    const before = (await agentNow(a.id)).workdir;
+    const r = await call('POST', `/agents/${a.id}/continue-on`, { engine: 'codex' });
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    const n = r.body;
+    ids.push(n.id);
+    assert.equal(n.engine, 'codex');
+    assert.deepEqual(n.continuesFrom.agentId, a.id);
+    await runningAgent(n.id);
+    const now = await agentNow(n.id);
+    assert.equal(now.workdir, before, 'same folder');
+    assert.equal(now.worktree, true, 'it owns the worktree now');
+    const launch = await waitFor(() => codexLaunches().find((l) => l.args.at(-1).includes('Continue this work')), 10000, 'codex launched');
+    assert.match(launch.args.at(-1), /\(Claude Code\) was doing it in this folder, on branch agent\/[\s\S]*stopped at a limit \("5-hour limit reached/);
+    assert.match(launch.args.at(-1), /The original request:\nFix the cache #limit/);
+    const old = await agentNow(a.id);
+    assert.equal(old.runtime.running, false);
+    assert.equal(old.sharedWith, n.id);
+    assert.equal(old.worktree, false);
+    assert.equal(old.continuedOn.agentId, n.id);
+    assert.equal((await call('POST', `/agents/${a.id}/continue-on`, { engine: 'codex' })).status, 409, 'once');
+    // Deleting the old agent leaves the folder to the new one.
+    await call('DELETE', `/agents/${a.id}?deleteWorkspace=1`);
+    ids.shift();
+    assert.ok(fs.existsSync(before));
+  } finally {
+    for (const id of ids) await call('DELETE', `/agents/${id}`);
+  }
+});
+
 test('Codex agents: launch with instructions, adopt the session Codex picks, usage, prompts, trust, resume, Explain', async () => {
   const codexLaunches = () => (fs.existsSync(process.env.FAKE_CODEX_LOG) ? fs.readFileSync(process.env.FAKE_CODEX_LOG, 'utf8').trim().split('\n').map((l) => JSON.parse(l)) : []);
   const dir = fs.mkdtempSync(path.join(home, 'codex-proj-'));

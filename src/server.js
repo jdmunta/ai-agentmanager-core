@@ -699,6 +699,7 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
     return { url: r.url ?? null, title };
   }));
   api.post('/agents/:id/fork', wrap((req) => manager.fork(req.params.id, req.body ?? {})));
+  api.post('/agents/:id/continue-on', wrap((req) => manager.continueOn(req.params.id, { engine: req.body?.engine })));
 
   api.get('/races', wrap(() => races.list()));
   // Attachments: copied once to a shared folder and listed in the request every attempt gets.
