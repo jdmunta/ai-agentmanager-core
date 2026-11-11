@@ -3534,8 +3534,8 @@ export class AgentManager extends EventEmitter {
     const name = `${src.name.replace(/-(claude|codex|antigravity|muse|acp-[\w-]+)$/, '')}-${target.id}`;
     const agent = this.create({ intent, name, engine: target.id, permissionMode, project: src.project ?? undefined, priority: src.priority, start: true, workspace: async () => ws });
     // The folder is the new agent's now: deleting the old one must not take it.
-    this.patch(src.id, { sharedWith: agent.id, worktree: false, continuedOn: { agentId: agent.id, name: agent.name, engine: target.id, at: now() } });
-    this.patch(agent.id, { continuesFrom: { agentId: src.id, name: src.name, engine: engineOf(src).id, at: now() } });
+    this.patch(src.id, { sharedWith: agent.id, worktree: false, continuedOn: { agentId: agent.id, name: agent.name, engine: target.id, label: target.label, at: now() } });
+    this.patch(agent.id, { continuesFrom: { agentId: src.id, name: src.name, engine: engineOf(src).id, label: engineOf(src).label, at: now() } });
     this.plugins.emit('agent.continued', { from: this.auditView(this.store.get(src.id)), to: this.auditView(this.store.get(agent.id)) });
     return this.view(this.store.get(agent.id));
   }
