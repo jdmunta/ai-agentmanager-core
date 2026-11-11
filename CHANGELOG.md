@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.39.0 (2026-11-11)
+
+- **Limits: agents carry on after a usage limit.** When an engine stops at a usage limit or exhausted quota ("5-hour limit reached ∙ resets 3pm", Codex's "try again at 3:05 PM") or a busy or failing service (429, 529 overloaded, 5xx), the inbox shows a **Limit** card with the message and when it resets, read in the time zone it names. A minute after the reset the agent is told to continue (a busy service: after 5 minutes), at most three times an hour; `"limits": { "autoResume": false }` turns that off. **Continue now** does it at once.
+- **Continue on another engine.** From the Limit card, **Continue on Codex** (or any other installed engine), or `agentmgr continue-on <agent> <engine>`: a new agent in the same folder and branch, started with the request, the brief and the end of the conversation. It owns the folder from then on; the old agent is closed, says where the work went, and deleting it leaves the folder.
+- **Approval rules for every repo.** Once you've allowed a command in 2 repos, the inbox offers it for every repo; accepted, agents in any repo stop asking about it.
+- **Read-only commands never ask:** `ls`, `pwd`, `wc`, `git status`, `git diff`, `git log`, `git show`, `git blame`, `git rev-parse`, in every repo (plain commands only; chained or redirected ones still ask). `"rules": { "readOnly": false }` turns it off.
+- **Codex agents learn approval rules too:** their "run the following command?" prompt names the command in the inbox, your yeses count toward a rule, and allowed rules answer them.
+- **Close idle sessions after hours.** Settings → Open agents → "Close sessions idle for N hours" (or `agentmgr cleanup --idle-hours 4`): open sessions quiet that long close on the same rules as the open-agent limit, and resume with their conversation when you open them. Off by default.
+
 ## 1.38.0 (2026-11-11)
 
 - **The top bar fits the window.** View buttons that don't fit go, in order, into a **More ▾** menu at the end of the row (with a dot when one of them has a count); the filter gives up its room first, and below 1100px the title and connection text step aside for the logo and a coloured dot. **+ New agents** and your menu always stay in view.
