@@ -3819,6 +3819,8 @@ test('Codex agents: launch with instructions, adopt the session Codex picks, usa
   const prompted = await waitFor(async () => ((await agentNow(a.id)).runtime.prompt?.choices.length ? agentNow(a.id) : null), 10000, 'codex prompt');
   assert.equal(prompted.runtime.attention, 'Permission prompt');
   assert.deepEqual(prompted.runtime.prompt.choices.map((c) => c.label), ['Yes, proceed', "Yes, and don't ask again for commands that start with `npm test`", 'No, and tell Codex what to do differently']);
+  // The command it asks about, read from the screen, so approval rules learn from Codex too.
+  assert.deepEqual(prompted.runtime.prompt.tool, { name: 'Bash', text: 'npm test' });
 
   // The folder is pre-trusted in Codex's own config.
   assert.ok(fs.readFileSync(path.join(process.env.CODEX_HOME, 'config.toml'), 'utf8').includes(`[projects."${fs.realpathSync(v.workdir)}"]`));
