@@ -396,7 +396,7 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
   const bg = (req) => req.query.background === '1' || req.body?.background === true;
   api.post('/agents/:id/explain', wrap((req) => (bg(req) ? manager.summarizeInBackground(req.params.id, ['explain']) : manager.explain(req.params.id))));
   api.post('/agents/:id/insights', wrap((req) => (bg(req) ? manager.summarizeInBackground(req.params.id, ['insights']) : manager.insights(req.params.id))));
-  const DOC_LIST = ['analysis', 'design', 'flow', 'proposal', 'humanai'];
+  const DOC_LIST = ['analysis', 'design', 'flow', 'proposal', 'humanai', 'estimate', 'documentation'];
   api.post('/agents/:id/humanai/answers', wrap((req) => manager.humanAiAnswers(req.params.id, req.body?.answers, { send: req.body?.send === true })));
   api.post(
     '/agents/:id/docs/:kind',

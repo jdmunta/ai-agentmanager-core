@@ -475,18 +475,18 @@ export async function main(argv) {
 
   program
     .command('doc')
-    .description('Write a stakeholder document from the agent work: analysis, design, flow, proposal, humanai (Human vs AI), diagrams (diagrams only), walkthrough (its changes explained one by one) or scorecard (its changes scored for review)')
+    .description('Write a stakeholder document from the agent work: analysis, design, flow, proposal, humanai (Human vs AI), estimate (human time estimate for planning), documentation (user, developer and OpenAPI docs), diagrams (diagrams only), walkthrough (its changes explained one by one) or scorecard (its changes scored for review)')
     .argument('<agent>')
-    .argument('<kind>', 'analysis, design, flow, proposal, humanai, diagrams, walkthrough, scorecard, or all (background; diagrams, walkthrough and scorecard not included)')
+    .argument('<kind>', 'analysis, design, flow, proposal, humanai, estimate, documentation, diagrams, walkthrough, scorecard, or all (background; diagrams, walkthrough and scorecard not included)')
     .option('-o, --output <file>', 'also save the Markdown to this file')
     .option('--cached', 'print the last version instead of writing a new one')
-    .option('-b, --background', 'start writing and return at once (kind "all" writes all five)')
+    .option('-b, --background', 'start writing and return at once (kind "all" writes all seven)')
     .action(async (ref, kind, opts) => {
       await daemon();
       const a = await resolveAgent(ref);
       if (opts.background || kind === 'all') {
         const res = await api('POST', `/agents/${a.id}/docs/${encodeURIComponent(kind)}?background=1`);
-        const kinds = kind === 'all' ? ['analysis', 'design', 'flow', 'proposal', 'humanai'] : [kind];
+        const kinds = kind === 'all' ? ['analysis', 'design', 'flow', 'proposal', 'humanai', 'estimate', 'documentation'] : [kind];
         console.log(`${green('…')} writing ${kinds.join(', ')} for ${res.name} in the background`);
         console.log(dim(`  read it when ready: agentmgr doc ${a.id} ${kinds[0]} --cached  (or open the agent in the UI)`));
         return;

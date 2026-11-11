@@ -1351,23 +1351,23 @@ test('agent priority P0-P3: default P2, set on create and later, validated, inhe
   await call('POST', `/backlog/${it.id}/cancel`);
 });
 
-test('stakeholder documents: analysis, design, flow, proposal; stored per kind; unknown kinds rejected', async () => {
+test('stakeholder documents: analysis, design, flow, proposal, estimate, documentation; stored per kind; unknown kinds rejected', async () => {
   const [a] = (await call('POST', '/agents', { intent: 'Doc me', start: false })).body;
   await waitFor(async () => (await agentNow(a.id)).status === 'stopped', 8000, 'ready');
-  for (const kind of ['analysis', 'design', 'flow', 'proposal']) {
+  for (const kind of ['analysis', 'design', 'flow', 'proposal', 'estimate', 'documentation']) {
     const res = await call('POST', `/agents/${a.id}/docs/${kind}`);
     assert.equal(res.status, 200, JSON.stringify(res.body));
-    const title = { analysis: 'Analysis', design: 'Design', flow: 'Flow', proposal: 'Proposal' }[kind];
+    const title = { analysis: 'Analysis', design: 'Design', flow: 'Flow', proposal: 'Proposal', estimate: 'Human', documentation: 'Documentation' }[kind];
     assert.match(res.body.docs[kind].markdown, new RegExp(`^# ${title}: Doc me\\n## Summary\\nSafe call\\.`));
     assert.equal(res.body.docs[kind].pending, false);
   }
   const all = await agentNow(a.id);
-  assert.deepEqual(Object.keys(all.docs).sort(), ['analysis', 'design', 'flow', 'proposal']);
+  assert.deepEqual(Object.keys(all.docs).sort(), ['analysis', 'design', 'documentation', 'estimate', 'flow', 'proposal']);
   assert.equal((await call('POST', `/agents/${a.id}/docs/novel`)).status, 400);
   assert.equal((await fetch(`${base}/share.html`)).status, 200);
 });
 
-test('documents in the background: returns at once, all five, at most two Claude calls at a time', async () => {
+test('documents in the background: returns at once, all seven, at most two Claude calls at a time', async () => {
   const [a] = (await call('POST', '/agents', { intent: 'Background docs', start: false })).body;
   await waitFor(async () => (await agentNow(a.id)).status === 'stopped', 8000, 'ready');
   const t0 = Date.now();
@@ -1378,8 +1378,8 @@ test('documents in the background: returns at once, all five, at most two Claude
   assert.ok(manager.summaryRunning <= 2, 'concurrency capped');
   const done = await waitFor(async () => {
     const ag = await agentNow(a.id);
-    return ['analysis', 'design', 'flow', 'proposal', 'humanai'].every((k) => ag.docs?.[k]?.markdown && !ag.docs[k].pending) ? ag : null;
-  }, 20000, 'all five written');
+    return ['analysis', 'design', 'flow', 'proposal', 'humanai', 'estimate', 'documentation'].every((k) => ag.docs?.[k]?.markdown && !ag.docs[k].pending) ? ag : null;
+  }, 30000, 'all seven written');
   assert.match(done.docs.flow.markdown, /^# Flow: Background docs/);
   assert.equal(manager.summaryRunning, 0);
   // A single kind in the background too.

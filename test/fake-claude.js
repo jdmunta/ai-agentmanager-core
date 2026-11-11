@@ -152,10 +152,10 @@ if (args.includes('-p')) {
       );
       return;
     }
-    const doc = input.match(/^Write a (\w+) document/)?.[1];
+    const doc = input.match(/^Write a (\w+)[\w ]* document/)?.[1];
     if (doc) {
       process.stdout.write(
-        `# ${doc}: ${section('intent')}\n## Summary\n${ok ? 'Safe call.' : 'UNSAFE call.'}\n## Architecture\n\`\`\`mermaid\nflowchart LR\n  A --> B\n\`\`\`\n`,
+        `# ${doc}: ${section('intent')}\n## Summary\n${ok ? 'Safe call.' : 'UNSAFE call.'}\n## Architecture\n\`\`\`mermaid\nflowchart LR\n  A --> B\n\`\`\`\n${doc === 'Documentation' ? '## API changes\n\`\`\`yaml\nopenapi: 3.0.3\ninfo:\n  title: Fake\n  version: 1.0.0\npaths: {}\n\`\`\`\n' : ''}`,
         () => process.exit(0),
       );
       return;

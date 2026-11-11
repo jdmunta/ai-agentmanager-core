@@ -307,9 +307,52 @@ export const DOC_KINDS = {
     ],
     diagram: 'Include one small diagram if it helps the decision.',
   },
+  estimate: {
+    title: 'Human time estimate',
+    sections: [
+      ['Summary', 'The total in hours and working days (6 focused hours a day) for one experienced developer who knows the codebase, the likely figure with its range, and how confident the estimate is.'],
+      [
+        'Breakdown',
+        'A Markdown table with columns: #, Task, What it covers, Optimistic (h), Likely (h), Pessimistic (h), Expected (h). Split the work into tasks of at most about 8 likely hours each: understanding the ticket and code, design, each part of the implementation (one row per component or module), tests (unit, integration, end-to-end), documentation, code review and fixes, QA and verification, release or rollout. Expected = (optimistic + 4 × likely + pessimistic) / 6, rounded to the nearest half hour. End with a bold Total row.',
+      ],
+      ['Suggested split', 'If the total is more than about 3 days, how to split it into tickets or sub-tasks that can be delivered and reviewed on their own: each with a one-line scope, its estimate and what it depends on. Otherwise say that one ticket is enough.'],
+      ['Roles and skills', 'Who is needed (for example backend, frontend, QA, DevOps, a reviewer who knows a component) and the hours for each.'],
+      ['Assumptions', 'What the estimate takes as given.'],
+      ['Risks and unknowns', 'What could move the estimate, by how much, and how to reduce the uncertainty early.'],
+    ],
+    diagram: 'No diagram unless a ```mermaid gantt chart of the tasks helps the plan.',
+    rules: [
+      'This is for planning: estimate the time a person would take to do this work by hand, without an AI agent. Never give the agent\'s own time.',
+      'Size it from the evidence: the ticket and intent, the files and lines changed so far (diffstat) and the brief. Where the work is not done yet, estimate what is left as well as what is done, and say which.',
+      'Use hours. Keep the numbers consistent: the Total row is the sum of the rows above it.',
+    ],
+    words: '300-900',
+  },
+  documentation: {
+    title: 'Documentation',
+    diff: true,
+    sections: [
+      ['Summary', 'What changed and who it is for, in two or three sentences.'],
+      ['What is new or changed', 'The changes as users see them, as bullets.'],
+      ['How to use it', 'Steps, commands, UI paths or code examples for the main uses.'],
+      ['Configuration', 'Settings, environment variables, flags and their defaults that were added or changed, as a table; or "No configuration changes."'],
+      ['Upgrade and operations notes', 'Migrations, compatibility, permissions, rollout and rollback, monitoring; or "None."'],
+      ['Docs to add or update', 'Each documentation file or page in the repository (README, docs/, changelog, help text) that should be added or changed, with what goes in it.'],
+      [
+        'API changes',
+        'If the work adds, changes or removes HTTP API endpoints, parameters, request or response fields or status codes, a summary table of the endpoints (method, path, change), then one ```yaml block with an OpenAPI 3.0.3 document covering only those endpoints: paths, parameters, request bodies, responses and component schemas, with descriptions and examples. Mark removed or deprecated endpoints with deprecated: true. If there are no API changes, write "No API changes."',
+      ],
+    ],
+    diagram: 'No diagram unless one makes the usage clearer.',
+    rules: [
+      'Write it from the actual changes in <diff> and the brief: only document behaviour the code has. Read routes, handlers, schemas and validation in the diff to get the API right (paths, methods, field names and types).',
+      'The OpenAPI block must be valid YAML that an OpenAPI 3.0 tool can load on its own: openapi, info (title and version), paths and, when used, components.',
+    ],
+    words: '400-1500',
+  },
 };
 
-export function docPrompt(kind, { intent, status, digest, repo, briefMarkdown, agentName }) {
+export function docPrompt(kind, { intent, status, digest, repo, briefMarkdown, agentName, diff }) {
   const d = DOC_KINDS[kind];
   return [
     `Write a ${d.title} document about an AI coding agent's work, for stakeholders who will review it.`,
@@ -323,7 +366,8 @@ export function docPrompt(kind, { intent, status, digest, repo, briefMarkdown, a
     `- ${d.diagram} Diagrams go in \`\`\`mermaid code blocks with valid Mermaid syntax; keep node labels short and quote labels that contain punctuation.`,
     '- Be specific: name the real files, components, tickets and documents from the context.',
     '- Separate facts from proposals. Where the context does not say, write "To be confirmed" rather than guessing.',
-    '- Clear, neutral, professional prose; bullets where they help. Roughly 400-900 words.',
+    ...(d.rules ?? []).map((r) => `- ${r}`),
+    `- Clear, neutral, professional prose; bullets where they help. Roughly ${d.words ?? '400-900'} words${d.rules ? ' (not counting tables and code)' : ''}.`,
     '- Output only the Markdown document.',
     '',
     '<agent_status>',
@@ -341,6 +385,7 @@ export function docPrompt(kind, { intent, status, digest, repo, briefMarkdown, a
     '<brief>',
     briefMarkdown || '(no brief yet)',
     '</brief>',
+    ...(diff == null ? [] : ['<diff>', diff || '(no changes yet)', '</diff>']),
   ].join('\n');
 }
 

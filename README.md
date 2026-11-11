@@ -26,7 +26,7 @@ Run one background [Claude Code](https://claude.com/claude-code) agent per inten
 - **Backlog.** Queue asks as work orders. Agents pick them up one by one, up to N in parallel per project, until each is done. You accept or reopen each one.
 - **Slack alerts.** A message in your channel when an agent needs input, finishes a backlog item, or fails.
 - **Priority.** Mark agents P0–P3. P0 and P1 are highlighted, and lists sort by priority.
-- **Share for review.** One click writes an **Analysis**, **Design**, **Flow** or **Proposal** document from the agent's work. Copy it as Markdown, download it, or print it to PDF with diagrams.
+- **Share for review.** One click writes an **Analysis**, **Design**, **Flow** or **Proposal** document from the agent's work, a human time **Estimate** for planning, or the change's **Documentation** with an OpenAPI spec of any API changes. Copy it as Markdown, download it, or print it to PDF with diagrams.
 - **Human vs AI.** It splits the open questions about the work into the top 5 that need your judgment and the ones a model can answer from the evidence. It answers those, then a second model double-checks every answer.
 - **Review changes.** Each agent's diff file by file, line comments sent back to the agent as one message, then **Commit all** and **Push & open PR**, without leaving the page.
 - **Standup.** Each weekday at 9:00 (or whenever you press **Standup**, or `p`), each agent with news since the last one is read aloud in a sentence or two, each in its own voice: what it did, what it's on, what it needs from you. Agents that need you go first and quiet ones are left out. It stops on an agent that needs you, with its questions beside it to answer by tap, or by voice when **Answer by voice** is on (what you say is read back, then sent when you say "send"). The wording comes from one short tool-less model call, plain wording if that fails. A Slack alert says when it's ready (Alerts). Change the time, weekends and wording in the player, or in config.json: `"standup": { "at": "09:00", "weekends": false, "ai": true, "notify": true }`. Speech is your browser's own; voice answers may be sent to your browser's maker to be turned into text.
@@ -173,8 +173,8 @@ agentmgr attach <agent>                       # live terminal here; Ctrl-] detac
 agentmgr shell <agent> [-n 2]                 # a shell in the agent's folder (-n picks another one); Ctrl-] detaches
 agentmgr brief <agent>                        # print the agent's brief (Markdown)
 agentmgr priority <agent> P0                  # P0 urgent, P1 high, P2 normal (default), P3 low
-agentmgr doc <agent> proposal -o p.md         # analysis | design | flow | proposal, for stakeholders
-agentmgr doc <agent> all --background         # write all four in the background
+agentmgr doc <agent> proposal -o p.md         # analysis | design | flow | proposal | estimate | documentation
+agentmgr doc <agent> all --background         # write them all (and Human vs AI) in the background
 agentmgr insights <agent>                     # Why / What / How / Now, three points each
 agentmgr explain <agent>                      # full briefing: ask, status, plan, solution, conclusions, needs
 agentmgr remote on | off | status | rotate    # phone / remote access (see below)
@@ -340,6 +340,8 @@ The Brief panel's **Share for review** buttons, or `agentmgr doc <agent> <kind>`
 | **Flow** | Summary, end-to-end flowchart with a step-by-step walk-through, key interactions as a sequence diagram, failure and edge cases |
 | **Proposal** | Summary, problem, recommendation, scope, plan, effort and dependencies, risks, decisions needed |
 | **Human vs AI** | Your top 5 decisions, each with why it needs you, the stakes, options and what the work suggests, plus a box for your answer. Up to 5 questions the AI answers, each with its confidence, evidence and how to check it. A second model's verdict on each. |
+| **Estimate** | Human time estimate for planning: summary with a range and confidence, a task breakdown with optimistic, likely, pessimistic and expected hours, a suggested split into tickets, roles and skills, assumptions, risks and unknowns |
+| **Documentation** | Summary, what's new or changed, how to use it, configuration, upgrade and operations notes, docs to add or update, and API changes with an OpenAPI 3.0 spec of the changed endpoints |
 | **Diagrams** | Diagrams only, for a quick grasp: the problem, the architecture (with what changes highlighted), the design, the data flow (animated) and the key interaction, plus the plan. Drawn from the documents already written and the agent's work. Optional: **Write all** leaves it out. |
 
 Each drawn diagram has **Copy image** (paste it into Slack, a PR comment or a doc), **PNG** and **SVG**, and a document with diagrams also downloads as one **.html** file. **🔊 Listen** reads Explain, documents and the change walkthrough aloud with the browser's own voices; the walkthrough is read change by change, showing each as it goes.
@@ -351,6 +353,10 @@ Each drawn diagram has **Copy image** (paste it into Slack, a PR comment or a do
 The second model is another installed engine by default (Codex or Antigravity for a Claude agent), because a different provider tends to catch different mistakes. Without one, it's Claude with a different model. Set `"critique": { "engine": "codex", "model": "…" }` in config.json to choose.
 
 Type your answers in the viewer, or tap an option to fill one in. **Send my answers to the agent** passes them on, together with any AI conclusions the second model doubted, so the agent re-checks those.
+
+**Estimate.** A human time estimate for planning: how long one experienced developer who knows the codebase would take to do the ticket by hand, without an AI agent. It's split into tasks of a day or less (understanding, design, each part of the implementation, tests, docs, review, QA, release), each with optimistic, likely and pessimistic hours and the expected (PERT) figure, and a total. Larger work also gets a suggested split into tickets that can ship on their own, with their dependencies. Then come the roles needed, the assumptions, and the risks that could move the number. It's sized from the ticket, the brief and the changes so far.
+
+**Documentation.** The docs for the change: what's new, how to use it, configuration, upgrade and operations notes, and which docs in the repository to add or update. It's written from the actual diff. When the change touches an HTTP API, it adds a table of the changed endpoints and an OpenAPI 3.0 spec covering only those endpoints. **Download OpenAPI** saves the spec as a .yaml file for Swagger, Postman or your API portal.
 
 **How they're written.** Documents name the real files, tickets and docs, separate facts from proposals, and say "To be confirmed" where the context doesn't. They're written for reviewers: no mention of the agent or its tools.
 
