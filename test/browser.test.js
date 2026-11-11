@@ -114,12 +114,12 @@ before(async () => {
   await until(`document.querySelectorAll('#agent-list li[data-id]').length === 3`, 'the agents listed', 20_000);
 });
 
+// Chrome and the daemon write to the home folder as they stop: let them exit before removing it.
+const stopped = (child) => (child && child.exitCode === null && child.signalCode === null ? new Promise((r) => (child.once('exit', r), child.kill(), setTimeout(r, 5000))) : null);
 after(async () => {
   ws?.close();
-  chrome?.kill();
-  daemon?.kill();
-  await sleep(300);
-  if (home) fs.rmSync(home, { recursive: true, force: true });
+  await Promise.all([stopped(chrome), stopped(daemon)]);
+  if (home) fs.rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 });
 
 test('the top bar fits the window: the view buttons that do not fit go into More', { skip }, async () => {
