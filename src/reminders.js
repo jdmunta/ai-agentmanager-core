@@ -51,8 +51,8 @@ export function reminderFor(v, settings, t = Date.now()) {
     return { kind: 'followup', title: `Quiet for ${hours(quiet)} and not finished`, detail, since };
   }
   // Closed: only when it closed by itself or was closed for you (session cap, clean up).
-  const byItself = v.status === 'exited' || v.closedBy === 'cap' || v.closedBy === 'cleanup';
+  const byItself = v.status === 'exited' || v.closedBy === 'cap' || v.closedBy === 'idle' || v.closedBy === 'cleanup';
   if (done || !byItself || !v.sessionId) return null;
-  const how = v.closedBy === 'cap' ? 'closed by the session cap' : v.closedBy === 'cleanup' ? 'closed by clean up' : 'its session ended';
+  const how = v.closedBy === 'cap' ? 'closed by the session cap' : v.closedBy === 'idle' ? 'closed after being idle' : v.closedBy === 'cleanup' ? 'closed by clean up' : 'its session ended';
   return { kind: 'followup', title: `Not finished, and ${how}`, detail: outcome === 'blocked' && v.results?.blockers?.[0]?.text ? `Blocked: ${v.results.blockers[0].text}` : null, since, closed: true };
 }

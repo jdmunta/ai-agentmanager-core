@@ -1908,10 +1908,12 @@ export async function main(argv) {
     .option('--close-after <days>', 'close sessions idle this many days')
     .option('--delete-after <days>', 'delete agents closed this many days')
     .option('--max-open <n>', 'keep at most this many agents open; the ones idle longest are closed above it ("off": no limit)')
+    .option('--idle-hours <h>', 'close open sessions idle this many hours; they resume when opened ("off": never)')
     .action(async (opts) => {
       await daemon();
       const patch = {
         ...(opts.maxOpen ? { maxRunning: /^(off|none|0)$/i.test(opts.maxOpen) ? null : Number(opts.maxOpen) } : {}),
+        ...(opts.idleHours ? { idleHours: /^(off|none|0)$/i.test(opts.idleHours) ? null : Number(opts.idleHours) } : {}),
         ...(opts.strategy ? { strategy: opts.strategy } : {}),
         ...(opts.closeAfter ? { closeAfterDays: Number(opts.closeAfter) } : {}),
         ...(opts.deleteAfter ? { deleteAfterDays: Number(opts.deleteAfter) } : {}),
@@ -1928,7 +1930,7 @@ export async function main(argv) {
       const c = await api('GET', '/cleanup');
       const what = { 'close-delete': 'closes and deletes automatically', close: 'closes automatically; delete with --run', manual: 'nothing automatic; use --run', off: 'off' }[c.strategy];
       console.log(`${bold('Clean up')}: ${c.strategy} (${what}) · close after ${c.closeAfterDays} days idle · delete ${c.deleteAfterDays} days after closing`);
-      console.log(`${bold('Open agents')}: ${c.running} open · ${c.maxRunning ? `at most ${c.maxRunning} (the ones idle longest close above it)` : 'no limit (set one: --max-open <n>)'}`);
+      console.log(`${bold('Open agents')}: ${c.running} open · ${c.maxRunning ? `at most ${c.maxRunning} (the ones idle longest close above it)` : 'no limit (set one: --max-open <n>)'}${c.idleHours ? ` · close after ${c.idleHours} h idle` : ''}`);
       if (c.lastCap) console.log(dim(`  last closed for the limit ${new Date(c.lastCap.at).toLocaleString()}: ${c.lastCap.closed.map((x) => x.name).join(', ')}`));
       const rows = [
         ...c.close.map((x) => [yellow('close'), x.name, `idle ${x.idleDays}d`, '']),
