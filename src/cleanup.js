@@ -7,14 +7,16 @@
 // that exists only in their worktree (uncommitted changes or commits on no other branch).
 // Optionally, a cap on open sessions ("maxRunning"): above it, the agents idle longest are closed
 // (they resume when opened), so the machine stays responsive. The same agents are left alone,
-// plus ones waiting for an answer and ones active in the last few minutes.
+// plus ones waiting for an answer and ones active in the last few minutes. And optionally an
+// idle time in hours ("idleHours"): open sessions quiet that long are closed the same way.
 import fs from 'node:fs';
 import * as git from './git.js';
 
 export const STRATEGIES = ['close-delete', 'close', 'manual', 'off'];
-export const CLEANUP_DEFAULTS = { strategy: 'close', closeAfterDays: 14, deleteAfterDays: 14, maxRunning: null };
+export const CLEANUP_DEFAULTS = { strategy: 'close', closeAfterDays: 14, deleteAfterDays: 14, maxRunning: null, idleHours: null };
 const CAP_GRACE_MS = 5 * 60_000;
-const DAY = 86_400_000;
+const HOUR = 3_600_000;
+const DAY = 24 * HOUR;
 const TEAM_DONE = new Set(['done', 'stopped']);
 
 const err = (status, message) => Object.assign(new Error(message), { status });
@@ -29,6 +31,7 @@ export function cleanupSettings(config = {}) {
     closeAfterDays: n(c.closeAfterDays, CLEANUP_DEFAULTS.closeAfterDays),
     deleteAfterDays: n(c.deleteAfterDays, CLEANUP_DEFAULTS.deleteAfterDays),
     maxRunning: Number(c.maxRunning) >= 1 ? Math.min(500, Math.floor(Number(c.maxRunning))) : null,
+    idleHours: Number(c.idleHours) >= 1 ? Math.min(720, Math.floor(Number(c.idleHours))) : null,
   };
 }
 
@@ -63,7 +66,7 @@ export class Cleanup {
     this.timer.unref?.();
     // The cap: checked soon after agents change (one starts) and every minute.
     this.onChange = () => {
-      if (!this.settings.maxRunning || this.capSoon) return;
+      if ((!this.settings.maxRunning && !this.settings.idleHours) || this.capSoon) return;
       this.capSoon = setTimeout(() => {
         this.capSoon = null;
         this.enforceCap().catch((e) => this.log(`cap: ${e.message}`));
@@ -88,16 +91,24 @@ export class Cleanup {
     return this.store.list().filter((a) => a.kind !== 'assistant' && this.manager.runtimes.get(a.id)?.pty);
   }
 
-  /** Which agents to close to get back under the cap: idle longest first, protected ones skipped. */
+  /**
+   * Which open agents to close: those idle `idleHours` or more, and, above the cap, the ones idle
+   * longest until back under it. Protected and recently active agents are skipped.
+   */
   capPlan(now = Date.now()) {
-    const max = this.settings.maxRunning;
+    const { maxRunning: max, idleHours } = this.settings;
     const running = this.runningAgents();
-    if (!max || running.length <= max) return { max, running: running.length, close: [] };
+    const over = max ? running.length - max : 0;
+    if (over <= 0 && !idleHours) return { max, idleHours, running: running.length, close: [] };
     const activeAt = (a) => Date.parse(this.manager.activeAt(a, this.manager.runtimes.get(a.id)) ?? a.createdAt) || now;
     const closable = running
       .filter((a) => !this.protectedBy(a) && !this.manager.runtimes.get(a.id)?.attention && now - activeAt(a) >= (this.config.capGraceMs ?? CAP_GRACE_MS))
       .sort((x, y) => activeAt(x) - activeAt(y));
-    return { max, running: running.length, close: closable.slice(0, running.length - max).map((a) => ({ id: a.id, name: a.name, idleMin: Math.floor((now - activeAt(a)) / 60_000) })) };
+    const close = closable
+      .map((a, i) => ({ a, why: idleHours && now - activeAt(a) >= idleHours * HOUR ? 'idle' : i < over ? 'cap' : null }))
+      .filter((x) => x.why)
+      .map(({ a, why }) => ({ id: a.id, name: a.name, idleMin: Math.floor((now - activeAt(a)) / 60_000), why }));
+    return { max, idleHours, running: running.length, close };
   }
 
   async enforceCap() {
@@ -110,7 +121,7 @@ export class Cleanup {
       for (const row of plan.close) {
         try {
           await this.manager.stop(row.id);
-          this.manager.patch(row.id, { closedBy: 'cap' });
+          this.manager.patch(row.id, { closedBy: row.why });
           closed.push(row);
         } catch (e) {
           this.log(`cap: couldn't close ${row.name}: ${e.message}`);
@@ -120,7 +131,7 @@ export class Cleanup {
       this.capping = false;
     }
     if (closed.length) {
-      this.log(`cap: ${plan.running} open, limit ${plan.max}; closed ${closed.map((r) => `${r.name} (idle ${r.idleMin} min)`).join(', ')}`);
+      this.log(`cap: ${plan.running} open${plan.max ? `, limit ${plan.max}` : ''}${plan.idleHours ? `, close after ${plan.idleHours} h idle` : ''}; closed ${closed.map((r) => `${r.name} (idle ${r.idleMin} min)`).join(', ')}`);
       this.store.data.cleanup.lastCap = { at: new Date().toISOString(), closed };
       this.store.save();
     }
@@ -141,9 +152,13 @@ export class Cleanup {
     if (patch.maxRunning !== undefined && patch.maxRunning !== null && patch.maxRunning !== '' && Number(patch.maxRunning) !== 0 && !(Number(patch.maxRunning) >= 1)) {
       throw err(400, 'maxRunning must be 1 or more, or empty for no cap');
     }
+    // idleHours: close open sessions idle this many hours, or empty/null/0 for never.
+    if (patch.idleHours !== undefined && patch.idleHours !== null && patch.idleHours !== '' && Number(patch.idleHours) !== 0 && !(Number(patch.idleHours) >= 1)) {
+      throw err(400, 'idleHours must be 1 or more, or empty to keep idle sessions open');
+    }
     const next = cleanupSettings({ cleanup: { ...this.config.cleanup, ...patch } });
     this.config.cleanup = next;
-    if (next.maxRunning) this.onChange?.();
+    if (next.maxRunning || next.idleHours) this.onChange?.();
     return next;
   }
 

@@ -3138,7 +3138,7 @@ test('clean up: closes idle agents, deletes long-closed ones, keeps Keep and uns
     assert.equal((await call('PUT', '/cleanup', { closeAfterDays: 0 })).status, 400);
     const saved = (await call('PUT', '/cleanup', { strategy: 'manual', closeAfterDays: 10, deleteAfterDays: 7 })).body;
     assert.equal(saved.strategy, 'manual');
-    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(home, 'config.json'), 'utf8')).cleanup, { strategy: 'manual', closeAfterDays: 10, deleteAfterDays: 7, maxRunning: null });
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(home, 'config.json'), 'utf8')).cleanup, { strategy: 'manual', closeAfterDays: 10, deleteAfterDays: 7, maxRunning: null, idleHours: null });
     await call('PATCH', `/agents/${b.id}`, { keep: true });
 
     // Agents still working are left alone; these finish their first turn.
@@ -3866,6 +3866,8 @@ test('Codex agents: launch with instructions, adopt the session Codex picks, usa
   const prompted = await waitFor(async () => ((await agentNow(a.id)).runtime.prompt?.choices.length ? agentNow(a.id) : null), 10000, 'codex prompt');
   assert.equal(prompted.runtime.attention, 'Permission prompt');
   assert.deepEqual(prompted.runtime.prompt.choices.map((c) => c.label), ['Yes, proceed', "Yes, and don't ask again for commands that start with `npm test`", 'No, and tell Codex what to do differently']);
+  // The command it asks about, read from the screen, so approval rules learn from Codex too.
+  assert.deepEqual(prompted.runtime.prompt.tool, { name: 'Bash', text: 'npm test' });
 
   // The folder is pre-trusted in Codex's own config.
   assert.ok(fs.readFileSync(path.join(process.env.CODEX_HOME, 'config.toml'), 'utf8').includes(`[projects."${fs.realpathSync(v.workdir)}"]`));
@@ -4798,6 +4800,7 @@ test('settings: who this runs as, release checks, and a cap on open agents', asy
   const made = (await call('POST', '/agents', { intents: ['Cap one', 'Cap two'], dir: repo })).body;
   for (const a of made) await waitFor(async () => (await agentNow(a.id)).runtime?.running, 15000, 'running');
   assert.equal((await call('PUT', '/cleanup', { maxRunning: -1 })).status, 400);
+  assert.equal((await call('PUT', '/cleanup', { idleHours: -1 })).status, 400);
   const open = (await call('GET', '/cleanup')).body.running;
   assert.ok(open >= 2);
   try {

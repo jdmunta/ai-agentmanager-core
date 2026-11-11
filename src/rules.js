@@ -2,12 +2,19 @@
 // ("npm test", three times), the inbox offers to always allow it there. Allowed rules go to every
 // agent in that repo at launch (Claude Code's --allowedTools) and answer its live prompts, so the
 // same question isn't asked again. Kept in ~/.agentmanager/rules.json, per repo (the repo-memory key).
+// A rule allowed in two or more repos is offered for every repo ("*"), and a few read-only
+// commands never ask anywhere (config.json "rules": { "readOnly": false } turns that off).
 import { EventEmitter } from 'node:events';
 import fs from 'node:fs';
 import path from 'node:path';
 import { paths } from './config.js';
 
 export const SUGGEST_AFTER = 3;
+export const EVERY_REPO = '*';
+// Repos that allow the same rule before it is offered for every repo.
+const SUGGEST_EVERYWHERE_AFTER = 2;
+// Commands that only look: allowed in every repo from the start.
+export const READ_ONLY = ['ls', 'pwd', 'wc', 'git status', 'git diff', 'git log', 'git show', 'git blame', 'git rev-parse'].map((c) => `Bash(${c}:*)`);
 // Commands whose first words name a subcommand: "npm test" is a rule, "npm" alone would allow anything npm does.
 const SUBCOMMANDS = new Set(['npm', 'pnpm', 'yarn', 'bun', 'npx', 'node', 'deno', 'git', 'gh', 'cargo', 'go', 'make', 'python', 'python3', 'uv', 'pip', 'poetry', 'pytest', 'mvn', 'gradle', './gradlew', 'dotnet', 'swift', 'xcodebuild', 'bundle', 'rake', 'rails', 'mix', 'composer', 'php', 'docker', 'kubectl', 'terraform', 'just', 'task']);
 // Never offered as a standing rule, however often approved: they delete, escalate, publish or reach out.
@@ -69,16 +76,18 @@ export function describeTool(tool) {
 }
 
 export class Rules extends EventEmitter {
-  constructor({ file = path.join(paths.home, 'rules.json'), suggestAfter = SUGGEST_AFTER } = {}) {
+  constructor({ file = path.join(paths.home, 'rules.json'), suggestAfter = SUGGEST_AFTER, readOnly = true } = {}) {
     super();
     this.file = file;
     this.suggestAfter = suggestAfter;
+    this.readOnly = readOnly !== false;
     try {
       this.data = JSON.parse(fs.readFileSync(file, 'utf8'));
     } catch {
       this.data = {};
     }
     this.data.repos ??= {};
+    this.data.everywhere ??= { allow: [], dismissed: [] };
   }
 
   save() {
@@ -91,9 +100,16 @@ export class Rules extends EventEmitter {
     return (this.data.repos[key] ??= { allow: [], dismissed: [], seen: {} });
   }
 
-  /** The rules allowed in a repo, as Claude Code allow rules. */
+  /** Where a repo key's rules live: a repo, or every repo. */
+  scope(key) {
+    return key === EVERY_REPO ? this.data.everywhere : this.data.repos[key];
+  }
+
+  /** The rules allowed in a repo (its own, every repo's, the read-only ones), as Claude Code allow rules. */
   allowed(key) {
-    return (this.data.repos[key]?.allow ?? []).map((r) => r.rule);
+    const own = (this.data.repos[key]?.allow ?? []).map((r) => r.rule);
+    const all = this.data.everywhere.allow.map((r) => r.rule);
+    return [...new Set([...own, ...all, ...(this.readOnly ? READ_ONLY : [])])];
   }
 
   /** The allowed rule that covers this call in this repo, if any. */
@@ -103,7 +119,7 @@ export class Rules extends EventEmitter {
 
   /** An allowed rule answered a prompt by itself: count it, so the list shows what it saves. */
   used(key, rule) {
-    const a = this.data.repos[key]?.allow.find((x) => x.rule === rule);
+    const a = this.data.repos[key]?.allow.find((x) => x.rule === rule) ?? this.data.everywhere.allow.find((x) => x.rule === rule);
     if (!a) return;
     a.uses = (a.uses ?? 0) + 1;
     a.lastUsedAt = new Date().toISOString();
@@ -114,8 +130,8 @@ export class Rules extends EventEmitter {
   approved(key, tool) {
     const r = ruleFor(tool);
     if (!r) return null;
+    if (this.allowed(key).includes(r.rule)) return null;
     const repo = this.repo(key);
-    if (repo.allow.some((x) => x.rule === r.rule)) return null;
     const seen = (repo.seen[r.rule] ??= { label: r.label, n: 0 });
     seen.n++;
     seen.at = new Date().toISOString();
@@ -124,6 +140,20 @@ export class Rules extends EventEmitter {
   }
 
   accept(key, rule) {
+    if (key === EVERY_REPO) {
+      const e = this.data.everywhere;
+      const from = Object.values(this.data.repos).flatMap((r) => r.allow).find((x) => x.rule === rule);
+      if (!from && !e.allow.some((x) => x.rule === rule)) throw Object.assign(new Error('No such suggestion'), { status: 404 });
+      if (!e.allow.some((x) => x.rule === rule)) e.allow.push({ rule, label: from.label, at: new Date().toISOString(), uses: 0 });
+      // One rule for every repo replaces the repos' own copies (their uses carry over).
+      for (const r of Object.values(this.data.repos)) {
+        const own = r.allow.find((x) => x.rule === rule);
+        if (own) e.allow.find((x) => x.rule === rule).uses += own.uses ?? 0;
+        r.allow = r.allow.filter((x) => x.rule !== rule);
+      }
+      this.save();
+      return;
+    }
     const repo = this.data.repos[key];
     const seen = repo?.seen[rule];
     if (!seen && !repo?.allow.some((x) => x.rule === rule)) throw Object.assign(new Error('No such suggestion'), { status: 404 });
@@ -134,6 +164,12 @@ export class Rules extends EventEmitter {
 
   /** "Not now": stop suggesting it (it can still be allowed later from the list). */
   dismiss(key, rule) {
+    if (key === EVERY_REPO) {
+      if (!this.view().suggestions.some((s) => s.repo === EVERY_REPO && s.rule === rule)) throw Object.assign(new Error('No such suggestion'), { status: 404 });
+      this.data.everywhere.dismissed.push(rule);
+      this.save();
+      return;
+    }
     const repo = this.data.repos[key];
     if (!repo?.seen[rule]) throw Object.assign(new Error('No such suggestion'), { status: 404 });
     if (!repo.dismissed.includes(rule)) repo.dismissed.push(rule);
@@ -141,7 +177,7 @@ export class Rules extends EventEmitter {
   }
 
   remove(key, rule) {
-    const repo = this.data.repos[key];
+    const repo = this.scope(key);
     if (!repo?.allow.some((x) => x.rule === rule)) throw Object.assign(new Error('No such rule'), { status: 404 });
     repo.allow = repo.allow.filter((x) => x.rule !== rule);
     repo.dismissed = repo.dismissed.filter((x) => x !== rule);
@@ -156,6 +192,15 @@ export class Rules extends EventEmitter {
       for (const a of r.allow) allowed.push({ repo, ...a });
       for (const [rule, s] of Object.entries(r.seen)) if (s.n >= this.suggestAfter && !r.dismissed.includes(rule)) suggestions.push({ repo, rule, label: s.label, n: s.n, at: s.at });
     }
-    return { allowed, suggestions, suggestAfter: this.suggestAfter };
+    // Allowed in several repos: offer it for every repo.
+    const repos = new Map();
+    for (const a of allowed) repos.set(a.rule, [...(repos.get(a.rule) ?? []), a]);
+    for (const [rule, list] of repos) {
+      if (list.length >= SUGGEST_EVERYWHERE_AFTER && !this.data.everywhere.dismissed.includes(rule)) {
+        suggestions.push({ repo: EVERY_REPO, rule, label: list[0].label, n: list.length, everywhere: true, at: list.map((x) => x.at).sort().at(-1) });
+      }
+    }
+    for (const a of this.data.everywhere.allow) allowed.push({ repo: EVERY_REPO, ...a });
+    return { allowed, suggestions, suggestAfter: this.suggestAfter, readOnly: this.readOnly ? READ_ONLY.map((r) => r.slice(5, -3)) : [] };
   }
 }

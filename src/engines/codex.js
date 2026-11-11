@@ -286,6 +286,18 @@ export default {
     [/Wouldyouliketo(run|make|apply|allow|grant)/i, 'Permission prompt'],
   ],
 
+  /** The command a "Would you like to run the following command?" prompt is about, as a Bash call. */
+  screenCall(screen) {
+    const text = String(screen ?? '')
+      .replace(/\x1b\[(\d*)C/g, ' ')
+      .replace(ANSI, ' ')
+      .replace(/\s+/g, ' ');
+    const at = text.lastIndexOf('Would you like to run the following command?');
+    if (at < 0) return null;
+    const m = /^Would you like to run the following command\?.*?\$ (.+?)\s+(?:›\s*)?1\. /.exec(text.slice(at));
+    return m ? { name: 'Bash', input: { command: m[1].trim() } } : null;
+  },
+
   /** Codex's menus: "› 1. Yes, proceed (y)" ... "3. No, and tell Codex what to do differently (esc)". */
   promptChoices(screen) {
     const text = String(screen ?? '')

@@ -302,7 +302,7 @@ export class AgentManager extends EventEmitter {
     this.stuck = new Map(); // agent id -> [finding]
     this.outbox = new Map(); // agent id -> [message] waiting to be typed into its session
     // The AI judge: rules decide when to look, a model decides what is going on (see judge.js).
-    this.rules = new Rules({ suggestAfter: config.rules?.suggestAfter });
+    this.rules = new Rules({ suggestAfter: config.rules?.suggestAfter, readOnly: config.rules?.readOnly });
     this.inboxSources = [];
     this.judge = new Judge({ config, call: (agent, prompt, { timeoutMs }) => this.oneShot(agent, prompt, { ...this.judgeModel(agent), timeoutMs }) });
     this.stuckVerdicts = new Map(); // agent id -> Map(finding key -> { at, since, data })
@@ -3317,7 +3317,7 @@ export class AgentManager extends EventEmitter {
       }
     }
     // Commands you keep allowing in a repo: offer to always allow them there.
-    for (const r of this.rules.view().suggestions) items.push({ kind: 'rule', key: `rule:${r.repo}:${r.rule}`, title: `Always allow ${r.label}?`, priority: 2, ...r });
+    for (const r of this.rules.view().suggestions) items.push({ kind: 'rule', key: `rule:${r.repo}:${r.rule}`, title: `Always allow ${r.label}${r.everywhere ? ' in every repo' : ''}?`, priority: 2, ...r });
     // Others' items (autopilot's held backlog work).
     for (const source of this.inboxSources) items.push(...source());
     const order = { prompt: 0, limit: 1, waiting: 1, question: 1, rule: 2, review: 2, autopilot: 2, stuck: 3, conflict: 4, reminder: 5, repeat: 5 };
@@ -3331,9 +3331,13 @@ export class AgentManager extends EventEmitter {
     return call ? { ...p, tool: describeTool(call) } : p;
   }
 
-  /** The one tool call a live prompt is waiting on, from the transcript (Claude Code); null when unsure. */
+  /**
+   * The one tool call a live prompt is waiting on: from the transcript (Claude Code), or from the
+   * prompt on screen for engines that show it there (Codex); null when unsure.
+   */
   pendingCall(agent) {
     const engine = engineOf(agent);
+    if (engine.screenCall) return engine.screenCall(this.runtimes.get(agent.id)?.tail ?? '');
     if (engine.id !== 'claude' || !agent.workdir || !agent.sessionId) return null;
     const key = `${agent.sessionId}:${agent.workdir}`;
     const state = this.activity.get(key) ?? {};

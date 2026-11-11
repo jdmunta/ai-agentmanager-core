@@ -92,6 +92,7 @@ export function initMenu({ api, esc, toast, $ }) {
     try {
       const c = await api('GET', '/cleanup');
       form.maxRunning.value = c.maxRunning ?? '';
+      form.idleHours.value = c.idleHours ?? '';
       $('#settings-running').textContent = `Open now: ${c.running}.`;
       service = null;
       showRules(await api('GET', '/rules').catch(() => null));
@@ -127,8 +128,9 @@ export function initMenu({ api, esc, toast, $ }) {
   const showRules = (r) => {
     const list = [...(r?.allowed ?? [])].sort((a, b) => String(b.at).localeCompare(String(a.at)));
     $('#settings-rules-list').innerHTML = list.length
-      ? list.map((x) => `<li><code>${esc(x.label)}</code> <span class="hint">in ${esc(String(x.repo).replace(/^dir:/, '').split('/').filter(Boolean).slice(-2).join('/'))}${x.uses ? ` · answered ${x.uses} prompt${x.uses === 1 ? '' : 's'}` : ''}</span> <button type="button" class="small ghost" data-rule-remove="${esc(x.rule)}" data-repo="${esc(x.repo)}">Remove</button></li>`).join('')
+      ? list.map((x) => `<li><code>${esc(x.label)}</code> <span class="hint">in ${x.repo === '*' ? 'every repo' : esc(String(x.repo).replace(/^dir:/, '').split('/').filter(Boolean).slice(-2).join('/'))}${x.uses ? ` · answered ${x.uses} prompt${x.uses === 1 ? '' : 's'}` : ''}</span> <button type="button" class="small ghost" data-rule-remove="${esc(x.rule)}" data-repo="${esc(x.repo)}">Remove</button></li>`).join('')
       : '<li class="hint">None yet.</li>';
+    $('#settings-rules-readonly').innerHTML = r?.readOnly?.length ? `Never asked anywhere (they only look): ${r.readOnly.map((c) => `<code>${esc(c)}</code>`).join(' ')}.` : '';
   };
   $('#settings-rules-list').addEventListener('click', async (e) => {
     const b = e.target.closest('[data-rule-remove]');
@@ -173,7 +175,7 @@ export function initMenu({ api, esc, toast, $ }) {
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     try {
-      const c = await api('PUT', '/cleanup', { maxRunning: form.maxRunning.value.trim() || null });
+      const c = await api('PUT', '/cleanup', { maxRunning: form.maxRunning.value.trim() || null, idleHours: form.idleHours.value.trim() || null });
       await api('PUT', '/update', { check: form.updateCheck.checked }).catch(() => {});
       if (features) {
         const want = Object.fromEntries(FEATURE_KEYS.map((k) => [k, form[`feat_${k}`].checked]));
@@ -196,7 +198,8 @@ export function initMenu({ api, esc, toast, $ }) {
         toast(s.installed ? `Starts at login from now on${s.note ? `. ${s.note}` : ''}` : 'No longer starts at login', 6000);
       }
       dialog.close();
-      toast(c.maxRunning ? `At most ${c.maxRunning} agents open; the ones idle longest close above that` : 'No limit on open agents');
+      const idle = c.idleHours ? `; sessions idle ${c.idleHours} h close` : '';
+      toast(c.maxRunning ? `At most ${c.maxRunning} agents open; the ones idle longest close above that${idle}` : `No limit on open agents${idle}`);
     } catch (err) {
       $('#settings-error').textContent = err.message;
       $('#settings-error').hidden = false;
