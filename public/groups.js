@@ -1,6 +1,7 @@
 // Split screen, like editor groups in VS Code: the area beside the agents list splits right or
 // down into groups, each showing one agent's session (its Claude session or a shell). The main
 // group is the usual panel (the agent's details and terminal); the others are terminals.
+// Keys: Cmd+\ or Ctrl+Shift+\ splits, Ctrl+Shift+1…6 focuses a group, Ctrl+Shift+X closes one.
 // Load a session into a group by dragging an agent onto it (onto its right or bottom edge to split
 // there), with the group's picker, or by clicking an agent in the list while that group is active.
 // The layout and what each group shows are kept per browser.
@@ -11,8 +12,42 @@ const MAX_GROUPS = 6;
 const REPLY = /^(\x1b\[[\d;?>]*[IOcRnt]|\x1b\][\d;]*[^\x07\x1b]*(\x07|\x1b\\))+$/;
 const EDGE = 0.25; // a drop this close to a group's right or bottom edge splits it
 const isShell = (k) => /^shell(:\d+)?$/.test(k ?? '');
+const FONT = 13;
 
-export function initGroups({ $, esc, agents, Terminal, FitAddon, openStream, api, upsert, toast, statusOf, pillText, engineLabel, dragged, openInMain, refitMain }) {
+// One session, several views (the main panel, groups, another window): the view you type in or
+// click sets the session's size; the others show it at that size, the font scaled to fit, until
+// you type in or click one of them. `v` is { xterm, follow }.
+
+/** Another view resized the session: show it at that size. */
+export function followSize(v, cols, rows, box) {
+  if (!(cols > 0 && rows > 0) || (cols === v.xterm.cols && rows === v.xterm.rows)) return;
+  v.follow = true;
+  v.xterm.resize(cols, rows);
+  requestAnimationFrame(() => scaleToFit(v, box));
+}
+
+/** While following: the font that fits the session's size into the panel. */
+export function scaleToFit(v, box) {
+  const screen = box.querySelector('.xterm-screen');
+  if (!v.follow || !screen?.offsetWidth || !box.clientWidth) return;
+  const f = v.xterm.options.fontSize;
+  const ratio = Math.min(box.clientWidth / screen.offsetWidth, box.clientHeight / screen.offsetHeight);
+  const next = Math.max(6, Math.min(FONT, Math.floor(f * ratio * 10) / 10));
+  if (Math.abs(next - f) > 0.05) v.xterm.options.fontSize = next;
+}
+
+/** This view sets the size again: its own font, fitted to its panel, sent to the session. */
+export function leadSize(v, fit, send) {
+  if (!v.follow) return;
+  v.follow = false;
+  v.xterm.options.fontSize = FONT;
+  try {
+    fit();
+  } catch {}
+  send({ t: 'r', cols: v.xterm.cols, rows: v.xterm.rows });
+}
+
+export function initGroups({ $, esc, agents, Terminal, FitAddon, openStream, api, upsert, toast, statusOf, pillText, engineLabel, dragged, openInMain, refitMain, mainActive, focusMain }) {
   const root = $('#groups');
   const detail = $('#detail');
   // A layout is a tree: { leaf: id } or { dir: 'row' | 'col', a, b, size } (the first part's share, %).
@@ -43,9 +78,9 @@ export function initGroups({ $, esc, agents, Terminal, FitAddon, openStream, api
         <select class="gkind" aria-label="Session" hidden></select>
         <span class="spacer"></span>
         <select class="gpick" aria-label="Open a session in this group" title="Open a session in this group"></select>
-        <button class="ghost small" data-g="right" title="Split right (Ctrl+\\)">◫</button>
-        <button class="ghost small" data-g="down" title="Split down">⬓</button>
-        <button class="ghost small" data-g="close" title="Close this group (the agent keeps running)">✕</button>
+        <button class="ghost small" data-g="right" title="Split right (Cmd+\\ on a Mac, or Ctrl+Shift+\\)">◫</button>
+        <button class="ghost small" data-g="down" title="Split down (Cmd+Shift+\\ on a Mac, or Ctrl+Alt+Shift+\\)">⬓</button>
+        <button class="ghost small" data-g="close" title="Close this group; the agent keeps running (Ctrl+Shift+X)">✕</button>
       </div>
       <div class="gbody">
         <div class="gterm"></div>
@@ -55,27 +90,30 @@ export function initGroups({ $, esc, agents, Terminal, FitAddon, openStream, api
     const xterm = new Terminal({
       cursorBlink: true,
       fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-      fontSize: 13,
+      fontSize: FONT,
       scrollback: 10000,
       theme: { background: '#0f1117' },
       allowProposedApi: true,
     });
     const fit = new FitAddon();
     xterm.loadAddon(fit);
-    const p = { el, xterm, fit, conn: null, agentId: null, kind: 'claude', replaying: false, exited: false, opened: false };
+    const p = { el, xterm, fit, conn: null, agentId: null, kind: 'claude', replaying: false, exited: false, opened: false, follow: false };
     xterm.onData((d) => {
       if (p.replaying || REPLY.test(d)) return;
+      lead(p);
       p.conn?.send({ t: 'i', d });
     });
-    xterm.onResize(({ cols, rows }) => p.conn?.send({ t: 'r', cols, rows }));
-    new ResizeObserver(() => refit(p)).observe(el.querySelector('.gterm'));
+    xterm.onResize(({ cols, rows }) => !p.follow && p.conn?.send({ t: 'r', cols, rows }));
+    new ResizeObserver(() => (p.follow ? scaleToFit(p, el.querySelector('.gterm')) : refit(p))).observe(el.querySelector('.gterm'));
     panes.set(id, p);
     if (show.agentId) load(id, show.agentId, show.kind);
     return p;
   }
 
+  const lead = (p) => leadSize(p, () => p.fit.fit(), (m) => p.conn?.send(m));
+
   function refit(p) {
-    if (!p.opened || !p.agentId || !p.el.isConnected) return;
+    if (!p.opened || !p.agentId || !p.el.isConnected || p.follow) return;
     try {
       p.fit.fit();
     } catch {}
@@ -104,6 +142,8 @@ export function initGroups({ $, esc, agents, Terminal, FitAddon, openStream, api
       p.opened = true;
     }
     p.failed = false;
+    p.follow = false;
+    p.xterm.options.fontSize = FONT;
     p.xterm.reset();
     const conn = openStream(
       { agentId: p.agentId, kind: p.kind },
@@ -119,7 +159,8 @@ export function initGroups({ $, esc, agents, Terminal, FitAddon, openStream, api
             p.xterm.reset();
             p.replaying = true;
             p.xterm.write(msg.backlog ?? '', () => (p.replaying = false));
-          } else if (msg.t === 'error') toast(`Terminal unavailable: ${msg.error}`, 5000);
+          } else if (msg.t === 'size') followSize(p, msg.cols, msg.rows, p.el.querySelector('.gterm'));
+          else if (msg.t === 'error') toast(`Terminal unavailable: ${msg.error}`, 5000);
           else if (msg.t === 'exit') {
             if (isShell(p.kind)) p.exited = true;
             else p.xterm.write(`\r\n\x1b[2m[session exited with code ${msg.code}; session kept]\x1b[0m\r\n`);
@@ -322,12 +363,17 @@ export function initGroups({ $, esc, agents, Terminal, FitAddon, openStream, api
     p.xterm.dispose();
     p.el.remove();
     panes.delete(id);
-    if (active === id) active = 'main';
+    if (active === id) {
+      active = 'main';
+      mainActive();
+    }
     layout();
     save();
   }
 
   function activate(id) {
+    if (id === 'main') mainActive();
+    else if (panes.get(id)) lead(panes.get(id));
     if (active === id) return;
     active = id;
     detail.classList.toggle('gactive', id === 'main' && Boolean(tree.dir) && !narrow());
@@ -448,13 +494,33 @@ export function initGroups({ $, esc, agents, Terminal, FitAddon, openStream, api
   });
   document.addEventListener('dragend', clearDrop);
 
-  // Ctrl+\ (Cmd+\ on a Mac), as in VS Code: split the active group to the right.
+  // Keys, taken before a focused terminal gets them (plain Ctrl+\ stays the terminal's: it's "quit").
+  //   Cmd+\ (Mac) or Ctrl+Shift+\: split right; with Shift (Mac) or Alt: split down.
+  //   Ctrl+Shift+1…6: focus group 1…6 (left to right, top to bottom). Ctrl+Shift+X: close the active group.
   document.addEventListener('keydown', (e) => {
-    if ((e.ctrlKey || e.metaKey) && !e.altKey && e.code === 'Backslash') {
-      e.preventDefault();
-      split(active, e.shiftKey ? 'col' : 'row');
-    }
-  });
+    const mac = e.metaKey && !e.ctrlKey;
+    const ctrl = e.ctrlKey && e.shiftKey && !e.metaKey;
+    let act = null;
+    if (e.code === 'Backslash' && mac && !e.altKey) act = () => split(active, e.shiftKey ? 'col' : 'row');
+    else if (e.code === 'Backslash' && ctrl) act = () => split(active, e.altKey ? 'col' : 'row');
+    else if (ctrl && !e.altKey && /^Digit[1-6]$/.test(e.code)) act = () => focusGroup(Number(e.code.slice(5)));
+    else if (ctrl && !e.altKey && e.code === 'KeyX' && active !== 'main' && tree.dir) act = () => close(active);
+    if (!act) return;
+    e.preventDefault();
+    e.stopPropagation();
+    act();
+  }, true);
+
+  function focusGroup(n) {
+    if (!tree.dir || narrow()) return;
+    const id = leaves()[n - 1];
+    if (!id) return;
+    activate(id);
+    if (id === 'main') return focusMain();
+    const p = panes.get(id);
+    if (p.opened) p.xterm.focus();
+    else p.el.querySelector('.gpick').focus();
+  }
   matchMedia('(max-width: 760px)').addEventListener('change', () => layout());
 
   // Restore the last layout.
