@@ -107,6 +107,8 @@ before(async () => {
   });
   await send('Runtime.enable');
   await send('Page.enable');
+  // BROWSER_TEST_CPU=6 runs the page 6x slower, to find waits that only hold on a fast machine.
+  if (Number(process.env.BROWSER_TEST_CPU) > 1) await send('Emulation.setCPUThrottlingRate', { rate: Number(process.env.BROWSER_TEST_CPU) });
   await width(1600);
   await send('Page.navigate', { url: `${base}/` });
   await until(`document.querySelectorAll('#agent-list li[data-id]').length === 3`, 'the agents listed', 20_000);
@@ -212,7 +214,7 @@ test('split screen: split, load, type, follow sizes, keys, reload, close', { ski
 
   // A reload brings the layout and the sessions back.
   await reload();
-  await until(`document.querySelectorAll('.gpane').length === 2 && [...document.querySelectorAll('.gpane .xterm-rows')].every((r) => r.textContent.includes('fake-claude ready'))`, 'the groups after a reload', 15_000);
+  await until(`document.querySelectorAll('.gpane').length === 2 && document.querySelectorAll('.gpane .xterm-rows').length === 2 && [...document.querySelectorAll('.gpane .xterm-rows')].every((r) => r.textContent.includes('fake-claude ready'))`, 'the groups after a reload', 15_000);
 
   // Ctrl+Shift+X closes the active group; the group's name moves the last one to the main panel.
   await js(`document.querySelectorAll('.gpane')[1].querySelector('.gterm textarea').focus()`);
