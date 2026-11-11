@@ -27,6 +27,7 @@ import { initCode } from '/code.js';
 import { initMachine } from '/machine.js';
 import { initWatch } from '/watch.js';
 import { initGroups } from '/groups.js';
+import { initTopNav } from '/topnav.js';
 import { initStandup } from '/standup.js';
 import { initIssues } from '/issues.js';
 import { initActions } from '/actions.js';
@@ -4977,6 +4978,7 @@ groupsUi = initGroups({
   refitMain: () => term.refit(),
 });
 $('#group-split').onclick = () => groupsUi.split('row');
+initTopNav({ $ });
 
 boot();
 setInterval(renderDetail, 30_000); // keep "x ago" labels fresh
