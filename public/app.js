@@ -2223,6 +2223,7 @@ function renderDetail() {
     ${a.movedTo ? `<p class="hint">Moved to <b>${esc(a.movedTo.machine)}</b> ${ago(a.movedTo.at)}: it continues there with the same conversation and work. This copy stays closed; delete it when you no longer need its folder.</p>` : ''}
     ${a.movedFrom ? `<p class="hint">Moved here from <b>${esc(a.movedFrom.machine ?? 'another machine')}</b> ${ago(a.movedFrom.at)}, with its conversation and uncommitted work.</p>` : ''}
     ${!running && a.closedBy === 'cap' ? `<p class="hint">Closed ${ago(a.closedAt)} to stay under the limit on open agents (Settings), as the one idle longest. Resume it any time${a.keep ? '' : ', or mark it Keep'}.</p>` : ''}
+    ${!running && a.closedBy === 'idle' ? `<p class="hint">Closed ${ago(a.closedAt)} after a few hours with no activity (Settings). Resume it any time, with its conversation${a.keep ? '' : ', or mark it Keep'}.</p>` : ''}
     ${!running && a.closedBy === 'cleanup' ? `<p class="hint">Closed by clean up ${ago(a.closedAt)}, after a while with no activity. Resume it any time${a.keep ? '' : ', or mark it Keep'}.</p>` : ''}
     ${a.status === 'preparing'
       ? `<div class="progress-box">

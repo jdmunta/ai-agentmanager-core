@@ -3138,7 +3138,7 @@ test('clean up: closes idle agents, deletes long-closed ones, keeps Keep and uns
     assert.equal((await call('PUT', '/cleanup', { closeAfterDays: 0 })).status, 400);
     const saved = (await call('PUT', '/cleanup', { strategy: 'manual', closeAfterDays: 10, deleteAfterDays: 7 })).body;
     assert.equal(saved.strategy, 'manual');
-    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(home, 'config.json'), 'utf8')).cleanup, { strategy: 'manual', closeAfterDays: 10, deleteAfterDays: 7, maxRunning: null });
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(home, 'config.json'), 'utf8')).cleanup, { strategy: 'manual', closeAfterDays: 10, deleteAfterDays: 7, maxRunning: null, idleHours: null });
     await call('PATCH', `/agents/${b.id}`, { keep: true });
 
     // Agents still working are left alone; these finish their first turn.
@@ -4751,6 +4751,7 @@ test('settings: who this runs as, release checks, and a cap on open agents', asy
   const made = (await call('POST', '/agents', { intents: ['Cap one', 'Cap two'], dir: repo })).body;
   for (const a of made) await waitFor(async () => (await agentNow(a.id)).runtime?.running, 15000, 'running');
   assert.equal((await call('PUT', '/cleanup', { maxRunning: -1 })).status, 400);
+  assert.equal((await call('PUT', '/cleanup', { idleHours: -1 })).status, 400);
   const open = (await call('GET', '/cleanup')).body.running;
   assert.ok(open >= 2);
   try {

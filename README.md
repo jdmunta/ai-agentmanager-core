@@ -1078,6 +1078,8 @@ Agents closed before clean up was turned on count as closed from the first check
 
 **A limit on open agents.** Many open sessions slow the machine down. In **☰ → Settings** (or `agentmgr cleanup --max-open 12`), set how many agents may be open at once: above it, the agents idle longest are closed, and they resume when you open them. Never closed for the limit: agents working, waiting for your answer, active in the last 5 minutes, marked **Keep**, or in a team that is still going. Off by default (`--max-open off`).
 
+**Closing idle sessions.** In the same place (or `agentmgr cleanup --idle-hours 4`), set how many hours an open session may sit idle: after that it is closed, on the same rules as the limit, and it resumes with its conversation when you open it. Off by default (`--idle-hours off`).
+
 ## Saving state: flush and restart
 
 - **What's saved immediately.** Agent records (session IDs, settings, links) are written to `state.json` on every change, fsynced, then atomically replaced. Claude writes each conversation to its own transcript as it goes.

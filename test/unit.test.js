@@ -761,9 +761,9 @@ test('team lead: sub-agents per role, and the steps it runs', () => {
 });
 
 test('clean up settings: defaults and bounds', () => {
-  assert.deepEqual(cleanupSettings({}), { strategy: 'close', closeAfterDays: 14, deleteAfterDays: 14, maxRunning: null });
-  assert.deepEqual(cleanupSettings({ cleanup: { strategy: 'close-delete', closeAfterDays: '7' } }), { strategy: 'close-delete', closeAfterDays: 7, deleteAfterDays: 14, maxRunning: null });
-  assert.deepEqual(cleanupSettings({ cleanup: { strategy: 'nuke', closeAfterDays: 0, deleteAfterDays: -3 } }), { strategy: 'close', closeAfterDays: 14, deleteAfterDays: 14, maxRunning: null });
+  assert.deepEqual(cleanupSettings({}), { strategy: 'close', closeAfterDays: 14, deleteAfterDays: 14, maxRunning: null, idleHours: null });
+  assert.deepEqual(cleanupSettings({ cleanup: { strategy: 'close-delete', closeAfterDays: '7' } }), { strategy: 'close-delete', closeAfterDays: 7, deleteAfterDays: 14, maxRunning: null, idleHours: null });
+  assert.deepEqual(cleanupSettings({ cleanup: { strategy: 'nuke', closeAfterDays: 0, deleteAfterDays: -3 } }), { strategy: 'close', closeAfterDays: 14, deleteAfterDays: 14, maxRunning: null, idleHours: null });
 });
 
 test('assistantSettings: defaults, bounds and known sources only', async () => {
@@ -1110,6 +1110,20 @@ test('open-agent cap: idle longest closed first, protected and recent ones skipp
   assert.equal(cleanupSettings({ cleanup: { maxRunning: 0 } }).maxRunning, null);
   assert.throws(() => c.update({ maxRunning: -2 }), /maxRunning/);
   assert.equal(c.update({ maxRunning: '' }).maxRunning, null);
+  // Idle hours: open sessions quiet that long close too, under the cap or not; protected ones stay.
+  c.config.cleanup.idleHours = 3;
+  assert.deepEqual(c.capPlan(now).close.map((r) => [r.name, r.why]), [['older', 'idle']]);
+  c.config.cleanup.maxRunning = 4;
+  assert.deepEqual(c.capPlan(now).close.map((r) => [r.name, r.why]), [['older', 'idle']], 'the idle close also brings it under the cap');
+  c.config.cleanup.maxRunning = 3;
+  assert.deepEqual(c.capPlan(now).close.map((r) => [r.name, r.why]), [['older', 'idle'], ['old', 'cap']]);
+  c.config.cleanup.idleHours = 1;
+  c.config.cleanup.maxRunning = null;
+  assert.deepEqual(c.capPlan(now).close.map((r) => [r.name, r.why]), [['older', 'idle'], ['old', 'idle']]);
+  assert.equal(cleanupSettings({ cleanup: { idleHours: '0' } }).idleHours, null);
+  assert.equal(cleanupSettings({ cleanup: { idleHours: 9999 } }).idleHours, 720);
+  assert.throws(() => c.update({ idleHours: -1 }), /idleHours/);
+  assert.equal(c.update({ idleHours: '' }).idleHours, null);
 });
 
 test('self update: newest release tag, blockers, and moving a checkout to it', async () => {
