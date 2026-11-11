@@ -881,8 +881,9 @@
         </fieldset>
         <fieldset id="settings-rules">
           <legend>Approval rules</legend>
-          <p class="hint">Commands you chose to always allow in a repo. Agents there run them without asking. After you allow the same command 3 times, the inbox offers a rule.</p>
+          <p class="hint">Commands you chose to always allow in a repo. Agents there run them without asking. After you allow the same command 3 times, the inbox offers a rule; once it's allowed in 2 repos, it offers it for every repo. Claude Code and Codex agents learn them.</p>
           <ul id="settings-rules-list" class="rules-list"></ul>
+          <p class="hint" id="settings-rules-readonly"></p>
         </fieldset>
         <fieldset class="local-only" id="settings-service">
           <legend>Start at login</legend>

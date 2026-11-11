@@ -127,8 +127,9 @@ export function initMenu({ api, esc, toast, $ }) {
   const showRules = (r) => {
     const list = [...(r?.allowed ?? [])].sort((a, b) => String(b.at).localeCompare(String(a.at)));
     $('#settings-rules-list').innerHTML = list.length
-      ? list.map((x) => `<li><code>${esc(x.label)}</code> <span class="hint">in ${esc(String(x.repo).replace(/^dir:/, '').split('/').filter(Boolean).slice(-2).join('/'))}${x.uses ? ` · answered ${x.uses} prompt${x.uses === 1 ? '' : 's'}` : ''}</span> <button type="button" class="small ghost" data-rule-remove="${esc(x.rule)}" data-repo="${esc(x.repo)}">Remove</button></li>`).join('')
+      ? list.map((x) => `<li><code>${esc(x.label)}</code> <span class="hint">in ${x.repo === '*' ? 'every repo' : esc(String(x.repo).replace(/^dir:/, '').split('/').filter(Boolean).slice(-2).join('/'))}${x.uses ? ` · answered ${x.uses} prompt${x.uses === 1 ? '' : 's'}` : ''}</span> <button type="button" class="small ghost" data-rule-remove="${esc(x.rule)}" data-repo="${esc(x.repo)}">Remove</button></li>`).join('')
       : '<li class="hint">None yet.</li>';
+    $('#settings-rules-readonly').innerHTML = r?.readOnly?.length ? `Never asked anywhere (they only look): ${r.readOnly.map((c) => `<code>${esc(c)}</code>`).join(' ')}.` : '';
   };
   $('#settings-rules-list').addEventListener('click', async (e) => {
     const b = e.target.closest('[data-rule-remove]');

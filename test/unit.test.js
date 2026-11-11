@@ -2030,7 +2030,7 @@ test('approval rules: which calls become a rule, what a rule covers, suggestions
   assert.ok(!covers('Bash(npm test:*)', bash('npm testx')));
   assert.ok(!covers('Bash(npm test:*)', bash('npm test; rm -rf /')));
 
-  const rules = new Rules({ file: path.join(tmp(), 'rules.json') });
+  const rules = new Rules({ file: path.join(tmp(), 'rules.json'), readOnly: false });
   const events = [];
   rules.on('change', (v) => events.push(v));
   for (let i = 0; i < 2; i++) rules.approved('repo-a', bash('npm test'));
@@ -2046,7 +2046,7 @@ test('approval rules: which calls become a rule, what a rule covers, suggestions
   rules.used('repo-a', 'Bash(npm test:*)');
   assert.equal(rules.view().allowed[0].uses, 1);
   // Kept on disk.
-  assert.deepEqual(new Rules({ file: rules.file }).allowed('repo-a'), ['Bash(npm test:*)']);
+  assert.deepEqual(new Rules({ file: rules.file, readOnly: false }).allowed('repo-a'), ['Bash(npm test:*)']);
   for (let i = 0; i < 3; i++) rules.approved('repo-b', bash('make lint'));
   rules.dismiss('repo-b', 'Bash(make lint:*)');
   assert.deepEqual(rules.view().suggestions, [], 'not now means not again');
@@ -2054,6 +2054,47 @@ test('approval rules: which calls become a rule, what a rule covers, suggestions
   rules.remove('repo-a', 'Bash(npm test:*)');
   assert.deepEqual(rules.allowed('repo-a'), []);
   assert.ok(events.length > 5);
+
+  // Allowed in two repos: offered for every repo; accepted, one rule replaces the repos' copies.
+  for (const repo of ['repo-a', 'repo-b']) {
+    for (let i = 0; i < 3; i++) rules.approved(repo, bash('npm run build'));
+    rules.accept(repo, 'Bash(npm run:*)');
+  }
+  rules.used('repo-b', 'Bash(npm run:*)');
+  const every = rules.view().suggestions.find((s) => s.everywhere);
+  assert.deepEqual([every.repo, every.rule, every.n], ['*', 'Bash(npm run:*)', 2]);
+  rules.accept('*', 'Bash(npm run:*)');
+  assert.deepEqual(rules.view().allowed.map((a) => [a.repo, a.rule, a.uses]), [['*', 'Bash(npm run:*)', 1]]);
+  assert.equal(rules.allows('repo-new', bash('npm run lint')), 'Bash(npm run:*)', 'in a repo it was never allowed in');
+  assert.equal(rules.approved('repo-new', bash('npm run lint')), null, 'nothing more to learn');
+  assert.deepEqual(rules.view().suggestions, []);
+  rules.remove('*', 'Bash(npm run:*)');
+  assert.equal(rules.allows('repo-new', bash('npm run lint')), null);
+  // "Not now" for every repo sticks too.
+  for (const repo of ['repo-a', 'repo-b']) {
+    for (let i = 0; i < 3; i++) rules.approved(repo, bash('cargo check'));
+    rules.accept(repo, 'Bash(cargo check:*)');
+  }
+  rules.dismiss('*', 'Bash(cargo check:*)');
+  assert.ok(!rules.view().suggestions.some((s) => s.everywhere));
+  assert.throws(() => rules.accept('*', 'Bash(nope:*)'), /No such suggestion/);
+
+  // Read-only commands never ask, unless turned off.
+  const ro = new Rules({ file: rules.file });
+  assert.equal(ro.allows('any', bash('git status')), 'Bash(git status:*)');
+  assert.equal(ro.allows('any', bash('git log --oneline -3')), 'Bash(git log:*)');
+  assert.equal(ro.allows('any', bash('git push')), null);
+  assert.equal(ro.allows('any', bash('ls; rm -rf x')), null);
+  assert.ok(ro.view().readOnly.includes('git diff'));
+  assert.equal(rules.allows('any', bash('git status')), null);
+});
+
+test('codex: the command a run prompt is about, from the screen', async () => {
+  const codex = (await import('../src/engines/codex.js')).default;
+  const screen = '\r\n  Would you like to run the following command?\r\n\r\n  Reason: run the tests\r\n\r\n  $ npm test -- --watch=false\r\n\r\n\x1b[1m› 1. Yes, proceed (y)\x1b[0m\r\n  2. No (esc)\r\n';
+  assert.deepEqual(codex.screenCall(screen), { name: 'Bash', input: { command: 'npm test -- --watch=false' } });
+  assert.equal(codex.screenCall('Would you like to make the following edits? 1. Yes'), null);
+  assert.equal(codex.screenCall('nothing here'), null);
 });
 
 test('transcripts: the tool call still waiting for its result is what a prompt asks about', async () => {

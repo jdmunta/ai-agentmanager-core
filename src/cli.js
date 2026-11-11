@@ -1299,11 +1299,12 @@ export async function main(argv) {
       else if (action) throw new Error('Use: agentmgr rules [allow <n> | no <n> | rm <n>]');
       if (r.suggestions.length) {
         console.log(bold('Suggested') + dim(`  (you allowed these ${r.suggestAfter}+ times; agentmgr rules allow <n> | no <n>)`));
-        r.suggestions.forEach((x, i) => console.log(`  ${i + 1}. ${x.label}  ${dim(`in ${repoLabel(x.repo)}, allowed ${x.n} times`)}`));
+        r.suggestions.forEach((x, i) => console.log(`  ${i + 1}. ${x.label}  ${dim(x.everywhere ? `in every repo (allowed in ${x.n} repos)` : `in ${repoLabel(x.repo)}, allowed ${x.n} times`)}`));
       }
       console.log(bold('Allowed') + dim('  (agents in the repo run these without asking; agentmgr rules rm <n>)'));
       if (!r.allowed.length) console.log(dim('  none yet'));
-      r.allowed.forEach((x, i) => console.log(`  ${i + 1}. ${x.label}  ${dim(`in ${repoLabel(x.repo)}${x.uses ? `, answered ${x.uses} prompts` : ''}`)}`));
+      r.allowed.forEach((x, i) => console.log(`  ${i + 1}. ${x.label}  ${dim(`in ${x.repo === '*' ? 'every repo' : repoLabel(x.repo)}${x.uses ? `, answered ${x.uses} prompts` : ''}`)}`));
+      if (r.readOnly?.length) console.log(dim(`Never asked anywhere (they only look): ${r.readOnly.join(', ')}`));
     });
 
   program

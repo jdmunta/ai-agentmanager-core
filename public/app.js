@@ -1411,7 +1411,7 @@ function approvalNeeds() {
   return builtReports.flatMap((r) => r.pending.map((p) => ({ a: { id: r.key, name: r.title, priority: 1 }, kind: 'approval', key: `approval:${r.key}:${p.id}`, r, p })));
 }
 /** The repo a rule belongs to, short: its last two path parts. */
-const repoLabel = (k) => String(k).replace(/^dir:/, '').split('/').filter(Boolean).slice(-2).join('/');
+const repoLabel = (k) => (k === '*' ? 'every repo' : String(k).replace(/^dir:/, '').split('/').filter(Boolean).slice(-2).join('/'));
 /** Commands you keep allowing in a repo, offered as a standing rule. */
 function ruleNeeds() {
   return rulesState.suggestions.map((r) => ({ a: { id: 'rules', name: repoLabel(r.repo), priority: 2 }, kind: 'rule', key: `rule:${r.repo}:${r.rule}`, r }));
@@ -1486,7 +1486,10 @@ function needCard(it, { inDetail = false } = {}) {
       <p class="hint">${esc(it.it.autopilot.note ?? '')}</p>
       <div class="need-actions"><button class="small primary" data-ib="ap-review">Review changes</button><button class="small" data-ib="ap-ship" title="Commit, push and open its pull request (and merge it, at the Merge level)">Ship it</button><button class="small" data-ib="ap-reopen">Send back…</button>${improveHtml(agents.get(it.it.agentId)).replace('small primary', 'small')}</div>`;
   } else if (it.kind === 'rule') {
-    body = `<p class="need-title">You've allowed <code>${esc(it.r.label)}</code> ${it.r.n} times in this repo. Always allow it here?</p>
+    body = it.r.everywhere
+      ? `<p class="need-title">You always allow <code>${esc(it.r.label)}</code> in ${it.r.n} repos. Allow it in every repo?</p>
+      <p class="hint">Agents in any repo won't ask about it again. Remove it any time in Settings → Approval rules.</p>`
+      : `<p class="need-title">You've allowed <code>${esc(it.r.label)}</code> ${it.r.n} times in this repo. Always allow it here?</p>
       <p class="hint">Agents in ${esc(a.name)} won't ask about it again. Remove it any time in Settings → Approval rules.</p>
       <div class="need-actions"><button class="small primary" data-ib="rule-accept">Always allow</button><button class="small" data-ib="rule-dismiss">Not now</button></div>`;
   } else if (it.kind === 'prompt') {
