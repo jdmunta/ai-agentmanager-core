@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.40.0 (2026-11-11)
+
+- **A calmer agent list.** No summary line under each name (it's the name's tooltip, and search still finds it); the engine, container, assistant and playbook tags move to the line below. The project name shows where the branch was (the branch is in its tooltip).
+- **Open sessions stand out** with a green background, a little stronger while the agent is working and when selected.
+- **Overview and Questions panels.** In an agent's detail, **Overview** (the AI review, marked *new* until you've seen it) and **Questions** (open questions with their answer buttons, and what you answered) sit next to **Review changes**, each in its own panel, instead of filling the page. Prompts, limits, stuck warnings and overlaps still show on the page.
+
 ## 1.39.0 (2026-11-11)
 
 - **Limits: agents carry on after a usage limit.** When an engine stops at a usage limit or exhausted quota ("5-hour limit reached ∙ resets 3pm", Codex's "try again at 3:05 PM") or a busy or failing service (429, 529 overloaded, 5xx), the inbox shows a **Limit** card with the message and when it resets, read in the time zone it names. A minute after the reset the agent is told to continue (a busy service: after 5 minutes), at most three times an hour; `"limits": { "autoResume": false }` turns that off. **Continue now** does it at once.
