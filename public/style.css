@@ -223,7 +223,7 @@ body.term-max .layout { grid-template-columns: 1fr; }
 #list-order, #list-project { width: auto; flex: none; padding: 1px 4px; font-size: 12px; }
 #list-project { max-width: 160px; }
 #list-project[hidden] { display: none; }
-.agent-list li.agent .tag.proj { cursor: default; }
+.agent-list .meta .proj-name { color: var(--text); font-weight: 500; }
 .agent-list { list-style: none; margin: 0; padding: 0; }
 .agent-list li.project { border-bottom: 1px solid var(--border); }
 .agent-list li.agent[draggable='true'] { cursor: grab; }
@@ -250,6 +250,11 @@ body.term-max .layout { grid-template-columns: 1fr; }
 .agent-list li.agent::before { content: ''; position: absolute; left: 19px; top: 0; bottom: 0; border-left: 1px solid var(--border); }
 .agent-list li.agent:hover { background: var(--panel-2); }
 .agent-list li.agent.selected { background: var(--panel-2); box-shadow: inset 3px 0 0 var(--accent); }
+/* Open sessions stand out: a green tint, a little stronger while working. */
+.agent-list li.agent.running { background: color-mix(in srgb, var(--green) 8%, var(--panel)); }
+.agent-list li.agent.running.working { background: color-mix(in srgb, var(--green) 14%, var(--panel)); }
+.agent-list li.agent.running:hover { background: color-mix(in srgb, var(--green) 16%, var(--panel)); }
+.agent-list li.agent.running.selected { background: color-mix(in srgb, var(--green) 20%, var(--panel)); }
 .agent-list .line1 { display: flex; align-items: center; gap: 8px; }
 .agent-list .name { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
 .agent-list .intent { color: var(--muted); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -722,6 +727,10 @@ pre.diff .meta { color: var(--muted); font-weight: 600; }
 /* Review changes */
 .review-dialog { width: min(1400px, calc(100vw - 24px)); height: calc(100vh - 32px); max-height: none; }
 .review-body { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 8px; padding: 8px 18px 14px; }
+.needs-body { flex: 1; min-height: 0; overflow: auto; padding: 0 18px 16px; }
+.needs-body .needs .needs { margin-top: 0; }
+.needs-body h4 { margin: 16px 0 6px; }
+.needs-body .answered { margin: 0; padding-left: 18px; display: grid; gap: 8px; }
 .rv-summary { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; font-size: 13px; }
 .rv-warn { margin: 0; color: var(--yellow); }
 .rv-add { color: var(--green); font-family: var(--mono); font-size: 12px; }

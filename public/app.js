@@ -1027,16 +1027,15 @@ function agentItem(a, { project = false } = {}) {
   const st = statusOf(a);
   const idle = !isActive(a);
   const p = project && a.projectInfo && !['other', 'general', 'assistant'].includes(a.projectInfo.key) ? a.projectInfo : null;
-  return `<li data-id="${a.id}" ${a.kind === 'general' || a.kind === 'assistant' ? '' : 'draggable="true" '}class="agent pr${a.priority ?? 2} ${a.id === selectedId ? 'selected' : ''} ${idle ? 'idle' : ''}">
-    <div class="line1">${prioChip(a.priority ?? 2)}${a.results?.outcome === 'blocked' ? '<span class="outcome-mark" title="Blocked">⛔</span>' : a.results?.outcome === 'done' ? '<span class="outcome-mark" title="Done">✅</span>' : ''}<span class="name">${esc(a.name)}</span>${flags(a)}<span class="pill ${st}">${pillText(st)}</span></div>
-    <div class="intent" title="${esc(describeTitle(a) ?? '')}">${a.builds ? `<span class="tag assistant" title="Develops the agent ${esc(a.builds.name)} (Built tab)">⚙ builds agent</span> ` : ''}${a.kind === 'general' ? '<span class="tag">general</span> ' : a.kind === 'assistant' ? '<span class="tag assistant">assistant</span> ' : a.startedBy ? '<span class="tag assistant" title="Started by the assistant">🤖 by assistant</span> ' : a.trigger ? `<span class="tag assistant" title="Started from ${a.trigger.source === 'github' ? 'a labeled GitHub issue' : 'the webhook'}${a.trigger.url ? `: ${esc(a.trigger.url)}` : ''}">⚡ ${a.trigger.source === 'github' ? 'GitHub' : 'webhook'}</span> ` : a.playbook ? `<span class="tag assistant" title="Started by the playbook ${esc(a.playbook.name)}">▶ ${esc(a.playbook.name)}</span> ` : ''}${a.engine && a.engine !== 'claude' ? `<span class="tag engine">${esc(ENGINE_LABEL[a.engine] ?? a.engine)}</span> ` : ''}${a.isolation === 'container' ? '<span class="tag engine" title="Runs in its own Docker container: it sees only its own folder">📦 container</span> ' : ''}${esc(describe(a) || (a.kind === 'assistant' ? 'Finds new work and starts agents for it' : 'General session'))}</div>
+  return `<li data-id="${a.id}" ${a.kind === 'general' || a.kind === 'assistant' ? '' : 'draggable="true" '}class="agent pr${a.priority ?? 2} ${a.id === selectedId ? 'selected' : ''} ${idle ? 'idle' : ''} ${a.runtime.running ? `running ${st}` : ''}">
+    <div class="line1">${prioChip(a.priority ?? 2)}${a.results?.outcome === 'blocked' ? '<span class="outcome-mark" title="Blocked">⛔</span>' : a.results?.outcome === 'done' ? '<span class="outcome-mark" title="Done">✅</span>' : ''}<span class="name" title="${esc(describeTitle(a) || (a.kind === 'assistant' ? 'Finds new work and starts agents for it' : 'General session'))}">${esc(a.name)}</span>${flags(a)}<span class="pill ${st}">${pillText(st)}</span></div>
     ${a.status === 'preparing' && a.progress ? `<div class="progress-line">${esc(progressText(a.progress))}</div>` : ''}
     <div class="meta">
       <span class="mono">${a.id}</span>
-      ${p ? `<span class="tag proj" title="Project: ${esc(p.full || p.name)}">${esc(p.shortcut || p.name)}</span>` : ''}
+      ${a.builds ? `<span class="tag assistant" title="Develops the agent ${esc(a.builds.name)} (Built tab)">⚙ builds agent</span> ` : ''}${a.kind === 'general' ? '<span class="tag">general</span> ' : a.kind === 'assistant' ? '<span class="tag assistant">assistant</span> ' : a.startedBy ? '<span class="tag assistant" title="Started by the assistant">🤖 by assistant</span> ' : a.trigger ? `<span class="tag assistant" title="Started from ${a.trigger.source === 'github' ? 'a labeled GitHub issue' : 'the webhook'}${a.trigger.url ? `: ${esc(a.trigger.url)}` : ''}">⚡ ${a.trigger.source === 'github' ? 'GitHub' : 'webhook'}</span> ` : a.playbook ? `<span class="tag assistant" title="Started by the playbook ${esc(a.playbook.name)}">▶ ${esc(a.playbook.name)}</span> ` : ''}${a.engine && a.engine !== 'claude' ? `<span class="tag engine">${esc(ENGINE_LABEL[a.engine] ?? a.engine)}</span> ` : ''}${a.isolation === 'container' ? '<span class="tag engine" title="Runs in its own Docker container: it sees only its own folder">📦 container</span> ' : ''}
       ${!idle && project && a.activeAt ? `<span title="Last used">${ago(a.activeAt)}</span>` : ''}
       ${idle && a.activeAt ? `<span title="Idle: no work and no input from you for over a day">💤 ${ago(a.activeAt)}</span>` : ''}
-      ${a.git?.branch ? `<span class="branch" title="${esc(a.git.branch)}">⎇ ${esc(a.git.branch)}</span>` : ''}
+      ${p ? `<span class="branch proj-name" title="Project: ${esc(p.full || p.name)}${a.git?.branch ? ` · branch ${esc(a.git.branch)}` : ''}">${esc(p.name)}</span>` : ''}
       ${a.prs.length ? `<span>${a.prs.length} PR</span>` : ''}
       ${a.bugs.length ? `<span>${a.bugs.length} bug</span>` : ''}
       ${a.usage?.total ? `<span title="${esc(usageTitle(a.usage))}">${fmtTokens(ioOf(a.usage))} tok</span>` : ''}
@@ -1784,10 +1783,41 @@ async function onNeedSubmit(e) {
   }
   done();
 }
-for (const root of [$('#inbox-view'), $('#detail-body')]) {
+for (const root of [$('#inbox-view'), $('#detail-body'), $('#needs-body')]) {
   root.addEventListener('click', onNeed);
   root.addEventListener('submit', onNeedSubmit);
 }
+
+// ------------------------------------------------------------------ overview and questions panels
+
+const openQuestions = (a) => (a.questions ?? []).filter((q) => !q.answer).length;
+let needsOpen = null; // { id, kind: 'overview' | 'questions' }
+
+function openNeeds(id, kind) {
+  needsOpen = { id, kind };
+  renderNeeds();
+  if (!$('#needs-dialog').open) $('#needs-dialog').showModal();
+}
+
+/** The open panel's cards, redrawn as the agent changes (an answer sent, the review marked seen). */
+function renderNeeds() {
+  if (!needsOpen) return;
+  const a = agents.get(needsOpen.id);
+  if (!a) return $('#needs-dialog').close();
+  $('#needs-title').textContent = `${needsOpen.kind === 'overview' ? 'Overview' : 'Questions'}: ${a.name}`;
+  let html;
+  if (needsOpen.kind === 'overview') {
+    html = a.aiReview?.verdict ? needCard({ a, kind: 'review', key: `review:${a.id}` }, { inDetail: true }) : '<p class="hint">No AI review yet.</p>';
+  } else {
+    const open = (a.questions ?? []).filter((q) => !q.answer);
+    const answered = (a.questions ?? []).filter((q) => q.answer);
+    html = (open.length ? `<div class="needs">${open.map((q) => needCard({ a, kind: 'question', key: `q:${a.id}:${q.id}`, q }, { inDetail: true })).join('')}</div>` : '<p class="hint">No open questions.</p>') +
+      (answered.length ? `<h4>Answered</h4><ul class="answered">${answered.map((q) => `<li><b>${esc(q.question)}</b><br>${esc(q.answer.text ?? q.answer)} <span class="hint">${q.answer.at ? ago(q.answer.at) : ""}</span></li>`).join('')}</ul>` : '');
+  }
+  morph($('#needs-body'), `<div class="needs">${html}</div>`);
+}
+$('#needs-close').onclick = () => $('#needs-dialog').close();
+$('#needs-dialog').addEventListener('close', () => (needsOpen = null));
 
 // ------------------------------------------------------------------ checkpoints and forks
 
@@ -2193,6 +2223,7 @@ function bugRow(a, b) {
 }
 
 function renderDetail() {
+  renderNeeds();
   const a = agents.get(selectedId);
   $('#placeholder').hidden = Boolean(a);
   const body = $('#detail-body');
@@ -2239,6 +2270,8 @@ function renderDetail() {
         ${(a.engine ?? 'claude') === 'claude' && a.isolation !== 'container' && !a.movedTo && !REMOTE ? `<button data-act="desktop" ${a.sessionId && a.workdir && a.status !== 'preparing' ? '' : 'disabled'} title="Continue this conversation in the Claude desktop app. Its session here closes; Resume here later picks up what was said there">Open in Claude desktop</button>` : ''}
         <button data-act="shell" ${a.workdir && a.status !== 'preparing' ? '' : 'disabled'} title="A separate terminal in this agent's folder for running commands by hand">Open shell</button>
         ${noRepo(a) ? '' : `<button data-act="changes" ${a.workdir && a.status !== 'preparing' ? '' : 'disabled'} title="Read its changes, comment on lines for the agent, commit and open a pull request">Review changes${a.git?.dirtyFiles ? ` <span class="count">${a.git.dirtyFiles}</span>` : ''}</button>`}
+        ${a.aiReview?.verdict ? `<button data-act="overview" title="The AI review: what's done, what's missing, the risks">Overview${a.aiReview.seen ? '' : ' <span class="count">new</span>'}</button>` : ''}
+        ${a.questions?.length ? `<button data-act="questions" title="What the agent asked you, and your answers">Questions${openQuestions(a) ? ` <span class="count">${openQuestions(a)}</span>` : ''}</button>` : ''}
         <button data-act="fork" ${a.workdir && a.git?.branch ? '' : 'disabled'} title="A new agent with this one's code and conversation, in its own worktree, to try another approach">Fork</button>
         <button data-act="edit" title="Change its name, request, project, priority, permission mode or model">Edit</button>
         <button data-act="refresh" title="Re-scan git, PRs and transcripts">Refresh</button>
@@ -2282,7 +2315,8 @@ function renderDetail() {
     ${a.builds ? builtUi.panel(a) : ''}
     ${a.forkOf ? `<div class="bl-banner">⑂ Forked from <a href="#${a.forkOf.agentId}" data-goto="${a.forkOf.agentId}">${esc(a.forkOf.name)}</a>${a.forkOf.checkpoint ? ` at checkpoint ${a.forkOf.checkpoint}` : ''} ${ago(a.forkOf.at)}</div>` : ''}
     ${(() => {
-      const items = needsFor(a, { both: true });
+      // The AI review and the questions have their own panels (Overview, Questions).
+      const items = needsFor(a, { both: true }).filter((it) => it.kind !== 'review' && it.kind !== 'question');
       return items.length ? `<div class="needs">${items.map((it) => needCard(it, { inDetail: true })).join('')}</div>` : '';
     })()}
     ${a.outbox ? `<div class="hint outbox-note">✉ ${a.outbox} message${a.outbox > 1 ? 's' : ''} waiting to be typed into the session when the agent is idle</div>` : ''}
@@ -3829,6 +3863,9 @@ $('#detail-body').addEventListener('click', async (e) => {
       break;
     case 'changes':
       return reviewUi.open(a.id);
+    case 'overview':
+    case 'questions':
+      return openNeeds(a.id, btn.dataset.act);
     case 'memory':
       return openMemory(a);
     case 'fork':
