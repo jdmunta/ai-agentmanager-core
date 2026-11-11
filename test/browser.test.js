@@ -207,7 +207,10 @@ test('split screen: split, load, type, follow sizes, keys, reload, close', { ski
   await until(`document.querySelectorAll('.gpane').length === 2 && [...document.querySelectorAll('.gpane .xterm-rows')].every((r) => r.textContent.includes('fake-claude ready'))`, 'the groups after a reload', 15_000);
 
   // Ctrl+Shift+X closes the active group; the group's name moves the last one to the main panel.
-  await js(`document.querySelectorAll('.gpane')[1].querySelector('.gterm textarea')?.focus()`);
+  await js(`document.querySelectorAll('.gpane')[1].querySelector('.gterm textarea').focus()`);
+  await until(`document.querySelectorAll('.gpane')[1].classList.contains('active') && document.activeElement?.closest('.gpane') === document.querySelectorAll('.gpane')[1]`, 'the lower group active');
+  await sleep(500); // the main terminal reconnecting must not take the keyboard back
+  assert.ok(await js(`document.querySelectorAll('.gpane')[1].classList.contains('active')`), 'the lower group stays active after the sessions reconnect');
   await key('KeyX', 'X', 88, 2 | 8);
   await until(`document.querySelectorAll('.gpane').length === 1`, 'one group left');
   await js(`document.querySelector('.gpane [data-g="main"]').click()`);

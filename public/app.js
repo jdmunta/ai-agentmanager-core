@@ -2529,7 +2529,8 @@ const term = {
         this.xterm.reset();
         this.replaying = true;
         this.xterm.write(msg.backlog, () => (this.replaying = false));
-        if (!matchMedia('(pointer: coarse)').matches) this.xterm.focus();
+        // Not while you work in a split-screen group: it would take the keyboard from there.
+        if (!matchMedia('(pointer: coarse)').matches && !groupsUi?.activeSplit()) this.xterm.focus();
       } else if (msg.t === 'size') {
         return followSize(this, msg.cols, msg.rows, $('#terminal'));
       } else if (msg.t === 'error') {
