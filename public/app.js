@@ -1687,7 +1687,7 @@ async function onNeed(e) {
       return act(async () => {
         rulesState = await api('POST', `/rules/${accept ? 'accept' : 'dismiss'}`, { repo, rule });
         renderInbox();
-      }, accept ? 'Allowed in this repo; agents there won\'t ask again' : 'Won\'t suggest it again');
+      }, accept ? (repo === '*' ? "Allowed in every repo; agents won't ask again" : 'Allowed in this repo; agents there won\'t ask again') : 'Won\'t suggest it again');
     }
     case 'terminal':
       showTab('agents');
