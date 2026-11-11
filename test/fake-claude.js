@@ -314,6 +314,8 @@ if (prompt.includes('#signin')) {
 }
 // "#waiting" / "#finish": plain words a rule can't recognize; the AI judge reads them.
 if (prompt.includes('#waiting')) setTimeout(() => process.stdout.write('\r\nWhich database should I use for the cache, Postgres or SQLite?\r\n'), 200);
+// "#limit": stops at a usage limit, as Claude Code prints it.
+if (prompt.includes('#limit')) setTimeout(() => process.stdout.write('\r\n5-hour limit reached ∙ resets 11pm\r\n/upgrade to increase your usage limit.\r\n'), 200);
 if (prompt.includes('#finish')) setTimeout(() => process.stdout.write('\r\nAll done: the token refresh fix is in.\r\n'), 200);
 // The tool call a permission prompt asks about ("#run(<command>)", else npm test), in the transcript
 // before the menu shows, as Claude Code writes it; answering "1" gives it a result.

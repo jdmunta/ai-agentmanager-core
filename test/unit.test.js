@@ -3355,3 +3355,53 @@ test('eval: test runs from the session, confidence by fixed rules (100 only when
   assert.deepEqual(ev.setTestCommand('a1', '  npm test  '), { testCommand: 'npm test' });
   ev.close();
 });
+
+test('limits: usage limits and busy services on screen, when they reset, and resuming once', async () => {
+  const { findLimit, resetTime, continuePrompt, BUSY_RETRY_MS } = await import('../src/limits.js');
+  const { AgentManager: Manager } = await import('../src/manager.js');
+  const now = Date.parse('2026-11-10T13:00:00Z');
+  const iso = (s) => new Date(resetTime(s, now)).toISOString();
+  assert.equal(iso('resets 3pm (America/Los_Angeles)'), '2026-11-10T23:00:00.000Z');
+  assert.equal(iso('resets 3pm (Asia/Kolkata)'), '2026-11-11T09:30:00.000Z', 'already past there today: tomorrow');
+  assert.equal(iso('resets Nov 12, 9am (UTC)'), '2026-11-12T09:00:00.000Z');
+  assert.equal(iso('try again in 2h 15m'), '2026-11-10T15:15:00.000Z');
+  assert.equal(resetTime('resets soon', now), null);
+
+  const l = findLimit('working…\n5-hour limit reached ∙ resets 3pm (UTC)\n/upgrade to increase your usage limit.', now);
+  assert.deepEqual(l, { kind: 'limit', text: '5-hour limit reached ∙ resets 3pm (UTC)', resetAt: '2026-11-10T15:00:00.000Z' });
+  assert.equal(findLimit("■ You've hit your usage limit. Upgrade to Pro, or try again at 3:05 PM (UTC).", now).resetAt, '2026-11-10T15:05:00.000Z');
+  assert.equal(findLimit('Claude usage limit reached.', now).resetAt, null);
+  const busy = findLimit('API Error: 529 {"type":"error","error":{"type":"overloaded_error"}}', now);
+  assert.equal(busy.kind, 'busy');
+  assert.equal(Date.parse(busy.resetAt), now + BUSY_RETRY_MS);
+  assert.equal(findLimit('■ stream error: exceeded retry limit, last status: 429 Too Many Requests', now).kind, 'busy');
+  // An agent talking about limits in its own work isn't stopped at one.
+  for (const s of ['I added handling for 429 Too Many Requests and a rate limit middleware.', 'The overloaded function takes two args.', 'All tests pass.']) assert.equal(findLimit(s, now), null, s);
+  // Only the end of the screen counts.
+  assert.equal(findLimit(`Claude usage limit reached\n${'more work\n'.repeat(10)}`, now), null);
+
+  const p = continuePrompt({ from: 'fix-cache', engineLabel: 'Claude Code', limit: 'usage limit reached', intent: 'Fix the cache', branch: 'agent/fix-cache', brief: '# Brief', digest: 'user: go' });
+  assert.match(p, /^Continue this work\. fix-cache \(Claude Code\) was doing it in this folder, on branch agent\/fix-cache, and stopped at a limit/);
+  assert.match(p, /The original request:\nFix the cache[\s\S]*# Brief[\s\S]*user: go[\s\S]*git status/);
+
+  // Resumed once the reset has passed (a minute's grace for a usage limit), once, and at most three times an hour.
+  const told = [];
+  const rt = { pty: {}, busy: false, limited: { ...l, at: new Date(now).toISOString(), resumedAt: null } };
+  const fake = { config: {}, runtimes: new Map([['a1', rt]]), tell: (id, text, o) => told.push([id, text, o.source]) };
+  const resume = (t) => Manager.prototype.resumeLimited.call(fake, t);
+  resume(Date.parse('2026-11-10T15:00:30Z'));
+  assert.equal(told.length, 0, 'not before the grace minute');
+  resume(Date.parse('2026-11-10T15:01:00Z'));
+  resume(Date.parse('2026-11-10T15:02:00Z'));
+  assert.deepEqual(told, [['a1', 'Continue where you left off.', 'limit']]);
+  for (let i = 0; i < 4; i++) {
+    rt.limited = { ...busy, resumedAt: null };
+    resume(now + BUSY_RETRY_MS + 1000 + i);
+  }
+  assert.equal(told.length, 3, 'three an hour');
+  fake.config.limits = { autoResume: false };
+  rt.limitResumes = [];
+  rt.limited = { ...busy, resumedAt: null };
+  resume(now + BUSY_RETRY_MS + 1000);
+  assert.equal(told.length, 3, 'turned off');
+});
