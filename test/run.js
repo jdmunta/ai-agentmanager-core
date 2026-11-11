@@ -10,6 +10,7 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const parts = Math.max(1, Number(process.env.E2E_PARTS) || Math.min(4, os.availableParallelism()));
 const runs = [
   { label: 'unit', files: ['unit.test.js', 'agentkit.test.js'], env: {} },
+  { label: 'browser', files: ['browser.test.js'], env: {} },
   ...Array.from({ length: parts }, (_, i) => ({ label: `e2e ${i + 1}/${parts}`, files: ['e2e.test.js'], env: { E2E_PART: `${i + 1}/${parts}` } })),
 ];
 

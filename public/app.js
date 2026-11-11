@@ -26,7 +26,7 @@ import { initSupport } from '/support.js';
 import { initCode } from '/code.js';
 import { initMachine } from '/machine.js';
 import { initWatch } from '/watch.js';
-import { initGroups } from '/groups.js';
+import { initGroups, followSize, scaleToFit, leadSize } from '/groups.js';
 import { initTopNav } from '/topnav.js';
 import { initStandup } from '/standup.js';
 import { initIssues } from '/issues.js';
@@ -2450,10 +2450,12 @@ const term = {
       // answers are stale, and the program would get them as typing.
       if (this.replaying) return;
       lastTyped = Date.now();
+      this.lead();
       this.send({ t: 'i', d });
     });
-    this.xterm.onResize(({ cols, rows }) => this.send({ t: 'r', cols, rows }));
-    new ResizeObserver(() => this.refit()).observe($('#terminal'));
+    // Shown in a split-screen group too (or another window): the view typed in sets the size.
+    this.xterm.onResize(({ cols, rows }) => !this.follow && this.send({ t: 'r', cols, rows }));
+    new ResizeObserver(() => (this.follow ? scaleToFit(this, $('#terminal')) : this.refit())).observe($('#terminal'));
     touchScroll($('#terminal'), this.xterm);
   },
 
@@ -2461,8 +2463,13 @@ const term = {
     this.conn?.send(msg);
   },
 
+  follow: false,
+  lead() {
+    leadSize(this, () => this.fit.fit(), (m) => this.send(m));
+  },
+
   refit() {
-    if (!this.agentId) return;
+    if (!this.agentId || this.follow) return;
     try {
       this.fit.fit();
     } catch {}
@@ -2490,6 +2497,8 @@ const term = {
     this.agentId = id;
     this.kind = kind;
     this.shellExited = false;
+    this.follow = false;
+    this.xterm.options.fontSize = 13;
     this.xterm.reset();
     this.syncOverlay();
     requestAnimationFrame(() => this.refit());
@@ -2520,7 +2529,10 @@ const term = {
         this.xterm.reset();
         this.replaying = true;
         this.xterm.write(msg.backlog, () => (this.replaying = false));
-        if (!matchMedia('(pointer: coarse)').matches) this.xterm.focus();
+        // Not while you work in a split-screen group: it would take the keyboard from there.
+        if (!matchMedia('(pointer: coarse)').matches && !groupsUi?.activeSplit()) this.xterm.focus();
+      } else if (msg.t === 'size') {
+        return followSize(this, msg.cols, msg.rows, $('#terminal'));
       } else if (msg.t === 'error') {
         toast(`Terminal unavailable: ${msg.error}`, 5000);
       } else if (msg.t === 'o') {
@@ -4360,13 +4372,13 @@ function connectEvents() {
     { events: true },
     {
       onOpen: () => {
-        $('#conn').textContent = REMOTE ? 'connected (remote)' : 'daemon connected';
+        $('#conn').textContent = $('#conn').title = REMOTE ? 'connected (remote)' : 'daemon connected';
         $('#conn').className = 'conn ok';
         reloadIfUpdated();
       },
       onMessage: handleEvent,
       onClose: async () => {
-        $('#conn').textContent = 'daemon offline, retrying…';
+        $('#conn').textContent = $('#conn').title = 'daemon offline, retrying…';
         $('#conn').className = 'conn bad';
         if (REMOTE && !(await sessionOk())) return showLogin();
         setTimeout(connectEvents, 2000);
@@ -4976,6 +4988,8 @@ groupsUi = initGroups({
     if (kind !== 'claude' || agents.get(id)?.runtime.running) term.open(id, kind);
   },
   refitMain: () => term.refit(),
+  mainActive: () => term.xterm && term.lead(),
+  focusMain: () => (term.agentId && !$('#term-wrap').hidden ? term.xterm.focus() : $('#detail').focus?.()),
 });
 $('#group-split').onclick = () => groupsUi.split('row');
 initTopNav({ $ });

@@ -59,6 +59,12 @@ export const SHORTCUTS = [
     [['Ctrl+Shift+L'], 'Leave the terminal (then the keys above work)', 'leave'],
     [['Ctrl+Shift+E'], 'Expand or shrink the terminal', null],
   ]],
+  ['Split screen (also from a terminal)', [
+    [['Cmd+\\', 'Ctrl+Shift+\\'], 'Split the active group to the right', null],
+    [['Cmd+Shift+\\', 'Ctrl+Alt+Shift+\\'], 'Split it down', null],
+    [['Ctrl+Shift+1…6'], 'Go to group 1 to 6 (left to right, top to bottom)', null],
+    [['Ctrl+Shift+X'], 'Close the active group (its agent keeps running)', null],
+  ]],
 ];
 
 // A single key, as an event names it, to its action.
