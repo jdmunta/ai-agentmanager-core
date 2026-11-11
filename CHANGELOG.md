@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.38.0 (2026-11-11)
+
+- **The top bar fits the window.** View buttons that don't fit go, in order, into a **More ▾** menu at the end of the row (with a dot when one of them has a count); the filter gives up its room first, and below 1100px the title and connection text step aside for the logo and a coloured dot. **+ New agents** and your menu always stay in view.
+- **Split screen: one session in two views.** When a session shows in more than one place (the main panel, a group, another window), the view you type in or click sets its size; the others show it at that size with the font scaled to fit, instead of wrapping oddly.
+- **Split screen keys**, also from inside a terminal: **Cmd+\\** on a Mac or **Ctrl+Shift+\\** splits right (add Shift on a Mac, or Alt, to split down), **Ctrl+Shift+1…6** goes to a group, **Ctrl+Shift+X** closes the active one. They're listed under **?**.
+- Fixed: plain **Ctrl+\\** in a terminal split the screen *and* reached the agent as Ctrl+\\, a quit key. It now only goes to the terminal.
+- Fixed: a terminal reconnecting in the main panel took the keyboard away from the split-screen group you were working in.
+- Tests now drive the page in headless Chrome (`test/browser.test.js`, skipped without Chrome): the top bar at several widths, and the split screen end to end.
+
 ## 1.37.0 (2026-11-10)
 
 - **Split screen, as in VS Code.** The area beside the agents list splits right or down into groups, each showing an agent's session or one of its shells, next to the usual panel with the agent's details. Split with **⊞ Split screen** in the terminal bar, **Ctrl+\\** (Ctrl+Shift+\\ splits down) or the buttons on a group; up to six groups. Load a session into a group by dragging an agent onto it (onto its right or bottom edge to split there), from the group's menu (open sessions first), or by clicking an agent in the list while that group is active. In a group you can switch to its shells or open a new one, resume a closed session, or move it to the main panel. Dividers resize; the layout and what each group shows are kept per browser. Narrow screens show the main panel only.
