@@ -2407,7 +2407,7 @@ export class AgentManager extends EventEmitter {
     return this.view(this.store.get(agent.id));
   }
 
-  /** A stakeholder document: analysis, design, flow or proposal. */
+  /** A stakeholder document: analysis, design, flow, proposal, estimate or documentation. */
   document(ref, kind) {
     if (!SUMMARIES[kind]?.doc) throw Object.assign(new Error(`Unknown document "${kind}"`), { status: 400 });
     return this.summarize(ref, kind);
@@ -2422,6 +2422,7 @@ export class AgentManager extends EventEmitter {
     const run = this.summarySlot()
       .then((release) =>
         this.explainContext(agent)
+          .then(async (ctx) => (DOC_KINDS[kind]?.diff ? { ...ctx, diff: await this.docDiff(agent) } : ctx))
           .then((ctx) => (SUMMARIES[kind].run ? this[SUMMARIES[kind].run](agent, ctx) : this.runExplain(agent, { ...ctx, agentName: agent.name }, kind)))
           .finally(release),
       )
@@ -2433,6 +2434,13 @@ export class AgentManager extends EventEmitter {
       .finally(() => this.explaining.delete(key));
     this.explaining.set(key, run);
     return run;
+  }
+
+  /** The agent's changes for a document that needs the code itself (Documentation: the API), cut to fit a prompt. */
+  async docDiff(agent, max = 80_000) {
+    if (!this.changesSource || NO_REPO.has(agent.kind) || !agent.workdir) return null;
+    const diff = (await this.changesSource(agent.id).catch(() => null))?.diff ?? '';
+    return diff.length > max ? `${diff.slice(0, max)}\n… (the rest of the diff was cut)` : diff;
   }
 
   /** What the agent is actually doing: its session, repo changes, live status and brief. */

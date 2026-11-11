@@ -13,6 +13,8 @@ const DOCS = [
   ['flow', 'Flow'],
   ['analysis', 'Analysis'],
   ['proposal', 'Proposal'],
+  ['estimate', 'Estimate'],
+  ['documentation', 'Documentation'],
   ['explain', 'Explain'],
 ];
 const pref = {

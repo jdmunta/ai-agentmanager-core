@@ -501,10 +501,17 @@ const INSIGHT_ICONS = { why: '🎯', what: '📦', how: '🛠', now: '📍' };
 
 // ------------------------------------------------------------------ stakeholder documents
 
-const DOCS = { analysis: 'Analysis', design: 'Design', flow: 'Flow', proposal: 'Proposal', humanai: 'Human vs AI', diagrams: 'Diagrams', scorecard: 'Scorecard' };
+const DOCS = { analysis: 'Analysis', design: 'Design', flow: 'Flow', proposal: 'Proposal', humanai: 'Human vs AI', estimate: 'Estimate', documentation: 'Documentation', diagrams: 'Diagrams', scorecard: 'Scorecard' };
+// What a document is before it's written, where "Write a … document for stakeholders" doesn't say it.
+const DOC_HINTS = {
+  estimate: 'For planning: how long a person would take to do this work by hand, split into tasks with optimistic, likely and pessimistic hours, a suggested split into tickets, the roles needed and the risks',
+  documentation: 'The documentation for this change: what is new, how to use it, configuration, upgrade notes, which docs to add or update, and an OpenAPI spec of any API changes',
+};
+/** The OpenAPI spec in a Documentation document (its ```yaml block), if the change has API changes. */
+const openApiOf = (markdown) => (markdown ?? '').match(/```ya?ml\s*\n((?:#.*\n|\s*\n)*openapi:[\s\S]*?)```/)?.[1] ?? null;
 // Optional extras that "Write all" leaves out.
 const DOC_EXTRAS = new Set(['diagrams', 'scorecard']);
-const DOC_TITLES = { ...DOCS, eval: 'Eval', plan: 'Plan', intent: 'Intent', spec: 'Spec', designdoc: 'Design doc', benchmark: 'Benchmark' };
+const DOC_TITLES = { ...DOCS, estimate: 'Human time estimate', eval: 'Eval', plan: 'Plan', intent: 'Intent', spec: 'Spec', designdoc: 'Design doc', benchmark: 'Benchmark' };
 // The agent's intent, spec and plan files (read from the daemon when opened; kept here by agent and kind).
 const SPEC_KINDS = { intent: 'Intent', spec: 'Spec', plan: 'Plan', designdoc: 'Design doc', benchmark: 'Benchmark' };
 // What each optional file is, for its button before it's written.
@@ -589,7 +596,7 @@ function docButtons(a) {
       const d = a.docs?.[k];
       const stale = d?.markdown && a.brief?.updatedAt && d.briefUpdatedAt !== a.brief.updatedAt;
       return `<button class="small doc-btn ${d?.markdown ? 'has' : ''}" data-doc="${k}" ${d?.pending ? 'disabled' : ''}
-        title="${k === 'scorecard' ? (d?.markdown ? `Open the review scorecard: ${d.data?.overall ?? '—'}/100` : 'Score the changes for review: intent, spec, scope, plan, tests and safety, with an overall readiness and where to look') : k === 'diagrams' ? (d?.markdown ? `Open the diagrams${stale ? ' (the brief changed since)' : ''}` : 'Draw the problem and its solution for a quick grasp: architecture, design, data flow (animated) and the key interaction, diagrams only. Built from the documents already written and the agent\'s work') : d?.markdown ? `Open the ${label.toLowerCase()} document${stale ? ' (the brief changed since)' : ''}` : `Write a ${label.toLowerCase()} document for stakeholders`}">${d?.pending ? `${label}…` : label}${d?.markdown ? (stale ? ' •' : ' ✓') : ''}</button>`;
+        title="${k === 'scorecard' ? (d?.markdown ? `Open the review scorecard: ${d.data?.overall ?? '—'}/100` : 'Score the changes for review: intent, spec, scope, plan, tests and safety, with an overall readiness and where to look') : k === 'diagrams' ? (d?.markdown ? `Open the diagrams${stale ? ' (the brief changed since)' : ''}` : 'Draw the problem and its solution for a quick grasp: architecture, design, data flow (animated) and the key interaction, diagrams only. Built from the documents already written and the agent\'s work') : d?.markdown ? `Open the ${label.toLowerCase()} document${stale ? ' (the brief changed since)' : ''}` : DOC_HINTS[k] ?? `Write a ${label.toLowerCase()} document for stakeholders`}">${d?.pending ? `${label}…` : label}${d?.markdown ? (stale ? ' •' : ' ✓') : ''}</button>`;
     })
     .join('')}</span>${specButtons(a)}${driveButton(a)}`;
 }
@@ -660,6 +667,7 @@ function renderDocDialog() {
   for (const id of ['doc-copy', 'doc-download', 'doc-print']) $(`#${id}`).disabled = !d?.markdown;
   // Diagrams: the whole document as one HTML file with every diagram (each also has Copy / PNG / SVG).
   $('#doc-html').hidden = !/```mermaid/.test(d?.markdown ?? '');
+  $('#doc-openapi').hidden = docView.kind !== 'documentation' || !openApiOf(d?.markdown);
   $('#doc-listen').innerHTML = d?.markdown && docView.kind !== 'diagrams' ? listenHtml(docView.kind === 'scorecard' ? `score:${docView.agentId}` : `doc:${docView.agentId}:${docView.kind}`, { title: 'Read the document aloud' }) : '';
   $('#doc-print').hidden = plan || specKind;
   $('#doc-regen').hidden = plan || specKind;
@@ -704,6 +712,7 @@ function renderEval(a, body, d) {
   $('#doc-meta').textContent = ev?.at ? `Worked out ${ago(ev.at)}${ev.postedTo ? ' · posted on the pull request' : ''}` : '';
   for (const id of ['doc-copy', 'doc-download', 'doc-print']) $(`#${id}`).disabled = !d?.markdown;
   $('#doc-html').hidden = true;
+  $('#doc-openapi').hidden = true;
   $('#doc-listen').innerHTML = '';
   $('#doc-print').hidden = true;
   $('#doc-regen').hidden = true;
@@ -781,6 +790,13 @@ $('#doc-download').onclick = () => {
   const a = agents.get(docView.agentId);
   const blob = new Blob([docOf(a, docView.kind).markdown], { type: 'text/markdown' });
   const link = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: `${a.slug}-${docView.kind}.md` });
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+};
+$('#doc-openapi').onclick = () => {
+  const a = agents.get(docView.agentId);
+  const blob = new Blob([openApiOf(docOf(a, docView.kind)?.markdown)], { type: 'application/yaml' });
+  const link = Object.assign(document.createElement('a'), { href: URL.createObjectURL(blob), download: `${a.slug}-openapi.yaml` });
   link.click();
   setTimeout(() => URL.revokeObjectURL(link.href), 1000);
 };

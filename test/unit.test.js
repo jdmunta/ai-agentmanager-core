@@ -3405,3 +3405,20 @@ test('limits: usage limits and busy services on screen, when they reset, and res
   resume(now + BUSY_RETRY_MS + 1000);
   assert.equal(told.length, 3, 'turned off');
 });
+
+test('documents: the human time estimate and the documentation (with the diff, for the OpenAPI spec)', async () => {
+  const { docPrompt } = await import('../src/brief.js');
+  const est = docPrompt('estimate', { intent: 'PROJ-12 Add export', repo: 'diffstat: 3 files' });
+  assert.match(est, /^Write a Human time estimate document/);
+  assert.match(est, /## Breakdown\n.*Optimistic \(h\), Likely \(h\), Pessimistic \(h\), Expected \(h\)/);
+  assert.match(est, /## Suggested split/);
+  assert.match(est, /without an AI agent/);
+  assert.doesNotMatch(est, /<diff>/, 'the estimate goes by the diffstat');
+  assert.match(est, /Roughly 300-900 words \(not counting tables and code\)/);
+  const doc = docPrompt('documentation', { intent: 'Add /export', diff: '+app.get("/export")' });
+  assert.match(doc, /## API changes\n.*OpenAPI 3\.0\.3/);
+  assert.match(doc, /<diff>\n\+app\.get\("\/export"\)\n<\/diff>/);
+  assert.match(docPrompt('documentation', { diff: '' }), /<diff>\n\(no changes yet\)\n<\/diff>/);
+  assert.match(docPrompt('analysis', {}), /Roughly 400-900 words\./, 'the other documents are unchanged');
+  assert.doesNotMatch(docPrompt('analysis', {}), /<diff>/);
+});

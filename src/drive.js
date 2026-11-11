@@ -23,6 +23,8 @@ export const DRIVE_DOCS = [
   ['design', 'Design'],
   ['flow', 'Flow'],
   ['proposal', 'Proposal'],
+  ['estimate', 'Human time estimate'],
+  ['documentation', 'Documentation'],
   ['diagrams', 'Diagrams'],
   ['walkthrough', 'Change walkthrough'],
   ['scorecard', 'Review scorecard'],
