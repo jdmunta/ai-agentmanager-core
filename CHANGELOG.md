@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.41.0 (2026-11-11)
+
+- **Estimate.** A human time estimate for planning any Jira fix or feature: how long one experienced developer would take to do it by hand, without an AI agent. It's split into tasks of a day or less, each with optimistic, likely, pessimistic and expected hours and a total. Work over about 3 days gets a suggested split into tickets, and it lists the roles, assumptions and risks.
+- **Documentation.** The docs for the change, written from the actual diff: what's new, how to use it, configuration, upgrade notes and which docs to add or update. When the change touches an HTTP API, it includes an OpenAPI 3.0 spec of the changed endpoints; **Download OpenAPI** saves it as a .yaml file.
+- Both sit with the other documents (Analysis, Design and the rest), and are included in **Write all**, `agentmgr doc`, Google Drive publishing and the side pane.
+
 ## 1.40.0 (2026-11-11)
 
 - **A calmer agent list.** No summary line under each name (it's the name's tooltip, and search still finds it); the engine, container, assistant and playbook tags move to the line below. The project name shows where the branch was (the branch is in its tooltip).
