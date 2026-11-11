@@ -119,7 +119,12 @@ const stopped = (child) => (child && child.exitCode === null && child.signalCode
 after(async () => {
   ws?.close();
   await Promise.all([stopped(chrome), stopped(daemon)]);
-  if (home) fs.rmSync(home, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  // Chrome's helper processes can still be writing its profile for a moment; a temp folder left behind isn't a failure.
+  if (home) {
+    try {
+      fs.rmSync(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 });
+    } catch {}
+  }
 });
 
 test('the top bar fits the window: the view buttons that do not fit go into More', { skip }, async () => {
