@@ -40,9 +40,17 @@ const js = async (expression) => {
   if (r.exceptionDetails) throw new Error(`${r.exceptionDetails.exception?.description ?? r.exceptionDetails.text}\n  in: ${expression.slice(0, 160)}`);
   return r.result.value;
 };
+// Waits for an expression to be true; one that throws (the page is between two loads) is tried again.
 const until = async (expression, what, ms = 10_000) => {
-  for (const end = Date.now() + ms; Date.now() < end; await sleep(150)) if (await js(expression)) return;
-  throw new Error(`timed out waiting for ${what}`);
+  let last;
+  for (const end = Date.now() + ms; Date.now() < end; await sleep(150)) {
+    try {
+      if (await js(expression)) return;
+    } catch (e) {
+      last = e;
+    }
+  }
+  throw new Error(`timed out waiting for ${what}${last ? ` (last error: ${last.message})` : ''}`);
 };
 // A reload: the checks that follow must see the new page, not the old one still on screen.
 const reload = async () => {
