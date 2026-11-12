@@ -53,7 +53,7 @@ Policies are synchronous so every code path can call them. Keep them fast; do sl
 | `agent.start` | Before an agent's engine is launched or resumed (including after a restart) | `agent`, `fresh` |
 | `agent.message` | Before a message is typed into an agent (`tell`, inbox replies) | `agent`, `text`, `source` |
 | `agent.remove` | Before an agent is deleted | `agent`, `deleteWorkspace` |
-| `mcp.run` | Before an MCP tool runs once in a folder (the MCP panel's **Run once**, `agentmgr mcp run`); running it in a session goes through `agent.message` | `agent` (or null for the home folder), `dir`, `tool`, `input` |
+| `mcp.run` | Before an MCP tool runs in a folder's MCP session (the MCP panel's **Run**, `agentmgr mcp run`); running it in an agent's session goes through `agent.message` | `agent` (or null for the home folder), `dir`, `tool`, `input`, `where` (`direct`: called with the JSON arguments in `input`; `workspace`: through a one-off Claude Code call) |
 | `agent.commit` | Before Commit in the review screen commits an agent's worktree | `agent`, `message` |
 | `agent.pr` | Before the review screen pushes an agent's branch and opens a pull request | `agent`, `title`, `draft` |
 | `agent.merge` | Before Merge (or auto-merge) in the Land tab merges an agent's pull request | `agent`, `url`, `method`, `auto` |

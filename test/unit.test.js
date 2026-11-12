@@ -3424,7 +3424,7 @@ test('documents: the human time estimate and the documentation (with the diff, f
 });
 
 test('MCP: tool names, server views without secrets, and the run prompts', async () => {
-  const { toolId, targetOf, serverView, runPrompt, sessionMessage } = await import('../src/mcp.js');
+  const { toolId, targetOf, serverView, runPrompt, sessionMessage, parseArgs, resultText } = await import('../src/mcp.js');
   assert.equal(toolId('claude.ai Google Drive', 'create_file'), 'mcp__claude_ai_Google_Drive__create_file');
   assert.equal(toolId('my-server', 'x'), 'mcp__my-server__x');
   assert.equal(targetOf({ url: 'https://mcp.example.com/mcp?token=abc#x' }), 'https://mcp.example.com/mcp');
@@ -3447,6 +3447,7 @@ test('MCP: tool names, server views without secrets, and the run prompts', async
     target: 'node s.js',
     version: '1.2',
     error: null,
+    canSignIn: false,
     tools: [
       { name: 'echo', id: 'mcp__fake__echo', title: 'Echo', readOnly: true, destructive: false },
       { name: 'rm', id: 'mcp__fake__rm', title: null, readOnly: false, destructive: true },
@@ -3457,6 +3458,16 @@ test('MCP: tool names, server views without secrets, and the run prompts', async
   assert.match(runPrompt('mcp__fake__echo', ''), /Request: \(none: /);
   assert.equal(sessionMessage('mcp__fake__echo', 'say hi'), 'Use the MCP tool mcp__fake__echo for this: say hi. Show me what it returned.');
   assert.equal(sessionMessage('mcp__fake__echo', ''), 'Use the MCP tool mcp__fake__echo. Show me what it returned.');
+  // Only servers reached over HTTP have a sign-in.
+  assert.equal(serverView({ name: 'h', status: 'needs-auth', config: { type: 'http', url: 'https://x.example/mcp?k=1' } }).canSignIn, true);
+  // A direct call takes JSON arguments or nothing; anything else is plain words for Claude Code.
+  assert.deepEqual(parseArgs(''), {});
+  assert.deepEqual(parseArgs(' {"q": "x", "n": 2} '), { q: 'x', n: 2 });
+  for (const words of ['find the open bugs', '{not json', '[1, 2]', '"text"']) assert.equal(parseArgs(words), null);
+  assert.deepEqual(resultText({ content: [{ type: 'text', text: 'a' }, { type: 'image', mimeType: 'image/png' }, { type: 'text', text: 'b' }] }), { text: 'a\n[image image/png]\nb', isError: false });
+  assert.deepEqual(resultText({ isError: true, content: [{ type: 'text', text: 'no' }] }), { text: 'no', isError: true });
+  assert.deepEqual(resultText({ structuredContent: { ok: 1 } }), { text: '{\n  "ok": 1\n}', isError: false });
+  assert.equal(resultText({}).text, '(no output)');
 });
 
 test('update from the app: answers at once, then reports each step; a failure keeps its error and the manual command', async () => {

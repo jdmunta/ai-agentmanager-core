@@ -27,7 +27,7 @@ Run one background [Claude Code](https://claude.com/claude-code) agent per inten
 - **Slack alerts.** A message in your channel when an agent needs input, finishes a backlog item, or fails.
 - **Priority.** Mark agents P0–P3. P0 and P1 are highlighted, and lists sort by priority.
 - **Share for review.** One click writes an **Analysis**, **Design**, **Flow** or **Proposal** document from the agent's work, a human time **Estimate** for planning, or the change's **Documentation** with an OpenAPI spec of any API changes. Copy it as Markdown, download it, or print it to PDF with diagrams.
-- **MCP servers and tools.** See every MCP server Claude Code has in a folder (yours, the project's, claude.ai connectors and plugins) with its tools, and run any tool in an agent's session or once in its workspace.
+- **MCP servers and tools.** See every MCP server Claude Code has in a folder (yours, the project's, claude.ai connectors and plugins) with its tools, sign in to the ones that need it, and run any tool directly, through Claude Code, or in an agent's session.
 - **Human vs AI.** It splits the open questions about the work into the top 5 that need your judgment and the ones a model can answer from the evidence. It answers those, then a second model double-checks every answer.
 - **Review changes.** Each agent's diff file by file, line comments sent back to the agent as one message, then **Commit all** and **Push & open PR**, without leaving the page.
 - **Standup.** Each weekday at 9:00 (or whenever you press **Standup**, or `p`), each agent with news since the last one is read aloud in a sentence or two, each in its own voice: what it did, what it's on, what it needs from you. Agents that need you go first and quiet ones are left out. It stops on an agent that needs you, with its questions beside it to answer by tap, or by voice when **Answer by voice** is on (what you say is read back, then sent when you say "send"). The wording comes from one short tool-less model call, plain wording if that fails. A Slack alert says when it's ready (Alerts). Change the time, weekends and wording in the player, or in config.json: `"standup": { "at": "09:00", "weekends": false, "ai": true, "notify": true }`. Speech is your browser's own; voice answers may be sent to your browser's maker to be turned into text.
@@ -1130,13 +1130,20 @@ Usage comes from the session transcripts and is refreshed every few seconds whil
 
 ## MCP servers and tools
 
-**MCP** in the top bar (or **MCP tools** in an agent's detail, or `agentmgr mcp [agent]`) lists the MCP servers Claude Code has in a folder: your own servers, the project's `.mcp.json`, local ones, claude.ai connectors and plugins' servers. Each shows its status, where it comes from, where it runs and its tools, marked *read-only* or *destructive* when the server says so. Pick the home folder or any agent's workspace at the top, since a workspace adds its project's servers. The app asks Claude Code itself through its control protocol, which connects to each server but makes no model call. The list is kept for 5 minutes, and **Refresh** asks again. Environment variables, headers, URL queries and secret-looking arguments are never shown.
+**MCP** in the top bar (or **MCP tools** in an agent's detail, or `agentmgr mcp [agent]`) lists the MCP servers Claude Code has in a folder: your own servers, the project's `.mcp.json`, local ones, claude.ai connectors and plugins' servers. Each shows its status, where it comes from, where it runs and its tools, marked *read-only* or *destructive* when the server says so. Pick the home folder or any agent's workspace at the top, since a workspace adds its project's servers. Environment variables, headers, URL queries and secret-looking arguments are never shown.
 
-**Run…** on a tool takes an optional request in plain words, then runs it in one of two ways:
-- **Run in session** tells the agent to use the tool, with its conversation and context. The answer is in the session. This works for Claude Code agents.
-- **Run once in workspace** (or `agentmgr mcp run <agent|home> <server> <tool> [request]`) is a separate one-off Claude Code call in that folder. It may use only that one tool, works out the arguments from your request, and shows what the tool returned. The agent isn't interrupted.
+**Its own MCP session.** Each folder gets an MCP session of its own on the daemon: one Claude Code process, separate from any agent's session, that the app talks to through Claude Code's control protocol. It keeps the servers connected, so listing, signing in, reconnecting and calling a tool make no model call and don't interrupt an agent. The session closes after 15 minutes unused and starts again when needed. **Refresh all** starts a new one, which reads the configuration again. **↗ Window** opens the panel in a window of its own (`#mcp` or `#mcp/<agent>`), and **Runs in this MCP session** at the bottom keeps the last 30 runs with their results.
 
-A destructive tool needs a second click. Plugins can refuse one-off runs with the `mcp.run` policy.
+**Signing in.** A server that needs it shows **needs sign-in** and a **Sign in** button (or `agentmgr mcp signin <agent|home> <server>`), which opens that server's sign-in page in a new tab and keeps the link on the page. Claude Code runs the sign-in and keeps the tokens; the app never sees them. When you finish, the server connects by itself. The sign-in ends on an address on the computer the daemon runs on, so from another device (or when that last page doesn't load) paste the address the browser ended on into the box under the link. A claude.ai connector is connected on claude.ai instead: the link goes there.
+
+**↻ on each server** (or `agentmgr mcp reconnect <agent|home> <server>`) connects that one server again and lists its tools, after signing in or when it failed. The others are left alone.
+
+**Run…** on a tool takes its input and runs it in one of three ways:
+- **Run** with the tool's arguments as JSON (`{"query": "…"}`), or with nothing: the tool is called directly in the folder's MCP session, with no model call, and its output is shown as it is.
+- **Run** with a request in plain words: a separate one-off Claude Code call in that folder, allowed only that one tool, works out the arguments and shows what the tool returned.
+- **Run in agent session** tells the agent to use the tool, with its conversation and context. The answer is in the session. This works for Claude Code agents.
+
+`agentmgr mcp run <agent|home> <server> <tool> [arguments or request]` does the first two, and `--session` the third. A destructive tool needs a second click. Plugins can refuse runs outside an agent's session with the `mcp.run` policy.
 
 ## Configuration
 

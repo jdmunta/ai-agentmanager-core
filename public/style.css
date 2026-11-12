@@ -759,6 +759,14 @@ pre.diff .meta { color: var(--muted); font-weight: 600; }
 .mcp-form textarea { width: 100%; box-sizing: border-box; }
 .mcp-actions { display: flex; gap: 6px; justify-content: flex-end; flex-wrap: wrap; }
 .mcp-result { border-left: 3px solid var(--border); padding-left: 10px; margin: 6px 0; max-height: 320px; overflow: auto; }
+.mcp-server summary .spacer { flex: 1; }
+.mcp-again { min-width: 28px; font-size: 15px; line-height: 1; }
+.mcp-signin p { margin: 6px 0; }
+.mcp-paste { display: flex; gap: 6px; margin: 6px 0; }
+.mcp-paste input { flex: 1; min-width: 0; }
+.mcp-result.failed { border-left-color: var(--red); }
+.mcp-runs { margin: 14px 0 0; padding: 6px 10px; border: 1px dashed var(--border); border-radius: 6px; }
+.mcp-runs summary { cursor: pointer; }
 .tag.mcp-ok { color: var(--green); }
 .tag.mcp-wait { color: var(--yellow); }
 .rv-summary { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; font-size: 13px; }

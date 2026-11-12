@@ -826,7 +826,7 @@ export async function main(argv) {
     .command('list', { isDefault: true })
     .description('List the MCP servers, their status and tools')
     .argument('[agent]', "an agent: its folder's servers too (default: your home folder)")
-    .option('-r, --refresh', 'ask Claude Code again instead of the list from the last 5 minutes')
+    .option('-r, --refresh', "start the folder's MCP session again (reads the configuration again)")
     .option('--json', 'print JSON')
     .action(async (ref, opts) => {
       await daemon();
@@ -843,19 +843,46 @@ export async function main(argv) {
     });
   mcp
     .command('run')
-    .description("Run a tool once in the agent's folder (a separate call allowed only that tool), or in its session with --session")
+    .description("Run a tool in the folder's MCP session: JSON arguments (or none) call it directly; plain words go through a one-off Claude Code call allowed only that tool. --session tells the agent to use it")
     .argument('<agent>', 'the agent, or "home" for your home folder')
     .argument('<server>')
     .argument('<tool>')
-    .argument('[request...]', 'what it should do, or its arguments in plain words')
+    .argument('[request...]', `its arguments as JSON ('{"query":"x"}'), or what it should do in plain words`)
     .option('-s, --session', 'tell the agent to use it in its session instead')
     .action(async (ref, server, tool, request, opts) => {
       await daemon();
       const agent = ref === 'home' ? 'home' : (await resolveAgent(ref)).id;
-      const r = await api('POST', '/mcp/run', { agent, server, tool, input: request.join(' '), where: opts.session ? 'session' : 'workspace' });
+      const input = request.join(' ');
+      const { parseArgs } = await import('./mcp.js');
+      const r = await api('POST', '/mcp/run', { agent, server, tool, input, where: opts.session ? 'session' : parseArgs(input) ? 'direct' : 'workspace' });
       if (r.where === 'session') return console.log(`${green('✓')} asked ${r.agent.name} to use ${r.tool}; its answer is in the session`);
       console.log(r.text);
-      console.log(dim(`(${r.tool}, ${(r.ms / 1000).toFixed(1)} s)`));
+      console.log(dim(`(${r.tool}, ${(r.ms / 1000).toFixed(1)} s, ${r.where === 'direct' ? 'called directly' : 'through Claude Code'})`));
+      if (r.isError) process.exitCode = 1;
+    });
+  mcp
+    .command('signin')
+    .description("Sign in to a server that needs it: prints the address to open. Claude Code keeps the sign-in")
+    .argument('<agent>', 'the agent, or "home" for your home folder')
+    .argument('<server>')
+    .action(async (ref, server) => {
+      await daemon();
+      const agent = ref === 'home' ? 'home' : (await resolveAgent(ref)).id;
+      const r = await api('POST', '/mcp/signin', { agent, server });
+      if (!r.url) return console.log(`${green('✓')} ${server} is already signed in`);
+      console.log(`Open this to sign in to ${bold(server)}:\n${r.url}`);
+      console.log(dim(r.callback ? `When you finish there it connects by itself; check with: agentmgr mcp reconnect ${ref} ${server}` : `Then connect it again: agentmgr mcp reconnect ${ref} ${server}`));
+    });
+  mcp
+    .command('reconnect')
+    .description('Connect one server again (after signing in, or when it failed) and show its status')
+    .argument('<agent>', 'the agent, or "home" for your home folder')
+    .argument('<server>')
+    .action(async (ref, server) => {
+      await daemon();
+      const agent = ref === 'home' ? 'home' : (await resolveAgent(ref)).id;
+      const s = (await api('POST', '/mcp/reconnect', { agent, server })).servers.find((x) => x.name === server);
+      console.log(`${bold(server)}  ${s?.status === 'connected' ? green(s.status) : yellow(s?.status ?? 'not listed')}${s ? dim(`  ${s.tools.length} tools`) : ''}`);
     });
 
   program

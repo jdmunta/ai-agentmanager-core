@@ -1367,35 +1367,63 @@ test('stakeholder documents: analysis, design, flow, proposal, estimate, documen
   assert.equal((await fetch(`${base}/share.html`)).status, 200);
 });
 
-test('MCP: servers and tools in an agent\'s folder, listed without a model call; a tool run once there with only that tool', async () => {
+test('MCP: a folder\'s own MCP session lists servers, signs in to one, reconnects one and calls a tool, all without a model call', async () => {
   const [a] = (await call('POST', '/agents', { intent: 'MCP tools', start: false })).body;
   const ag = await waitFor(async () => {
     const x = await agentNow(a.id);
     return x.status === 'stopped' && x.workdir ? x : null;
   }, 8000, 'ready');
-  fs.writeFileSync(path.join(ag.workdir, '.mcp.json'), JSON.stringify({ mcpServers: { fake: { command: 'node', args: ['s.js', '--api-key', 'k123'], env: { TOKEN: 'shh' } } } }));
+  const dir = fs.realpathSync(ag.workdir);
+  fs.writeFileSync(path.join(ag.workdir, '.mcp.json'), JSON.stringify({ mcpServers: { fake: { command: 'node', args: ['s.js', '--api-key', 'k123'], env: { TOKEN: 'shh' } }, tracker: { type: 'http', url: 'https://mcp.tracker.example/mcp?k=zz' } } }));
+  const sessions = () => fs.readFileSync(claudeLog, 'utf8').trim().split('\n').map((l) => JSON.parse(l)).filter((l) => l.mcp && l.cwd === dir).length;
   const res = await call('GET', `/mcp?agent=${a.id}`);
   assert.equal(res.status, 200, JSON.stringify(res.body));
   assert.equal(res.body.dir, ag.workdir);
-  assert.deepEqual(res.body.servers.map((s) => [s.name, s.status, s.tools.map((t) => t.id)]), [
-    ['claude.ai Example', 'connected', ['mcp__claude_ai_Example__search']],
-    ['fake', 'connected', ['mcp__fake__echo', 'mcp__fake__delete_all']],
+  assert.deepEqual(res.body.servers.map((s) => [s.name, s.status, s.canSignIn, s.tools.map((t) => t.id)]), [
+    ['claude.ai Example', 'connected', true, ['mcp__claude_ai_Example__search']],
+    ['fake', 'connected', false, ['mcp__fake__echo', 'mcp__fake__delete_all']],
+    ['tracker', 'needs-auth', true, []],
   ], 'waits while a server is still connecting');
-  assert.doesNotMatch(JSON.stringify(res.body), /shh|k123|token=abc|Bearer/, 'no secrets');
-  const probe = fs.readFileSync(claudeLog, 'utf8').trim().split('\n').map((l) => JSON.parse(l)).filter((l) => l.mcp && l.cwd === fs.realpathSync(ag.workdir));
-  assert.equal(probe.length, 1, 'one probe, in the folder');
-  // Listed again from the cache; refresh asks again.
+  assert.doesNotMatch(JSON.stringify(res.body), /shh|k123|token=abc|Bearer|k=zz/, 'no secrets');
+  assert.ok(res.body.session.startedAt);
+  // The session stays up between requests; Refresh all starts a new one.
   await call('GET', `/mcp?agent=${a.id}`);
-  await call('GET', `/mcp?agent=${a.id}&refresh=1`);
-  assert.equal(fs.readFileSync(claudeLog, 'utf8').trim().split('\n').map((l) => JSON.parse(l)).filter((l) => l.mcp && l.cwd === fs.realpathSync(ag.workdir)).length, 2);
-  const run = await call('POST', '/mcp/run', { agent: a.id, server: 'fake', tool: 'echo', input: 'say hi', where: 'workspace' });
+  assert.equal(sessions(), 1, 'one session for the folder');
+
+  // A direct call: the arguments as given, in the folder, no model.
+  const run = await call('POST', '/mcp/run', { agent: a.id, server: 'fake', tool: 'echo', input: '{"text": "hi"}' });
   assert.equal(run.status, 200, JSON.stringify(run.body));
-  assert.equal(run.body.text, `ran mcp__fake__echo (only: true) in ${fs.realpathSync(ag.workdir)}: say hi`);
+  assert.deepEqual([run.body.where, run.body.text, run.body.isError], ['direct', `called mcp__fake__echo with {"text":"hi"} in ${dir}`, false]);
+  assert.equal((await call('POST', '/mcp/run', { agent: a.id, server: 'fake', tool: 'echo', input: 'say hi' })).status, 400, 'plain words are not arguments');
+  // Plain words: once through Claude Code, with only that tool.
+  const words = await call('POST', '/mcp/run', { agent: a.id, server: 'fake', tool: 'echo', input: 'say hi', where: 'workspace' });
+  assert.equal(words.body.text, `ran mcp__fake__echo (only: true) in ${dir}: say hi`);
   assert.equal((await call('POST', '/mcp/run', { agent: a.id, server: 'fake', tool: 'nope' })).status, 404);
+  assert.equal((await call('POST', '/mcp/run', { agent: a.id, server: 'tracker', tool: 'echo' })).status, 404, 'not signed in: no tools');
   assert.equal((await call('POST', '/mcp/run', { agent: a.id, server: 'fake', tool: 'echo', where: 'elsewhere' })).status, 400);
   const told = await call('POST', '/mcp/run', { agent: a.id, server: 'fake', tool: 'echo', input: 'say hi', where: 'session' });
-  assert.equal(told.status, 200, JSON.stringify(told.body));
   assert.equal(told.body.tool, 'mcp__fake__echo');
+
+  // Signing in: the address to open; a command on this computer has none.
+  const signIn = await call('POST', '/mcp/signin', { agent: a.id, server: 'tracker' });
+  assert.deepEqual(signIn.body, { server: 'tracker', url: 'https://auth.example.com/authorize?client_id=x&state=s-tracker', callback: true, local: true });
+  assert.equal((await call('POST', '/mcp/signin', { agent: a.id, server: 'fake' })).status, 409);
+  assert.equal((await call('POST', '/mcp/signin', { agent: a.id, server: 'nope' })).status, 404);
+  assert.equal((await call('POST', '/mcp/signin/callback', { agent: a.id, server: 'tracker', url: 'http://localhost:45678/callback' })).status, 502, 'no code in it');
+  const back = await call('POST', '/mcp/signin/callback', { agent: a.id, server: 'tracker', url: 'http://localhost:45678/callback?code=c1&state=s-tracker' });
+  assert.deepEqual(back.body.servers.find((s) => s.name === 'tracker').tools.map((t) => t.name), ['echo', 'delete_all'], 'signed in: connected, with its tools');
+
+  // One server connected again; the others are left alone.
+  const again = await call('POST', '/mcp/reconnect', { agent: a.id, server: 'fake' });
+  assert.deepEqual(again.body.servers.map((s) => [s.name, s.version]), [['claude.ai Example', null], ['fake', 'r1'], ['tracker', 'r0']]);
+  assert.equal((await call('POST', '/mcp/reconnect', { agent: a.id, server: 'nope' })).status, 404);
+  assert.equal(sessions(), 1, 'all in the same session');
+  // The runs are kept with the folder, newest first.
+  assert.deepEqual(again.body.runs.map((r) => [r.where, r.name, r.input]), [['workspace', 'echo', 'say hi'], ['direct', 'echo', '{"text": "hi"}']]);
+  // Refresh all: a new session, which reads the configuration again (the sign-in was the old one's).
+  const fresh = await call('GET', `/mcp?agent=${a.id}&refresh=1`);
+  assert.equal(sessions(), 2);
+  assert.equal(fresh.body.servers.find((s) => s.name === 'tracker').status, 'needs-auth');
 });
 
 test('documents in the background: returns at once, all seven, at most two Claude calls at a time', async () => {
