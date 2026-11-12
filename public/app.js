@@ -38,6 +38,7 @@ import { initReviews } from '/reviews.js';
 import { initBugHunt } from '/bughunt.js';
 import { drawDiagram } from '/diagram.js';
 import { initValue } from '/value.js';
+import { initMcp } from '/mcp.js';
 import { initCodeMap } from '/codemap.js';
 import { initKeys } from '/keys.js';
 import { morph } from '/morph.js';
@@ -296,6 +297,9 @@ $('#bugs-btn').onclick = () => bugsUi.open();
 // Value: what the delivered work is worth, for you and for management.
 const valueUi = initValue({ api, $, esc, toast: (m, ms) => toast(m, ms), openAgent: (id) => (showTab('agents'), select(id)) });
 $('#value-btn').onclick = () => valueUi.open();
+// MCP: the MCP servers and tools Claude Code has in a folder, and running one.
+const mcpUi = initMcp({ api, $, esc, ago, md: (t) => md(t), toast: (m, ms) => toast(m, ms), agents: () => [...agents.values()] });
+$('#mcp-btn').onclick = () => mcpUi.open(selectedId && agents.get(selectedId)?.workdir ? selectedId : null);
 // Keyboard shortcuts (keys.js): the same actions as the buttons.
 const keysUi = initKeys({ $, esc, run: (act) => shortcut(act) });
 $('#keys-btn').onclick = () => keysUi.help();
@@ -2288,6 +2292,7 @@ function renderDetail() {
         ${noRepo(a) ? '' : `<button data-act="changes" ${a.workdir && a.status !== 'preparing' ? '' : 'disabled'} title="Read its changes, comment on lines for the agent, commit and open a pull request">Review changes${a.git?.dirtyFiles ? ` <span class="count">${a.git.dirtyFiles}</span>` : ''}</button>`}
         ${a.aiReview?.verdict ? `<button data-act="overview" title="The AI review: what's done, what's missing, the risks">Overview${a.aiReview.seen ? '' : ' <span class="count">new</span>'}</button>` : ''}
         ${a.questions?.length ? `<button data-act="questions" title="What the agent asked you, and your answers">Questions${openQuestions(a) ? ` <span class="count">${openQuestions(a)}</span>` : ''}</button>` : ''}
+        <button data-act="mcp" ${a.workdir && a.status !== 'preparing' ? '' : 'disabled'} title="The MCP servers and tools Claude Code has in this agent's folder; run one in its session or once in the workspace">MCP tools</button>
         <button data-act="fork" ${a.workdir && a.git?.branch ? '' : 'disabled'} title="A new agent with this one's code and conversation, in its own worktree, to try another approach">Fork</button>
         <button data-act="edit" title="Change its name, request, project, priority, permission mode or model">Edit</button>
         <button data-act="refresh" title="Re-scan git, PRs and transcripts">Refresh</button>
@@ -3882,6 +3887,8 @@ $('#detail-body').addEventListener('click', async (e) => {
     case 'overview':
     case 'questions':
       return openNeeds(a.id, btn.dataset.act);
+    case 'mcp':
+      return mcpUi.open(a.id);
     case 'memory':
       return openMemory(a);
     case 'fork':

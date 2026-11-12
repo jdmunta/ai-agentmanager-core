@@ -2522,16 +2522,17 @@ export class AgentManager extends EventEmitter {
   }
 
   /** One tool-less, read-only call to an engine; resolves to its text output. */
-  oneShot(agent, text, { engine, model, timeoutMs = 300_000, tools }) {
+  oneShot(agent, text, { engine, model, timeoutMs = 300_000, tools, cwd = paths.home }) {
     // Some engines take the prompt as an argument instead of on stdin, and some need their extra
     // arguments after a subcommand (oneShotExtra: they place them). `tools`: Claude Code only, a
-    // call that may use just these connector tools (and none of its own).
+    // call that may use just these connector tools (and none of its own). `cwd`: where it runs, which
+    // decides the project MCP servers it loads.
     const extra = engine.extraArgs(this.config);
     const args = tools
       ? [...extra, ...engine.connectorArgs(this.config, { model, tools })]
       : engine.oneShotExtra ? engine.oneShotArgs(this.config, { model, prompt: text, extra }) : [...extra, ...engine.oneShotArgs(this.config, { model, prompt: text })];
     return new Promise((resolve, reject) => {
-      const child = spawn(engine.bin(this.config), args, { cwd: paths.home, env: this.childEnv(agent), stdio: ['pipe', 'pipe', 'pipe'] });
+      const child = spawn(engine.bin(this.config), args, { cwd, env: this.childEnv(agent), stdio: ['pipe', 'pipe', 'pipe'] });
       let out = '';
       let err = '';
       const timer = setTimeout(() => child.kill('SIGTERM'), timeoutMs);

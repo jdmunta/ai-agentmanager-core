@@ -3422,3 +3422,39 @@ test('documents: the human time estimate and the documentation (with the diff, f
   assert.match(docPrompt('analysis', {}), /Roughly 400-900 words\./, 'the other documents are unchanged');
   assert.doesNotMatch(docPrompt('analysis', {}), /<diff>/);
 });
+
+test('MCP: tool names, server views without secrets, and the run prompts', async () => {
+  const { toolId, targetOf, serverView, runPrompt, sessionMessage } = await import('../src/mcp.js');
+  assert.equal(toolId('claude.ai Google Drive', 'create_file'), 'mcp__claude_ai_Google_Drive__create_file');
+  assert.equal(toolId('my-server', 'x'), 'mcp__my-server__x');
+  assert.equal(targetOf({ url: 'https://mcp.example.com/mcp?token=abc#x' }), 'https://mcp.example.com/mcp');
+  assert.equal(targetOf({ command: 'npx', args: ['srv', '--api-key', 'abc', '--token=xyz', '--port=3', 'a'.repeat(40), '/a/b'] }), `npx srv --api-key ••• --token=••• --port=3 ••• /a/b`);
+  const v = serverView({
+    name: 'fake',
+    status: 'connected',
+    scope: 'project',
+    source: 'project',
+    config: { type: 'stdio', command: 'node', args: ['s.js'], env: { TOKEN: 'secret' } },
+    serverInfo: { name: 'fake', version: '1.2' },
+    tools: [{ name: 'echo', annotations: { readOnlyHint: true, title: 'Echo' } }, { name: 'rm', annotations: { destructiveHint: true } }],
+  });
+  assert.deepEqual(v, {
+    name: 'fake',
+    status: 'connected',
+    scope: 'project',
+    source: 'project',
+    transport: 'stdio',
+    target: 'node s.js',
+    version: '1.2',
+    error: null,
+    tools: [
+      { name: 'echo', id: 'mcp__fake__echo', title: 'Echo', readOnly: true, destructive: false },
+      { name: 'rm', id: 'mcp__fake__rm', title: null, readOnly: false, destructive: true },
+    ],
+  });
+  assert.doesNotMatch(JSON.stringify(v), /secret/);
+  assert.match(runPrompt('mcp__fake__echo', ' say hi '), /^Use the MCP tool mcp__fake__echo [\s\S]*\nRequest: say hi\n/);
+  assert.match(runPrompt('mcp__fake__echo', ''), /Request: \(none: /);
+  assert.equal(sessionMessage('mcp__fake__echo', 'say hi'), 'Use the MCP tool mcp__fake__echo for this: say hi. Show me what it returned.');
+  assert.equal(sessionMessage('mcp__fake__echo', ''), 'Use the MCP tool mcp__fake__echo. Show me what it returned.');
+});

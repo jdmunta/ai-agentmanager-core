@@ -20,7 +20,52 @@ if (args.includes('--desktop')) {
   process.stdout.write('Opening in Claude Desktop…\n');
   process.exit(0);
 }
-if (args.includes('-p')) {
+if (args.includes('--input-format') && args.includes('stream-json')) {
+  // The control protocol, as the MCP list uses it: servers from the folder's .mcp.json plus a
+  // claude.ai connector that is still connecting the first time it's asked.
+  fs.appendFileSync(process.env.FAKE_CLAUDE_LOG, JSON.stringify({ cwd: process.cwd(), args, mcp: true }) + '\n');
+  let file = {};
+  try {
+    file = JSON.parse(fs.readFileSync(path.join(process.cwd(), '.mcp.json'), 'utf8')).mcpServers ?? {};
+  } catch {}
+  let asked = 0;
+  let buf = '';
+  const reply = (request_id, response) => process.stdout.write(JSON.stringify({ type: 'control_response', response: { subtype: 'success', request_id, response } }) + '\n');
+  process.stdin.on('data', (d) => {
+    buf += d;
+    const lines = buf.split('\n');
+    buf = lines.pop();
+    for (const line of lines) {
+      const { request_id, request } = JSON.parse(line);
+      if (request.subtype === 'initialize') reply(request_id, { commands: [] });
+      else if (request.subtype === 'mcp_status') {
+        asked++;
+        reply(request_id, {
+          mcpServers: [
+            ...Object.entries(file).map(([name, config]) => ({
+              name,
+              status: 'connected',
+              config: { type: 'stdio', ...config },
+              scope: 'project',
+              source: 'project',
+              tools: [{ name: 'echo', annotations: { readOnlyHint: true } }, { name: 'delete_all', annotations: { destructiveHint: true } }],
+            })),
+            {
+              name: 'claude.ai Example',
+              status: asked > 1 ? 'connected' : 'pending',
+              config: { type: 'http', url: 'https://mcp.example.com/mcp?token=abc', headers: { Authorization: 'Bearer abc' } },
+              scope: 'claudeai',
+              source: 'claudeai',
+              tools: asked > 1 ? [{ name: 'search' }] : [],
+            },
+          ],
+        });
+      }
+    }
+  });
+  process.stdin.on('end', () => process.exit(0));
+  await new Promise(() => {});
+} else if (args.includes('-p')) {
   // Explain: a one-shot call that must have no tools and no MCP servers.
   let input = '';
   process.stdin.on('data', (d) => (input += d));
@@ -28,6 +73,12 @@ if (args.includes('-p')) {
     const ok = args[args.indexOf('--tools') + 1] === '' && args.includes('--strict-mcp-config');
     const section = (tag) => input.match(new RegExp(`<${tag}>\\n([\\s\\S]*?)\\n</${tag}>`))?.[1] ?? '';
     const conv = section('conversation');
+    if (input.startsWith('Use the MCP tool ')) {
+      // A one-off MCP tool run: only that tool allowed, in the agent's folder.
+      const tool = args[args.indexOf('--allowedTools') + 1];
+      process.stdout.write(`ran ${tool} (only: ${args[args.indexOf('--tools') + 1] === ''}) in ${process.cwd()}: ${input.match(/^Request: (.*)$/m)?.[1]}`, () => process.exit(0));
+      return;
+    }
     // The AI judge: JSON verdicts (see src/judge.js).
     const json = (o) => process.stdout.write(JSON.stringify(o), () => process.exit(0));
     if (input.startsWith('Write a short spoken standup')) {
