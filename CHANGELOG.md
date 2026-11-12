@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.42.0 (2026-11-11)
+
+- **MCP servers and tools.** **MCP** in the top bar (or **MCP tools** in an agent's detail, or `agentmgr mcp [agent]`) lists the MCP servers Claude Code has in your home folder or an agent's workspace: your own, the project's `.mcp.json`, claude.ai connectors and plugins' servers. Each shows its status, where it comes from and its tools. Listing makes no model call, and secrets are never shown.
+- **Run a tool.** **Run in session** tells the agent to use it, with its conversation and context. **Run once in workspace** (or `agentmgr mcp run`) is a separate one-off call that may use only that tool and shows what it returned, without interrupting the agent. Destructive tools need a second click, and plugins can refuse one-off runs with the `mcp.run` policy.
+
 ## 1.41.0 (2026-11-11)
 
 - **Estimate.** A human time estimate for planning any Jira fix or feature: how long one experienced developer would take to do it by hand, without an AI agent. It's split into tasks of a day or less, each with optimistic, likely, pessimistic and expected hours and a total. Work over about 3 days gets a suggested split into tickets, and it lists the roles, assumptions and risks.
