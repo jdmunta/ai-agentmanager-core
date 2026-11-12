@@ -139,7 +139,7 @@ test('the top bar fits the window: the view buttons that do not fit go into More
       menuOk: document.querySelector('#menu-btn').getBoundingClientRect().right <= innerWidth,
     })`);
     assert.ok(r.page <= w, `${w}px: the page is ${r.page}px wide`);
-    assert.equal(r.inRow + r.inMore, 14, `${w}px: every view button is in the row or in More`);
+    assert.equal(r.inRow + r.inMore, 15, `${w}px: every view button is in the row or in More`);
     assert.ok(r.newOk && r.menuOk, `${w}px: New agents and the account menu are on screen`);
     if (w >= 1024) assert.ok(r.inRow >= 3, `${w}px: only ${r.inRow} buttons in the row`);
   }

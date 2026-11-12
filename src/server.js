@@ -57,6 +57,7 @@ import { BugHunts } from './bughunt.js';
 import { ModuleBenchmarks } from './benchmarks.js';
 import { Evals, readTail, stateHash } from './eval.js';
 import { engineOf } from './engines/index.js';
+import { Mcp } from './mcp.js';
 import * as git from './git.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -181,6 +182,7 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
   const review = new Review({ manager });
   // The walkthrough explains the same diff the review screen shows.
   manager.changesSource = (id) => review.get(id);
+  const mcp = new Mcp({ manager });
   const studio = new Studio({ manager, review });
   const teams = new Teams({ manager, store, config });
   const cleanup = new Cleanup({ manager, store, config, teams });
@@ -955,6 +957,9 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
   // Your action on issues: assign (starts an agent from the proposal), skip, done, remove, or null to clear.
   api.post('/issues/action', wrap((req) => proposed.setAction(Array.isArray(req.body?.keys) ? req.body.keys.map(String) : [], req.body?.action ?? null, { until: req.body?.until ?? null })));
   // Design docs of all agents; the same ?group= and ?format=markdown.
+  // MCP servers and their tools as Claude Code sees them in an agent's folder (or the home folder), and running one.
+  api.get('/mcp', wrap((req) => mcp.list(req.query.agent, { refresh: req.query.refresh === '1' })));
+  api.post('/mcp/run', wrap((req) => mcp.run(req.body?.agent, req.body ?? {})));
   api.get('/designs', wrap((req) => {
     const v = manager.designs();
     const group = req.query.group ? String(req.query.group) : null;

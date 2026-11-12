@@ -53,6 +53,7 @@ Policies are synchronous so every code path can call them. Keep them fast; do sl
 | `agent.start` | Before an agent's engine is launched or resumed (including after a restart) | `agent`, `fresh` |
 | `agent.message` | Before a message is typed into an agent (`tell`, inbox replies) | `agent`, `text`, `source` |
 | `agent.remove` | Before an agent is deleted | `agent`, `deleteWorkspace` |
+| `mcp.run` | Before an MCP tool runs once in a folder (the MCP panel's **Run once**, `agentmgr mcp run`); running it in a session goes through `agent.message` | `agent` (or null for the home folder), `dir`, `tool`, `input` |
 | `agent.commit` | Before Commit in the review screen commits an agent's worktree | `agent`, `message` |
 | `agent.pr` | Before the review screen pushes an agent's branch and opens a pull request | `agent`, `title`, `draft` |
 | `agent.merge` | Before Merge (or auto-merge) in the Land tab merges an agent's pull request | `agent`, `url`, `method`, `auto` |
@@ -64,7 +65,7 @@ Policies are synchronous so every code path can call them. Keep them fast; do sl
 
 ## Daemon events (listeners)
 
-`agent.created`, `agent.starting`, `agent.stopping`, `agent.message`, `agent.removed`, `agent.commit` (with `sha`), `agent.pr` (with `url`), `agent.merge`, `hub.action`, each with the same `agent` summary and an `at` timestamp.
+`agent.created`, `agent.starting`, `agent.stopping`, `agent.message`, `agent.removed`, `agent.commit` (with `sha`), `agent.pr` (with `url`), `agent.merge`, `hub.action`, `mcp.run`, each with the same `agent` summary and an `at` timestamp.
 
 ## Engines
 

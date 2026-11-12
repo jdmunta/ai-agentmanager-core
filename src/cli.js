@@ -821,6 +821,43 @@ export async function main(argv) {
       }
     });
 
+  const mcp = program.command('mcp').description("MCP servers and their tools as Claude Code has them in an agent's folder (or your home folder), and running one");
+  mcp
+    .command('list', { isDefault: true })
+    .description('List the MCP servers, their status and tools')
+    .argument('[agent]', "an agent: its folder's servers too (default: your home folder)")
+    .option('-r, --refresh', 'ask Claude Code again instead of the list from the last 5 minutes')
+    .option('--json', 'print JSON')
+    .action(async (ref, opts) => {
+      await daemon();
+      const a = ref ? await resolveAgent(ref) : null;
+      const r = await api('GET', `/mcp?agent=${encodeURIComponent(a?.id ?? 'home')}${opts.refresh ? '&refresh=1' : ''}`);
+      if (opts.json) return console.log(JSON.stringify(r, null, 2));
+      if (r.error) console.log(red(r.error));
+      if (!r.servers.length) return console.log(dim(`No MCP servers in ${r.dir}.`));
+      console.log(dim(`In ${r.dir}:`));
+      for (const s of r.servers) {
+        console.log(`${bold(s.name)}  ${s.status === 'connected' ? green(s.status) : yellow(s.status)}  ${dim([s.source, s.target].filter(Boolean).join('  '))}`);
+        for (const t of s.tools) console.log(`  ${t.name}${t.readOnly ? dim('  read-only') : ''}${t.destructive ? red('  destructive') : ''}`);
+      }
+    });
+  mcp
+    .command('run')
+    .description("Run a tool once in the agent's folder (a separate call allowed only that tool), or in its session with --session")
+    .argument('<agent>', 'the agent, or "home" for your home folder')
+    .argument('<server>')
+    .argument('<tool>')
+    .argument('[request...]', 'what it should do, or its arguments in plain words')
+    .option('-s, --session', 'tell the agent to use it in its session instead')
+    .action(async (ref, server, tool, request, opts) => {
+      await daemon();
+      const agent = ref === 'home' ? 'home' : (await resolveAgent(ref)).id;
+      const r = await api('POST', '/mcp/run', { agent, server, tool, input: request.join(' '), where: opts.session ? 'session' : 'workspace' });
+      if (r.where === 'session') return console.log(`${green('✓')} asked ${r.agent.name} to use ${r.tool}; its answer is in the session`);
+      console.log(r.text);
+      console.log(dim(`(${r.tool}, ${(r.ms / 1000).toFixed(1)} s)`));
+    });
+
   program
     .command('review')
     .description("Start a reviewer agent on someone else's pull request: it asks the critical questions and finds what blocks approval; nothing is posted")

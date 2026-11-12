@@ -27,6 +27,7 @@ Run one background [Claude Code](https://claude.com/claude-code) agent per inten
 - **Slack alerts.** A message in your channel when an agent needs input, finishes a backlog item, or fails.
 - **Priority.** Mark agents P0–P3. P0 and P1 are highlighted, and lists sort by priority.
 - **Share for review.** One click writes an **Analysis**, **Design**, **Flow** or **Proposal** document from the agent's work, a human time **Estimate** for planning, or the change's **Documentation** with an OpenAPI spec of any API changes. Copy it as Markdown, download it, or print it to PDF with diagrams.
+- **MCP servers and tools.** See every MCP server Claude Code has in a folder (yours, the project's, claude.ai connectors and plugins) with its tools, and run any tool in an agent's session or once in its workspace.
 - **Human vs AI.** It splits the open questions about the work into the top 5 that need your judgment and the ones a model can answer from the evidence. It answers those, then a second model double-checks every answer.
 - **Review changes.** Each agent's diff file by file, line comments sent back to the agent as one message, then **Commit all** and **Push & open PR**, without leaving the page.
 - **Standup.** Each weekday at 9:00 (or whenever you press **Standup**, or `p`), each agent with news since the last one is read aloud in a sentence or two, each in its own voice: what it did, what it's on, what it needs from you. Agents that need you go first and quiet ones are left out. It stops on an agent that needs you, with its questions beside it to answer by tap, or by voice when **Answer by voice** is on (what you say is read back, then sent when you say "send"). The wording comes from one short tool-less model call, plain wording if that fails. A Slack alert says when it's ready (Alerts). Change the time, weekends and wording in the player, or in config.json: `"standup": { "at": "09:00", "weekends": false, "ai": true, "notify": true }`. Speech is your browser's own; voice answers may be sent to your browser's maker to be turned into text.
@@ -1126,6 +1127,16 @@ Usage comes from the session transcripts and is refreshed every few seconds whil
   - **Safety:** the relay serves only signed-in devices. It never relays to AI Agent Manager's own ports on any of the machine's addresses, and it removes AI Agent Manager's sign-in cookie before forwarding. Sites other than localhost must present a valid certificate. The relays close when remote access is turned off.
   - If a tab stays blank on a device, open it once with **↗** and accept the certificate there.
 - **Ask Agent** (or `agentmgr ask`, with `--engine` for another engine) creates a `general` agent. All general sessions share `~/.agentmanager/general`, so Claude's folder-trust prompt only appears the first time.
+
+## MCP servers and tools
+
+**MCP** in the top bar (or **MCP tools** in an agent's detail, or `agentmgr mcp [agent]`) lists the MCP servers Claude Code has in a folder: your own servers, the project's `.mcp.json`, local ones, claude.ai connectors and plugins' servers. Each shows its status, where it comes from, where it runs and its tools, marked *read-only* or *destructive* when the server says so. Pick the home folder or any agent's workspace at the top, since a workspace adds its project's servers. The app asks Claude Code itself through its control protocol, which connects to each server but makes no model call. The list is kept for 5 minutes, and **Refresh** asks again. Environment variables, headers, URL queries and secret-looking arguments are never shown.
+
+**Run…** on a tool takes an optional request in plain words, then runs it in one of two ways:
+- **Run in session** tells the agent to use the tool, with its conversation and context. The answer is in the session. This works for Claude Code agents.
+- **Run once in workspace** (or `agentmgr mcp run <agent|home> <server> <tool> [request]`) is a separate one-off Claude Code call in that folder. It may use only that one tool, works out the arguments from your request, and shows what the tool returned. The agent isn't interrupted.
+
+A destructive tool needs a second click. Plugins can refuse one-off runs with the `mcp.run` policy.
 
 ## Configuration
 

@@ -1367,6 +1367,37 @@ test('stakeholder documents: analysis, design, flow, proposal, estimate, documen
   assert.equal((await fetch(`${base}/share.html`)).status, 200);
 });
 
+test('MCP: servers and tools in an agent\'s folder, listed without a model call; a tool run once there with only that tool', async () => {
+  const [a] = (await call('POST', '/agents', { intent: 'MCP tools', start: false })).body;
+  const ag = await waitFor(async () => {
+    const x = await agentNow(a.id);
+    return x.status === 'stopped' && x.workdir ? x : null;
+  }, 8000, 'ready');
+  fs.writeFileSync(path.join(ag.workdir, '.mcp.json'), JSON.stringify({ mcpServers: { fake: { command: 'node', args: ['s.js', '--api-key', 'k123'], env: { TOKEN: 'shh' } } } }));
+  const res = await call('GET', `/mcp?agent=${a.id}`);
+  assert.equal(res.status, 200, JSON.stringify(res.body));
+  assert.equal(res.body.dir, ag.workdir);
+  assert.deepEqual(res.body.servers.map((s) => [s.name, s.status, s.tools.map((t) => t.id)]), [
+    ['claude.ai Example', 'connected', ['mcp__claude_ai_Example__search']],
+    ['fake', 'connected', ['mcp__fake__echo', 'mcp__fake__delete_all']],
+  ], 'waits while a server is still connecting');
+  assert.doesNotMatch(JSON.stringify(res.body), /shh|k123|token=abc|Bearer/, 'no secrets');
+  const probe = fs.readFileSync(claudeLog, 'utf8').trim().split('\n').map((l) => JSON.parse(l)).filter((l) => l.mcp && l.cwd === fs.realpathSync(ag.workdir));
+  assert.equal(probe.length, 1, 'one probe, in the folder');
+  // Listed again from the cache; refresh asks again.
+  await call('GET', `/mcp?agent=${a.id}`);
+  await call('GET', `/mcp?agent=${a.id}&refresh=1`);
+  assert.equal(fs.readFileSync(claudeLog, 'utf8').trim().split('\n').map((l) => JSON.parse(l)).filter((l) => l.mcp && l.cwd === fs.realpathSync(ag.workdir)).length, 2);
+  const run = await call('POST', '/mcp/run', { agent: a.id, server: 'fake', tool: 'echo', input: 'say hi', where: 'workspace' });
+  assert.equal(run.status, 200, JSON.stringify(run.body));
+  assert.equal(run.body.text, `ran mcp__fake__echo (only: true) in ${fs.realpathSync(ag.workdir)}: say hi`);
+  assert.equal((await call('POST', '/mcp/run', { agent: a.id, server: 'fake', tool: 'nope' })).status, 404);
+  assert.equal((await call('POST', '/mcp/run', { agent: a.id, server: 'fake', tool: 'echo', where: 'elsewhere' })).status, 400);
+  const told = await call('POST', '/mcp/run', { agent: a.id, server: 'fake', tool: 'echo', input: 'say hi', where: 'session' });
+  assert.equal(told.status, 200, JSON.stringify(told.body));
+  assert.equal(told.body.tool, 'mcp__fake__echo');
+});
+
 test('documents in the background: returns at once, all seven, at most two Claude calls at a time', async () => {
   const [a] = (await call('POST', '/agents', { intent: 'Background docs', start: false })).body;
   await waitFor(async () => (await agentNow(a.id)).status === 'stopped', 8000, 'ready');
