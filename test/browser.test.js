@@ -256,3 +256,30 @@ test("expanded, the terminal bar names the agent whose session it is; it follows
   await until(`${shown} === null`, 'hidden again when restored');
   assert.deepEqual(errors, [], 'no errors on the page');
 });
+
+test('Actions: the Due tab lists what is due and not done, soonest first, overdue in red', { skip }, async () => {
+  const days = (n) => new Date(Date.now() + n * 86_400_000).toISOString();
+  const late = await api('POST', '/actions', { text: 'Send the numbers', due: 'today', when: days(-3) });
+  await api('POST', '/actions', { text: 'Plan the rollout', due: 'next sprint' });
+  await api('POST', '/actions', { text: 'Book the review', due: 'tomorrow' });
+  await api('POST', '/actions', { text: 'No date on this one' });
+  const done = await api('POST', '/actions', { text: 'Already handled', due: 'today' });
+  await api('POST', '/actions/set', { ids: [done.id], state: 'done' });
+  await api('POST', '/actions/set', { ids: [late.id], state: 'skip' });
+
+  // The button shows only with Slack or meeting notes set up; the window itself works either way.
+  await js(`document.querySelector('#actions-btn').click()`);
+  await until(`document.querySelector('#actions-dialog').open && document.querySelector('[data-act-filter="due"]')`, 'the Actions window');
+  await js(`document.querySelector('[data-act-filter="due"]').click()`);
+  await until(`document.querySelectorAll('#actions-body tbody tr').length === 3`, 'three dues');
+  const r = await js(`({
+    texts: [...document.querySelectorAll('#actions-body .action-text')].map((e) => e.textContent),
+    dues: [...document.querySelectorAll('#actions-body .action-due')].map((e) => [e.textContent, e.classList.contains('late')]),
+    chip: document.querySelector('[data-act-filter="due"]').classList.contains('late'),
+  })`);
+  assert.deepEqual(r.texts, ['Send the numbers', 'Book the review', 'Plan the rollout'], 'overdue first (skipped is still yours), then by date; no date said last; done and dateless left out');
+  assert.deepEqual(r.dues, [['overdue 3 days', true], ['due tomorrow', false], ['due next sprint', false]]);
+  assert.ok(r.chip, 'the Due tab shows there is something overdue');
+  await js(`document.querySelector('[data-act="close"]').click()`);
+  assert.deepEqual(errors, [], 'no errors on the page');
+});

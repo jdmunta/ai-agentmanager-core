@@ -7,6 +7,7 @@
 // is ever sent to Slack or anywhere else from here.
 
 import crypto from 'node:crypto';
+import { actionDue, dueWords } from './today.js';
 
 export const ACTION_SOURCES = { slack: 'Slack', gemini: 'Meeting notes', other: 'Other' };
 export const ACTION_STATES = ['open', 'assign', 'skip', 'snooze', 'done', 'remove'];
@@ -126,8 +127,10 @@ export class MyActions {
   rows() {
     const order = Object.fromEntries(Object.values(GROUP).map((g, i) => [g, i]));
     this.wake();
+    const now = new Date();
     return this.all
       .map((a) => {
+        const due = actionDue(a, now);
         const agent = a.agentId ? this.manager.store?.get?.(a.agentId) ?? null : null;
         const talk = a.discussId ? this.manager.store?.get?.(a.discussId) ?? null : null;
         return {
@@ -139,6 +142,9 @@ export class MyActions {
           from: a.from,
           when: a.when,
           due: a.due,
+          // The due date as a time, and in words ("overdue 2 days", "due Friday"), when it can be told.
+          dueAt: due?.toISOString() ?? null,
+          dueWords: dueWords(due, now),
           context: a.context,
           status: a.status,
           group: GROUP[a.status] ?? 'open',
