@@ -2734,7 +2734,10 @@ export async function main(argv) {
       if (!info.newer) return console.log(`${green('✓')} ${info.current} is the newest release`);
       if (info.blocker) throw new Error(`${info.latest} is available, but: ${info.blocker}`);
       if (opts.check) return console.log(`${yellow(info.latest)} is available (you have ${info.current}); install it: agentmgr update`);
-      const r = await up.installUpdate({ log: (m) => console.log(dim(m)) });
+      // A line per package npm fetches, as a count that moves while a long install runs.
+      let fetched = 0;
+      const onLine = (line) => /^npm http /.test(line) && process.stdout.isTTY && process.stdout.write(`\r${dim(`  ${++fetched} packages fetched`)}`);
+      const r = await up.installUpdate({ info, log: (m) => console.log(dim(m)), onLine }).finally(() => fetched && process.stdout.write('\n'));
       console.log(`${green('✓')} installed ${r.to} (was ${r.from})`);
       if (!(await health())) return console.log(dim('The daemon is not running; it starts on the new version next time'));
       outliveTerminal();
