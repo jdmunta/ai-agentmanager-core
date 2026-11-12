@@ -22,6 +22,36 @@ const run = (cmd, args, { cwd = root, timeoutMs = 120_000 } = {}) =>
     });
   });
 
+/** Like run, with each line of output (stdout and stderr) passed to `onLine` as it comes. */
+const runLines = (cmd, args, { cwd = root, timeoutMs = 120_000, onLine = () => {} } = {}) =>
+  new Promise((resolve, reject) => {
+    const child = spawn(cmd, args, { cwd, env: process.env, stdio: ['ignore', 'pipe', 'pipe'] });
+    let tail = '';
+    let buf = '';
+    const feed = (d) => {
+      buf += d;
+      const lines = buf.split(/\r?\n/);
+      buf = lines.pop();
+      for (const line of lines.map((l) => l.trim()).filter(Boolean)) {
+        tail = `${tail}\n${line}`.slice(-4000);
+        onLine(line);
+      }
+    };
+    const timer = setTimeout(() => child.kill('SIGTERM'), timeoutMs);
+    child.stdout.on('data', feed);
+    child.stderr.on('data', feed);
+    const fail = (why) => reject(Object.assign(new Error(`${cmd} ${args.join(' ')}: ${why}`), { status: 500 }));
+    child.on('error', (e) => (clearTimeout(timer), fail(e.message)));
+    child.on('close', (code, signal) => {
+      clearTimeout(timer);
+      if (code === 0) return resolve(tail.trim());
+      // npm's own summary of what went wrong, not the progress lines around it.
+      const lines = `${tail}\n${buf}`.split('\n').filter(Boolean);
+      const errors = lines.filter((l) => /^npm (error|ERR!)/.test(l));
+      fail(signal ? `stopped after ${Math.round(timeoutMs / 1000)} s without finishing` : (errors.length ? errors.slice(0, 3).join('; ') : lines.pop() ?? `exit ${code}`));
+    });
+  });
+
 const pkg = (dir = root) => JSON.parse(fs.readFileSync(path.join(dir, 'package.json'), 'utf8'));
 
 /** The newest release tag (vX.Y.Z, no pre-releases) among `tags`, or null. */
@@ -61,9 +91,12 @@ export async function checkUpdate({ dir = root, fetchTags = true } = {}) {
   return { kind, current, latest: r.latest, newer: r.newer, blocker: null, checkedAt: new Date().toISOString() };
 }
 
-/** Put the newest release in place (no restart). Returns { from, to } or { upToDate }. */
-export async function installUpdate({ dir = root, log = () => {} } = {}) {
-  const info = await checkUpdate({ dir });
+/**
+ * Put the newest release in place (no restart). Returns { from, to } or { upToDate }. `info`: a
+ * check made just now, to skip making another; `onLine`: the installer's output as it comes.
+ */
+export async function installUpdate({ dir = root, log = () => {}, onLine = () => {}, info = null } = {}) {
+  info ??= await checkUpdate({ dir });
   if (!info.newer) return { upToDate: true, current: info.current };
   if (info.blocker) throw err(409, info.blocker);
   if (info.kind === 'git') {
@@ -73,12 +106,13 @@ export async function installUpdate({ dir = root, log = () => {} } = {}) {
     const lockAfter = await run('git', ['rev-parse', 'HEAD:package-lock.json'], { cwd: dir }).catch(() => '');
     if (lockAfter !== lockBefore || !fs.existsSync(path.join(dir, 'node_modules'))) {
       log('installing dependencies');
-      await run('npm', ['install', '--no-audit', '--no-fund'], { cwd: dir, timeoutMs: 600_000 });
+      await runLines('npm', ['install', '--no-audit', '--no-fund', '--loglevel=http'], { cwd: dir, timeoutMs: 600_000, onLine });
     }
   } else {
     const name = pkg(dir).name;
     log(`npm install -g ${name}@${info.latest}`);
-    await run('npm', ['install', '-g', `${name}@${info.latest}`], { timeoutMs: 600_000 }).catch((e) => {
+    // --loglevel=http: a line per package fetched, so a long install shows that it is moving.
+    await runLines('npm', ['install', '-g', `${name}@${info.latest}`, '--no-audit', '--no-fund', '--loglevel=http'], { timeoutMs: 600_000, onLine }).catch((e) => {
       throw err(500, `${e.message}${/EACCES|permission/i.test(e.message) ? ' (npm needs write access to its global folder)' : ''}`);
     });
   }
@@ -100,6 +134,7 @@ export class Updates {
     this.check = check;
     this.last = null;
     this.busy = null;
+    this.progress = null;
     this.schedule();
   }
 
@@ -139,22 +174,55 @@ export class Updates {
   }
 
   status() {
-    return { check: this.enabled, updating: Boolean(this.busy), ...(this.last ?? {}) };
+    return { check: this.enabled, updating: Boolean(this.busy), progress: this.progress, ...(this.last ?? {}) };
   }
 
-  /** Install the newest release, then restart onto it. Answers before the restart begins. */
-  async apply({ restart = restartDetached } = {}) {
+  /**
+   * Install the newest release, then restart onto it. Answers once it knows there is something to
+   * install ({ started, from, to }); the install goes on in the background and status().progress
+   * says where it is: step "install" (with the installer's last line and how many packages it
+   * fetched), "restart", or "failed" with the error.
+   */
+  async apply({ restart = restartDetached, install = installUpdate, check = checkUpdate } = {}) {
     if (this.busy) throw err(409, 'An update is already running');
-    this.busy = installUpdate({ log: (m) => this.log(`update: ${m}`) });
+    this.busy = true; // held through the check, so a second click can't start another
+    let info;
     try {
-      const r = await this.busy;
-      if (r.upToDate) return r;
-      this.log(`update: ${r.from} → ${r.to} installed; restarting`);
-      this.last = { ...(this.last ?? {}), current: r.to, newer: false };
-      setTimeout(restart, 200);
-      return { ...r, restarting: true };
-    } finally {
+      info = await check();
+    } catch (e) {
       this.busy = null;
+      throw e;
     }
+    this.last = info;
+    if (!info.newer || info.blocker) {
+      this.busy = null;
+      if (info.blocker) throw err(409, info.blocker);
+      return { upToDate: true, current: info.current };
+    }
+    const p = { step: 'install', from: info.current, to: info.latest, kind: info.kind, startedAt: new Date().toISOString(), detail: '', fetched: 0, error: null };
+    this.progress = p;
+    this.busy = install({
+      info,
+      log: (m) => {
+        p.detail = m;
+        this.log(`update: ${m}`);
+      },
+      onLine: (line) => {
+        if (/^npm http /.test(line)) p.fetched++;
+        else if (!/^npm notice/.test(line)) p.detail = line.slice(0, 200);
+      },
+    })
+      .then((r) => {
+        this.log(`update: ${r.from} → ${r.to} installed; restarting`);
+        this.last = { ...(this.last ?? {}), current: r.to, newer: false };
+        Object.assign(p, { step: 'restart', detail: '', installedAt: new Date().toISOString() });
+        setTimeout(restart, 200);
+      })
+      .catch((e) => {
+        this.log(`update: failed: ${e.message}`);
+        Object.assign(p, { step: 'failed', error: e.message, manual: info.kind === 'npm' ? `npm install -g ${pkg().name}@${info.latest} && agentmgr restart` : null });
+      })
+      .finally(() => (this.busy = null));
+    return { started: true, from: info.current, to: info.latest };
   }
 }

@@ -957,9 +957,14 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
   // Your action on issues: assign (starts an agent from the proposal), skip, done, remove, or null to clear.
   api.post('/issues/action', wrap((req) => proposed.setAction(Array.isArray(req.body?.keys) ? req.body.keys.map(String) : [], req.body?.action ?? null, { until: req.body?.until ?? null })));
   // Design docs of all agents; the same ?group= and ?format=markdown.
-  // MCP servers and their tools as Claude Code sees them in an agent's folder (or the home folder), and running one.
+  // MCP servers and their tools as Claude Code sees them in an agent's folder (or the home folder), in that
+  // folder's own MCP session: listing, signing in, reconnecting one, and running a tool.
   api.get('/mcp', wrap((req) => mcp.list(req.query.agent, { refresh: req.query.refresh === '1' })));
   api.post('/mcp/run', wrap((req) => mcp.run(req.body?.agent, req.body ?? {})));
+  api.post('/mcp/reconnect', wrap((req) => mcp.reconnect(req.body?.agent, req.body?.server)));
+  // Signing in: Claude Code runs the OAuth flow and keeps the tokens; this only hands over the address to open.
+  api.post('/mcp/signin', wrap((req) => mcp.signIn(req.body?.agent, req.body?.server)));
+  api.post('/mcp/signin/callback', wrap((req) => mcp.signInCallback(req.body?.agent, req.body?.server, req.body?.url)));
   api.get('/designs', wrap((req) => {
     const v = manager.designs();
     const group = req.query.group ? String(req.query.group) : null;
@@ -1431,6 +1436,8 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
   // ---------------------------------------------------------- listeners
 
   const server = http.createServer(app);
+  // The MCP sessions are processes of ours: they end with the server.
+  server.on('close', () => mcp.close());
   // Outlive clients' idle keep-alive sockets (Node fetch keeps them ~4s+): with the 5s
   // default, a request sent on a socket just as the server closes it fails with ECONNRESET.
   server.keepAliveTimeout = 65_000;
@@ -1488,6 +1495,7 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
     budgets.close();
     playbooks.close();
     updates.close();
+    mcp.close();
     assistant.close();
     console.log(`[agentmgr] shutting down (${reason}); closing agents so their sessions are saved`);
     builder.stopAll();

@@ -3424,7 +3424,7 @@ test('documents: the human time estimate and the documentation (with the diff, f
 });
 
 test('MCP: tool names, server views without secrets, and the run prompts', async () => {
-  const { toolId, targetOf, serverView, runPrompt, sessionMessage } = await import('../src/mcp.js');
+  const { toolId, targetOf, serverView, runPrompt, sessionMessage, parseArgs, resultText } = await import('../src/mcp.js');
   assert.equal(toolId('claude.ai Google Drive', 'create_file'), 'mcp__claude_ai_Google_Drive__create_file');
   assert.equal(toolId('my-server', 'x'), 'mcp__my-server__x');
   assert.equal(targetOf({ url: 'https://mcp.example.com/mcp?token=abc#x' }), 'https://mcp.example.com/mcp');
@@ -3447,6 +3447,7 @@ test('MCP: tool names, server views without secrets, and the run prompts', async
     target: 'node s.js',
     version: '1.2',
     error: null,
+    canSignIn: false,
     tools: [
       { name: 'echo', id: 'mcp__fake__echo', title: 'Echo', readOnly: true, destructive: false },
       { name: 'rm', id: 'mcp__fake__rm', title: null, readOnly: false, destructive: true },
@@ -3457,4 +3458,57 @@ test('MCP: tool names, server views without secrets, and the run prompts', async
   assert.match(runPrompt('mcp__fake__echo', ''), /Request: \(none: /);
   assert.equal(sessionMessage('mcp__fake__echo', 'say hi'), 'Use the MCP tool mcp__fake__echo for this: say hi. Show me what it returned.');
   assert.equal(sessionMessage('mcp__fake__echo', ''), 'Use the MCP tool mcp__fake__echo. Show me what it returned.');
+  // Only servers reached over HTTP have a sign-in.
+  assert.equal(serverView({ name: 'h', status: 'needs-auth', config: { type: 'http', url: 'https://x.example/mcp?k=1' } }).canSignIn, true);
+  // A direct call takes JSON arguments or nothing; anything else is plain words for Claude Code.
+  assert.deepEqual(parseArgs(''), {});
+  assert.deepEqual(parseArgs(' {"q": "x", "n": 2} '), { q: 'x', n: 2 });
+  for (const words of ['find the open bugs', '{not json', '[1, 2]', '"text"']) assert.equal(parseArgs(words), null);
+  assert.deepEqual(resultText({ content: [{ type: 'text', text: 'a' }, { type: 'image', mimeType: 'image/png' }, { type: 'text', text: 'b' }] }), { text: 'a\n[image image/png]\nb', isError: false });
+  assert.deepEqual(resultText({ isError: true, content: [{ type: 'text', text: 'no' }] }), { text: 'no', isError: true });
+  assert.deepEqual(resultText({ structuredContent: { ok: 1 } }), { text: '{\n  "ok": 1\n}', isError: false });
+  assert.equal(resultText({}).text, '(no output)');
+});
+
+test('update from the app: answers at once, then reports each step; a failure keeps its error and the manual command', async () => {
+  const { Updates } = await import('../src/update.js');
+  const logs = [];
+  const up = new Updates({ config: { updates: { check: false } }, log: (m) => logs.push(m) });
+  const info = { kind: 'npm', current: '1.0.0', latest: '1.2.0', newer: true, blocker: null };
+  let finish;
+  let restarted = 0;
+  const install = ({ log, onLine, info: given }) => {
+    assert.equal(given, info, 'the check is not made twice');
+    log('npm install -g x@1.2.0');
+    onLine('npm http fetch GET 200 https://registry.npmjs.org/a 12ms');
+    onLine('npm http fetch GET 200 https://registry.npmjs.org/b 9ms');
+    onLine('added 3 packages in 2s');
+    return new Promise((resolve, reject) => (finish = { resolve, reject }));
+  };
+  const r = await up.apply({ check: async () => info, install, restart: () => restarted++ });
+  assert.deepEqual(r, { started: true, from: '1.0.0', to: '1.2.0' });
+  let s = up.status();
+  assert.equal(s.updating, true);
+  assert.deepEqual([s.progress.step, s.progress.to, s.progress.fetched, s.progress.detail], ['install', '1.2.0', 2, 'added 3 packages in 2s']);
+  await assert.rejects(up.apply({ check: async () => info, install }), /already running/);
+  finish.resolve({ from: '1.0.0', to: '1.2.0', kind: 'npm' });
+  await new Promise((done) => setTimeout(done, 300));
+  s = up.status();
+  assert.deepEqual([s.updating, s.progress.step, s.current, s.newer, restarted], [false, 'restart', '1.2.0', false, 1]);
+  assert.ok(logs.includes('update: 1.0.0 → 1.2.0 installed; restarting'));
+
+  // A failed install: not restarted, and the error stays for the page to show.
+  const fail = await up.apply({ check: async () => info, install: async () => { throw new Error('npm install -g x@1.2.0: npm error code EACCES'); }, restart: () => restarted++ });
+  assert.equal(fail.started, true);
+  await new Promise((done) => setTimeout(done, 300));
+  s = up.status();
+  assert.deepEqual([s.updating, s.progress.step, restarted], [false, 'failed', 1]);
+  assert.match(s.progress.error, /EACCES/);
+  assert.match(s.progress.manual, /^npm install -g [\w-]+@1\.2\.0 && agentmgr restart$/);
+
+  // Nothing newer, or a checkout that can't move: answered without starting anything.
+  assert.deepEqual(await up.apply({ check: async () => ({ ...info, newer: false, latest: '1.0.0' }), install }), { upToDate: true, current: '1.0.0' });
+  await assert.rejects(up.apply({ check: async () => ({ ...info, blocker: 'on a branch' }), install }), /on a branch/);
+  assert.equal(up.status().updating, false);
+  up.close();
 });

@@ -512,6 +512,19 @@ dialog::backdrop { background: rgba(0, 0, 0, .45); }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .error { color: var(--red); margin: 0; font-size: 13px; }
 
+.update-dialog { width: min(520px, calc(100vw - 32px)); padding: 20px; }
+.update-dialog h2 { margin: 0 0 8px; font-size: 17px; }
+.update-dialog p { margin: 6px 0; font-size: 13px; }
+.update-steps { list-style: none; margin: 10px 0; padding: 0; display: grid; gap: 8px; }
+.update-steps li { display: grid; grid-template-columns: 22px 1fr; gap: 4px 6px; align-items: baseline; color: var(--muted); }
+.update-steps li.now { color: var(--text); font-weight: 600; }
+.update-steps li.done { color: var(--text); }
+.update-steps li .hint { grid-column: 2; font-weight: 400; word-break: break-word; }
+.update-bar { height: 4px; border-radius: 2px; background: var(--border); overflow: hidden; margin: 4px 0 10px; }
+.update-bar span { display: block; height: 100%; width: 35%; background: var(--accent); border-radius: 2px; animation: update-slide 1.4s ease-in-out infinite; }
+@keyframes update-slide { 0% { margin-left: -35%; } 100% { margin-left: 100%; } }
+@media (prefers-reduced-motion: reduce) { .update-bar span { animation: none; width: 100%; opacity: 0.5; } }
+
 .toast button { margin-left: 8px; }
 .toast {
   position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: var(--text); color: var(--bg);
@@ -746,6 +759,14 @@ pre.diff .meta { color: var(--muted); font-weight: 600; }
 .mcp-form textarea { width: 100%; box-sizing: border-box; }
 .mcp-actions { display: flex; gap: 6px; justify-content: flex-end; flex-wrap: wrap; }
 .mcp-result { border-left: 3px solid var(--border); padding-left: 10px; margin: 6px 0; max-height: 320px; overflow: auto; }
+.mcp-server summary .spacer { flex: 1; }
+.mcp-again { min-width: 28px; font-size: 15px; line-height: 1; }
+.mcp-signin p { margin: 6px 0; }
+.mcp-paste { display: flex; gap: 6px; margin: 6px 0; }
+.mcp-paste input { flex: 1; min-width: 0; }
+.mcp-result.failed { border-left-color: var(--red); }
+.mcp-runs { margin: 14px 0 0; padding: 6px 10px; border: 1px dashed var(--border); border-radius: 6px; }
+.mcp-runs summary { cursor: pointer; }
 .tag.mcp-ok { color: var(--green); }
 .tag.mcp-wait { color: var(--yellow); }
 .rv-summary { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; font-size: 13px; }

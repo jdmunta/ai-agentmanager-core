@@ -67,8 +67,10 @@ const standupOnLoad = hashId === 'standup';
 const mapOnLoad = hashId === 'map';
 const valueOnLoad = hashId === 'value';
 const reviewsOnLoad = hashId === 'reviews';
+// "#mcp" or "#mcp/<agent>": the MCP window on its own.
+const mcpOnLoad = hashId === 'mcp';
 let watchShown = false;
-let selectedId = (watchOnLoad || standupOnLoad || mapOnLoad || valueOnLoad || reviewsOnLoad ? null : hashId) || null;
+let selectedId = (watchOnLoad || standupOnLoad || mapOnLoad || valueOnLoad || reviewsOnLoad || mcpOnLoad ? null : hashId) || null;
 let openTermOnLoad = hashView === 'term' || hashView === 'code' || isShell(hashView) || isBrowser(hashView);
 let filterText = '';
 // "Only agents created in the last N days": remembered in this browser.
@@ -4403,6 +4405,11 @@ function handleEvent(msg) {
       watchShown = true;
       history.replaceState(null, '', '#');
       standupUi.open();
+    }
+    if (mcpOnLoad && !watchShown) {
+      watchShown = true;
+      history.replaceState(null, '', '#');
+      mcpUi.open(agents.has(hashView) ? hashView : null);
     }
     if (watchOnLoad && !watchUi.isOpen() && !watchShown) {
       watchShown = true;

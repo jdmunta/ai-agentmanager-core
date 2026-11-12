@@ -30,7 +30,11 @@ if (args.includes('--input-format') && args.includes('stream-json')) {
   } catch {}
   let asked = 0;
   let buf = '';
-  const reply = (request_id, response) => process.stdout.write(JSON.stringify({ type: 'control_response', response: { subtype: 'success', request_id, response } }) + '\n');
+  const reconnects = {};
+  const signedIn = new Set();
+  const out = (response) => process.stdout.write(JSON.stringify({ type: 'control_response', response }) + '\n');
+  const reply = (request_id, response) => out({ subtype: 'success', request_id, response });
+  const refuse = (request_id, error) => out({ subtype: 'error', request_id, error });
   process.stdin.on('data', (d) => {
     buf += d;
     const lines = buf.split('\n');
@@ -42,14 +46,20 @@ if (args.includes('--input-format') && args.includes('stream-json')) {
         asked++;
         reply(request_id, {
           mcpServers: [
-            ...Object.entries(file).map(([name, config]) => ({
-              name,
-              status: 'connected',
-              config: { type: 'stdio', ...config },
-              scope: 'project',
-              source: 'project',
-              tools: [{ name: 'echo', annotations: { readOnlyHint: true } }, { name: 'delete_all', annotations: { destructiveHint: true } }],
-            })),
+            // A server with a url needs signing in (OAuth); one with a command just runs.
+            ...Object.entries(file).map(([name, config]) =>
+              config.url && !signedIn.has(name)
+                ? { name, status: 'needs-auth', config: { type: 'http', ...config }, transport: 'http', scope: 'project', source: 'project' }
+                : {
+                    name,
+                    status: 'connected',
+                    serverInfo: { name, version: `r${reconnects[name] ?? 0}` },
+                    config: { type: config.url ? 'http' : 'stdio', ...config },
+                    scope: 'project',
+                    source: 'project',
+                    tools: [{ name: 'echo', annotations: { readOnlyHint: true } }, { name: 'delete_all', annotations: { destructiveHint: true } }],
+                  },
+            ),
             {
               name: 'claude.ai Example',
               status: asked > 1 ? 'connected' : 'pending',
@@ -60,7 +70,28 @@ if (args.includes('--input-format') && args.includes('stream-json')) {
             },
           ],
         });
-      }
+      } else if (request.subtype === 'mcp_call') {
+        // A direct tool call: no model, the arguments as given.
+        if (request.tool.endsWith('__fail')) reply(request_id, { isError: true, content: [{ type: 'text', text: 'it broke' }] });
+        else reply(request_id, { content: [{ type: 'text', text: `called ${request.tool} with ${JSON.stringify(request.arguments)} in ${process.cwd()}` }] });
+      } else if (request.subtype === 'mcp_reconnect') {
+        if (!(request.serverName in file) && request.serverName !== 'claude.ai Example') refuse(request_id, `Server not found: ${request.serverName}`);
+        else {
+          reconnects[request.serverName] = (reconnects[request.serverName] ?? 0) + 1;
+          reply(request_id, {});
+        }
+      } else if (request.subtype === 'mcp_authenticate') {
+        const config = file[request.serverName];
+        if (!config) refuse(request_id, `Server not found: ${request.serverName}`);
+        else if (!config.url) refuse(request_id, 'Server type "stdio" does not support OAuth authentication');
+        else reply(request_id, { authUrl: `https://auth.example.com/authorize?client_id=x&state=s-${request.serverName}`, requiresUserAction: true, callbackExpected: true, redirectScheme: 'localhost', callbackPort: 45678, state: `s-${request.serverName}` });
+      } else if (request.subtype === 'mcp_oauth_callback_url') {
+        if (!/[?&]code=/.test(request.callbackUrl)) refuse(request_id, 'Invalid callback URL: missing authorization code.');
+        else {
+          signedIn.add(request.serverName);
+          reply(request_id, {});
+        }
+      } else refuse(request_id, `Unsupported control request: ${request.subtype}`);
     }
   });
   process.stdin.on('end', () => process.exit(0));
