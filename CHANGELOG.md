@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.43.0 (2026-11-11)
+
+- **An MCP session of its own.** Each folder (your home folder or an agent's workspace) gets one Claude Code process for MCP, separate from any agent's session. Listing servers, signing in, reconnecting and calling a tool make no model call and don't interrupt an agent. It closes after 15 minutes unused; **Refresh all** starts a new one.
+- **Sign in to MCP servers.** A server that needs it shows **Sign in** (or `agentmgr mcp signin`), which opens its sign-in page. Claude Code keeps the tokens; the app never sees them. From another device, paste the address the browser ended on.
+- **Reconnect one server** with **↻** (or `agentmgr mcp reconnect`), leaving the others alone.
+- **Run a tool directly.** **Run** with JSON arguments (or none) calls the tool with no model call and shows its output as it is; plain words still go through a one-off Claude Code call allowed only that tool, and **Run in agent session** asks the agent. The last 30 runs are kept with their results, and **↗ Window** opens the panel on its own (`#mcp`). The `mcp.run` plugin policy now gets `where`.
+- **Update from the app** shows an in-page dialog with live progress (install, restart, reload) instead of a browser confirm and a short toast.
+
 ## 1.42.0 (2026-11-11)
 
 - **MCP servers and tools.** **MCP** in the top bar (or **MCP tools** in an agent's detail, or `agentmgr mcp [agent]`) lists the MCP servers Claude Code has in your home folder or an agent's workspace: your own, the project's `.mcp.json`, claude.ai connectors and plugins' servers. Each shows its status, where it comes from and its tools. Listing makes no model call, and secrets are never shown.
