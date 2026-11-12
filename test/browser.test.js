@@ -233,3 +233,26 @@ test('split screen: split, load, type, follow sizes, keys, reload, close', { ski
 
   assert.deepEqual(errors, [], 'no errors on the page');
 });
+
+test("expanded, the terminal bar names the agent whose session it is; it follows the tab and a rename", { skip }, async () => {
+  const listed = await api('GET', '/agents');
+  const [a] = listed;
+  const shown = `(() => { const e = document.querySelector('#term-agent'); return e.offsetParent ? e.textContent : null; })()`;
+  await js(`document.querySelector('#agent-list li[data-id="${a.id}"]').click()`);
+  await until(`[...document.querySelectorAll('#detail-body button')].some((x) => x.textContent.trim() === 'Open terminal')`, 'Open terminal');
+  await js(`[...document.querySelectorAll('#detail-body button')].find((x) => x.textContent.trim() === 'Open terminal').click()`);
+  await until(`!document.querySelector('#term-wrap').hidden`, 'the terminal');
+  assert.equal(await js(shown), null, 'not shown while the detail above names the agent');
+
+  await js(`document.querySelector('#term-max').click()`);
+  await until(`${shown} === ${JSON.stringify(a.name)}`, 'the name when expanded');
+  await js(`document.querySelector('.term-tab[data-kind="code"]').click()`);
+  await until(`${shown} === ${JSON.stringify(a.name)} && document.querySelector('#term-wrap').classList.contains('coding')`, 'the name on the Code tab too');
+  // Renamed while expanded: the new name.
+  await fetch(`${base}/api/agents/${a.id}`, { method: 'PATCH', headers: { 'content-type': 'application/json', 'x-agentmgr': '1' }, body: JSON.stringify({ name: 'Renamed agent' }) });
+  await until(`${shown} === 'Renamed agent'`, 'the new name');
+
+  await js(`document.querySelector('#term-max').click()`);
+  await until(`${shown} === null`, 'hidden again when restored');
+  assert.deepEqual(errors, [], 'no errors on the page');
+});

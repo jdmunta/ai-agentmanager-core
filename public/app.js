@@ -2662,6 +2662,8 @@ const term = {
   renderTabs() {
     renderSignIn();
     const a = this.agentId && agents.get(this.agentId);
+    // Whose session this is, for when the detail above is out of view (expanded, full screen, phone).
+    Object.assign($('#term-agent'), { textContent: a?.name ?? '', title: a ? `${a.name}${a.intent && a.intent !== a.name ? `\n${a.intent}` : ''}` : '' });
     // The agent's own session tab is named after its engine (Codex, Muse Code, …).
     $('.term-tab[data-kind="claude"]').textContent = ENGINE_LABEL[a?.engine] ?? 'Claude';
     sidePane?.follow(this.agentId);
