@@ -1,7 +1,9 @@
 // Today: what needs you, from every list, most pressing first: agents stopped at a prompt or
 // waiting for an answer, issues and pull requests ready for your review, what's asked of you
 // (by due date), new Jira issues, and the rest. Each says why it's here, and the common
-// decisions are a click (or a key) away. Listen reads the top of it aloud.
+// decisions are a click (or a key) away. Listen reads the top of it aloud. With your calendar
+// connected, the day is laid out on top: meetings, the free time between them with what needs you
+// placed in it, and what each meeting is about.
 
 import { listenHtml } from './speak.js';
 import { holdWhilePicking, rowKeys } from './rowkeys.js';
@@ -10,7 +12,7 @@ import { expandButton, expandable } from './expand.js';
 // Up to this score an item is pressing: it counts on the button.
 const PRESSING = 32;
 
-export function initToday({ api, $, esc, ago, openAgent, showInbox, openActions, openIssues, openReviews, openBugs, openChanges, openEval, toast }) {
+export function initToday({ api, $, esc, ago, openAgent, showInbox, openActions, openIssues, openReviews, openBugs, openChanges, openEval, openPlan, toast }) {
   const dialog = $('#today-dialog');
   const body = $('#today-body');
   let data = null;
@@ -22,6 +24,8 @@ export function initToday({ api, $, esc, ago, openAgent, showInbox, openActions,
   let editing = null; // the question whose draft answer is being edited
   let replying = null; // the item a reply or send-back box is open on
   const drafts = new Map(); // typed text per item, kept across redraws
+  let calOpen = false; // the calendar's settings are showing
+  let calDraft = {}; // what's typed in them, kept across redraws
 
   async function load({ quiet = false, fresh = false } = {}) {
     if (loading) return;
@@ -61,6 +65,7 @@ export function initToday({ api, $, esc, ago, openAgent, showInbox, openActions,
     if (it.kind === 'pr-requested') return [btn('review', 'Review it', 'A reviewer agent reads it and finds what blocks approval (a)', true), link(it.url, 'PR')].join(' ');
     if (it.kind === 'pr-ready') return [btn('open-reviews', 'Open review', 'Pick what to post (Enter)', true), link(it.url, 'PR')].join(' ');
     if (it.kind === 'rule') return btn('inbox', 'Inbox', 'Decide in the inbox (Enter)', true);
+    if (it.kind === 'milestone') return btn('plan', 'Checklist', 'What is open for this date, and its reminders (Enter)', true);
     if (it.kind === 'eval') return [btn('gaps', 'Close the gaps', 'Send what is pending to the agent, to bring it to 100% (a)', true), btn('eval', 'Eval', 'What was run and verified, and what is pending (Enter)'), btn('done', 'Seen', 'Off the list until its confidence changes (d)'), btn('open', 'Open', "Open the agent's session")].join(' ');
     if (it.kind === 'bench') return [btn('fix', 'Ask to fix', 'Ask the agent to make it as fast as before, or say why it can\'t be (a)', true), btn('done', "It's fine", 'The slowdown is expected: off the list (d)'), btn('open', 'Open', "Open the agent's session (Enter)")].join(' ');
     if (it.kind === 'bug-pr') return [link(it.url, 'Open PR'), btn('done', 'Done', 'You looked at it: off the list (d)'), btn('bugs', 'Details', 'The bug and how the fix was checked (Enter)')].join(' ');
@@ -93,12 +98,62 @@ export function initToday({ api, $, esc, ago, openAgent, showInbox, openActions,
     </tr>`;
   }
 
+  const hm = (ms) => new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  const dur = (m) => (m >= 60 ? `${Math.floor(m / 60)}h${m % 60 ? ` ${m % 60}m` : ''}` : `${m}m`);
+
+  /** The calendar's settings: its private iCal address (never shown back) and the working day. */
+  function calForm(d) {
+    if (!calOpen) return '';
+    return `<form class="today-cal" data-day-form autocomplete="off">
+      <input name="ics" value="${esc(calDraft.ics ?? '')}" placeholder="${d.connected ? 'Add another calendar: its private iCal address' : "Your calendar's private iCal address (https://… .ics)"}" aria-label="The calendar's private iCal address" />
+      <label class="hint">Working day <input type="time" name="workStart" value="${esc(calDraft.workStart ?? d.workStart ?? '09:00')}" /> to <input type="time" name="workEnd" value="${esc(calDraft.workEnd ?? d.workEnd ?? '18:00')}" /></label>
+      <button class="small primary">Save</button>
+      ${d.connected ? '<button type="button" class="small" data-day="disconnect" title="Forget the calendar addresses">Disconnect</button>' : ''}
+      <button type="button" class="small" data-day="settings">Cancel</button>
+      <p class="hint">Google Calendar: Settings → your calendar → Integrate calendar → <b>Secret address in iCal format</b>. Outlook: Settings → Calendar → Shared calendars → Publish a calendar → <b>ICS</b>. It gives read access only, is kept in config.json on this computer, and isn't shown here again.</p>
+    </form>`;
+  }
+
+  /** The day on top of the list: meetings, and the free time with what needs you placed in it. */
+  function dayHtml() {
+    const d = data.day;
+    if (!d) return '';
+    if (!d.connected) return `<div class="today-day"><div class="today-day-head"><span class="hint">Plan the day around your meetings: connect your calendar, and what needs you is fitted into the free time between them.</span><span class="spacer"></span><button class="small" data-day="settings">Connect calendar</button></div>${calForm(d)}</div>`;
+    const gear = '<button class="small" data-day="settings" title="Calendar addresses and working hours">Calendar…</button>';
+    if (d.error || !d.meetings) return `<div class="today-day"><div class="today-day-head"><span class="hint">Couldn't plan the day: ${esc(d.error ?? 'the calendar could not be read')}</span><span class="spacer"></span>${gear}</div>${calForm(d)}</div>`;
+    const bad = (d.sources ?? []).filter((s) => s.error);
+    const rel = (r) => (r.kind === 'agent' ? `<button class="link" data-day-agent="${esc(r.agentId)}" title="${esc(r.why)}: open its session">${esc(r.title)}</button>` : `<button class="link" data-day-item="${esc(r.id)}" title="${esc(r.why)}: show it in the list">${esc(r.title)}</button>`);
+    const rows = [
+      ...d.meetings.filter((m) => !m.past).map((m) => ({ at: m.start, html: `<li class="day-meeting${m.now ? ' now' : ''}${m.free ? ' free' : ''}"><span class="day-time">${esc(hm(m.start))} – ${esc(hm(m.end))}</span><span class="day-what"><b>${esc(m.title)}</b>${m.now ? ' <span class="tag">now</span>' : ''}${m.location ? ` <span class="hint">· ${esc(m.location)}</span>` : ''}${m.related.length ? `<div class="hint">About: ${m.related.map(rel).join(' · ')}</div>` : ''}</span></li>` })),
+      ...d.blocks.map((b) => ({ at: b.start, html: `<li class="day-free"><span class="day-time">${esc(hm(b.start))} – ${esc(hm(b.end))}</span><span class="day-what"><span class="day-free-label">Free ${esc(dur(b.minutes))}</span>${b.items.length ? `<ol>${b.items.map((i) => `<li><button class="link" data-day-item="${esc(i.id)}" title="Show it in the list">${esc(i.label)}: ${esc(i.title)}</button> <span class="hint">${i.minutes}m</span></li>`).join('')}</ol>` : ' <span class="hint">nothing waiting for it</span>'}</span></li>` })),
+    ].sort((x, y) => x.at - y.at);
+    const busy = d.meetings.filter((m) => !m.free).length;
+    const summary = [
+      busy ? `${busy} meeting${busy === 1 ? '' : 's'} today (${dur(d.meetingMinutes)})` : 'No meetings today',
+      d.freeMinutes ? `${dur(d.freeMinutes)} free until ${esc(d.workEnd)}` : 'no free time left today',
+      d.needMinutes ? `what needs you: about ${dur(d.needMinutes)}` : null,
+      d.unplaced ? `<b>${d.unplaced} won't fit today</b>` : null,
+    ].filter(Boolean).join(' · ');
+    const next = d.current ? `In <b>${esc(d.current)}</b> now` : d.next ? `Next: <b>${esc(d.next.title)}</b> ${d.next.inMinutes <= 90 ? `in ${d.next.inMinutes} min` : `at ${esc(hm(d.next.start))}`}` : '';
+    return `<div class="today-day">
+      <div class="today-day-head"><b>Your day</b><span class="hint">${summary}${next ? ` · ${next}` : ''}</span><span class="spacer"></span>${gear}</div>
+      ${d.allDay?.length ? `<div class="hint">All day: ${esc(d.allDay.join(', '))}</div>` : ''}
+      ${bad.length ? `<div class="hint">Couldn't read ${esc(bad.map((s) => `${s.name} (${s.error})`).join(', '))}: showing what was read last.</div>` : ''}
+      ${rows.length ? `<ul class="day-rows">${rows.map((r) => r.html).join('')}</ul>` : ''}
+      ${calForm(d)}
+    </div>`;
+  }
+
   function draw() {
     if (!dialog.open) return;
     if (!data) {
       body.innerHTML = '<p class="hint">Loading…</p>';
       return;
     }
+    // What's typed in the calendar's settings survives the list being drawn again.
+    const cf = body.querySelector('[data-day-form]');
+    const calFocus = cf && document.activeElement?.form === cf ? document.activeElement.name : null;
+    if (cf) calDraft = Object.fromEntries(new FormData(cf));
     const items = data.items;
     const pressing = items.filter((i) => i.score <= PRESSING).length;
     const off = [!data.features?.jira && 'Jira', !data.features?.slack && !data.features?.gemini && 'Actions'].filter(Boolean);
@@ -112,14 +167,30 @@ export function initToday({ api, $, esc, ago, openAgent, showInbox, openActions,
         ${expandButton(dialog)}
         <button class="small" data-today="close" title="Close (Esc)">Close</button>
       </div>
+      ${dayHtml()}
       ${items.length
         ? `<div class="issues-scroll"><table class="issues today-table"><tbody>${items.map(row).join('')}</tbody></table></div>`
         : '<p class="hint issues-empty">Nothing needs you right now: no agent is waiting on you, nothing is due, and no review is waiting.</p>'}
       ${asideHtml()}
       <p class="hint">Keys: j/k move (or click a row), Enter opens, 1–6 pick an answer, a assign or review, d done, s skip, z snooze, c discuss, u undo, r look again, f bigger.${off.length ? ` Not included (off in Settings → What you use): ${esc(off.join(', '))}.` : ''}${data.errors?.length ? ` Couldn't get: ${esc(data.errors.map((e) => `${e.source === 'jira' ? 'Jira' : e.source} (${e.error})`).join('; '))}.` : ''}</p>`;
+    if (calFocus) body.querySelector(`[data-day-form] [name="${calFocus}"]`)?.focus();
     keys.redraw();
   }
   const render = holdWhilePicking(body, draw);
+
+  /** Save the calendar's settings: a new address is checked by the daemon before it is kept. */
+  async function saveCalendar(form) {
+    const f = Object.fromEntries(new FormData(form));
+    try {
+      await api('PUT', '/calendar', { ...(f.ics?.trim() ? { add: f.ics.trim() } : {}), workStart: f.workStart, workEnd: f.workEnd });
+      calOpen = false;
+      calDraft = {};
+      toast?.(f.ics?.trim() ? 'Calendar connected' : 'Working hours saved', 2500);
+    } catch (err) {
+      return toast?.(err.message, 7000);
+    }
+    load();
+  }
 
   /** What you skipped, marked done or removed: each can be brought back, or all of them. */
   function asideHtml() {
@@ -206,6 +277,10 @@ export function initToday({ api, $, esc, ago, openAgent, showInbox, openActions,
         if (!it.agentId) return;
         dialog.close();
         return openAgent(it.agentId);
+      }
+      if (what === 'plan' || (what === 'enter' && it.kind === 'milestone')) {
+        dialog.close();
+        return openPlan?.('dates');
       }
       if (what === 'inbox' || (what === 'enter' && it.kind === 'rule')) {
         dialog.close();
@@ -350,6 +425,8 @@ export function initToday({ api, $, esc, ago, openAgent, showInbox, openActions,
     e.preventDefault();
     // Done typing: the list may be drawn again.
     document.activeElement?.blur?.();
+    const cal = e.target.closest('[data-day-form]');
+    if (cal) return saveCalendar(cal);
     const f = e.target.closest('[data-today-form]');
     const ed = e.target.closest('[data-today-edit]');
     try {
@@ -390,6 +467,29 @@ export function initToday({ api, $, esc, ago, openAgent, showInbox, openActions,
         toast?.(err.message, 6000);
       }
       return load();
+    }
+    const day = e.target.closest('[data-day]')?.dataset.day;
+    if (day === 'settings') {
+      calOpen = !calOpen;
+      calDraft = {};
+      return draw();
+    }
+    if (day === 'disconnect') {
+      await api('PUT', '/calendar', { ics: [] }).catch((err) => toast?.(err.message, 6000));
+      calOpen = false;
+      return load();
+    }
+    const dayAgent = e.target.closest('[data-day-agent]')?.dataset.dayAgent;
+    if (dayAgent) {
+      dialog.close();
+      return openAgent(dayAgent);
+    }
+    const dayItem = e.target.closest('[data-day-item]')?.dataset.dayItem;
+    if (dayItem) {
+      const tr = [...body.querySelectorAll('tr[data-row-id]')].find((r) => r.dataset.rowId === dayItem);
+      tr?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      tr?.classList.add('day-flash');
+      return setTimeout(() => tr?.classList.remove('day-flash'), 1600);
     }
     const pick = e.target.closest('[data-today-pick]');
     if (pick) return pickAt(itemOf(e.target.closest('tr[data-row-id]')?.dataset.rowId), Number(pick.dataset.todayPick));

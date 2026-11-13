@@ -68,7 +68,7 @@ const INBOX = {
  * The list: [{ id, kind, label, title, why, score, at, agentId?, url?, actionId?, issueKey?, reviewUrl? }],
  * most pressing first. Each source may be missing (turned off, or it couldn't be had).
  */
-export function todayItems({ inbox = [], issues = [], actions = [], reviews = [], findings = [], slower = [], unsure = [], now = new Date() } = {}) {
+export function todayItems({ inbox = [], issues = [], actions = [], reviews = [], findings = [], slower = [], unsure = [], milestones = [], now = new Date() } = {}) {
   const items = [];
   // The issue each agent works on: named on its questions, and not listed twice.
   const issueOfAgent = new Map(issues.filter((r) => r.agent?.id).map((r) => [r.agent.id, r]));
@@ -141,6 +141,8 @@ export function todayItems({ inbox = [], issues = [], actions = [], reviews = []
     const why = `Micro benchmarks${r.agent && r.agent !== r.issue ? ` by ${r.agent}` : ''}${worst ? `: ${worst.name} ${worst.before} → ${worst.after}${worst.unit ? ` ${worst.unit}` : ''}` : ''}${worst?.note ? ` · its note: ${worst.note}` : ''}`;
     items.push({ id: `bench:${r.id}`, kind: 'bench', label: 'Slower', title, why, score: r.worst > 20 ? 27 : 36, at: r.at ?? null, agentId: r.agentId, runId: r.id, issueKey: r.issue ?? null });
   }
+  // A project's dates coming up, at risk or late (milestones.js), already scored.
+  items.push(...milestones);
   return items.sort((x, y) => x.score - y.score || String(y.at ?? '').localeCompare(String(x.at ?? '')));
 }
 

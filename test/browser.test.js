@@ -29,6 +29,12 @@ let home, daemon, chrome, ws, base, notes;
 // AI News reads its release notes from here, never the internet.
 const today = new Date().toISOString().slice(0, 10);
 const longDate = (d) => new Date(`${d}T12:00:00Z`).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
+// ...and Today's calendar: a meeting late today (this computer's time), and one that names an agent.
+const calIcs = () => {
+  const d = new Date();
+  const ymd = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
+  return ['BEGIN:VCALENDAR', 'BEGIN:VEVENT', 'UID:1', 'SUMMARY:Design sync', 'DESCRIPTION:About task-2', `DTSTART:${ymd}T235000`, `DTEND:${ymd}T235500`, 'END:VEVENT', 'END:VCALENDAR'].join('\r\n');
+};
 let notesMd = `## ${longDate(today)}\n\n* We launched **Model One** ([docs](https://example.com/one)).\n* Faster batches. See [batches](https://example.com/batches).\n`;
 let seq = 0;
 const pending = new Map();
@@ -75,7 +81,7 @@ before(async () => {
   const port = await freePort();
   base = `http://127.0.0.1:${port}`;
   const http = await import('node:http');
-  notes = http.createServer((req, res) => res.end(notesMd));
+  notes = http.createServer((req, res) => res.end(req.url.endsWith('.ics') ? calIcs() : notesMd));
   await new Promise((r) => notes.listen(0, '127.0.0.1', r));
   fs.writeFileSync(path.join(home, 'config.json'), JSON.stringify({ claudeBin: process.execPath, claudeArgs: [path.join(here, 'fake-claude.js')], updates: { check: false }, judge: { enabled: false }, shell: '/bin/sh', gitRefreshSec: 1, conflictRefreshSec: 0, news: { sources: [], custom: [{ id: 'local', lab: 'Anthropic', label: 'Local notes', url: `http://127.0.0.1:${notes.address().port}/notes.md` }] } }));
   daemon = spawn(process.execPath, [path.join(here, '..', 'bin', 'agentmgr.js'), 'serve'], {
@@ -147,7 +153,7 @@ test('the top bar fits the window: the view buttons that do not fit go into More
       menuOk: document.querySelector('#menu-btn').getBoundingClientRect().right <= innerWidth,
     })`);
     assert.ok(r.page <= w, `${w}px: the page is ${r.page}px wide`);
-    assert.equal(r.inRow + r.inMore, 16, `${w}px: every view button is in the row or in More`);
+    assert.equal(r.inRow + r.inMore, 17, `${w}px: every view button is in the row or in More`);
     assert.ok(r.newOk && r.menuOk, `${w}px: New agents and the account menu are on screen`);
     if (w >= 1024) assert.ok(r.inRow >= 3, `${w}px: only ${r.inRow} buttons in the row`);
   }
@@ -408,5 +414,80 @@ test('Debug: asked beside the session, the report drawn with its animated diagra
   await js(`document.querySelector('[data-debug-fix]').click()`);
   await until(`document.querySelector('.debug-asked summary')?.textContent === 'Asked (2)' && document.querySelector('.debug-asked li:last-child').textContent.trim() === 'fix Apply fixes: 1'`, 'the fix asked for');
   await js(`document.querySelector('#side-close').click()`);
+  assert.deepEqual(errors, [], 'no errors on the page');
+});
+
+test('Plan: project dates with checklists, the decision log, the tech debt radar; Today shows the date and the day around a meeting', { skip }, async () => {
+  // A project with an agent at work in its folder, and one that is a git repository.
+  for (const n of ['p1', 'p3']) fs.mkdirSync(path.join(home, n));
+  const [worker] = await api('POST', '/agents', { intent: 'Plan task', dir: path.join(home, 'p1') });
+  for (let i = 0; i < 100 && (await api('GET', '/agents')).find((a) => a.id === worker.id)?.status !== 'running'; i++) await sleep(100);
+  const w3 = await api('POST', '/projects', { shortcut: 'pthree', dir: path.join(home, 'p3') });
+  const w1 = (await api('GET', '/projects')).find((p) => p.dir === path.join(home, 'p1'));
+  assert.ok(w1, 'the agent\'s folder is a project');
+  const iso = (days) => {
+    const d = new Date(Date.now() + days * 86_400_000);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  };
+  // Dates: code complete in 3 days with an agent still working is at risk.
+  await js(`document.querySelector('#plan-btn').click()`);
+  await until(`document.querySelector('#plan-dialog').open && document.querySelector('[data-plan="add"]')`, 'the Plan window');
+  await js(`document.querySelector('[data-plan-tab="dates"]').click()`);
+  await until(`document.querySelector('[data-plan="add"]') && !document.querySelector('[data-plan="add"]').disabled`, 'projects to add dates for');
+  await js(`document.querySelector('[data-plan="add"]').click()`);
+  await js(`(() => { const f = document.querySelector('form[data-plan-dates=""]'); f.project.value = ${JSON.stringify(w1.shortcut)}; f.codeComplete.value = '${iso(3)}'; f.rc.value = '${iso(10)}'; f.ga.value = '${iso(30)}'; f.requestSubmit(); })()`);
+  await until(`document.querySelectorAll('.plan-stage').length === 3`, 'the three dates');
+  const stages = await js(`[...document.querySelectorAll('.plan-stage')].map((s) => [s.querySelector('b').textContent, s.querySelector('.tag').textContent, s.querySelector('.plan-left').textContent, s.querySelectorAll('.plan-reminder').length])`);
+  assert.deepEqual(stages, [['Code complete', 'At risk', 'in 3 days', 5], ['Release candidate', 'On track', 'in 10 days', 5], ['GA', 'On track', 'in 30 days', 5]]);
+  assert.match(await js(`document.querySelector('.plan-stage .plan-check.open').textContent`), /1\s*1 agent still working/);
+  await until(`document.querySelector('#plan-count').textContent === '1'`, 'one date at risk on the button');
+  // One of yours ticked; the dates out of order are refused.
+  await js(`document.querySelector('.plan-stage input[type=checkbox]').click()`);
+  await until(`document.querySelector('.plan-stage .plan-check.ok input[type=checkbox]')?.checked`, 'ticked');
+  await js(`(() => { const f = document.querySelector('form[data-plan-dates]:not([data-plan-dates=""])'); f.rc.value = '${iso(1)}'; f.requestSubmit(); })()`);
+  await until(`[...document.querySelectorAll('.toast, #toast')].some((t) => /in order/.test(t.textContent))`, 'refused: the dates go in order');
+
+  // Decisions: one of yours, found by a word.
+  await js(`document.querySelector('[data-plan-tab="decisions"]').click()`);
+  await until(`document.querySelector('[data-plan-find]')`, 'the decision log');
+  await js(`document.querySelector('[data-plan="add"]').click()`);
+  await js(`(() => { const f = document.querySelector('[data-plan-decision]'); f.project.value = ${JSON.stringify(w1.shortcut)}; f.title.value = 'Cursor or offset paging'; f.decision.value = 'Offset'; f.why.value = 'Small tables'; f.requestSubmit(); })()`);
+  await until(`document.querySelector('.plan-decision b')?.textContent === 'Cursor or offset paging'`, 'the decision listed');
+  assert.match(await js(`document.querySelector('.plan-decision').textContent`), /Decided:\s*Offset[\s\S]*Why:\s*Small tables[\s\S]*Added by you/);
+  await js(`(() => { const f = document.querySelector('[data-plan-find]'); f.focus(); f.value = 'nothing like it'; f.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+  await until(`!document.querySelector('.plan-decision') && document.activeElement?.matches('[data-plan-find]')`, 'filtered while typing');
+  await js(`document.activeElement.blur()`);
+
+  // Debt: a real repository, one file changed often and tangled.
+  const repo = w3.dir;
+  const git = (...args) => execFileSync('git', ['-c', 'commit.gpgsign=false', '-c', 'user.email=t@t', '-c', 'user.name=t', ...args], { cwd: repo });
+  git('init', '-q', '-b', 'main');
+  for (let i = 1; i <= 5; i++) {
+    fs.writeFileSync(path.join(repo, 'importer.js'), `export function run(a) {\n${Array.from({ length: 70 + i }, (_, k) => `          if (a.x${k} && a.y${k}) { a.z += ${k}; } // TODO ${k}`).join('\n')}\n}\n`);
+    git('add', 'importer.js');
+    git('commit', '-q', '-m', i % 2 ? 'Fix the importer' : 'Importer: more');
+  }
+  await js(`document.querySelector('[data-plan-tab="debt"]').click()`);
+  await until(`document.querySelector('[data-plan-scan="${w3.shortcut}"]') && !document.querySelector('[data-plan-scan="${w3.shortcut}"]').disabled`, 'the project to scan');
+  await js(`document.querySelector('[data-plan-scan="${w3.shortcut}"]').click()`);
+  await until(`document.querySelector('table.plan-debt code')?.textContent === 'importer.js'`, 'the hot spot', 20_000);
+  assert.match(await js(`document.querySelector('table.plan-debt tr').textContent`), /changed 5 times in 90 days · 3 of them fixes/);
+  await js(`document.querySelector('[data-plan-notdebt]').click()`);
+  await until(`!document.querySelector('table.plan-debt code')`, 'set aside');
+  await js(`document.querySelector('[data-plan="close"]').click()`);
+
+  // Today: the date near the top, and the day planned around a meeting once the calendar is connected.
+  await js(`document.querySelector('#today-btn').click()`);
+  await until(`document.querySelector('#today-dialog').open && document.querySelector('tr.today-milestone')`, 'the date in Today', 20_000);
+  assert.match(await js(`document.querySelector('tr.today-milestone').textContent`), /At risk[\s\S]*Code complete in 3 days[\s\S]*1 agent still working/);
+  await js(`document.querySelector('[data-day="settings"]').click()`);
+  await js(`(() => { const f = document.querySelector('[data-day-form]'); f.ics.value = 'http://127.0.0.1:${notes.address().port}/secret/cal.ics'; f.workStart.value = '00:00'; f.workEnd.value = '23:59'; f.requestSubmit(); })()`);
+  await until(`document.querySelector('.day-meeting b')?.textContent === 'Design sync'`, 'the meeting', 20_000);
+  const dayRows = await js(`({ free: document.querySelectorAll('.day-free').length, about: document.querySelector('.day-meeting [data-day-agent]')?.textContent, head: document.querySelector('.today-day-head').textContent, html: document.querySelector('#today-body').innerHTML.includes('secret') })`);
+  assert.ok(dayRows.free >= 1, 'free time before it');
+  assert.equal(dayRows.about, 'task-2', 'the agent the meeting names');
+  assert.match(dayRows.head, /1 meeting today \(5m\)[\s\S]*Next: Design sync/);
+  assert.equal(dayRows.html, false, "the calendar's address isn't shown");
+  await js(`document.querySelector('[data-today="close"]').click()`);
   assert.deepEqual(errors, [], 'no errors on the page');
 });

@@ -27,6 +27,8 @@ Run one background [Claude Code](https://claude.com/claude-code) agent per inten
 - **Slack alerts.** A message in your channel when an agent needs input, finishes a backlog item, or fails.
 - **Priority.** Mark agents P0–P3. P0 and P1 are highlighted, and lists sort by priority.
 - **Share for review.** One click writes an **Analysis**, **Design**, **Flow** or **Proposal** document from the agent's work, a human time **Estimate** for planning, or the change's **Documentation** with an OpenAPI spec of any API changes. Copy it as Markdown, download it, or print it to PDF with diagrams.
+- **Plan.** A project's commitment dates (code complete, release candidate, GA) with a checklist of what is still open for each, reminders as they come near, and an at-risk or late flag. A **decision log** gathered from plan reviews, your answers and design docs. A **tech debt radar** from git history and the code. What is open can be handed to an agent.
+- **Your day.** Connect your calendar and Today lays the day out around your meetings: the free time between them with what needs you placed in it, and what each meeting is about.
 - **Debug.** Say what to debug (a failure, E2E instability at max scale, slowness under load) in the **Debug** tab beside an agent's session. The agent investigates there and writes a report next to it: animated diagrams of the code path and the data flow with where it breaks, findings with evidence, likely causes and recommended fixes. It changes no code until you press **Apply fixes**.
 - **AI News.** The frontier labs' latest releases in one list, newest first: Claude Platform, Claude Code, the OpenAI API and the Gemini API from their release notes, and the other top labs from a daily web search. Each is summarized in a sentence or two, with its links.
 - **MCP servers and tools.** See every MCP server Claude Code has in a folder (yours, the project's, claude.ai connectors and plugins) with its tools, sign in to the ones that need it, and run any tool directly, through Claude Code, or in an agent's session.
@@ -184,6 +186,9 @@ agentmgr remote on | off | status | rotate    # phone / remote access (see below
 agentmgr backlog add "ask" -r <repo> [-p 1]   # queue work; also: ls, start, accept, reopen, move, limit, pause
 agentmgr notify slack --webhook <url>         # Slack alerts; also: test, status, on, off, event <name> on|off
 agentmgr debug <agent> "what goes wrong"       # debug with an agent; no question prints its report; --fix applies the fixes
+agentmgr dates <project> --cc 2026-12-01 --rc 2026-12-10 --ga 2026-12-20   # commitment dates; no dates: where each stands
+agentmgr decisions [project] [--md]           # the decision log; --add "<question>" --decision "<what>" adds one
+agentmgr debt <project> --scan                # the tech debt radar: files that change often and are hard to read
 agentmgr news                                 # the frontier labs' latest releases, summarized (--refresh, --lab, --days)
 agentmgr inbox                                # prompts, questions, stuck agents and overlaps waiting on you
 agentmgr answer <agent> <question-id> "…"     # answer a question from the inbox
@@ -1148,6 +1153,65 @@ Usage comes from the session transcripts and is refreshed every few seconds whil
 - **Run in agent session** tells the agent to use the tool, with its conversation and context. The answer is in the session. This works for Claude Code agents.
 
 `agentmgr mcp run <agent|home> <server> <tool> [arguments or request]` does the first two, and `--session` the third. A destructive tool needs a second click. Plugins can refuse runs outside an agent's session with the `mcp.run` policy.
+
+## Plan: dates, decisions and tech debt
+
+**Plan** in the top bar (or `c`, or `#plan`) looks ahead, in three tabs. Its button counts the dates that are late or at risk.
+
+### Dates
+
+Give a project its **code complete**, **release candidate** and **GA** dates (**+ Dates for a project**, or `agentmgr dates <project> --cc … --rc … --ga …`; they must be in that order). For each date you get:
+
+- **How far it is and where it stands.** *On track*, *at risk* (a week or less away with counted work still open), *late*, or *reached* once you mark it.
+- **A checklist.** What the app can count for itself, and what only you can tick:
+
+| Date | Counted by the app | Yours to tick |
+|---|---|---|
+| Code complete | agents still working, backlog items not finished, things waiting on you (plans, questions, prompts) | scope agreed |
+| Release candidate | pull requests still open, pull requests with failing checks, critical or high bugs open (bug hunts) | release notes and changelog drafted, RC cut and smoke-tested |
+| GA | critical or high bugs open, pull requests still open | docs and upgrade notes, release notes final, version tagged and published |
+
+- **Related actions.** **Show** jumps to the agents, backlog, Land tab or Bugs behind a count. **Have an agent do it** hands one of your items (release notes, docs) to an agent through the project's backlog.
+- **Reminders.** Planned 14, 7, 3 and 1 days before and on the day, and once when a date passes. Each goes to Slack with what is still open (Alerts → *a project's date*), between 8:00 and 20:00; coming within a nearer one covers the further ones. A date you move gets its reminders again.
+- **In Today.** A date shows from two weeks out, higher up as it nears, with what is open.
+
+### Decisions
+
+What was decided on each project and why, newest first, gathered from what already happens here:
+
+- **Plan reviews:** a plan you approved or sent back, with your notes.
+- **Your answers** to agents' questions.
+- **Design docs:** the bullets under *Decisions and risks*. When a design moves on, what it no longer says is kept and marked *replaced since*.
+- **Your own**, with **+ Add a decision** (or `agentmgr decisions <project> --add …`).
+
+Entries stay after their agent is deleted. Filter by project or by words, remove one with ×, and **Copy as Markdown** (or `agentmgr decisions --md`) gives the log as a document. No model is called.
+
+### Debt
+
+Where a project's code costs the most to change. **Scan** (or `agentmgr debt <project> --scan`) reads the repository's last 90 days of git history and its source files, and scores each file by:
+
+- how often it changed, and how many of those changes were fixes;
+- how tangled it is: its length, branch points, lines nested five deep or more, TODO/FIXME notes;
+- open bugs the bug hunts found in it.
+
+Files that are both changed often and hard to read come first, each with its reasons. Test files count for less; vendored, generated and binary files, and commits that touch more than 40 files, are left out. **Hand to an agent** queues a task in the project's backlog (cover it with tests, then refactor in small steps); **Not debt** sets a file aside for good. Projects with a repository on this computer are scanned again every 7 days. It reads git and the files only: no model is called and nothing leaves the machine. In config.json: `"debt": { "enabled": true, "days": 90, "autoDays": 7, "top": 30 }`.
+
+## Your day: Today around your calendar
+
+In **Today**, **Connect calendar** takes your calendar's private iCal address:
+
+- **Google Calendar:** Settings → your calendar → Integrate calendar → *Secret address in iCal format*.
+- **Outlook:** Settings → Calendar → Shared calendars → Publish a calendar → *ICS*.
+
+The address gives read access only. It is kept in config.json on this computer, is never shown in the page again, and is fetched only by the daemon (every 10 minutes at most). Nothing is written to your calendar.
+
+With it, Today opens with **Your day**:
+
+- **Meetings** from now on, with the one in progress marked, and all-day events on a line of their own.
+- **Free time** between them until the end of your working day (09:00 to 18:00 unless you change it), with what needs you placed in it, most pressing first. Each kind of item has a usual length (a prompt 3 minutes, a question 5, a pull request review 25), and what doesn't fit is counted as *won't fit today* instead of squeezed in.
+- **What a meeting is about:** the agents, pull requests and issues its title or description names (a Jira key, `#482`, an agent's or project's name), to open before you walk in.
+
+Repeating meetings, time zones, moved or cancelled occurrences and events marked *free* are understood. Several calendars can be added; **Disconnect** forgets them. In config.json: `"calendar": { "ics": ["https://…"], "workStart": "09:00", "workEnd": "18:00" }`.
 
 ## Debug
 
