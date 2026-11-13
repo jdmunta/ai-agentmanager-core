@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.48.0 (2026-11-13)
+
+- **OS.** **OS** in the top bar (or `u`, `#os`, `agentmgr os`) shows the computer the agents run on and how loaded it is right now: the processor in use and the load average against the number of cores, memory and swap, and the free space on your disks, with a line of the last ten minutes for processor and memory. A tag sums it up: light load, busy or heavy load.
+- **What takes it.** Each open agent session with the processor and memory it takes, counting everything it started (click a name to open the agent), and the busiest processes on the whole computer. Also the basics: name, system, kernel, processor and cores, memory, uptime, addresses and the app's version. It reads again every 3 seconds while open; nothing leaves the computer.
+- **Running, as a filter.** **N running** above the agent list is clickable: it lists only the agents whose session is open; click again for all.
+
 ## 1.47.1 (2026-11-13)
 
 - **Lists scroll on a small screen.** In AI News, Plan and Bugs the list ran past the bottom of the window on a phone (or any screen shorter than the list) and was cut off; it now scrolls inside the window.
