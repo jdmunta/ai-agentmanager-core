@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.44.0 (2026-11-12)
+
+- **Whose session is this?** Expanded, in full screen and on a phone, the terminal bar shows the agent's name on the left, on every tab (Claude, Code, Shell, Browser). It follows a rename, and its tooltip has the agent's task.
+- **Due in Actions.** A **Due** tab lists every action with a due date that isn't done or removed, soonest first with overdue ones at the top; ones without a fixed date ("next sprint") come last. Due dates read "overdue 3 days", "due tomorrow", "due Friday" (the tooltip has what was said), overdue ones are red, and the tab is outlined red when something is overdue. `agentmgr actions --due` prints the same list.
+- **Due dates are read from when they were asked.** "By Friday" asked last week is that Friday, now overdue, not the next one; Actions and Today agree.
+- **Overlaps in a panel of their own.** An agent's overlaps with other agents are behind **⚔ Overlaps** (with the count) in its detail, next to Overview and Questions, instead of taking room on the page. The agent list's ⚔ marker and the Inbox are unchanged.
+
 ## 1.43.0 (2026-11-11)
 
 - **An MCP session of its own.** Each folder (your home folder or an agent's workspace) gets one Claude Code process for MCP, separate from any agent's session. Listing servers, signing in, reconnecting and calling a tool make no model call and don't interrupt an agent. It closes after 15 minutes unused; **Refresh all** starts a new one.
