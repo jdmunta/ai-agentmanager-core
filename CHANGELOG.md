@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.47.1 (2026-11-13)
+
+- **Lists scroll on a small screen.** In AI News, Plan and Bugs the list ran past the bottom of the window on a phone (or any screen shorter than the list) and was cut off; it now scrolls inside the window.
+
 ## 1.47.0 (2026-11-13)
 
 - **Plan.** **Plan** in the top bar (or `c`, `#plan`) has three tabs: Dates, Decisions and Debt. Its badge counts dates that are late or at risk.
