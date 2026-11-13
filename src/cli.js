@@ -1456,6 +1456,30 @@ export async function main(argv) {
     });
 
   program
+    .command('debug')
+    .description("Debug with an agent: say what to debug and it investigates in its session, keeping a report with diagrams of the code path and data flow, findings and recommended fixes. With no question: print the report")
+    .argument('<agent>')
+    .argument('[question...]', 'what to debug, or a follow-up once there is a report')
+    .option('--fix [which]', "apply the report's fixes: which ones in words (\"1 and 3\"), or the ones it recommends")
+    .action(async (ref, question, opts) => {
+      await daemon();
+      const a = await resolveAgent(ref);
+      const q = question.join(' ').trim();
+      if (opts.fix) {
+        await api('POST', `/agents/${a.id}/debug`, { fix: opts.fix === true ? q || true : opts.fix });
+        return console.log(`${green('✓')} asked ${a.name} to apply the fixes; it verifies each and records the result in the report`);
+      }
+      if (q) {
+        await api('POST', `/agents/${a.id}/debug`, { question: q });
+        return console.log(`${green('✓')} sent to ${a.name}; it investigates in its session. The report: agentmgr debug ${ref}`);
+      }
+      const r = await api('GET', `/agents/${a.id}/specs/debug`);
+      if (!r.markdown) return console.log(dim(`No debug report yet. Start one: agentmgr debug ${ref} "what goes wrong"`));
+      console.log(r.markdown.trimEnd());
+      console.log(dim(`\n(updated ${new Date(r.updatedAt).toLocaleString()})`));
+    });
+
+  program
     .command('fork')
     .description("A new agent with this one's code and conversation, in its own worktree")
     .argument('<agent>')

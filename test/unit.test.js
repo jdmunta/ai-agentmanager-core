@@ -3629,3 +3629,18 @@ test('AI News: a refresh reads each source, searches when due, summarizes the ne
   // Off: no refresh.
   await assert.rejects(new News({ store, config: { news: { enabled: false } } }).refresh(), /off/);
 });
+
+test('debug: the messages that start, continue and fix an investigation', async () => {
+  const { debugPrompt, debugFixPrompt, SPEC_DOCS } = await import('../src/brief.js');
+  assert.ok(SPEC_DOCS.debug('a1').endsWith('/a1/DEBUG.md'));
+  const first = debugPrompt('/b/DEBUG.md', '  E2E tests fail at max scale ');
+  assert.match(first, /^Debug this: E2E tests fail at max scale\n/);
+  for (const part of ['Do not change the repository code yet', 'Keep a report at /b/DEBUG.md', '## Code path', '## Data flow', '## Findings', '## Root cause', '## Recommended fixes', 'e1@{ animate: true }', 'classDef fault', '## Interleaving', 'reproduce it if you can']) assert.ok(first.includes(part), part);
+  const more = debugPrompt('/b/DEBUG.md', 'It only happens with 500 tenants', { again: true });
+  assert.match(more, /^Debug, continued: It only happens with 500 tenants\n/);
+  assert.ok(more.includes('/b/DEBUG.md') && !more.includes('## Code path'), 'a follow-up does not repeat the shape');
+  assert.match(debugFixPrompt('/b/DEBUG.md', '1 and 3'), /^Apply the fixes from your debug report at \/b\/DEBUG\.md: 1 and 3\.\n[\s\S]*## Fixes applied/);
+  assert.match(debugFixPrompt('/b/DEBUG.md', ''), /: the ones you recommend, the safest first\./);
+  // The fake engine (and a shell) would take "exit" in a message as a command.
+  for (const m of [first, more, debugFixPrompt('/b/DEBUG.md', '')]) assert.doesNotMatch(m, /\bexit\b/);
+});

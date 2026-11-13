@@ -719,7 +719,74 @@ export const DEMO_FILE = 'DEMO.html';
 export const demoPath = (agentId) => path.join(briefDir(agentId), DEMO_FILE);
 export const BENCH_FILE = 'BENCHMARK.md';
 export const benchPath = (agentId) => path.join(briefDir(agentId), BENCH_FILE);
-export const SPEC_DOCS = { intent: intentPath, spec: specPath, plan: planPath, designdoc: designPath, benchmark: benchPath, demo: demoPath };
+export const DEBUG_FILE = 'DEBUG.md';
+export const debugPath = (agentId) => path.join(briefDir(agentId), DEBUG_FILE);
+export const SPEC_DOCS = { intent: intentPath, spec: specPath, plan: planPath, designdoc: designPath, benchmark: benchPath, demo: demoPath, debug: debugPath };
+
+// ------------------------------------------------------------------ debug
+
+// Debug: you say what to debug (a failure, instability at scale, slowness under load); the agent
+// investigates in its own session and keeps a report at DEBUG.md with animated diagrams of the code
+// path and the data flow, what it found with evidence, the likely causes and the fixes it
+// recommends. It changes no code until you ask for a fix. The Debug tab shows the report as it grows.
+
+const DEBUG_SHAPE = [
+  '# Debug: <short name of the problem>',
+  '## Summary',
+  'Two or three sentences: what goes wrong, the most likely cause, and how sure you are.',
+  '## Symptoms',
+  'What is seen and when (scale, load, timing, environment), and how to reproduce it. Only numbers that were measured or given.',
+  '## Code path',
+  'One ```mermaid flowchart of the path the failing request, job or test takes through the real files and functions, where it breaks marked.',
+  '## Data flow',
+  'One ```mermaid flowchart LR or sequenceDiagram of the data on that path (payloads, queues, caches, connections, stores): where it grows, waits, is dropped or goes wrong.',
+  '## Findings',
+  'Numbered. Each with its evidence (file:line, a log line, a metric, or a command and its output) and "confirmed" (reproduced or measured) or "suspected".',
+  '## Root cause',
+  'The causes, most likely first, each with a confidence (high, medium, low) and what would confirm or rule it out.',
+  '## Recommended fixes',
+  'Numbered. Each: the change, where (file and function), effort (S, M, L), the risk, and how to verify it worked.',
+  '## Next checks',
+  'What to measure or try next, and what you need from the user (logs, numbers, access).',
+].join('\n');
+
+const DEBUG_DIAGRAMS =
+  'Diagrams: valid Mermaid, at most about 15 nodes each, labels of five words or fewer (quote labels with punctuation, e.g. A["Parse (JSON)"]), no HTML in labels, real names from the code. ' +
+  'Animate the path in every flowchart: give its edges ids and animate them, e.g.\n' +
+  '    A e1@--> B\n    B e2@-->|"rows"| C\n    e1@{ animate: true }\n    e2@{ animate: true }\n' +
+  'Mark where it breaks and what is only suspected: `classDef fault stroke:#ef4444,stroke-width:3px` and `classDef suspect stroke:#f59e0b,stroke-width:3px,stroke-dasharray:4`, then `class X fault` and `class Y suspect`. ' +
+  'When timing, concurrency or load is the issue, add a "## Interleaving" section after Data flow with a sequenceDiagram of the order of events that breaks.';
+
+/** The message that starts (or continues) a debug investigation in the agent's session. */
+export function debugPrompt(file, question, { again = false } = {}) {
+  const q = String(question ?? '').trim();
+  if (again) {
+    return (
+      `Debug, continued: ${q}\n` +
+      `Carry on the investigation and bring the report at ${file} up to date: same sections, diagrams redrawn where the picture changed, findings re-marked confirmed or suspected. ` +
+      'Still no changes to the repository code unless I ask for a fix. Answer me here in a few lines, and say what changed in the report.'
+    );
+  }
+  return (
+    `Debug this: ${q}\n` +
+    'Investigate before proposing anything: read the code on the path, the logs and the tests; reproduce it if you can (run the failing test, a small load or a script), and measure instead of guessing. ' +
+    'Do not change the repository code yet: instrumentation or reproduction scripts go outside the repository or are reverted when you are done. ' +
+    'If you need facts only I have (the environment, the scale it fails at, logs), ask me here in a line or two, but first write what you can.\n' +
+    `Keep a report at ${file} (Markdown; the file is outside the repository: never copy it in or commit it). Write a first version as soon as you have the code path, and update it as you learn. Short and specific, in these sections:\n` +
+    `${DEBUG_SHAPE}\n${DEBUG_DIAGRAMS}\n` +
+    'When the report is written, tell me in a few lines what you found and which fix you recommend first.'
+  );
+}
+
+/** The message that asks for the report's fixes to be made. */
+export function debugFixPrompt(file, which) {
+  const w = String(which ?? '').trim();
+  return (
+    `Apply the fixes from your debug report at ${file}: ${w || 'the ones you recommend, the safest first'}.\n` +
+    'Make each change, then verify it the way the report says (run the test, the reproduction or the load again) and compare with what you measured before. ' +
+    'Then update the report: add a "## Fixes applied" section (what changed, where, and the result before and after), and re-mark the findings. If a fix does not hold up, revert it and say why.'
+  );
+}
 
 /** INTENT.md: the request as given, and where it came from. */
 export function intentMarkdown(agent) {

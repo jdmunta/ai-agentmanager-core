@@ -375,3 +375,38 @@ test('AI News: release notes summarized, the top labs from a web search, filters
   await until(`document.querySelector('#news-count').textContent === ''`, 'the count cleared after looking');
   assert.deepEqual(errors, [], 'no errors on the page');
 });
+
+test('Debug: asked beside the session, the report drawn with its animated diagrams, follow-ups and fixes', { skip }, async () => {
+  const a = (await api('GET', '/agents')).find((v) => v.intent === 'Task 2');
+  await js(`document.querySelector('#agent-list li[data-id="${a.id}"]').click()`);
+  await until(`document.querySelector('#detail-body button[data-act="debug"]')`, 'the Debug button');
+  await js(`document.querySelector('#detail-body button[data-act="debug"]').click()`);
+  await until(`!document.querySelector('#side-pane').hidden && document.querySelector('[data-side="debug"]').classList.contains('active') && document.querySelector('[data-debug-text]')`, 'the Debug tab beside the terminal');
+  assert.equal(await js(`document.querySelector('[data-debug-form] button.primary').textContent`), 'Debug');
+  assert.equal(await js(`Boolean(document.querySelector('[data-debug-fix]'))`), false, 'no fixes to apply before a report');
+
+  // An idea fills the box; what you type instead is what's sent.
+  await js(`document.querySelector('[data-debug-idea]').click()`);
+  assert.equal(await js(`document.querySelector('[data-debug-text]').value`), 'E2E tests unstable at max scale');
+  await js(`(() => { const t = document.querySelector('[data-debug-text]'); t.value = 'Imports stall at 500 tenants'; t.form.requestSubmit(); })()`);
+  await until(`document.querySelector('.debug-asked summary')?.textContent === 'Asked (1)'`, 'the question listed');
+  // The message is long: its end is what's still on screen (lines wrap, so spaces aside).
+  await until(`document.querySelector('#terminal .xterm-rows').textContent.replace(/\\s/g, '').includes('whichfixyourecommendfirst.')`, "typed into the agent's session", 20_000);
+
+  // The agent writes its report: it shows here, diagrams drawn and the path animated.
+  const dir = path.join(home, 'briefs', a.id);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'DEBUG.md'), '# Debug: imports at scale\n## Summary\nThe pool runs dry.\n## Code path\n```mermaid\nflowchart LR\n  A["importer.run"] e1@--> B["pool.get"]\n  e1@{ animate: true }\n  classDef fault stroke:#ef4444,stroke-width:3px\n  class B fault\n```\n## Recommended fixes\n1. Raise the pool size.\n');
+  await until(`document.querySelector('.debug-report h1')?.textContent === 'Debug: imports at scale'`, 'the report', 20_000);
+  await until(`document.querySelector('.debug-report .diagram svg')`, 'its diagram drawn', 20_000);
+  assert.ok(await js(`/animat|dash/i.test(document.querySelector('.debug-report .diagram svg').outerHTML)`), 'the path is animated');
+  assert.equal(await js(`document.querySelector('[data-debug-form] button.primary').textContent`), 'Ask');
+  await until(`/report/.test(document.querySelector('#detail-body button[data-act="debug"]').textContent)`, 'the Debug button says there is a report');
+
+  // What's typed survives the pane redrawing; then the fixes are asked for by name.
+  await js(`(() => { const t = document.querySelector('[data-debug-text]'); t.focus(); t.value = '1'; })()`);
+  await js(`document.querySelector('[data-debug-fix]').click()`);
+  await until(`document.querySelector('.debug-asked summary')?.textContent === 'Asked (2)' && document.querySelector('.debug-asked li:last-child').textContent.trim() === 'fix Apply fixes: 1'`, 'the fix asked for');
+  await js(`document.querySelector('#side-close').click()`);
+  assert.deepEqual(errors, [], 'no errors on the page');
+});
