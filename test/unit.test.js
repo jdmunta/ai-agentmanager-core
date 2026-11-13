@@ -27,6 +27,7 @@ import { commentsMessage, parseBaseRef, prBase } from '../src/review.js';
 import { parseDiff } from '../public/review.js';
 import { normalizeReview, parsePrUrl, recheckMessage, reviewDraft, reviewRows, reviewerPrompt, Reviews } from '../src/reviews.js';
 import { reviewerSpeech } from '../public/reviews.js';
+import { cpuTimes, loadLevel, parseMeminfo, parsePs, parseSwapUsage, parseVmStat, System, treeUsage } from '../src/system.js';
 import { actionDue, dueAt, dueWords, todayAside, todayItems, todaySpeech } from '../src/today.js';
 import { VERDICTS, gapsOf, leadPrompt, readCoverage, readVerdict, subagents, summarize, teamPrompt } from '../src/teams.js';
 
@@ -3849,4 +3850,44 @@ test('calendar: iCal events with zones and repeats, the day planned around the m
   const day = await cal.day({ items: todo, agents });
   assert.ok(day.connected && day.meetings.some((m) => m.title.startsWith('Design review')) && day.allDay.includes('Company holiday'));
   assert.doesNotMatch(JSON.stringify(day), /secret-token/, "the calendar's address is never shown");
+});
+
+test('OS: memory, swap and processes read from the system; a session with everything under it; the load in a word; a real look', async () => {
+  const vm = parseVmStat(['Mach Virtual Memory Statistics: (page size of 16384 bytes)', 'Pages free:                               10.', 'Pages active:                            500.', 'Pages inactive:                           20.', 'Pages speculative:                         5.', 'Pages wired down:                        100.', 'Pages purgeable:                           3.', 'Pages occupied by compressor:             40.'].join('\n'));
+  assert.deepEqual(vm, { available: 38 * 16384, wired: 100 * 16384, compressed: 40 * 16384 }, 'free, inactive, purgeable and speculative can be had at once');
+  assert.equal(parseVmStat('nothing'), null);
+  assert.deepEqual(parseMeminfo('MemTotal:       16000000 kB\nMemFree:         1000000 kB\nMemAvailable:    6000000 kB\nSwapTotal:       2000000 kB\nSwapFree:        1500000 kB\n'), { total: 16000000 * 1024, available: 6000000 * 1024, swap: { total: 2000000 * 1024, used: 500000 * 1024 } });
+  assert.equal(parseMeminfo('MemTotal: 100 kB\nMemFree: 10 kB\nBuffers: 5 kB\nCached: 20 kB\n').available, 35 * 1024, 'an old kernel without MemAvailable');
+  assert.deepEqual(parseSwapUsage('total = 2048.00M  used = 1024.50M  free = 1023.50M  (encrypted)'), { total: 2048 * 1024 ** 2, used: Math.round(1024.5 * 1024 ** 2) });
+  assert.equal(parseSwapUsage(''), null);
+
+  const procs = parsePs(['    1     0   0.0   1000 /sbin/launchd', '  100     1  12.5  20480 /usr/local/bin/node', '  101   100  50,0  10240 claude', '  102   101   1.5   2048 /bin/zsh', '  200     1  99.0   4096 /Applications/Some App.app/Contents/MacOS/Some App', 'garbage'].join('\n'));
+  assert.equal(procs.length, 5);
+  assert.deepEqual(procs[1], { pid: 100, ppid: 1, cpu: 12.5, mem: 20480 * 1024, name: 'node', command: '/usr/local/bin/node' });
+  assert.equal(procs[2].cpu, 50, 'a comma for the decimal point');
+  assert.equal(procs[4].name, 'Some App', 'a path with spaces');
+  assert.deepEqual(treeUsage(procs, 100), { cpu: 64, mem: (20480 + 10240 + 2048) * 1024, count: 3 }, 'the session, its Claude, and the shell under it');
+  assert.equal(treeUsage(procs, 999), null, 'gone');
+
+  assert.equal(loadLevel({ cpuPercent: 10, load1: 1, cores: 8, memPercent: 50 }), 'light');
+  assert.equal(loadLevel({ cpuPercent: 65, load1: 1, cores: 8, memPercent: 50 }), 'busy');
+  assert.equal(loadLevel({ cpuPercent: 10, load1: 7, cores: 8, memPercent: 50 }), 'busy', 'load near the number of cores');
+  assert.equal(loadLevel({ cpuPercent: 10, load1: 1, cores: 8, memPercent: 95 }), 'heavy');
+  assert.equal(loadLevel({ cpuPercent: 10, load1: 16, cores: 8, memPercent: 10 }), 'heavy', 'twice as much wanting to run as there are cores');
+  assert.deepEqual(cpuTimes([{ times: { user: 10, nice: 0, sys: 5, irq: 0, idle: 85 } }, { times: { user: 20, nice: 0, sys: 0, irq: 0, idle: 80 } }]), { busy: 35, total: 200 });
+
+  // This computer, for real: this test's own process stands in for an agent's session.
+  const sys = new System({ agents: () => [{ id: 'a1', name: 'Me', pid: process.pid }, { id: 'a2', name: 'Closed', pid: null }], version: '9.9.9', timer: false });
+  sys.sample();
+  const v = await sys.view();
+  assert.ok(v.host.name && v.host.os && v.cpu.cores >= 1 && v.memory.total > 0, JSON.stringify(v.host));
+  assert.ok(v.memory.percent > 0 && v.memory.percent <= 100 && v.memory.used + v.memory.available === v.memory.total);
+  assert.ok(['light', 'busy', 'heavy'].includes(v.level));
+  assert.equal(v.cpu.load.length, 3);
+  assert.equal(v.history.length, 1);
+  assert.equal(v.app.version, '9.9.9');
+  assert.ok(v.disks.length >= 1 && v.disks[0].total > 0 && v.disks[0].percent >= 0, 'the disk under the home folder');
+  assert.ok(v.processes.count > 1 && v.processes.top.length > 1 && v.processes.top[0].cpu >= v.processes.top[1].cpu, 'busiest first');
+  assert.deepEqual(v.agents.list.map((a) => a.id), ['a1'], 'only sessions that are open');
+  assert.ok(v.agents.list[0].mem > 0 && v.agents.list[0].count >= 1);
 });

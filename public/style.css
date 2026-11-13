@@ -1291,7 +1291,7 @@ table.bench-cases tr.faster td:nth-child(5) { color: var(--green); font-weight: 
 .issues-dialog { width: min(1100px, calc(100% - 32px)); max-height: calc(100% - 32px); padding: 16px; }
 /* Only while open: a display on the dialog itself would keep a closed one on screen. */
 .issues-dialog[open] { display: flex; flex-direction: column; }
-#issues-body, #actions-body, #designs-body, #reviews-body, #bugs-body, #plan-body, #news-body { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+#issues-body, #actions-body, #designs-body, #reviews-body, #bugs-body, #plan-body, #news-body, #os-body { display: flex; flex-direction: column; min-height: 0; flex: 1; }
 /* The lists: drag the corner to any size, or fill the window (⤢ or f). */
 .issues-dialog { resize: both; overflow: hidden; min-width: min(520px, calc(100% - 32px)); min-height: 240px; max-width: calc(100% - 16px); max-height: calc(100% - 16px); }
 .issues-dialog.expanded { width: calc(100% - 16px); height: calc(100% - 16px); }
@@ -1448,6 +1448,32 @@ table.plan-debt .plan-score b { position: relative; padding-left: 6px; }
 .plan-bar-fill { position: absolute; left: 0; top: 6px; bottom: 6px; background: color-mix(in srgb, var(--red) 22%, transparent); border-radius: 3px; }
 table.plan-debt code { overflow-wrap: anywhere; }
 /* AI News: a day heading, then each release with its lab, summary and links. */
+/* ---------- OS: this computer and its load */
+.os-dialog { width: min(1080px, calc(100% - 32px)); }
+.os-scroll { border: 0; }
+.os-host { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.os-level.light { color: var(--green); }
+.os-level.busy { color: var(--yellow); }
+.os-level.heavy { color: var(--red); border-color: var(--red); }
+.os-meter { height: 6px; margin: 4px 0 6px; border-radius: 3px; background: var(--panel-2); overflow: hidden; }
+.os-meter span { display: block; height: 100%; border-radius: 3px; background: var(--green); transition: width .4s; }
+.os-meter.busy span { background: var(--yellow); }
+.os-meter.heavy span { background: var(--red); }
+.os-spark { display: block; width: 100%; height: 44px; margin-top: 8px; font-size: 12px; }
+svg.os-spark polyline { fill: none; stroke: var(--accent); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+svg.os-spark polygon { fill: color-mix(in srgb, var(--accent) 14%, transparent); }
+.os-disk + .os-disk { margin-top: 8px; }
+.os-cols { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); gap: 18px; }
+.os-cols h3 { margin: 10px 0 6px; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.os-facts { width: 100%; border-collapse: collapse; font-size: 13px; }
+.os-facts th { text-align: left; font-weight: 400; color: var(--muted); padding: 4px 12px 4px 0; white-space: nowrap; vertical-align: top; }
+.os-facts td { padding: 4px 0; overflow-wrap: anywhere; }
+table.os-table { width: 100%; }
+table.os-table .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+@media (max-width: 760px) { .os-cols { grid-template-columns: minmax(0, 1fr); } }
+#counts .count-running { padding: 0; font-size: inherit; text-decoration: underline dotted; text-underline-offset: 3px; cursor: pointer; }
+#counts .count-running.active { color: var(--accent); font-weight: 600; }
+
 .news-dialog { width: min(980px, calc(100% - 32px)); }
 .news-find { width: 150px; }
 .news-source.failed, .news-source.failed a { color: var(--red); }

@@ -50,6 +50,7 @@ import { Builder } from './builder.js';
 import { Standup } from './standup.js';
 import { Value, valueSlack } from './value.js';
 import { News } from './news.js';
+import { System } from './system.js';
 import { Milestones } from './milestones.js';
 import { Decisions } from './decisions.js';
 import { Debt } from './debt.js';
@@ -361,6 +362,12 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
   });
   const pkgVersion = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8')).version;
   // "Open on this machine" links from the hub point at remote access, when it's on.
+  // OS: this computer and its load right now, and what each open session takes (system.js).
+  const system = new System({
+    agents: () => store.list().map((x) => ({ id: x.id, name: x.name, pid: x.pid })),
+    folders: () => [['Home', os.homedir()], ['Agents and data', paths.home]],
+    version: pkgVersion,
+  });
   const hubLink = new HubLink({ manager, config, backlog, version: pkgVersion, urls: () => (remoteServer ? linkUrls(remote.remoteUrls(remotePort)) : []) });
 
   /** Returns an error string if the request may not proceed, else null. Sets req.device for remote sessions. */
@@ -1099,6 +1106,7 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
   api.get('/calendar', wrap(() => calendar.status()));
   api.put('/calendar', wrap((req) => calendar.set(req.body ?? {}, saveConfig)));
   // AI News: the entries, a refresh now (answers at once; the page hears when it's done), and "seen".
+  api.get('/system', wrap(() => system.view()));
   api.get('/news', wrap(() => news.view()));
   api.post('/news/refresh', wrap((req) => {
     news.refresh({ search: req.body?.search === true ? true : null }).catch(() => {});
@@ -1596,6 +1604,7 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
     standup.close();
     value.close();
     news.close();
+    system.close();
     milestones.close();
     decisions.close();
     debt.close();

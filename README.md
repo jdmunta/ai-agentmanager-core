@@ -30,6 +30,7 @@ Run one background [Claude Code](https://claude.com/claude-code) agent per inten
 - **Plan.** A project's commitment dates (code complete, release candidate, GA) with a checklist of what is still open for each, reminders as they come near, and an at-risk or late flag. A **decision log** gathered from plan reviews, your answers and design docs. A **tech debt radar** from git history and the code. What is open can be handed to an agent.
 - **Your day.** Connect your calendar and Today lays the day out around your meetings: the free time between them with what needs you placed in it, and what each meeting is about.
 - **Debug.** Say what to debug (a failure, E2E instability at max scale, slowness under load) in the **Debug** tab beside an agent's session. The agent investigates there and writes a report next to it: animated diagrams of the code path and the data flow with where it breaks, findings with evidence, likely causes and recommended fixes. It changes no code until you press **Apply fixes**.
+- **OS.** The computer the agents run on and how loaded it is right now: processor, load average, memory, swap and disks with the last ten minutes, what each open agent session takes, and the busiest processes.
 - **AI News.** The frontier labs' latest releases in one list, newest first: Claude Platform, Claude Code, the OpenAI API and the Gemini API from their release notes, and the other top labs from a daily web search. Each is summarized in a sentence or two, with its links.
 - **MCP servers and tools.** See every MCP server Claude Code has in a folder (yours, the project's, claude.ai connectors and plugins) with its tools, sign in to the ones that need it, and run any tool directly, through Claude Code, or in an agent's session.
 - **Human vs AI.** It splits the open questions about the work into the top 5 that need your judgment and the ones a model can answer from the evidence. It answers those, then a second model double-checks every answer.
@@ -189,6 +190,7 @@ agentmgr debug <agent> "what goes wrong"       # debug with an agent; no questio
 agentmgr dates <project> --cc 2026-12-01 --rc 2026-12-10 --ga 2026-12-20   # commitment dates; no dates: where each stands
 agentmgr decisions [project] [--md]           # the decision log; --add "<question>" --decision "<what>" adds one
 agentmgr debt <project> --scan                # the tech debt radar: files that change often and are hard to read
+agentmgr os                                   # this computer and its load: processor, memory, disks, what each open session takes (--json)
 agentmgr news                                 # the frontier labs' latest releases, summarized (--refresh, --lab, --days)
 agentmgr inbox                                # prompts, questions, stuck agents and overlaps waiting on you
 agentmgr answer <agent> <question-id> "…"     # answer a question from the inbox
@@ -1236,6 +1238,19 @@ The agent investigates in its own session, with everything it already knows abou
 - **How it runs.** Your question is typed into the agent's session like any message: when it is idle, resuming it if it was closed. It uses the agent's own engine, model and permissions; no other model call is made. The report is `DEBUG.md` next to the agent's brief, outside the repository.
 
 `agentmgr debug <agent> "<what goes wrong>"` asks from the terminal, `agentmgr debug <agent>` prints the report, and `--fix ["1 and 3"]` applies fixes.
+
+## OS
+
+**OS** in the top bar (or `u`, `#os`, or `agentmgr os`) shows the computer the agents run on and how loaded it is right now:
+
+- **Load**: the processor in use and the load average against the number of cores, memory and swap in use, and the free space on the disks under your home folder and the app's data. Processor and memory come with a line of their last ten minutes. A word sums it up: light load, busy, or heavy load.
+- **This computer**: its name, system and kernel, processor and cores, memory, how long it has been up, its network addresses, and the app's version and uptime.
+- **Agent sessions**: each open session with the processor and memory it takes, counting everything it started (Claude Code, the tools and tests it runs). Click a name to open the agent.
+- **Busiest processes**: the top of everything running on the computer.
+
+It reads again every 3 seconds while open, with `ps` and the system's own counters; nothing leaves the computer.
+
+Above the agent list, **N running** is a filter: click it to list only the agents whose session is open, and again to list them all.
 
 ## AI News
 
