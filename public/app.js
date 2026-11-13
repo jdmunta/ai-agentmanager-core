@@ -1810,10 +1810,11 @@ for (const root of [$('#inbox-view'), $('#detail-body'), $('#needs-body')]) {
   root.addEventListener('submit', onNeedSubmit);
 }
 
-// ------------------------------------------------------------------ overview and questions panels
+// ------------------------------------------------------------------ overview, questions and overlaps panels
 
 const openQuestions = (a) => (a.questions ?? []).filter((q) => !q.answer).length;
-let needsOpen = null; // { id, kind: 'overview' | 'questions' }
+let needsOpen = null; // { id, kind: 'overview' | 'questions' | 'overlaps' }
+const NEEDS_TITLE = { overview: 'Overview', questions: 'Questions', overlaps: 'Overlaps' };
 
 function openNeeds(id, kind) {
   needsOpen = { id, kind };
@@ -1826,10 +1827,14 @@ function renderNeeds() {
   if (!needsOpen) return;
   const a = agents.get(needsOpen.id);
   if (!a) return $('#needs-dialog').close();
-  $('#needs-title').textContent = `${needsOpen.kind === 'overview' ? 'Overview' : 'Questions'}: ${a.name}`;
+  $('#needs-title').textContent = `${NEEDS_TITLE[needsOpen.kind]}: ${a.name}`;
   let html;
   if (needsOpen.kind === 'overview') {
     html = a.aiReview?.verdict ? needCard({ a, kind: 'review', key: `review:${a.id}` }, { inDetail: true }) : '<p class="hint">No AI review yet.</p>';
+  } else if (needsOpen.kind === 'overlaps') {
+    // Every overlap, also the ones where the other agent is the one to rebase.
+    const items = needsFor(a, { both: true }).filter((it) => it.kind === 'conflict');
+    html = items.length ? items.map((it) => needCard(it, { inDetail: true })).join('') : '<p class="hint">No overlaps with other agents now.</p>';
   } else {
     const open = (a.questions ?? []).filter((q) => !q.answer);
     const answered = (a.questions ?? []).filter((q) => q.answer);
@@ -2294,6 +2299,7 @@ function renderDetail() {
         ${noRepo(a) ? '' : `<button data-act="changes" ${a.workdir && a.status !== 'preparing' ? '' : 'disabled'} title="Read its changes, comment on lines for the agent, commit and open a pull request">Review changes${a.git?.dirtyFiles ? ` <span class="count">${a.git.dirtyFiles}</span>` : ''}</button>`}
         ${a.aiReview?.verdict ? `<button data-act="overview" title="The AI review: what's done, what's missing, the risks">Overview${a.aiReview.seen ? '' : ' <span class="count">new</span>'}</button>` : ''}
         ${a.questions?.length ? `<button data-act="questions" title="What the agent asked you, and your answers">Questions${openQuestions(a) ? ` <span class="count">${openQuestions(a)}</span>` : ''}</button>` : ''}
+        ${a.conflicts?.length ? `<button data-act="overlaps" title="Other agents changing the same files: which, who should merge first, and what to do">⚔ Overlaps <span class="count">${a.conflicts.length}</span></button>` : ''}
         <button data-act="mcp" ${a.workdir && a.status !== 'preparing' ? '' : 'disabled'} title="The MCP servers and tools Claude Code has in this agent's folder; run one in its session or once in the workspace">MCP tools</button>
         <button data-act="fork" ${a.workdir && a.git?.branch ? '' : 'disabled'} title="A new agent with this one's code and conversation, in its own worktree, to try another approach">Fork</button>
         <button data-act="edit" title="Change its name, request, project, priority, permission mode or model">Edit</button>
@@ -2338,8 +2344,8 @@ function renderDetail() {
     ${a.builds ? builtUi.panel(a) : ''}
     ${a.forkOf ? `<div class="bl-banner">⑂ Forked from <a href="#${a.forkOf.agentId}" data-goto="${a.forkOf.agentId}">${esc(a.forkOf.name)}</a>${a.forkOf.checkpoint ? ` at checkpoint ${a.forkOf.checkpoint}` : ''} ${ago(a.forkOf.at)}</div>` : ''}
     ${(() => {
-      // The AI review and the questions have their own panels (Overview, Questions).
-      const items = needsFor(a, { both: true }).filter((it) => it.kind !== 'review' && it.kind !== 'question');
+      // The AI review, the questions and the overlaps have their own panels (Overview, Questions, Overlaps).
+      const items = needsFor(a, { both: true }).filter((it) => !['review', 'question', 'conflict'].includes(it.kind));
       return items.length ? `<div class="needs">${items.map((it) => needCard(it, { inDetail: true })).join('')}</div>` : '';
     })()}
     ${a.outbox ? `<div class="hint outbox-note">✉ ${a.outbox} message${a.outbox > 1 ? 's' : ''} waiting to be typed into the session when the agent is idle</div>` : ''}
@@ -3890,6 +3896,7 @@ $('#detail-body').addEventListener('click', async (e) => {
       return reviewUi.open(a.id);
     case 'overview':
     case 'questions':
+    case 'overlaps':
       return openNeeds(a.id, btn.dataset.act);
     case 'mcp':
       return mcpUi.open(a.id);
