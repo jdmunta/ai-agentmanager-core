@@ -824,6 +824,27 @@ export async function main(argv) {
     });
 
   program
+    .command('os')
+    .description('This computer and its load right now: processor, memory, disks, and what each open agent session takes')
+    .option('--json', 'print JSON')
+    .action(async (opts) => {
+      await daemon();
+      const v = await api('GET', '/system');
+      if (opts.json) return console.log(JSON.stringify(v, null, 2));
+      const gb = (n) => (n >= 1024 ** 3 ? `${(n / 1024 ** 3).toFixed(1)} GB` : `${Math.round(n / 1024 ** 2)} MB`);
+      const up = (sec) => (sec >= 86400 ? `${Math.floor(sec / 86400)}d ${Math.floor((sec % 86400) / 3600)}h` : sec >= 3600 ? `${Math.floor(sec / 3600)}h ${Math.floor((sec % 3600) / 60)}m` : `${Math.floor(sec / 60)}m`);
+      const tone = { light: green, busy: yellow, heavy: red }[v.level] ?? ((x) => x);
+      console.log(`${bold(v.host.name)}  ${v.host.os} · ${v.host.arch} · up ${up(v.host.uptime)}  ${tone(`load: ${v.level}`)}`);
+      console.log(`Processor  ${v.cpu.percent}% of ${v.cpu.cores} cores · load ${v.cpu.load.join(' ')}${v.cpu.model ? dim(`  ${v.cpu.model}`) : ''}`);
+      console.log(`Memory     ${v.memory.percent}% · ${gb(v.memory.used)} of ${gb(v.memory.total)}${v.memory.swap ? ` · swap ${gb(v.memory.swap.used)} of ${gb(v.memory.swap.total)}` : ''}`);
+      for (const d of v.disks) console.log(`Disk       ${d.percent}% · ${gb(d.free)} free of ${gb(d.total)}  ${dim(`${d.label}: ${d.path}`)}`);
+      console.log(`Agents     ${v.agents.open} open session${v.agents.open === 1 ? '' : 's'} · ${v.agents.cpu}% of a core · ${gb(v.agents.mem)}`);
+      for (const a of v.agents.list.slice(0, 10)) console.log(`  ${String(a.cpu).padStart(6)}%  ${gb(a.mem).padStart(9)}  ${a.name}`);
+      console.log(dim('Busiest processes'));
+      for (const p of v.processes.top.slice(0, 8)) console.log(`  ${String(p.cpu).padStart(6)}%  ${gb(p.mem).padStart(9)}  ${p.name} ${dim(String(p.pid))}`);
+    });
+
+  program
     .command('news')
     .description("AI News: the frontier labs' latest releases, each summarized, with links")
     .option('-r, --refresh', 'read the release notes again now (and summarize what is new), then print')

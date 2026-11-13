@@ -45,6 +45,7 @@
         <button id="map-btn" title="The codebase map: where each agent is changing and reading code, and who is about to collide">Map</button>
         <button id="watch-btn" title="Running agents' sessions side by side, live: follow them all without clicking from one to the next">Watch</button>
         <button id="mcp-btn" title="MCP: the MCP servers Claude Code has (yours, projects', claude.ai connectors and plugins), their tools, and running one in an agent's session or workspace">MCP</button>
+        <button id="os-btn" title="OS: this computer and how loaded it is right now: processor, memory, disks, what each open agent session takes, and the busiest processes">OS</button>
         <button id="machine-btn" title="A terminal on this computer (your home folder), from any device you're signed in on">Terminal</button>
         <button id="ask-btn" title="A general session with no repo or folder, on Claude Code or another engine you have (Codex, Muse Code, …)">Ask Agent</button>
         <div class="menu-wrap top-more" id="top-more" hidden>
@@ -420,6 +421,9 @@
     </dialog>
     <dialog id="plan-dialog" class="issues-dialog plan-dialog" aria-label="Plan">
       <div id="plan-body"></div>
+    </dialog>
+    <dialog id="os-dialog" class="issues-dialog os-dialog" aria-label="OS">
+      <div id="os-body"></div>
     </dialog>
     <dialog id="news-dialog" class="issues-dialog news-dialog" aria-label="AI News">
       <div id="news-body"></div>

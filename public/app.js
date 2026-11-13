@@ -40,6 +40,7 @@ import { drawDiagram } from '/diagram.js';
 import { initValue } from '/value.js';
 import { initNews } from '/news.js';
 import { initPlan } from '/plan.js';
+import { initSystem } from '/system.js';
 import { initMcp } from '/mcp.js';
 import { initCodeMap } from '/codemap.js';
 import { initKeys } from '/keys.js';
@@ -71,13 +72,16 @@ const valueOnLoad = hashId === 'value';
 const newsOnLoad = hashId === 'news';
 // "#plan" or "#plan/<dates|decisions|debt>".
 const planOnLoad = hashId === 'plan';
+const osOnLoad = hashId === 'os';
 const reviewsOnLoad = hashId === 'reviews';
 // "#mcp" or "#mcp/<agent>": the MCP window on its own.
 const mcpOnLoad = hashId === 'mcp';
 let watchShown = false;
-let selectedId = (watchOnLoad || standupOnLoad || mapOnLoad || valueOnLoad || newsOnLoad || planOnLoad || reviewsOnLoad || mcpOnLoad ? null : hashId) || null;
+let selectedId = (watchOnLoad || standupOnLoad || mapOnLoad || valueOnLoad || newsOnLoad || planOnLoad || osOnLoad || reviewsOnLoad || mcpOnLoad ? null : hashId) || null;
 let openTermOnLoad = hashView === 'term' || hashView === 'code' || isShell(hashView) || isBrowser(hashView);
 let filterText = '';
+// Only agents whose session is open (the "running" count above the list, clicked).
+let listRunning = false;
 // "Only agents created in the last N days": remembered in this browser.
 const recent = (() => {
   try {
@@ -323,6 +327,9 @@ const planUi = initPlan({
   },
 });
 $('#plan-btn').onclick = () => planUi.open();
+// OS: this computer and its load right now.
+const osUi = initSystem({ api, $, esc, toast: (m, ms) => toast(m, ms), openAgent: (id) => (showTab('agents'), select(id)) });
+$('#os-btn').onclick = () => osUi.open();
 // MCP: the MCP servers and tools Claude Code has in a folder, and running one.
 const mcpUi = initMcp({ api, $, esc, ago, md: (t) => md(t), toast: (m, ms) => toast(m, ms), agents: () => [...agents.values()] });
 $('#mcp-btn').onclick = () => mcpUi.open(selectedId && agents.get(selectedId)?.workdir ? selectedId : null);
@@ -378,6 +385,7 @@ function shortcut(act) {
   if (act === 'value') return valueUi.open();
   if (act === 'news') return newsUi.open();
   if (act === 'plan') return planUi.open();
+  if (act === 'os') return osUi.open();
   if (act === 'today') return todayUi.open();
   if (act.startsWith('tab:')) return showTab(act.slice(4));
   return false;
@@ -1177,7 +1185,9 @@ function renderList() {
   const at = filterText.startsWith('@') ? filterText.slice(1) : null;
   renderProjectPicker([...agents.values()]);
   const list = [...agents.values()].filter((a) =>
-    listProject && (a.projectInfo?.key ?? 'other') !== listProject
+    listRunning && !a.runtime.running
+      ? false
+      : listProject && (a.projectInfo?.key ?? 'other') !== listProject
       ? false
       : !filterText
       ? true
@@ -1201,7 +1211,7 @@ function renderList() {
   const running = all.filter((a) => a.runtime.running).length;
   const open = all.filter((a) => a.runtime.running && a.kind !== 'assistant').length;
   $('#counts').innerHTML = agents.size
-    ? `<span title="Projects">${projects} project${projects === 1 ? '' : 's'}</span><span>${agents.size} agents</span><span>${running} running</span>
+    ? `<span title="Projects">${projects} project${projects === 1 ? '' : 's'}</span><span>${agents.size} agents</span><button class="link count-running${listRunning ? ' active' : ''}" id="running-btn" aria-pressed="${listRunning}" title="${listRunning ? 'Showing only agents whose session is open. Click to show all' : 'Show only the agents whose session is open'}">${running} running${listRunning ? ' ✕' : ''}</button>
        ${waiting ? `<span class="fail">${waiting} need${waiting === 1 ? 's' : ''} input</span>` : ''}
        <span class="spacer"></span><button class="link" id="import-btn" title="Continue Claude sessions you started in a terminal or the Claude desktop app on this machine">Import</button>${open ? `<button class="link" id="close-all-btn" title="Close every open agent session (the assistant's stays); they resume when you open them">Close all</button>` : ''}<button class="link" id="flush-btn" title="Save session IDs, terminal scrollback and state to disk now (also automatic every 30s)">Save now</button>`
     : '';
@@ -1217,7 +1227,7 @@ function renderList() {
       const total = totals.get(g.key) ?? g.agents.length;
       const n = g.agents.length;
       // While filtering, show every match; otherwise respect collapsed projects.
-      const open = filterText || !collapsed.has(g.key) || g.agents.some((a) => a.id === selectedId);
+      const open = filterText || listRunning || !collapsed.has(g.key) || g.agents.some((a) => a.id === selectedId);
       return `<li class="project ${open ? 'open' : ''}" data-key="${esc(g.key)}" data-move="${esc(dropRef(g))}">
         <button class="project-head" data-toggle="${esc(g.key)}" aria-expanded="${open}" title="${esc(g.full || g.name)}">
           <span class="caret">${open ? '▾' : '▸'}</span>
@@ -3719,6 +3729,10 @@ async function closeAll(working = false) {
 
 $('#counts').addEventListener('click', (e) => {
   if (e.target.id === 'import-btn') return openImport();
+  if (e.target.id === 'running-btn') {
+    listRunning = !listRunning;
+    return renderList();
+  }
   if (e.target.id === 'close-all-btn') return closeAll();
   if (e.target.id !== 'flush-btn') return;
   act(async () => {
@@ -4444,6 +4458,11 @@ function handleEvent(msg) {
       watchShown = true;
       history.replaceState(null, '', '#');
       planUi.open(hashView || 'dates');
+    }
+    if (osOnLoad && !watchShown) {
+      watchShown = true;
+      history.replaceState(null, '', '#');
+      osUi.open();
     }
     if (newsOnLoad && !watchShown) {
       watchShown = true;

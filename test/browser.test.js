@@ -153,7 +153,7 @@ test('the top bar fits the window: the view buttons that do not fit go into More
       menuOk: document.querySelector('#menu-btn').getBoundingClientRect().right <= innerWidth,
     })`);
     assert.ok(r.page <= w, `${w}px: the page is ${r.page}px wide`);
-    assert.equal(r.inRow + r.inMore, 17, `${w}px: every view button is in the row or in More`);
+    assert.equal(r.inRow + r.inMore, 18, `${w}px: every view button is in the row or in More`);
     assert.ok(r.newOk && r.menuOk, `${w}px: New agents and the account menu are on screen`);
     if (w >= 1024) assert.ok(r.inRow >= 3, `${w}px: only ${r.inRow} buttons in the row`);
   }
@@ -338,6 +338,48 @@ test("overlaps: behind their own button in the agent's detail, not on the page",
   assert.match(card, /app\.js/, 'and the file');
   await js(`document.querySelector('#needs-close').click()`);
   for (const id of [x.id, y.id]) await fetch(`${base}/api/agents/${id}`, { method: 'DELETE', headers: { 'x-agentmgr': '1' } });
+  assert.deepEqual(errors, [], 'no errors on the page');
+});
+
+test('OS: this computer and its load, what an open session takes; the running count filters the list', { skip }, async () => {
+  const [a] = await api('POST', '/agents', { intents: ['Watch the load'], workdir: home });
+  for (let i = 0; i < 100 && (await api('GET', '/agents')).find((v) => v.id === a.id)?.status !== 'running'; i++) await sleep(100);
+  await js(`document.querySelector('#os-btn').click()`);
+  await until(`document.querySelector('#os-dialog').open && document.querySelector('[data-os-card="cpu"] .value-big')`, 'the OS window');
+  await until(`document.querySelector('[data-os-agent="${a.id}"]')`, 'the open session in the list', 15_000);
+  const r = await js(`({
+    cards: [...document.querySelectorAll('[data-os-card]')].map((c) => c.dataset.osCard),
+    big: [...document.querySelectorAll('[data-os-card] .value-big')].map((b) => b.textContent),
+    level: document.querySelector('.os-level').textContent,
+    facts: [...document.querySelectorAll('.os-facts th')].map((t) => t.textContent),
+    procs: document.querySelectorAll('.os-table')[1].querySelectorAll('tbody tr').length,
+  })`);
+  assert.deepEqual(r.cards, ['cpu', 'memory', 'disk', 'agents']);
+  assert.match(r.big[0], /^[\d.]+%$/);
+  assert.match(r.big[1], /^[\d.]+%$/);
+  assert.match(r.level, /^(Light load|Busy|Heavy load)$/);
+  assert.ok(['Name', 'System', 'Processor', 'Memory', 'Up for'].every((f) => r.facts.includes(f)), JSON.stringify(r.facts));
+  assert.ok(r.procs > 1, 'the busiest processes');
+  // It reads again by itself while open.
+  const at = await js(`(await (await fetch('/api/system')).json()).at`);
+  await sleep(3500);
+  assert.ok((await js(`(await (await fetch('/api/system')).json()).history.length`)) >= 1 && at, 'sampled');
+  // The session's name goes to the agent.
+  await js(`document.querySelector('[data-os-agent="${a.id}"]').click()`);
+  await until(`!document.querySelector('#os-dialog').open && location.hash === '#${a.id}'`, 'the agent opened');
+
+  // "N running" above the list: only the agents with an open session, and back.
+  const [b] = await api('POST', '/agents', { intents: ['Stay closed'], workdir: home });
+  for (let i = 0; i < 100 && (await api('GET', '/agents')).find((v) => v.id === b.id)?.status !== 'running'; i++) await sleep(100);
+  await api('POST', `/agents/${b.id}/stop`);
+  const ids = `[...document.querySelectorAll('#agent-list li[data-id]')].map((l) => l.dataset.id)`;
+  await until(`${ids}.includes('${b.id}') && ${ids}.includes('${a.id}') && /running/.test(document.querySelector('#running-btn')?.textContent ?? '')`, 'both listed');
+  await until(`!(await (await fetch('/api/agents')).json()).find((v) => v.id === '${b.id}').runtime.running`, 'one stopped');
+  await js(`document.querySelector('#running-btn').click()`);
+  await until(`${ids}.includes('${a.id}') && !${ids}.includes('${b.id}') && document.querySelector('#running-btn').getAttribute('aria-pressed') === 'true'`, 'only the running one');
+  await js(`document.querySelector('#running-btn').click()`);
+  await until(`${ids}.includes('${b.id}') && document.querySelector('#running-btn').getAttribute('aria-pressed') === 'false'`, 'all again');
+  for (const id of [a.id, b.id]) await fetch(`${base}/api/agents/${id}`, { method: 'DELETE', headers: { 'x-agentmgr': '1' } });
   assert.deepEqual(errors, [], 'no errors on the page');
 });
 
