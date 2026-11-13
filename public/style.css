@@ -1375,6 +1375,26 @@ table.issues tr.stage-proposed.ticked { background: color-mix(in srgb, var(--acc
 table.issues tr.stage-proposed .issue-note { color: var(--accent); }
 
 /* ---------- Value */
+/* AI News: a day heading, then each release with its lab, summary and links. */
+.news-dialog { width: min(980px, calc(100% - 32px)); }
+.news-find { width: 150px; }
+.news-source.failed, .news-source.failed a { color: var(--red); }
+.news-day { margin: 14px 0 6px; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.news-list .news-day:first-child { margin-top: 4px; }
+.news-items { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.news-item { border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; background: var(--panel); }
+.news-item.new { border-left: 3px solid var(--accent); }
+.news-meta { font-size: 12px; margin-bottom: 4px; }
+.news-lab { font-weight: 600; }
+.news-lab[data-lab="Anthropic"] { color: #c15f3c; }
+.news-lab[data-lab="OpenAI"] { color: var(--green); }
+.news-lab[data-lab="Google"] { color: var(--accent); }
+.news-new { color: var(--accent); }
+.news-title { font-weight: 600; color: var(--text); text-decoration: none; overflow-wrap: anywhere; }
+.news-title:hover { text-decoration: underline; }
+.news-summary { margin: 4px 0 0; line-height: 1.45; }
+.news-links { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-top: 6px; font-size: 12px; }
+.news-links a { overflow-wrap: anywhere; }
 .value-dialog { width: min(1180px, calc(100% - 32px)); }
 .value-dialog[open] { overflow: auto; }
 .value-period { margin: 0 0 8px; }

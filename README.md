@@ -27,6 +27,7 @@ Run one background [Claude Code](https://claude.com/claude-code) agent per inten
 - **Slack alerts.** A message in your channel when an agent needs input, finishes a backlog item, or fails.
 - **Priority.** Mark agents P0–P3. P0 and P1 are highlighted, and lists sort by priority.
 - **Share for review.** One click writes an **Analysis**, **Design**, **Flow** or **Proposal** document from the agent's work, a human time **Estimate** for planning, or the change's **Documentation** with an OpenAPI spec of any API changes. Copy it as Markdown, download it, or print it to PDF with diagrams.
+- **AI News.** The frontier labs' latest releases in one list, newest first: Claude Platform, Claude Code, the OpenAI API and the Gemini API from their release notes, and the other top labs from a daily web search. Each is summarized in a sentence or two, with its links.
 - **MCP servers and tools.** See every MCP server Claude Code has in a folder (yours, the project's, claude.ai connectors and plugins) with its tools, sign in to the ones that need it, and run any tool directly, through Claude Code, or in an agent's session.
 - **Human vs AI.** It splits the open questions about the work into the top 5 that need your judgment and the ones a model can answer from the evidence. It answers those, then a second model double-checks every answer.
 - **Review changes.** Each agent's diff file by file, line comments sent back to the agent as one message, then **Commit all** and **Push & open PR**, without leaving the page.
@@ -181,6 +182,7 @@ agentmgr explain <agent>                      # full briefing: ask, status, plan
 agentmgr remote on | off | status | rotate    # phone / remote access (see below)
 agentmgr backlog add "ask" -r <repo> [-p 1]   # queue work; also: ls, start, accept, reopen, move, limit, pause
 agentmgr notify slack --webhook <url>         # Slack alerts; also: test, status, on, off, event <name> on|off
+agentmgr news                                 # the frontier labs' latest releases, summarized (--refresh, --lab, --days)
 agentmgr inbox                                # prompts, questions, stuck agents and overlaps waiting on you
 agentmgr answer <agent> <question-id> "…"     # answer a question from the inbox
 agentmgr tell <agent> "…"                     # send a message into the session (when it's idle)
@@ -1144,6 +1146,29 @@ Usage comes from the session transcripts and is refreshed every few seconds whil
 - **Run in agent session** tells the agent to use the tool, with its conversation and context. The answer is in the session. This works for Claude Code agents.
 
 `agentmgr mcp run <agent|home> <server> <tool> [arguments or request]` does the first two, and `--session` the third. A destructive tool needs a second click. Plugins can refuse runs outside an agent's session with the `mcp.run` policy.
+
+## AI News
+
+**AI News** in the top bar (or `l`, `#news`, or `agentmgr news`) lists what the frontier labs released in the last 30 days, newest first and grouped by day. Each entry has its lab, a summary of a sentence or two, a link to the release and the links from the note. Filter by lab or by words. What arrived since you last looked is marked *new* and counted on the button.
+
+Where it comes from:
+
+| Source | Read from |
+|---|---|
+| Claude Platform (Anthropic) | [platform.claude.com release notes](https://platform.claude.com/docs/en/release-notes/overview) |
+| Claude Code (Anthropic) | its [GitHub releases](https://github.com/anthropics/claude-code/releases), one entry per version |
+| OpenAI API | [developers.openai.com/changelog](https://developers.openai.com/changelog) |
+| Gemini API (Google) | [ai.google.dev release notes](https://ai.google.dev/gemini-api/docs/changelog) |
+| Top 10 labs | a web search once a day, for labs without release notes read here (xAI, Meta, Mistral and the rest) |
+
+The daemon reads the release notes every 6 hours; **Refresh** reads them now, and **Search top labs** also searches now. Model calls, on your own Claude plan:
+
+- **Summaries:** one tool-less call per 25 new entries, each entry summarized once. Until then an entry shows the start of its own text.
+- **Web search:** one Claude Code call a day that may use only web search and web fetch, with no MCP servers and none of its other tools. What it finds is as reliable as a web search: check the link.
+
+Only public pages are read, and nothing is sent anywhere. A source whose page can't be read is marked ⚠ with the reason, and the others still show.
+
+In config.json: `"news": { "enabled": true, "sources": ["claude-platform", "claude-code", "openai", "gemini"], "search": true, "summaries": true, "refreshHours": 6, "searchHours": 24, "days": 30 }`. Add release notes of your own, in Markdown with a dated heading per day and a bullet per change, with `"custom": [{ "id": "mistral", "lab": "Mistral AI", "label": "Mistral API", "url": "https://…/changelog.md" }]`.
 
 ## Configuration
 

@@ -38,6 +38,7 @@ import { initReviews } from '/reviews.js';
 import { initBugHunt } from '/bughunt.js';
 import { drawDiagram } from '/diagram.js';
 import { initValue } from '/value.js';
+import { initNews } from '/news.js';
 import { initMcp } from '/mcp.js';
 import { initCodeMap } from '/codemap.js';
 import { initKeys } from '/keys.js';
@@ -66,11 +67,12 @@ const watchOnLoad = hashId === 'watch';
 const standupOnLoad = hashId === 'standup';
 const mapOnLoad = hashId === 'map';
 const valueOnLoad = hashId === 'value';
+const newsOnLoad = hashId === 'news';
 const reviewsOnLoad = hashId === 'reviews';
 // "#mcp" or "#mcp/<agent>": the MCP window on its own.
 const mcpOnLoad = hashId === 'mcp';
 let watchShown = false;
-let selectedId = (watchOnLoad || standupOnLoad || mapOnLoad || valueOnLoad || reviewsOnLoad || mcpOnLoad ? null : hashId) || null;
+let selectedId = (watchOnLoad || standupOnLoad || mapOnLoad || valueOnLoad || newsOnLoad || reviewsOnLoad || mcpOnLoad ? null : hashId) || null;
 let openTermOnLoad = hashView === 'term' || hashView === 'code' || isShell(hashView) || isBrowser(hashView);
 let filterText = '';
 // "Only agents created in the last N days": remembered in this browser.
@@ -299,6 +301,9 @@ $('#bugs-btn').onclick = () => bugsUi.open();
 // Value: what the delivered work is worth, for you and for management.
 const valueUi = initValue({ api, $, esc, toast: (m, ms) => toast(m, ms), openAgent: (id) => (showTab('agents'), select(id)) });
 $('#value-btn').onclick = () => valueUi.open();
+// AI News: the frontier labs' latest releases, summarized.
+const newsUi = initNews({ api, $, esc, ago, toast: (m, ms) => toast(m, ms) });
+$('#news-btn').onclick = () => newsUi.open();
 // MCP: the MCP servers and tools Claude Code has in a folder, and running one.
 const mcpUi = initMcp({ api, $, esc, ago, md: (t) => md(t), toast: (m, ms) => toast(m, ms), agents: () => [...agents.values()] });
 $('#mcp-btn').onclick = () => mcpUi.open(selectedId && agents.get(selectedId)?.workdir ? selectedId : null);
@@ -352,6 +357,7 @@ function shortcut(act) {
   if (act === 'reviews') return reviewsUi.open();
   if (act === 'bugs') return bugsUi.open();
   if (act === 'value') return valueUi.open();
+  if (act === 'news') return newsUi.open();
   if (act === 'today') return todayUi.open();
   if (act.startsWith('tab:')) return showTab(act.slice(4));
   return false;
@@ -4410,6 +4416,11 @@ function handleEvent(msg) {
       history.replaceState(null, '', '#');
       valueUi.open();
     }
+    if (newsOnLoad && !watchShown) {
+      watchShown = true;
+      history.replaceState(null, '', '#');
+      newsUi.open();
+    }
     if (standupOnLoad && !watchShown) {
       watchShown = true;
       history.replaceState(null, '', '#');
@@ -4459,6 +4470,8 @@ function handleEvent(msg) {
     teams.delete(msg.id);
   } else if (msg.t === 'value') {
     valueUi.changed();
+  } else if (msg.t === 'news') {
+    newsUi.changed();
   } else if (msg.t === 'standup') {
     standupUi.set(msg.latest);
     if (msg.latest?.reason === 'scheduled' && msg.latest.items.length) toast('Standup ready: press Standup (or p) to play it', 8000);

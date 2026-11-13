@@ -731,6 +731,40 @@ export async function main(argv) {
       for (const x of r.failed) console.log(`${red('!')} ${bold(x.key)}: ${x.reason}`);
     });
 
+  program
+    .command('news')
+    .description("AI News: the frontier labs' latest releases, each summarized, with links")
+    .option('-r, --refresh', 'read the release notes again now (and summarize what is new), then print')
+    .option('-s, --search', 'with --refresh: also search the web for the top 10 labs now')
+    .option('--lab <lab>', 'only this lab (Anthropic, OpenAI, Google, …)')
+    .option('--days <n>', 'only the last n days', '7')
+    .option('--json', 'print JSON')
+    .action(async (opts) => {
+      await daemon();
+      let v = await api('GET', '/news');
+      if (!v.enabled) return console.log(dim('AI News is off: "news": { "enabled": true } in config.json'));
+      if (opts.refresh) {
+        v = await api('POST', '/news/refresh', opts.search ? { search: true } : {});
+        process.stderr.write(dim(opts.search ? 'Reading the release notes and searching the web (a few minutes)…\n' : 'Reading the release notes…\n'));
+        for (let i = 0; v.refreshing && i < 900; i++) {
+          await new Promise((r) => setTimeout(r, 2000));
+          v = await api('GET', '/news');
+        }
+      }
+      const since = new Date(Date.now() - Number(opts.days || 7) * 86_400_000).toISOString().slice(0, 10);
+      const items = v.items.filter((i) => i.date >= since && (!opts.lab || i.lab.toLowerCase() === String(opts.lab).toLowerCase()));
+      if (opts.json) return console.log(JSON.stringify({ ...v, items }, null, 2));
+      for (const s of v.sources.filter((x) => x.error)) console.log(yellow(`! ${s.label}: ${s.error}`));
+      if (!items.length) return console.log(dim(v.items.length ? 'Nothing in that range. --days 30 looks further back.' : 'No news yet. agentmgr news --refresh reads the release notes now.'));
+      let day = null;
+      for (const i of items) {
+        if (i.date !== day) console.log(`\n${bold((day = i.date))}`);
+        console.log(`${i.isNew ? green('● ') : '  '}${bold(i.lab)} ${dim(i.label)}  ${i.title}`);
+        console.log(`    ${i.summary ?? dim(i.lead ?? '')}`);
+        console.log(dim(`    ${i.url}`));
+      }
+    });
+
   const actionsCmd = program.command('actions').description("Your action items from Slack and meeting notes (the assistant finds them): decide on each one");
   actionsCmd
     .command('ls', { isDefault: true })

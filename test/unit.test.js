@@ -3521,3 +3521,111 @@ test('update from the app: answers at once, then reports each step; a failure ke
   assert.equal(up.status().updating, false);
   up.close();
 });
+
+test('AI News: release notes read from Markdown, OpenAI\'s page and GitHub releases; settings', async () => {
+  const { parseDatedMarkdown, parseOpenAiChangelog, parseGithubReleases, dateOf, newsSettings, SOURCES } = await import('../src/news.js');
+  assert.equal(dateOf('November 12, 2026  {% id="11-12-2026" %}'), '2026-11-12');
+  assert.equal(dateOf('Sept 3 2026'), '2026-09-03');
+  assert.equal(dateOf('Overview'), null);
+  const md = [
+    '# Release notes', '', 'Intro text, not an entry.', '',
+    '### November 12, 2026', '',
+    '* We’ve launched [self-hosted agents](/docs/en/self-hosted). You run it',
+    '  on your own infrastructure.',
+    '* **Model X (`x-1`) GA**: Released [Model X](https://example.com/x), fast.', '',
+    '  More about [pricing](/pricing#x).', '',
+    '    * A sub-point of X.', '',
+    'A paragraph after the list, not part of it.', '',
+    '<Tip>', '  A tip.', '</Tip>', '',
+    '### October 1, 2026', '',
+    '* Too old for the window.',
+  ].join('\n');
+  const e = parseDatedMarkdown(md, { base: 'https://docs.example.com/notes/overview', since: '2026-11-01' });
+  assert.deepEqual(e.map((x) => [x.date, x.title]), [['2026-11-12', 'We’ve launched self-hosted agents.'], ['2026-11-12', 'Model X (`x-1`) GA']]);
+  assert.equal(e[0].text, 'We’ve launched self-hosted agents. You run it on your own infrastructure.');
+  assert.deepEqual(e[0].links, [{ text: 'self-hosted agents', url: 'https://docs.example.com/docs/en/self-hosted' }]);
+  assert.match(e[1].text, /fast\. More about pricing\. A sub-point of X\.$/, 'an indented paragraph or sub-point after a blank line belongs to the bullet');
+  assert.deepEqual(e[1].links.map((l) => l.url), ['https://example.com/x', 'https://docs.example.com/pricing#x']);
+  // Gemini's "/docs/…" links are its "/gemini-api/docs/…" pages.
+  assert.equal(SOURCES.gemini.parse('## November 2, 2026\n\n*   **G**: see [it](/docs/models/g).', {})[0].links[0].url, 'https://ai.google.dev/gemini-api/docs/models/g');
+
+  const html = '<h3 class="x">November, 2026</h3><div class="grid grid-cols-[3rem_1fr] a"><div><div class="_Badge" data-variant="outline">Nov 5</div></div><div><div class="_Badge" data-variant="soft"><span class="capitalize">Feature</span></div><div class="_Badge" data-variant="soft">gpt-x</div></div><div class="_MarkdownContent_1 y"><p>Use <a href="/api/docs/models/gpt-x" class="l">GPT X</a> &amp; more.</p></div></div>' +
+    '<h3>October, 2026</h3><div class="grid grid-cols-[3rem_1fr]"><div data-variant="outline">Oct 2</div><div class="_MarkdownContent_1">Old.</div></div>';
+  const o = parseOpenAiChangelog(html, { base: 'https://developers.openai.com/changelog', since: '2026-10-15' });
+  assert.deepEqual(o, [{ date: '2026-11-05', title: 'Feature: gpt-x', text: 'Use GPT X & more.', links: [{ text: 'GPT X', url: 'https://developers.openai.com/api/docs/models/gpt-x' }], tags: ['gpt-x'] }]);
+
+  const gh = parseGithubReleases([
+    { tag_name: 'v2.1.9', published_at: '2026-11-12T22:00:00Z', html_url: 'https://github.com/a/b/releases/v2.1.9', body: "## What's changed\n- Added [Code Mode](https://code.example.com/x)\n- Fixed a bug" },
+    { tag_name: 'v2.2.0-beta', prerelease: true, published_at: '2026-11-13T00:00:00Z', body: 'beta' },
+    { tag_name: 'v2.1.1', published_at: '2026-01-01T00:00:00Z', body: 'old' },
+  ], { label: 'Claude Code', since: '2026-11-01' });
+  assert.deepEqual(gh.map((x) => [x.date, x.title, x.url]), [['2026-11-12', 'Claude Code 2.1.9', 'https://github.com/a/b/releases/v2.1.9']]);
+  assert.equal(gh[0].text, '- Added Code Mode - Fixed a bug');
+  assert.throws(() => parseGithubReleases({ message: 'API rate limit exceeded' }, {}), /rate limit/);
+
+  const s = newsSettings({ news: { sources: ['openai', 'nope'], refreshHours: 'x', custom: [{ id: 'mine', label: 'Mine', url: 'https://m.example/notes.md' }, { id: 'bad id!', url: 'https://x' }, { id: 'openai', url: 'https://x' }, { id: 'nourl' }] } });
+  assert.deepEqual([s.enabled, s.sources, s.refreshHours, s.custom], [true, ['openai'], 6, [{ id: 'mine', lab: 'Mine', label: 'Mine', url: 'https://m.example/notes.md', page: 'https://m.example/notes.md' }]]);
+  assert.equal(newsSettings({ news: { enabled: false } }).enabled, false);
+});
+
+test('AI News: a refresh reads each source, searches when due, summarizes the new ones once, and marks what is new', async () => {
+  const { News } = await import('../src/news.js');
+  let t = Date.parse('2026-11-13T10:00:00Z');
+  const store = { data: {}, save() {} };
+  const pages = {
+    'https://p.example/notes.md': '## November 12, 2026\n\n* Launched **A**.\n* Launched B. See [B](https://p.example/b).\n\n## November 11, 2026\n\n* #nosummary C.',
+    'https://q.example/notes.md': 'no dates here',
+  };
+  const calls = [];
+  const news = new News({
+    store,
+    config: { news: { sources: [], custom: [{ id: 'p', lab: 'Lab P', label: 'P notes', url: 'https://p.example/notes.md' }, { id: 'q', lab: 'Lab Q', url: 'https://q.example/notes.md' }], refreshHours: 6, searchHours: 24 } },
+    fetchText: async (url) => pages[url] ?? Promise.reject(new Error('404')),
+    oneShot: async (prompt, { web } = {}) => {
+      calls.push(web ? 'search' : 'summaries');
+      if (web) return JSON.stringify({ items: [{ lab: 'xAI', date: '2026-11-12', title: 'Grok 9', summary: 'From the web.', url: 'https://x.example/grok' }, { lab: 'Lab P', date: '2026-11-12', title: 'Dup', summary: 'Same page.', url: 'https://p.example/b' }, { lab: 'Old', date: '2026-01-01', title: 'Old', url: 'https://o.example' }, { lab: 'Bad', date: 'soon', title: 'Bad', url: 'https://b.example' }] });
+      const entries = JSON.parse(prompt.match(/<entries>\n(.*)\n<\/entries>/s)[1]);
+      return JSON.stringify({ summaries: Object.fromEntries(entries.filter((e) => !/#nosummary/.test(e.title)).map((e) => [e.id, `Sum: ${e.title}`])) });
+    },
+    now: () => t,
+  });
+  news.close();
+  await news.refresh();
+  let v = news.view();
+  assert.deepEqual(v.items.map((i) => [i.date, i.lab, i.title, i.summary]), [
+    ['2026-11-12', 'Lab P', 'Launched A.', 'Sum: Launched A.'],
+    ['2026-11-12', 'Lab P', 'Launched B.', 'Sum: Launched B.'],
+    ['2026-11-12', 'xAI', 'Grok 9', 'From the web.'],
+    ['2026-11-11', 'Lab P', '#nosummary C.', null],
+  ], 'the search keeps only dated, recent, new ones; its own summary is used');
+  assert.equal(v.items.at(-1).lead, '#nosummary C.', 'without a summary: the start of its text');
+  assert.deepEqual(calls, ['search', 'summaries']);
+  assert.deepEqual(v.sources.map((s) => [s.id, s.count, Boolean(s.error)]), [['p', 3, false], ['q', 0, true], ['search', 2, false]]);
+  assert.match(v.sources[1].error, /No dated entries/);
+  assert.deepEqual([v.newCount, v.seenAt], [0, null], 'nothing is new before the first look');
+
+  // Seen; later a new entry: it's new, summarized alone; the failed one is tried once more, then left.
+  news.seen();
+  t += 7 * 3_600_000;
+  pages['https://p.example/notes.md'] = '## November 13, 2026\n\n* Launched D.\n\n' + pages['https://p.example/notes.md'];
+  calls.length = 0;
+  await news.refresh();
+  v = news.view();
+  assert.deepEqual(calls, ['summaries'], 'no search: not due yet');
+  assert.deepEqual(v.items.filter((i) => i.isNew).map((i) => i.title), ['Launched D.']);
+  assert.equal(v.newCount, 1);
+  calls.length = 0;
+  await news.refresh({ search: true });
+  assert.deepEqual(calls, ['search'], 'searched when asked; the one that failed twice is left without a summary');
+  // Older than the window: gone.
+  t += 40 * 86_400_000;
+  pages['https://p.example/notes.md'] = '## December 23, 2026\n\n* Launched E.';
+  await news.refresh();
+  assert.deepEqual(news.view().items.map((i) => i.title), ['Launched E.']);
+  // A page with nothing recent is read fine: no entries, no error.
+  t += 60 * 86_400_000;
+  await news.refresh();
+  assert.deepEqual([news.view().items.length, news.view().sources[0].count, news.view().sources[0].error], [0, 0, null]);
+  // Off: no refresh.
+  await assert.rejects(new News({ store, config: { news: { enabled: false } } }).refresh(), /off/);
+});

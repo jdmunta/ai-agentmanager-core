@@ -2522,13 +2522,17 @@ export class AgentManager extends EventEmitter {
   }
 
   /** One tool-less, read-only call to an engine; resolves to its text output. */
-  oneShot(agent, text, { engine, model, timeoutMs = 300_000, tools, cwd = paths.home }) {
+  oneShot(agent, text, { engine, model, timeoutMs = 300_000, tools, web, cwd = paths.home }) {
     // Some engines take the prompt as an argument instead of on stdin, and some need their extra
     // arguments after a subcommand (oneShotExtra: they place them). `tools`: Claude Code only, a
     // call that may use just these connector tools (and none of its own). `cwd`: where it runs, which
-    // decides the project MCP servers it loads.
+    // decides the project MCP servers it loads. `web`: Claude Code only, a call that may use just
+    // these of its own tools (WebSearch, WebFetch).
+    if (web && !engine.webArgs) return Promise.reject(new Error(`${engine.label} can't search the web here; Claude Code can`));
     const extra = engine.extraArgs(this.config);
-    const args = tools
+    const args = web
+      ? [...extra, ...engine.webArgs(this.config, { model, tools: web })]
+      : tools
       ? [...extra, ...engine.connectorArgs(this.config, { model, tools })]
       : engine.oneShotExtra ? engine.oneShotArgs(this.config, { model, prompt: text, extra }) : [...extra, ...engine.oneShotArgs(this.config, { model, prompt: text })];
     return new Promise((resolve, reject) => {
