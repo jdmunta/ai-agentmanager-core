@@ -734,18 +734,21 @@ export async function main(argv) {
   const actionsCmd = program.command('actions').description("Your action items from Slack and meeting notes (the assistant finds them): decide on each one");
   actionsCmd
     .command('ls', { isDefault: true })
-    .description('The open ones (--all for the decided ones too)')
+    .description('The open ones (--all for the decided ones too, --due for the dues)')
     .option('--all', 'also assigned, skipped, done and removed')
+    .option('--due', 'the ones with a due date not done yet, soonest first (overdue at the top)')
     .option('--json', 'print JSON')
     .action(async (opts) => {
       await daemon();
       const v = await api('GET', '/actions');
-      const rows = opts.all ? v.rows : v.rows.filter((r) => r.group === 'open');
+      const rows = opts.due
+        ? v.rows.filter((r) => r.due && ['open', 'assigned', 'skipped', 'snoozed'].includes(r.group)).sort((x, y) => (x.dueAt ? 0 : 1) - (y.dueAt ? 0 : 1) || String(x.dueAt ?? '').localeCompare(String(y.dueAt ?? '')))
+        : opts.all ? v.rows : v.rows.filter((r) => r.group === 'open');
       if (opts.json) return console.log(JSON.stringify({ ...v, rows }, null, 2));
-      if (!rows.length) return console.log(dim(opts.all ? 'No action items yet.' : 'Nothing open. --all shows the decided ones.'));
+      if (!rows.length) return console.log(dim(opts.due ? 'Nothing with a due date is waiting on you.' : opts.all ? 'No action items yet.' : 'Nothing open. --all shows the decided ones.'));
       for (const r of rows) {
         console.log(`${bold(r.id)} ${r.group === 'open' ? yellow(r.text) : r.text}${r.group === 'open' ? '' : dim(` [${r.status}]`)}`);
-        console.log(dim(`  ${[r.sourceLabel, r.from && `from ${r.from}`, r.due && `due ${r.due}`, r.link].filter(Boolean).join(' · ')}`));
+        console.log(dim(`  ${[r.sourceLabel, r.from && `from ${r.from}`, r.due && (/^overdue/.test(r.dueWords ?? '') ? red(r.dueWords) : (r.dueWords ?? `due ${r.due}`)), r.link].filter(Boolean).join(' · ')}`));
       }
     });
   actionsCmd

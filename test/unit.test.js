@@ -27,7 +27,7 @@ import { commentsMessage, parseBaseRef, prBase } from '../src/review.js';
 import { parseDiff } from '../public/review.js';
 import { normalizeReview, parsePrUrl, recheckMessage, reviewDraft, reviewRows, reviewerPrompt, Reviews } from '../src/reviews.js';
 import { reviewerSpeech } from '../public/reviews.js';
-import { dueAt, dueWords, todayAside, todayItems, todaySpeech } from '../src/today.js';
+import { actionDue, dueAt, dueWords, todayAside, todayItems, todaySpeech } from '../src/today.js';
 import { VERDICTS, gapsOf, leadPrompt, readCoverage, readVerdict, subagents, summarize, teamPrompt } from '../src/teams.js';
 
 const tmp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'agentmgr-unit-'));
@@ -842,6 +842,10 @@ test('actions: added once, decided (assign starts an agent), kept, discussed in 
   assert.throws(() => q.add({ text: 'Do it', source: 'fax' }), /source is one of/);
   assert.throws(() => q.add({ text: 'Do it', link: 'javascript:alert(1)' }), /http/);
   assert.equal(q.rows().length, 2);
+  // The due date as a time and in words for the Due list; none when none was said.
+  const rowA = q.rows().find((x) => x.id === a.id);
+  assert.ok(rowA.dueAt && /^due /.test(rowA.dueWords), JSON.stringify(rowA));
+  assert.deepEqual([q.rows().find((x) => x.id === b.id).dueAt, q.rows().find((x) => x.id === b.id).dueWords], [null, null]);
   // Decisions, kept in the store's data (state.json).
   q.set([b.id], 'skip');
   assert.deepEqual(new MyActions({ store, manager }).rows().map((r) => [r.id, r.group]), [[a.id, 'open'], [b.id, 'skipped']]);
@@ -2772,6 +2776,11 @@ test('today: due dates said in words, and what needs you ranked with why', () =>
   assert.deepEqual(['today', 'EOD', 'tomorrow', 'Friday', 'mon', '2026-11-03', 'by Dec 3rd', 'soon', ''].map((d) => day(dueAt(d, now))), ['11/7', '11/7', '11/8', '11/13', '11/9', '11/3', '12/3', null, null]);
   assert.equal(dueWords(dueAt('2026-11-03', now), now), 'overdue 4 days');
   assert.equal(dueWords(dueAt('today', now), now), 'due today');
+  // An action's words are read from when it was asked: "Friday" asked last Monday was yesterday.
+  assert.equal(day(actionDue({ due: 'Friday', when: '2026-11-02T09:00:00' }, now)), '11/6');
+  assert.equal(dueWords(actionDue({ due: 'today', when: '2026-11-04T09:00:00' }, now), now), 'overdue 3 days');
+  assert.equal(day(actionDue({ due: 'Friday' }, now)), '11/13', 'not known when: from now');
+  assert.equal(day(actionDue({ due: 'Friday', when: 'garbage' }, now)), '11/13');
   const items = todayItems({
     now,
     inbox: [

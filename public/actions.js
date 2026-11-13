@@ -10,6 +10,7 @@ const SAVED = 'agentmgr.actionsFilter';
 const PROJECT = 'agentmgr.actionsProject';
 const FILTERS = [
   ['open', 'Open'],
+  ['due', 'Due'],
   ['assigned', 'Assigned'],
   ['questions', 'Questions'],
   ['skipped', 'Skipped'],
@@ -27,6 +28,11 @@ const STATES = [
   ['remove', 'Remove', 'Not mine, or not needed: off the list (under Removed)'],
 ];
 const ICON = { slack: '💬', gemini: '📝', other: '•' };
+// Still yours to handle: what the Due list shows (done and removed ones are off it).
+const PENDING = new Set(['open', 'assigned', 'skipped', 'snoozed']);
+const late = (r) => Boolean(r.dueAt) && /^overdue/.test(r.dueWords ?? '');
+// Soonest first, overdue at the top; a due date that can't be told ("next sprint") after the dated ones.
+const byDue = (x, y) => (x.dueAt ? 0 : 1) - (y.dueAt ? 0 : 1) || String(x.dueAt ?? '').localeCompare(String(y.dueAt ?? '')) || String(y.when).localeCompare(String(x.when));
 
 export function initActions({ api, $, esc, ago, toast, openAgent, projects = () => [] }) {
   let editing = null; // the question whose answer is being edited
@@ -73,7 +79,7 @@ export function initActions({ api, $, esc, ago, toast, openAgent, projects = () 
   function row(r) {
     const opts = STATES.map(([v, label, title]) => `<option value="${v}" title="${esc(title)}" ${r.status === v ? 'selected' : ''}>${label}</option>`).join('');
     const where = r.link ? `<a href="${esc(r.link)}" target="_blank" rel="noopener" title="Open where it was asked">${esc(r.sourceLabel)} ↗</a>` : esc(r.sourceLabel);
-    const meta = [`${ICON[r.source] ?? '•'} ${where}`, r.from && `from <b>${esc(r.from)}</b>`, r.due && `<span class="action-due">due ${esc(r.due)}</span>`, `<span title="${esc(new Date(r.when).toLocaleString())}">${esc(ago(r.when))}</span>`].filter(Boolean).join(' · ');
+    const meta = [`${ICON[r.source] ?? '•'} ${where}`, r.from && `from <b>${esc(r.from)}</b>`, r.due && `<span class="action-due${late(r) ? ' late' : ''}" title="${esc(`Said: ${r.due}${r.dueAt ? ` (${new Date(r.dueAt).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' })})` : ''}`)}">${esc(r.dueWords ?? `due ${r.due}`)}</span>`, `<span title="${esc(new Date(r.when).toLocaleString())}">${esc(ago(r.when))}</span>`].filter(Boolean).join(' · ');
     const agent = r.agent ? `<button class="link" data-act-open="${esc(r.agent.id)}" title="Open the agent doing it">${esc(r.agent.name)}</button>` : '';
     const talk = r.discussion
       ? `<button class="small" data-act-open="${esc(r.discussion.id)}" title="Open the conversation about it">💬 Open talk</button>`
@@ -91,16 +97,18 @@ export function initActions({ api, $, esc, ago, toast, openAgent, projects = () 
       body.innerHTML = '<p class="hint">Loading…</p>';
       return;
     }
-    const inGroup = (r, g) => (g === 'all' ? r.group !== 'removed' : g === 'questions' ? r.kind === 'question' && r.group === 'open' : r.group === g);
+    const inGroup = (r, g) => (g === 'all' ? r.group !== 'removed' : g === 'questions' ? r.kind === 'question' && r.group === 'open' : g === 'due' ? Boolean(r.due) && PENDING.has(r.group) : r.group === g);
     const count = (g) => data.rows.filter((r) => inGroup(r, g)).length;
     const rows = data.rows.filter((r) => inGroup(r, filter));
+    if (filter === 'due') rows.sort(byDue);
+    const overdue = data.rows.filter((r) => inGroup(r, 'due') && late(r)).length;
     const f = data.features ?? {};
     const from = [f.slack && 'Slack', f.gemini && 'meeting notes (Notes by Gemini)'].filter(Boolean).join(' and ');
     const list = projects();
     body.innerHTML = `
       <div class="issues-head">
         <h2>Actions</h2>
-        <div class="chips" role="tablist">${FILTERS.map(([k, label]) => `<button class="chip ${k === filter ? 'active' : ''}" role="tab" aria-selected="${k === filter}" data-act-filter="${k}">${label} <span class="count">${count(k)}</span></button>`).join('')}</div>
+        <div class="chips" role="tablist">${FILTERS.map(([k, label]) => `<button class="chip ${k === filter ? 'active' : ''}${k === 'due' && overdue ? ' late' : ''}" role="tab" aria-selected="${k === filter}" data-act-filter="${k}"${k === 'due' ? ` title="With a due date and not done yet, soonest first${overdue ? `: ${overdue} overdue` : ''}"` : ''}>${label} <span class="count">${count(k)}</span></button>`).join('')}</div>
         <span class="spacer"></span>
         <label class="hint" title="Where an agent works when you assign an action to one">Agents in <select data-act-project class="small">
           <option value="">pick a project</option>
@@ -122,7 +130,9 @@ export function initActions({ api, $, esc, ago, toast, openAgent, projects = () 
               ? `Nothing yet. With the Assistant running and "Things asked of me in Slack and in meeting notes" on, what's asked of you shows up here after its next check (or: agentmgr actions add).`
               : filter === 'open'
                 ? 'Nothing left to decide.'
-                : 'None here.',
+                : filter === 'due'
+                  ? 'Nothing with a due date is waiting on you.'
+                  : 'None here.',
           )}</p>`}`;
     keys.redraw();
   }

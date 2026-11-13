@@ -32,6 +32,15 @@ export function dueAt(due, now = new Date()) {
   return null;
 }
 
+/**
+ * When an action is due: its words read from when it was asked, so "by Friday" said last week is
+ * that Friday (overdue now), not the next one. From `now` when it isn't known when it was asked.
+ */
+export function actionDue(a, now = new Date()) {
+  const asked = a?.when ? new Date(a.when) : null;
+  return dueAt(a?.due, asked && Number.isFinite(asked.getTime()) ? asked : now);
+}
+
 /** "overdue 2 days", "due today", "due tomorrow", "due Friday", or null. */
 export function dueWords(at, now = new Date()) {
   if (!at) return null;
@@ -87,12 +96,12 @@ export function todayItems({ inbox = [], issues = [], actions = [], reviews = []
     if (a.group !== 'open') continue;
     // A question put to you: asked directly is pressing; copied or mentioned can wait a little.
     if (a.kind === 'question') {
-      const at = dueAt(a.due, now);
+      const at = actionDue(a, now);
       const why = [a.cc ? `you're copied${a.from ? `; ${a.from} asked` : ''}` : a.from ? `${a.from} asked you` : 'asked of you', a.sourceLabel && `in ${a.sourceLabel}`, dueWords(at, now), a.answer ? 'answer drafted' : 'no answer drafted yet'].filter(Boolean).join(' · ');
       items.push({ id: `action:${a.id}`, kind: 'ask', label: a.cc ? "CC'd" : 'Asked you', title: a.question || a.text, why, score: a.cc ? 44 : at && at.getTime() < now.getTime() + DAY ? 16 : 22, at: a.when ?? null, url: a.link ?? null, actionId: a.id, draft: a.answer ?? null });
       continue;
     }
-    const at = dueAt(a.due, now);
+    const at = actionDue(a, now);
     const words = dueWords(at, now);
     const late = at && at.getTime() < now.getTime();
     const soon = at && !late && at.getTime() - now.getTime() < DAY;

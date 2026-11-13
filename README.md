@@ -642,7 +642,7 @@ For each agent with its own branch, AI Agent Manager works out which files and l
 - **same lines**: both edit the same region, within a few lines (likely a merge conflict). Only judged when both branched from the same commit.
 - **same file**: both edit the file, in different places.
 
-The suggested merge order puts an agent whose PR is merged or open first; otherwise the smaller change lands first, so the other has less to rebase. **Tell** sends an agent a short note naming the other agent, the files and the order. Attempts in one race, and a fork and its source, are expected to overlap, so they aren't flagged.
+The suggested merge order puts an agent whose PR is merged or open first; otherwise the smaller change lands first, so the other has less to rebase. An agent's overlaps are behind **⚔ Overlaps** in its detail (with how many), in a panel of their own; the Inbox lists each on the agent that should rebase. **Tell** sends an agent a short note naming the other agent, the files and the order. Attempts in one race, and a fork and its source, are expected to overlap, so they aren't flagged.
 
 ## Stuck detection
 

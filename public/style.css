@@ -181,6 +181,10 @@ body.term-max .topbar, body.term-max .sidebar, body.term-max .split-side,
 body.term-max #detail-body, body.term-max .split-term, body.term-max #placeholder { display: none !important; }
 body.term-max .layout { grid-template-columns: 1fr; }
 .term-wrap:fullscreen { width: 100vw; height: 100vh; }
+/* The agent's name in the terminal bar, only when the detail with its name is out of view. */
+.term-agent { display: none; flex-shrink: 0; max-width: 32ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; color: #e6edf3; padding-right: 8px; border-right: 1px solid #30363d; }
+body.term-max .term-agent, .term-wrap:fullscreen .term-agent { display: inline-block; }
+.term-agent:empty { display: none !important; }
 .term-bar button.on { background: #262c38; border-color: #58a6ff; }
 .sidebar { border-right: 1px solid var(--border); overflow-y: auto; background: var(--panel); }
 .side-tabs { display: flex; border-bottom: 1px solid var(--border); position: sticky; top: 0; background: var(--panel); z-index: 2; }
@@ -545,6 +549,7 @@ dialog::backdrop { background: rgba(0, 0, 0, .45); }
   /* On a phone the terminal takes the whole screen; "Hide terminal" goes back. */
   .detail.with-term .term-wrap { position: fixed; inset: 0; z-index: 5; min-height: 0; padding-top: env(safe-area-inset-top); }
   .term-bar #term-title { display: none; }
+  .detail.with-term .term-agent { display: inline-block; max-width: 45vw; }
   /* The tabs get a row of their own, so + Shell and + Browser aren't squeezed out of view. */
   .term-bar { flex-wrap: wrap; row-gap: 6px; }
   .term-bar > .term-tabs { flex: 1 0 100%; }
@@ -1447,6 +1452,8 @@ table.issues tr.kb-on td:first-child { box-shadow: inset 3px 0 0 var(--accent); 
 .actions-table .action-text { font-weight: 600; color: var(--text); }
 .actions-table .action-meta { margin-top: 3px; }
 .actions-table .action-due { color: var(--yellow); font-weight: 600; }
+.actions-table .action-due.late { color: var(--red); }
+.issues-head .chip.late:not(.active) { border-color: var(--red); color: var(--red); }
 .actions-table tr.action-skip td:not(.issue-action), .actions-table tr.action-remove td:not(.issue-action), .actions-table tr.action-done td:not(.issue-action) { opacity: 0.65; }
 
 /* Report a problem or idea */

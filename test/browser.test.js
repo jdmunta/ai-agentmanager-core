@@ -3,7 +3,7 @@
 // remembers. Skipped when no Chrome-family browser is installed.
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
@@ -70,7 +70,7 @@ before(async () => {
   home = fs.mkdtempSync(path.join(os.tmpdir(), 'agentmgr-browser-'));
   const port = await freePort();
   base = `http://127.0.0.1:${port}`;
-  fs.writeFileSync(path.join(home, 'config.json'), JSON.stringify({ claudeBin: process.execPath, claudeArgs: [path.join(here, 'fake-claude.js')], updates: { check: false }, judge: { enabled: false }, shell: '/bin/sh' }));
+  fs.writeFileSync(path.join(home, 'config.json'), JSON.stringify({ claudeBin: process.execPath, claudeArgs: [path.join(here, 'fake-claude.js')], updates: { check: false }, judge: { enabled: false }, shell: '/bin/sh', gitRefreshSec: 1, conflictRefreshSec: 0 }));
   daemon = spawn(process.execPath, [path.join(here, '..', 'bin', 'agentmgr.js'), 'serve'], {
     env: { ...process.env, AGENTMGR_HOME: home, AGENTMGR_PORT: String(port), AGENTMGR_REMOTE: '0', AGENTMGR_PLUGINS: '', AGENTMGR_NO_GH: '1', CLAUDE_CONFIG_DIR: path.join(home, 'claude'), AGENTMGR_CLAUDE_DESKTOP_DIR: path.join(home, 'claude-desktop'), FAKE_CLAUDE_LOG: path.join(home, 'fake.log') },
     stdio: 'ignore',
@@ -231,5 +231,98 @@ test('split screen: split, load, type, follow sizes, keys, reload, close', { ski
   await js(`document.querySelector('.gpane [data-g="main"]').click()`);
   await until(`document.querySelectorAll('.gpane').length === 0 && !document.querySelector('#groups').classList.contains('split')`, 'back to one panel');
 
+  assert.deepEqual(errors, [], 'no errors on the page');
+});
+
+test("expanded, the terminal bar names the agent whose session it is; it follows the tab and a rename", { skip }, async () => {
+  const listed = await api('GET', '/agents');
+  const [a] = listed;
+  const shown = `(() => { const e = document.querySelector('#term-agent'); return e.offsetParent ? e.textContent : null; })()`;
+  await js(`document.querySelector('#agent-list li[data-id="${a.id}"]').click()`);
+  await until(`[...document.querySelectorAll('#detail-body button')].some((x) => x.textContent.trim() === 'Open terminal')`, 'Open terminal');
+  await js(`[...document.querySelectorAll('#detail-body button')].find((x) => x.textContent.trim() === 'Open terminal').click()`);
+  await until(`!document.querySelector('#term-wrap').hidden`, 'the terminal');
+  assert.equal(await js(shown), null, 'not shown while the detail above names the agent');
+
+  await js(`document.querySelector('#term-max').click()`);
+  await until(`${shown} === ${JSON.stringify(a.name)}`, 'the name when expanded');
+  await js(`document.querySelector('.term-tab[data-kind="code"]').click()`);
+  await until(`${shown} === ${JSON.stringify(a.name)} && document.querySelector('#term-wrap').classList.contains('coding')`, 'the name on the Code tab too');
+  // Renamed while expanded: the new name.
+  await fetch(`${base}/api/agents/${a.id}`, { method: 'PATCH', headers: { 'content-type': 'application/json', 'x-agentmgr': '1' }, body: JSON.stringify({ name: 'Renamed agent' }) });
+  await until(`${shown} === 'Renamed agent'`, 'the new name');
+
+  await js(`document.querySelector('#term-max').click()`);
+  await until(`${shown} === null`, 'hidden again when restored');
+  assert.deepEqual(errors, [], 'no errors on the page');
+});
+
+test('Actions: the Due tab lists what is due and not done, soonest first, overdue in red', { skip }, async () => {
+  const days = (n) => new Date(Date.now() + n * 86_400_000).toISOString();
+  const late = await api('POST', '/actions', { text: 'Send the numbers', due: 'today', when: days(-3) });
+  await api('POST', '/actions', { text: 'Plan the rollout', due: 'next sprint' });
+  await api('POST', '/actions', { text: 'Book the review', due: 'tomorrow' });
+  await api('POST', '/actions', { text: 'No date on this one' });
+  const done = await api('POST', '/actions', { text: 'Already handled', due: 'today' });
+  await api('POST', '/actions/set', { ids: [done.id], state: 'done' });
+  await api('POST', '/actions/set', { ids: [late.id], state: 'skip' });
+
+  // The button shows only with Slack or meeting notes set up; the window itself works either way.
+  await js(`document.querySelector('#actions-btn').click()`);
+  await until(`document.querySelector('#actions-dialog').open && document.querySelector('[data-act-filter="due"]')`, 'the Actions window');
+  await js(`document.querySelector('[data-act-filter="due"]').click()`);
+  await until(`document.querySelectorAll('#actions-body tbody tr').length === 3`, 'three dues');
+  const r = await js(`({
+    texts: [...document.querySelectorAll('#actions-body .action-text')].map((e) => e.textContent),
+    dues: [...document.querySelectorAll('#actions-body .action-due')].map((e) => [e.textContent, e.classList.contains('late')]),
+    chip: document.querySelector('[data-act-filter="due"]').classList.contains('late'),
+  })`);
+  assert.deepEqual(r.texts, ['Send the numbers', 'Book the review', 'Plan the rollout'], 'overdue first (skipped is still yours), then by date; no date said last; done and dateless left out');
+  assert.deepEqual(r.dues, [['overdue 3 days', true], ['due tomorrow', false], ['due next sprint', false]]);
+  assert.ok(r.chip, 'the Due tab shows there is something overdue');
+  await js(`document.querySelector('[data-act="close"]').click()`);
+  assert.deepEqual(errors, [], 'no errors on the page');
+});
+
+test("overlaps: behind their own button in the agent's detail, not on the page", { skip }, async () => {
+  // Two agents in one repo changing the same lines.
+  const git = (cwd, ...args) => execFileSync('git', ['-c', 'commit.gpgsign=false', '-c', 'user.email=t@t', '-c', 'user.name=t', ...args], { cwd });
+  const origin = path.join(home, 'ov.git');
+  const seed = path.join(home, 'ov-seed');
+  execFileSync('git', ['init', '-q', '--bare', '-b', 'main', origin]);
+  execFileSync('git', ['clone', '-q', origin, seed]);
+  fs.writeFileSync(path.join(seed, 'app.js'), 'line1\nline2\nline3\n');
+  git(seed, 'add', '.');
+  git(seed, 'commit', '-q', '-m', 'app');
+  git(seed, 'push', '-q', 'origin', 'main');
+  const [x, y] = await api('POST', '/agents', { intents: ['Change line two', 'Also change line two'], repo: `file://${origin}` });
+  const ready = async (id) => {
+    for (let i = 0; i < 200; i++) {
+      const a = (await api('GET', '/agents')).find((v) => v.id === id);
+      if (a?.workdir && a.status === 'running') return a;
+      await sleep(100);
+    }
+    throw new Error(`agent ${id} not ready`);
+  };
+  const [rx, ry] = [await ready(x.id), await ready(y.id)];
+  fs.writeFileSync(path.join(rx.workdir, 'app.js'), 'line1\nLINE TWO\nline3\n');
+  fs.writeFileSync(path.join(ry.workdir, 'app.js'), 'line1\nline 2!\nline3\nline4\n');
+
+  let seen;
+  for (let i = 0; i < 200 && !seen?.conflicts?.length; i++) {
+    seen = (await api('GET', '/agents')).find((v) => v.id === x.id);
+    await sleep(100);
+  }
+  assert.ok(seen?.conflicts?.length, 'the radar flags them');
+  await js(`document.querySelector('#agent-list li[data-id="${x.id}"]').click()`);
+  await until(`document.querySelector('#detail-body button[data-act="overlaps"] .count')?.textContent === '1'`, 'the Overlaps button with its count', 20_000);
+  assert.equal(await js(`document.querySelectorAll('#detail-body .need').length`), 0, 'no overlap card on the page');
+  await js(`document.querySelector('#detail-body button[data-act="overlaps"]').click()`);
+  await until(`document.querySelector('#needs-dialog').open && document.querySelector('#needs-title').textContent === ${JSON.stringify(`Overlaps: ${rx.name}`)}`, 'the Overlaps panel');
+  const card = await js(`document.querySelector('#needs-body .need')?.textContent ?? ''`);
+  assert.match(card, new RegExp(ry.name), 'names the other agent');
+  assert.match(card, /app\.js/, 'and the file');
+  await js(`document.querySelector('#needs-close').click()`);
+  for (const id of [x.id, y.id]) await fetch(`${base}/api/agents/${id}`, { method: 'DELETE', headers: { 'x-agentmgr': '1' } });
   assert.deepEqual(errors, [], 'no errors on the page');
 });
