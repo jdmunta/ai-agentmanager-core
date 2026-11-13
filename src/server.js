@@ -9,7 +9,7 @@ import { spawn } from 'node:child_process';
 import express from 'express';
 import { WebSocketServer } from 'ws';
 import { ensureHome, HOST, loadConfig, paths, PORT, saveConfig } from './config.js';
-import { AgentManager, MACHINE, projectOf, shellNumber } from './manager.js';
+import { AgentManager, MACHINE, NO_REPO, projectOf, repoCacheDir, shellNumber } from './manager.js';
 import { Backlog } from './backlog.js';
 import { Races } from './races.js';
 import { Review } from './review.js';
@@ -50,6 +50,12 @@ import { Builder } from './builder.js';
 import { Standup } from './standup.js';
 import { Value, valueSlack } from './value.js';
 import { News } from './news.js';
+import { Milestones } from './milestones.js';
+import { Decisions } from './decisions.js';
+import { Debt } from './debt.js';
+import { Calendar } from './calendar.js';
+import { loadQuestions } from './inbox.js';
+import { readSpecDoc } from './brief.js';
 import { Store } from './store.js';
 import { about, latestRelease } from './about.js';
 import { Support } from './support.js';
@@ -256,6 +262,54 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
     onChange: () => pushNews(),
     oneShot: (prompt, { web, timeoutMs } = {}) => manager.oneShot(null, prompt, { ...manager.writerFor({}), web, timeoutMs }),
   });
+  // Plan: a project's dates with their reminders and checklists, the decision log, the tech debt
+  // radar, and the calendar Today is planned around (milestones.js, decisions.js, debt.js, calendar.js).
+  let pushPlan = () => {};
+  const openFindings = (p) => hunts.list().findings.filter((f) => ['open', 'fixing', 'pr'].includes(f.status) && manager.resolveProject(f.project)?.key === p.key);
+  const queueTask = (p, title) => backlog.add([title], { project: p.shortcut })[0];
+  const milestones = new Milestones({
+    store,
+    projects: () => manager.listProjects(),
+    onChange: () => pushPlan(),
+    queue: queueTask,
+    facts: (p) => {
+      const mine = store.list().filter((a) => projectOf(a).key === p.key && !NO_REPO.has(a.kind) && !a.hunting && !a.reviewing);
+      const views = mine.map((a) => manager.view(a));
+      const prs = mine.flatMap((a) => Object.values(a.prs ?? {}).filter((x) => x.state === 'OPEN' && x.source !== 'mentioned'));
+      return {
+        working: views.filter((v) => ['planning', 'working', 'blocked'].includes(v.brief?.status) || (v.runtime.running && v.brief?.status !== 'done')),
+        backlog: backlog.view().items.filter((it) => it.projectKey === p.key && ['queued', 'active', 'review', 'blocked'].includes(it.status)),
+        waiting: views.filter((v) => v.runtime.attention || v.runtime.waiting || v.planReview?.status === 'review' || (v.questions ?? []).some((q) => !q.answer)),
+        prs,
+        failing: prs.filter((x) => x.checks?.state === 'failed'),
+        bugs: openFindings(p).filter((f) => ['critical', 'high'].includes(f.severity)),
+      };
+    },
+    notify: async (text, plain) => {
+      const n = loadNotify();
+      if (!n.enabled || !n.events.milestone) return;
+      await sendSlack(text, n, plain);
+    },
+  });
+  const decisions = new Decisions({
+    store,
+    agents: () => store.list(),
+    projectOf,
+    questions: (a) => (NO_REPO.has(a.kind) ? [] : loadQuestions(a.id)),
+    designDoc: (id) => readSpecDoc(id, 'designdoc'),
+    onChange: () => pushPlan(),
+  });
+  const debt = new Debt({
+    store,
+    config,
+    projects: () => manager.listProjects(),
+    // The project's folder, or the shared clone its agents' worktrees come from.
+    dirOf: (p) => p.dir ?? (p.repo && git.isRemoteUrl(p.repo) ? repoCacheDir(p.repo) : p.repo ?? null),
+    bugs: (p) => openFindings(p).map((f) => f.file),
+    queue: queueTask,
+    onChange: () => pushPlan(),
+  });
+  const calendar = new Calendar({ config });
   const triggers = new Triggers({ manager, store, config, notifier });
   const budgets = new Budgets({ manager, store, config, notifier });
   const playbooks = new Playbooks({ manager, store });
@@ -1011,6 +1065,39 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
   api.patch('/value/items/:id', wrap((req) => value.edit(req.params.id, req.body ?? {})));
   api.post('/value/items/:id/estimate', wrap((req) => value.estimate(req.params.id).then((it) => value.itemView(it))));
   api.post('/value/items/:id/exclude', wrap((req) => value.exclude(req.params.id, req.body?.excluded !== false)));
+  // Plan → Dates: a project's code complete, RC and GA dates, their checklists and reminders.
+  api.get('/milestones', wrap(() => milestones.view()));
+  api.put('/milestones/:project', wrap((req) => milestones.set(req.params.project, req.body ?? {})));
+  api.post('/milestones/:project/check', wrap((req) => milestones.check(req.params.project, req.body?.stage, req.body?.item, req.body?.done !== false)));
+  api.post('/milestones/:project/reach', wrap((req) => milestones.reach(req.params.project, req.body?.stage, req.body?.reached !== false)));
+  api.post('/milestones/:project/task', wrap((req) => milestones.task(req.params.project, req.body?.stage, req.body?.item)));
+  // Plan → Decisions: the log (?project=<key>&q=<words>; ?format=markdown), one of your own, and removal.
+  api.get('/decisions', (req, res) => {
+    try {
+      const project = req.query.project ? String(req.query.project) : null;
+      if (req.query.format === 'markdown') return res.type('text/markdown').send(decisions.markdown({ project }));
+      res.json(decisions.view({ project, q: String(req.query.q ?? '') }));
+    } catch (e) {
+      res.status(e.status ?? 500).json({ error: e.message });
+    }
+  });
+  api.post('/decisions', wrap((req) => {
+    const p = manager.resolveProject(req.body?.project) ?? manager.listProjects().find((x) => x.key === req.body?.project);
+    return decisions.add({ ...req.body, project: p ? { key: p.key, name: p.name } : null });
+  }));
+  api.delete('/decisions/:id', wrap((req) => decisions.remove(req.params.id)));
+  // Plan → Debt: each project's hot spots; a scan answers at once and the page hears when it's done.
+  api.get('/debt', wrap(() => debt.view()));
+  api.post('/debt/:project/scan', wrap((req) => {
+    debt.project(req.params.project);
+    debt.scan(req.params.project).catch(() => {});
+    return debt.view();
+  }));
+  api.post('/debt/:project/queue', wrap((req) => debt.queueSpot(req.params.project, String(req.body?.file ?? ''))));
+  api.post('/debt/:project/dismiss', wrap((req) => debt.dismiss(req.params.project, String(req.body?.file ?? ''), req.body?.dismissed !== false)));
+  // The calendar Today is planned around: its private iCal addresses (never sent back) and working hours.
+  api.get('/calendar', wrap(() => calendar.status()));
+  api.put('/calendar', wrap((req) => calendar.set(req.body ?? {}, saveConfig)));
   // AI News: the entries, a refresh now (answers at once; the page hears when it's done), and "seen".
   api.get('/news', wrap(() => news.view()));
   api.post('/news/refresh', wrap((req) => {
@@ -1059,8 +1146,12 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
       got('reviews', () => reviews.rows()),
     ]);
     const findings = hunts.list().findings.filter((x) => x.status === 'open' || x.status === 'pr');
-    const items = todayItems({ inbox, issues, actions, reviews: prs, findings, slower: benches.slower(), unsure: evals.unsure().map((a) => ({ id: a.id, name: a.name, issue: manager.issueKey(a), confidence: a.eval.confidence, pending: a.eval.pending, at: a.eval.at })) });
-    return { items, aside: todayAside({ issues, actions }), speech: todaySpeech(items), features: f, errors };
+    const items = todayItems({ inbox, issues, actions, reviews: prs, findings, slower: benches.slower(), milestones: milestones.todayItems(), unsure: evals.unsure().map((a) => ({ id: a.id, name: a.name, issue: manager.issueKey(a), confidence: a.eval.confidence, pending: a.eval.pending, at: a.eval.at })) });
+    // The day around your meetings: what needs you, placed in the free time (calendar.js).
+    const day = await calendar
+      .day({ items, agents: store.list().filter((a) => !NO_REPO.has(a.kind)).map((a) => ({ id: a.id, name: a.name, status: a.status, issue: manager.issueKey(a), prs: Object.values(a.prs ?? {}), project: projectOf(a).name })) })
+      .catch((e) => ({ connected: true, error: e.message }));
+    return { items, day, aside: todayAside({ issues, actions }), speech: todaySpeech(items), features: f, errors };
   }));
   // Support tickets: kept on this computer, each with a filled-in link to a new GitHub issue.
   const pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
@@ -1366,6 +1457,7 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
   pushStandup = (latest) => broadcast({ t: 'standup', latest });
   pushValue = () => broadcast({ t: 'value' });
   pushNews = () => broadcast({ t: 'news' });
+  pushPlan = () => broadcast({ t: 'plan' });
   reports.on('change', () => broadcast({ t: 'built', reports: reports.list() }));
   manager.rules.on('change', (rules) => broadcast({ t: 'rules', rules }));
   repeats.on('change', (view) => broadcast({ t: 'repeats', repeats: view }));
@@ -1504,6 +1596,9 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
     standup.close();
     value.close();
     news.close();
+    milestones.close();
+    decisions.close();
+    debt.close();
     reviews.close();
     hunts.close();
     benches.close();

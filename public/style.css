@@ -1349,6 +1349,24 @@ table.today-table .today-label { font-size: 11px; font-weight: 600; text-transfo
 table.today-table tr.pressing .today-label { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); }
 table.today-table tr.today-prompt .today-label, table.today-table tr.today-waiting .today-label, table.today-table tr.today-question .today-label { background: color-mix(in srgb, var(--red) 16%, transparent); color: var(--red); }
 table.today-table .today-title { color: var(--text); }
+/* The day on top of Today: meetings and the free time between them. */
+.today-day { border: 1px solid var(--border); border-radius: var(--radius); background: var(--panel); padding: 8px 12px; margin: 0 0 10px; }
+.today-day-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.day-rows { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 4px; max-height: 240px; overflow: auto; }
+.day-rows > li { display: flex; gap: 12px; padding: 5px 8px; border-radius: 6px; border-left: 3px solid var(--border); }
+.day-rows .day-meeting { background: var(--panel-2); border-left-color: var(--accent); }
+.day-rows .day-meeting.now { outline: 1px solid var(--accent); }
+.day-rows .day-meeting.free { border-left-style: dashed; opacity: .8; }
+.day-rows .day-free { border-left-color: var(--green); }
+.day-time { flex: none; width: 132px; color: var(--muted); font-variant-numeric: tabular-nums; font-size: 12.5px; }
+.day-what { flex: 1; min-width: 0; }
+.day-free-label { color: var(--green); font-weight: 600; }
+.day-what ol { margin: 2px 0 0; padding-left: 20px; }
+.today-cal { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border); }
+.today-cal input[name="ics"] { flex: 1 1 320px; min-width: 0; }
+.today-cal p { flex: 1 0 100%; margin: 0; }
+table.today-table tr.day-flash td { background: color-mix(in srgb, var(--accent) 14%, transparent); transition: background .3s; }
+table.today-table tr.today-milestone .today-label { background: color-mix(in srgb, var(--yellow) 18%, transparent); color: var(--yellow); }
 table.today-table .today-why { margin-top: 2px; }
 table.today-table .today-acts { width: 1%; text-align: right; }
 table.today-table .small-link { font-size: 12px; margin-left: 4px; }
@@ -1388,6 +1406,47 @@ table.issues tr.stage-proposed.ticked { background: color-mix(in srgb, var(--acc
 table.issues tr.stage-proposed .issue-note { color: var(--accent); }
 
 /* ---------- Value */
+/* Plan: project dates, the decision log and the tech debt radar. */
+.plan-dialog { width: min(1080px, calc(100% - 32px)); }
+.plan-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 0 0 10px; }
+.plan-form { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 0 0 12px; padding: 10px 12px; border: 1px dashed var(--border); border-radius: var(--radius); }
+.plan-decision-form input { flex: 1 1 220px; min-width: 0; }
+.plan-date { font-size: 12.5px; color: var(--muted); display: inline-flex; align-items: center; gap: 4px; }
+.plan-project { border: 1px solid var(--border); border-radius: var(--radius); background: var(--panel); padding: 10px 12px; margin-bottom: 12px; }
+.plan-project-head { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.plan-project-head h3 { margin: 0 8px 0 0; font-size: 15px; }
+.plan-stages { display: grid; grid-template-columns: repeat(auto-fit, minmax(270px, 1fr)); gap: 10px; margin-top: 10px; }
+.plan-stage { border: 1px solid var(--border); border-left-width: 3px; border-radius: 6px; padding: 8px 10px; background: var(--bg); }
+.plan-stage.at-risk { border-left-color: var(--yellow); }
+.plan-stage.late { border-left-color: var(--red); }
+.plan-stage.on-track, .plan-stage.reached { border-left-color: var(--green); }
+.plan-stage.reached { opacity: .75; }
+.plan-stage-head { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.tag.plan-at-risk { color: var(--yellow); }
+.tag.plan-late { color: var(--red); }
+.tag.plan-on-track, .tag.plan-reached { color: var(--green); }
+.plan-left { font-size: 12.5px; color: var(--muted); }
+.plan-checks { list-style: none; margin: 8px 0 6px; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+.plan-check { display: flex; gap: 6px; align-items: baseline; flex-wrap: wrap; }
+.plan-check > span:nth-child(2) { flex: 1 1 160px; min-width: 0; }
+.plan-check label { flex: 1 1 160px; min-width: 0; display: flex; flex-direction: row; align-items: baseline; gap: 6px; margin: 0; font-weight: normal; }
+.plan-check input[type="checkbox"] { flex: none; width: auto; margin: 0; position: relative; top: 2px; }
+.plan-mark { flex: none; min-width: 18px; text-align: center; font-weight: 600; font-size: 12px; border-radius: 9px; padding: 0 4px; }
+.plan-check.ok .plan-mark { color: var(--green); }
+.plan-check.open .plan-mark { background: color-mix(in srgb, var(--yellow) 20%, transparent); color: var(--yellow); }
+.plan-check.ok { color: var(--muted); }
+.plan-reminders { display: flex; flex-wrap: wrap; gap: 4px 8px; }
+.plan-reminder.sent { color: var(--green); }
+.plan-reminder.past { text-decoration: line-through; }
+.plan-decisions { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.plan-decision { border: 1px solid var(--border); border-radius: var(--radius); background: var(--panel); padding: 8px 12px; display: flex; flex-direction: column; gap: 3px; }
+.plan-decision.superseded { opacity: .7; }
+.plan-decision-head { display: flex; gap: 8px; }
+table.plan-debt { margin-top: 8px; }
+table.plan-debt .plan-score { width: 90px; position: relative; }
+table.plan-debt .plan-score b { position: relative; padding-left: 6px; }
+.plan-bar-fill { position: absolute; left: 0; top: 6px; bottom: 6px; background: color-mix(in srgb, var(--red) 22%, transparent); border-radius: 3px; }
+table.plan-debt code { overflow-wrap: anywhere; }
 /* AI News: a day heading, then each release with its lab, summary and links. */
 .news-dialog { width: min(980px, calc(100% - 32px)); }
 .news-find { width: 150px; }

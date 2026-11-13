@@ -56,6 +56,8 @@ fs.writeFileSync(
     updates: { check: false },
     // AI News reads public pages: never from the tests (its own tests use a local page).
     news: { enabled: false },
+    // No repository scans in the background either.
+    debt: { autoDays: 0 },
     capGraceMs: 0,
     capDelayMs: 200,
     shell: '/bin/sh',

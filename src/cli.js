@@ -732,6 +732,98 @@ export async function main(argv) {
     });
 
   program
+    .command('dates')
+    .description("A project's commitment dates (code complete, RC, GA): how far each is, what is still open, and the reminders. With dates: set them")
+    .argument('[project]', 'a project shortcut or name (default: every project with dates)')
+    .option('--cc <date>', 'code complete, as YYYY-MM-DD ("none" clears it)')
+    .option('--rc <date>', 'release candidate')
+    .option('--ga <date>', 'GA')
+    .option('--reached <stage>', 'mark a date as met: cc, rc or ga')
+    .option('--json', 'print JSON')
+    .action(async (ref, opts) => {
+      await daemon();
+      const stage = { cc: 'codeComplete', rc: 'rc', ga: 'ga' };
+      const date = (v) => (v === undefined ? undefined : /^(none|clear|-)$/i.test(v) ? null : v);
+      const set = Object.fromEntries(Object.entries({ codeComplete: date(opts.cc), rc: date(opts.rc), ga: date(opts.ga) }).filter(([, v]) => v !== undefined));
+      if ((Object.keys(set).length || opts.reached) && !ref) throw new Error('Name the project: agentmgr dates <project> --cc 2026-12-01');
+      if (Object.keys(set).length) await api('PUT', `/milestones/${encodeURIComponent(ref)}`, set);
+      if (opts.reached) {
+        if (!stage[opts.reached]) throw new Error('--reached takes cc, rc or ga');
+        await api('POST', `/milestones/${encodeURIComponent(ref)}/reach`, { stage: stage[opts.reached] });
+      }
+      const v = await api('GET', '/milestones');
+      const r = String(ref ?? '').replace(/^@/, '').toLowerCase();
+      const list = v.projects.filter((p) => !r || p.shortcut === r || p.name.toLowerCase() === r);
+      if (opts.json) return console.log(JSON.stringify(list, null, 2));
+      if (!list.length) return console.log(dim(ref ? `No dates for ${ref}. Set them: agentmgr dates ${ref} --cc 2026-12-01 --rc 2026-12-10 --ga 2026-12-20` : 'No dates yet. Set them: agentmgr dates <project> --cc 2026-12-01 --rc 2026-12-10 --ga 2026-12-20'));
+      const color = { late: red, 'at-risk': yellow, 'on-track': green, reached: dim };
+      for (const p of list) {
+        console.log(`\n${bold(p.name)} ${dim(`@${p.shortcut}`)}`);
+        for (const s of p.stages) {
+          console.log(`  ${s.label.padEnd(18)} ${s.date}  ${color[s.status](s.status.replace('-', ' ').padEnd(8))} ${s.words}`);
+          for (const i of s.checklist) if (i.auto ? !i.ok : !i.done) console.log(dim(`      ${i.auto ? '•' : '☐'} ${i.text}`));
+        }
+      }
+    });
+
+  program
+    .command('decisions')
+    .description('The decision log: what was decided on each project and why (from plan reviews, your answers and design docs)')
+    .argument('[project]', 'only this project')
+    .option('--md', 'print it as Markdown')
+    .option('--add <title>', 'add one of your own (with --decision, and --why)')
+    .option('--decision <text>')
+    .option('--why <text>')
+    .option('--json', 'print JSON')
+    .action(async (ref, opts) => {
+      await daemon();
+      if (opts.add) {
+        if (!ref || !opts.decision) throw new Error('agentmgr decisions <project> --add "<the question>" --decision "<what was decided>" [--why "<why>"]');
+        await api('POST', '/decisions', { project: ref, title: opts.add, decision: opts.decision, why: opts.why });
+        return console.log(`${green('✓')} added to the decision log`);
+      }
+      const all = await api('GET', '/decisions');
+      const r = String(ref ?? '').replace(/^@/, '').toLowerCase();
+      const key = ref ? all.projects.find((p) => p.name.toLowerCase() === r)?.key ?? (await api('GET', '/projects')).find((p) => p.shortcut === r)?.key : null;
+      if (ref && !key) return console.log(dim(`No decisions recorded for ${ref}.`));
+      if (opts.md) return console.log(await (await fetch(`${BASE}/api/decisions?format=markdown&project=${encodeURIComponent(key ?? '')}`)).text());
+      const items = all.items.filter((i) => !key || i.project.key === key);
+      if (opts.json) return console.log(JSON.stringify(items, null, 2));
+      if (!items.length) return console.log(dim('No decisions recorded yet.'));
+      for (const i of items) {
+        console.log(`${bold(i.title)}${i.superseded ? dim(' (replaced since)') : ''}`);
+        console.log(`  ${i.decision}${i.why ? dim(`  because: ${i.why}`) : ''}`);
+        console.log(dim(`  ${i.project.name} · ${i.kindLabel}${i.agentName ? ` · ${i.agentName}` : ''} · ${String(i.at).slice(0, 10)}`));
+      }
+    });
+
+  program
+    .command('debt')
+    .description("The tech debt radar: a project's files that change often and are hard to read, from git and the files (no model call)")
+    .argument('[project]', 'only this project')
+    .option('-s, --scan', 'scan the repository again now')
+    .option('--json', 'print JSON')
+    .action(async (ref, opts) => {
+      await daemon();
+      if (opts.scan && !ref) throw new Error('Name the project to scan: agentmgr debt <project> --scan');
+      let v = opts.scan ? await api('POST', `/debt/${encodeURIComponent(ref)}/scan`, {}) : await api('GET', '/debt');
+      const r = String(ref ?? '').replace(/^@/, '').toLowerCase();
+      const mine = () => v.projects.filter((p) => !r || p.shortcut === r || p.name.toLowerCase() === r);
+      for (let i = 0; opts.scan && mine().some((p) => p.scanning) && i < 300; i++) {
+        await new Promise((res) => setTimeout(res, 1000));
+        v = await api('GET', '/debt');
+      }
+      if (opts.json) return console.log(JSON.stringify(mine(), null, 2));
+      const list = mine().filter((p) => ref || p.at);
+      if (!list.length) return console.log(dim('Nothing scanned yet. Scan a project: agentmgr debt <project> --scan'));
+      for (const p of list) {
+        console.log(`\n${bold(p.name)} ${dim(`@${p.shortcut}  ${p.error ? `couldn't scan: ${p.error}` : p.at ? `${p.commits} commits in ${p.days} days` : p.hasRepo ? 'not scanned yet (--scan)' : 'no local repository yet'}`)}`);
+        for (const h of p.spots) console.log(`  ${String(h.score).padStart(3)}  ${h.file}\n       ${dim(h.reasons.join(' · '))}`);
+        if (p.at && !p.error && !p.spots.length) console.log(dim('  No hot spots.'));
+      }
+    });
+
+  program
     .command('news')
     .description("AI News: the frontier labs' latest releases, each summarized, with links")
     .option('-r, --refresh', 'read the release notes again now (and summarize what is new), then print')

@@ -72,6 +72,10 @@ const DEFAULTS = {
   // and micro benchmarks of the code it changed, before and after. Per agent: demoPage, benchmarks.
   // Each morning (weekdays), a spoken standup of the agents' news; see standup.js.
   standup: { enabled: true, at: '09:00', weekends: false, ai: true, notify: true },
+  // Plan: the tech debt radar (see DEBT_DEFAULTS in debt.js) and the calendar Today is planned around
+  // (its private iCal addresses and the working day; see CALENDAR_DEFAULTS in calendar.js).
+  debt: { enabled: true },
+  calendar: { ics: [], workStart: '09:00', workEnd: '18:00' },
   // AI News: the frontier labs' latest releases, summarized; see NEWS_DEFAULTS in news.js for every field.
   news: { enabled: true },
   demoPage: false,

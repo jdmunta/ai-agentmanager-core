@@ -40,6 +40,7 @@
         <button id="bugs-btn" title="Bugs: background hunts in a project or folder, and what they found, checked and worst first">Bugs <span id="bugs-count" class="badge"></span></button>
         <button id="reviews-btn" title="Reviews: pull requests you review. Reviewer agents ask the critical questions and find what blocks approval; you post what you pick">Reviews <span id="reviews-count" class="badge ready"></span></button>
         <button id="value-btn" title="Value: what the delivered work is worth, by day, week, month and quarter, against the AI cost and your time; reports for management">Value</button>
+        <button id="plan-btn" title="Plan: a project's dates (code complete, RC, GA) with their checklists and reminders, the decision log, and the tech debt radar">Plan <span id="plan-count" class="badge"></span></button>
         <button id="news-btn" title="AI News: the frontier labs' latest releases (Anthropic, OpenAI, Google and the other top labs), each summarized, with links">AI News <span id="news-count" class="badge ready"></span></button>
         <button id="map-btn" title="The codebase map: where each agent is changing and reading code, and who is about to collide">Map</button>
         <button id="watch-btn" title="Running agents' sessions side by side, live: follow them all without clicking from one to the next">Watch</button>
@@ -417,6 +418,9 @@
     <dialog id="value-dialog" class="issues-dialog value-dialog" aria-label="Value">
       <div id="value-body"></div>
     </dialog>
+    <dialog id="plan-dialog" class="issues-dialog plan-dialog" aria-label="Plan">
+      <div id="plan-body"></div>
+    </dialog>
     <dialog id="news-dialog" class="issues-dialog news-dialog" aria-label="AI News">
       <div id="news-body"></div>
     </dialog>
@@ -595,6 +599,7 @@
           <label class="check"><input type="checkbox" name="ev_budget" /> nears or reaches its budget, or today's spend reaches the daily limit</label>
           <label class="check"><input type="checkbox" name="ev_standup" /> the daily standup is ready (with a link to play it)</label>
           <label class="check"><input type="checkbox" name="ev_value" /> value reports (weekly, monthly, quarterly, as set in Value)</label>
+          <label class="check"><input type="checkbox" name="ev_milestone" /> a project's date (code complete, RC, GA) is 14, 7, 3 or 1 days away, today, or late (Plan → Dates)</label>
           <label class="check"><input type="checkbox" name="ev_waiting" /> finished its turn and is idle after <input name="waitingDelaySec" type="number" min="0" class="num" />s</label>
           <label class="check"><input type="checkbox" name="skipWhenWatching" /> not while I have its terminal open</label>
           <label class="check"><input type="checkbox" name="includeIntent" /> include the intent text in the message</label>

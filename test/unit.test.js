@@ -3644,3 +3644,209 @@ test('debug: the messages that start, continue and fix an investigation', async 
   // The fake engine (and a shell) would take "exit" in a message as a command.
   for (const m of [first, more, debugFixPrompt('/b/DEBUG.md', '')]) assert.doesNotMatch(m, /\bexit\b/);
 });
+
+test('dates: a project\'s commitments in order, checklists from what is open, status, and reminders sent once each', async () => {
+  const { Milestones, daysLeft, leftWords, remindersFor, dueReminder, stageStatus, checklistFor } = await import('../src/milestones.js');
+  let now = new Date(2026, 10, 13, 10, 0);
+  assert.deepEqual([daysLeft('2026-11-13', now), daysLeft('2026-11-20', now), daysLeft('2026-11-10', now)], [0, 7, -3]);
+  assert.deepEqual([0, 1, 9, -2].map(leftWords), ['today', 'tomorrow', 'in 9 days', '2 days late']);
+  assert.deepEqual(remindersFor('2026-12-01').map((r) => [r.offset, r.on]), [[14, '2026-11-17'], [7, '2026-11-24'], [3, '2026-11-28'], [1, '2026-11-30'], [0, '2026-12-01']]);
+  assert.deepEqual([20, 14, 10, 7, 2, 1, 0, -1].map(dueReminder), [null, '14', '14', '7', '3', '1', '0', 'late']);
+  assert.deepEqual([stageStatus({ n: 5, open: 2 }), stageStatus({ n: 5, open: 0 }), stageStatus({ n: 20, open: 9 }), stageStatus({ n: -1, open: 0 }), stageStatus({ n: -1, reached: 'x', open: 3 })], ['at-risk', 'on-track', 'on-track', 'late', 'reached']);
+  const facts = { working: [{ name: 'add-login' }], backlog: [], waiting: [], prs: [{ number: 7, title: 'Login' }, { number: 9, title: 'Cache' }], failing: [{ number: 9, title: 'Cache' }], bugs: [] };
+  assert.deepEqual(checklistFor('codeComplete', facts).map((i) => [i.key, i.auto, i.auto ? i.ok : null, i.text]), [
+    ['working', true, false, '1 agent still working'],
+    ['backlog', true, true, 'The backlog is finished'],
+    ['waiting', true, true, 'Nothing waiting on you'],
+    ['scope', false, null, 'Scope agreed: what is in and what moved out'],
+  ]);
+  assert.match(checklistFor('rc', facts, { name: 'Console', date: '2026-12-01' }).find((i) => i.key === 'notes').task, /release notes[\s\S]*Console[\s\S]*RC on 2026-12-01/);
+
+  const store = { data: {}, save() {} };
+  const sent = [];
+  const queued = [];
+  const m = new Milestones({ store, timer: false, now: () => now, projects: () => [{ key: 'k1', shortcut: 'cc', name: 'Console' }, { key: 'k2', shortcut: 'api', name: 'API' }], facts: () => facts, notify: async (text, plain) => sent.push(plain), queue: (p, title) => (queued.push([p.shortcut, title]), { id: 'b1' }) });
+  assert.throws(() => m.set('nope', {}), /No project/);
+  assert.throws(() => m.set('cc', { rc: 'next week' }), /a date like/);
+  assert.throws(() => m.set('cc', { codeComplete: '2026-12-01', rc: '2026-11-20' }), /in order/);
+  let v = m.set('@cc', { codeComplete: '2026-11-18', rc: '2026-12-01', ga: '2026-12-15' });
+  assert.deepEqual(v.others.map((p) => p.shortcut), ['api']);
+  assert.deepEqual(v.projects[0].stages.map((s) => [s.id, s.daysLeft, s.status, s.open, s.words]), [['codeComplete', 5, 'at-risk', 1, 'in 5 days'], ['rc', 18, 'on-track', 3, 'in 18 days'], ['ga', 32, 'on-track', 2, 'in 32 days']]);
+  assert.equal(v.projects[0].next.id, 'codeComplete');
+  // Today: only what is within two weeks.
+  assert.deepEqual(m.todayItems().map((i) => [i.kind, i.label, i.title, i.why]), [['milestone', 'At risk', 'Console: Code complete in 5 days (2026-11-18)', '1 agent still working, yours: Scope agreed: what is in and what moved out']]);
+  // A reminder for the nearest offset the date is within, once.
+  assert.deepEqual(await m.tick(), [{ project: 'cc', stage: 'codeComplete', reminder: '7' }]);
+  assert.deepEqual(await m.tick(), []);
+  assert.match(sent[0], /^Console: Code complete in 5 days \(2026-11-18\)\n1 agent still working/);
+  assert.deepEqual(m.view().projects[0].stages[0].reminders.map((r) => [r.offset, r.sent]), [[14, true], [7, true], [3, false], [1, false], [0, false]], 'the further ones count as covered');
+  now = new Date(2026, 10, 17, 22, 0);
+  assert.deepEqual(await m.tick(), [], 'not at night');
+  now = new Date(2026, 10, 17, 9, 0);
+  assert.deepEqual((await m.tick()).map((x) => [x.stage, x.reminder]), [['codeComplete', '1'], ['rc', '14']]);
+  // Your own items: ticked, or handed to an agent.
+  v = m.check('cc', 'codeComplete', 'scope');
+  assert.equal(v.projects[0].stages[0].checklist.find((i) => i.key === 'scope').done, true);
+  assert.throws(() => m.task('cc', 'rc', 'cut'), /nothing an agent can do/);
+  v = m.task('cc', 'rc', 'notes');
+  assert.equal(queued[0][0], 'cc');
+  assert.ok(v.projects[0].stages[1].checklist.find((i) => i.key === 'notes').asked);
+  // Reached: no more reminders; a moved date gets its reminders again; cleared dates go.
+  now = new Date(2026, 10, 19, 9, 0);
+  m.reach('cc', 'codeComplete');
+  assert.deepEqual((await m.tick()).map((x) => x.stage), []);
+  assert.equal(m.view().projects[0].next.id, 'rc');
+  m.set('cc', { rc: '2026-11-20' });
+  assert.deepEqual((await m.tick()).map((x) => [x.stage, x.reminder]), [['rc', '1']]);
+  assert.deepEqual(m.set('cc', { codeComplete: null, rc: null, ga: '' }).projects, []);
+});
+
+test('decisions: gathered from plan reviews, answers and design docs; kept after the agent is gone; yours added; as Markdown', async () => {
+  const { Decisions, designDecisions } = await import('../src/decisions.js');
+  const design = '# Design: cache\n## Summary\nx\n## Decisions and risks\n- **LRU over TTL**: the hot set is small and stable.\n- Keep the cache per process; sharing it needs a lock we do not want\n  yet.\n- Risk: memory grows with key size.\n\n## Testing\n- not a decision\n';
+  assert.deepEqual(designDecisions(design), ['**LRU over TTL**: the hot set is small and stable.', 'Keep the cache per process; sharing it needs a lock we do not want yet.']);
+  assert.deepEqual(designDecisions('## Design\n- nothing'), []);
+  const store = { data: {}, save() {} };
+  let agents = [
+    { id: 'a1', name: 'add-cache', planReview: { status: 'approved', decidedAt: '2026-11-10T10:00:00Z', note: 'Skip the disk tier for now.' }, answers: { q1: { text: 'Offset paging', at: '2026-11-11T09:00:00Z' } } },
+    { id: 'a2', name: 'general', kind: 'general', answers: { q9: { text: 'x', at: '2026-11-11T09:00:00Z' } } },
+  ];
+  let doc = { markdown: design, updatedAt: '2026-11-09T08:00:00Z' };
+  const d = new Decisions({ store, timer: false, agents: () => agents, projectOf: (a) => (a.kind === 'general' ? { key: 'general', name: 'General' } : { key: 'k1', name: 'Console' }), questions: () => [{ id: 'q1', question: 'Cursor or offset paging?' }], designDoc: (id) => (id === 'a1' ? doc : null), now: () => '2026-11-13T00:00:00Z' });
+  let v = d.view();
+  assert.deepEqual(v.items.map((i) => [i.kind, i.title, i.decision, i.why]), [
+    ['answer', 'Cursor or offset paging?', 'Offset paging', null],
+    ['plan', 'Plan for add-cache', 'Approved', 'Skip the disk tier for now.'],
+    ['design', 'LRU over TTL', 'the hot set is small and stable.', null],
+    ['design', 'Keep the cache per process', 'Keep the cache per process; sharing it needs a lock we do not want yet.', null],
+  ]);
+  assert.deepEqual(v.projects, [{ key: 'k1', name: 'Console', count: 4 }]);
+  assert.equal(d.sync(), false, 'nothing new the second time');
+  // The design moves on: the old line is kept, marked replaced.
+  doc = { markdown: design.replace('- **LRU over TTL**: the hot set is small and stable.', '- **TTL over LRU**: entries go stale.'), updatedAt: '2026-11-12T08:00:00Z' };
+  v = d.view();
+  assert.deepEqual(v.items.filter((i) => i.kind === 'design').map((i) => [i.title, i.superseded]), [['TTL over LRU', false], ['LRU over TTL', true], ['Keep the cache per process', false]]);
+  // Yours; search; removal sticks; the agent deleted.
+  assert.throws(() => d.add({ title: 'x' }), /project/);
+  const mine = d.add({ project: { key: 'k1', name: 'Console' }, title: 'Ship behind a flag', decision: 'Yes, default off', why: 'Two customers on the old path' });
+  assert.deepEqual(d.view({ q: 'flag' }).items.map((i) => i.id), [mine.id]);
+  d.remove(v.items.find((i) => i.kind === 'plan').id);
+  agents = [];
+  v = d.view();
+  assert.equal(v.items.length, 5);
+  assert.ok(v.items.filter((i) => i.agentId).every((i) => i.agentGone));
+  assert.ok(!v.items.some((i) => i.kind === 'plan'), 'a removed one is not gathered again');
+  const md = d.markdown();
+  assert.match(md, /^# Decision log\n\n## Console\n\n### Ship behind a flag\n\n- \*\*Decided:\*\* Yes, default off\n- \*\*Why:\*\* Two customers on the old path\n- \*\*When:\*\* 2026-11-13 · Added by you\n/);
+  assert.match(md, /### LRU over TTL[\s\S]*replaced since/);
+});
+
+test('tech debt: hot spots from git history and the files themselves, and a real repository scanned', async () => {
+  const { parseLog, parseTree, metricsOf, hotSpots, debtTask, scanRepo, Debt } = await import('../src/debt.js');
+  assert.deepEqual(parseLog('\x01Fix the cache\n\nsrc/a.js\nsrc/b.js\n\x01Add x\n\nsrc/a.js\n'), [{ subject: 'Fix the cache', files: ['src/a.js', 'src/b.js'] }, { subject: 'Add x', files: ['src/a.js'] }]);
+  assert.deepEqual([...parseTree('100644 blob abc123    120\tsrc/a.js\n040000 tree def456       -\tsrc\n100755 blob 0a1b2c      9\tbin/run')], [['src/a.js', 120], ['bin/run', 9]]);
+  const m = metricsOf('function f(a) {\n  // TODO tidy\n  if (a && a.b) {\n    for (const x of a.b) {\n      if (x) {\n        while (x.y) {\n          if (x.z || x.w) {\n            go();\n          }\n        }\n      }\n    }\n  }\n}\n\n');
+  assert.deepEqual(m, { lines: 14, branches: 7, deep: 3, todos: 1 });
+  const big = { lines: 900, branches: 200, deep: 40, todos: 5 };
+  const small = { lines: 30, branches: 2, deep: 0, todos: 0 };
+  const commits = [...Array.from({ length: 12 }, (_, i) => ({ subject: i % 2 ? 'Fix a crash in the importer' : 'Importer: more formats', files: ['src/importer.js'] })), { subject: 'Tidy', files: ['src/util.js', 'src/importer.js'] }, { subject: 'Format everything', files: Array.from({ length: 60 }, (_, i) => `src/f${i}.js`).concat('src/util.js') }];
+  const spots = hotSpots({ commits, files: new Map([['src/importer.js', big], ['src/util.js', small], ['src/quiet.js', big]]), bugs: ['src/importer.js'], days: 90 });
+  assert.deepEqual(spots.map((s) => s.file), ['src/importer.js'], 'changed a lot and tangled; a quiet tangle and a busy small file are not hot spots');
+  assert.deepEqual([spots[0].churn, spots[0].fixes, spots[0].bugs], [13, 6, 1]);
+  assert.deepEqual(spots[0].reasons, ['changed 13 times in 90 days', '6 of them fixes', '900 lines', '40 lines nested 5 deep or more', '200 branch points', '5 TODO/FIXME notes', '1 open bug found here']);
+  assert.ok(spots[0].score >= 80, String(spots[0].score));
+  assert.match(debtTask(spots[0]), /^Pay down tech debt in src\/importer\.js \(changed 13 times in 90 days; /);
+
+  // A real repository.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentmgr-debt-'));
+  const git = (...args) => execFileSync('git', ['-c', 'commit.gpgsign=false', '-c', 'user.email=t@t', '-c', 'user.name=t', ...args], { cwd: dir });
+  git('init', '-q', '-b', 'main');
+  const body = (n) => `export function run(a) {\n${Array.from({ length: n }, (_, i) => `          if (a.x${i} && a.y${i}) { a.z += ${i}; } // TODO ${i}`).join('\n')}\n}\n`;
+  fs.mkdirSync(path.join(dir, 'src'));
+  fs.mkdirSync(path.join(dir, 'node_modules', 'x'), { recursive: true });
+  for (let i = 1; i <= 6; i++) {
+    fs.writeFileSync(path.join(dir, 'src', 'importer.js'), body(80 + i));
+    fs.writeFileSync(path.join(dir, 'node_modules', 'x', 'index.js'), body(80 + i));
+    fs.writeFileSync(path.join(dir, 'logo.png'), Buffer.from([0, 1, 2, i]));
+    if (i === 1) fs.writeFileSync(path.join(dir, 'src', 'quiet.js'), body(90));
+    git('add', '-A', '-f');
+    git('commit', '-q', '-m', i % 2 ? 'Fix the importer' : 'Importer: more');
+  }
+  const r = await scanRepo(dir, { days: 30 });
+  assert.equal(r.commits.length, 6);
+  assert.deepEqual([...r.files.keys()], ['src/importer.js'], 'only code that changed more than once; not vendored or binary');
+  assert.equal(r.files.get('src/importer.js').todos, 86);
+  const store = { data: {}, save() {} };
+  const queued = [];
+  const debt = new Debt({ store, timer: false, projects: () => [{ key: 'k1', shortcut: 'cc', name: 'Console' }, { key: 'k2', shortcut: 'api', name: 'API' }], dirOf: (p) => (p.key === 'k1' ? dir : null), queue: (p, title) => (queued.push([p.shortcut, title]), { id: 'b1' }) });
+  await assert.rejects(debt.scan('api'), /no local repository/);
+  let v = await debt.scan('cc');
+  const cc = v.projects.find((p) => p.shortcut === 'cc');
+  assert.deepEqual([cc.hasRepo, cc.commits, cc.scanned, cc.spots.map((s) => s.file)], [true, 6, 1, ['src/importer.js']]);
+  v = debt.queueSpot('cc', 'src/importer.js');
+  assert.match(queued[0][1], /^Pay down tech debt in src\/importer\.js/);
+  assert.ok(v.projects[0].spots[0].queued);
+  v = debt.dismiss('cc', 'src/importer.js');
+  assert.deepEqual([v.projects.find((p) => p.shortcut === 'cc').spots.length, v.projects.find((p) => p.shortcut === 'cc').dismissed], [0, 1]);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('calendar: iCal events with zones and repeats, the day planned around the meetings, and what a meeting is about', async () => {
+  const { parseIcs, eventsBetween, wallToMs, dayPlan, relatedTo, calendarSettings, Calendar } = await import('../src/calendar.js');
+  assert.equal(new Date(wallToMs({ y: 2026, m: 11, d: 13, h: 9, mi: 0 }, 'America/New_York')).toISOString(), '2026-11-13T14:00:00.000Z');
+  assert.equal(new Date(wallToMs({ y: 2026, m: 7, d: 1, h: 9, mi: 0 }, 'America/New_York')).toISOString(), '2026-07-01T13:00:00.000Z', 'summer time');
+  assert.equal(new Date(wallToMs({ y: 2026, m: 11, d: 13, h: 9, mi: 0 }, 'utc')).toISOString(), '2026-11-13T09:00:00.000Z');
+  const ics = [
+    'BEGIN:VCALENDAR', 'BEGIN:VEVENT', 'UID:standup', 'SUMMARY:Team standup', 'DTSTART;TZID=America/New_York:20261102T093000', 'DTEND;TZID=America/New_York:20261102T094500',
+    'RRULE:FREQ=WEEKLY;BYDAY=MO,WE,FR', 'EXDATE;TZID=America/New_York:20261111T093000', 'BEGIN:VALARM', 'TRIGGER:-PT10M', 'DESCRIPTION:not the event', 'END:VALARM', 'END:VEVENT',
+    'BEGIN:VEVENT', 'UID:standup', 'RECURRENCE-ID;TZID=America/New_York:20261113T093000', 'SUMMARY:Team standup (moved)', 'DTSTART;TZID=America/New_York:20261113T110000', 'DTEND;TZID=America/New_York:20261113T111500', 'END:VEVENT',
+    'BEGIN:VEVENT', 'UID:review', 'SUMMARY:Design review\\, OPS-12 and', '  #482', 'DESCRIPTION:Agenda\\nthe add-login agent', 'DTSTART:20261113T190000Z', 'DURATION:PT1H', 'LOCATION:Room 4', 'END:VEVENT',
+    'BEGIN:VEVENT', 'UID:off', 'SUMMARY:Company holiday', 'DTSTART;VALUE=DATE:20261113', 'DTEND;VALUE=DATE:20261114', 'END:VEVENT',
+    'BEGIN:VEVENT', 'UID:gone', 'SUMMARY:Cancelled sync', 'STATUS:CANCELLED', 'DTSTART:20261113T200000Z', 'DTEND:20261113T210000Z', 'END:VEVENT',
+    'BEGIN:VEVENT', 'UID:monthly', 'SUMMARY:Second Friday demo', 'DTSTART:20261009T210000Z', 'DTEND:20261009T213000Z', 'RRULE:FREQ=MONTHLY;BYDAY=2FR;COUNT=3', 'END:VEVENT',
+    'BEGIN:VEVENT', 'UID:daily', 'SUMMARY:Focus', 'TRANSP:TRANSPARENT', 'DTSTART:20261101T160000Z', 'DTEND:20261101T170000Z', 'RRULE:FREQ=DAILY;INTERVAL=2;UNTIL=20261113T235959Z', 'END:VEVENT',
+    'END:VCALENDAR',
+  ].join('\r\n');
+  const parsed = parseIcs(ics);
+  assert.equal(parsed.length, 7);
+  assert.equal(parsed[2].summary, 'Design review, OPS-12 and #482', 'folded lines joined, escapes undone');
+  const iso = (e) => [e.title, new Date(e.start).toISOString().slice(0, 16), Math.round((e.end - e.start) / 60000)];
+  const week = eventsBetween(parsed, Date.parse('2026-11-09T00:00:00Z'), Date.parse('2026-11-14T00:00:00Z')).filter((e) => !e.allDay && e.uid === 'standup').map(iso);
+  assert.deepEqual(week, [['Team standup', '2026-11-09T14:30', 15], ['Team standup (moved)', '2026-11-13T16:00', 15]], 'Wednesday left out (EXDATE), Friday as it was moved');
+  const fri = eventsBetween(parsed, Date.parse('2026-11-13T05:00:00Z'), Date.parse('2026-11-14T05:00:00Z'));
+  assert.deepEqual(fri.filter((e) => !e.allDay).map(iso), [['Team standup (moved)', '2026-11-13T16:00', 15], ['Focus', '2026-11-13T16:00', 60], ['Design review, OPS-12 and #482', '2026-11-13T19:00', 60], ['Second Friday demo', '2026-11-13T21:00', 30]]);
+  assert.deepEqual(fri.filter((e) => e.allDay).map((e) => e.title), ['Company holiday']);
+  assert.equal(eventsBetween(parsed, Date.parse('2027-01-08T00:00:00Z'), Date.parse('2027-01-09T00:00:00Z')).filter((e) => e.uid === 'monthly').length, 0, 'three times, then no more');
+
+  // What a meeting is about.
+  const agents = [{ id: 'a1', name: 'add-login', issue: null, prs: [], project: 'Console' }, { id: 'a2', name: 'fix-cache', issue: 'OPS-12', prs: [] }, { id: 'a3', name: 'paging', prs: [{ number: 482 }] }, { id: 'a4', name: 'other', prs: [] }];
+  const items = [{ id: 'issue:OPS-12', kind: 'issue-review', label: 'Jira', title: 'OPS-12 Cache limit', issueKey: 'OPS-12' }, { id: 'q1', kind: 'question', label: 'Question', title: 'Cursor or offset?' }];
+  assert.deepEqual(relatedTo(fri.find((e) => e.uid === 'review'), { agents, items }).map((r) => [r.kind, r.title, r.why]), [['agent', 'add-login', 'named in the invite'], ['agent', 'fix-cache', 'works on OPS-12'], ['agent', 'paging', 'opened #482'], ['item', 'OPS-12 Cache limit', 'Jira']]);
+
+  // The day: free blocks between the meetings from now on, filled most pressing first.
+  const at = (h, mi = 0) => new Date(2026, 10, 13, h, mi).getTime();
+  const events = [{ title: 'Standup', start: at(9, 30), end: at(9, 45) }, { title: 'Review', start: at(11), end: at(12), description: 'OPS-12' }, { title: 'Lunch walk', start: at(12), end: at(13), free: true }, { title: 'Holiday', start: at(0), end: at(24), allDay: true }];
+  const todo = [{ id: 'p', kind: 'prompt', label: 'Prompt', title: 'Allow npm test?' }, { id: 'r', kind: 'pr-review', label: 'Review', title: '#9 Big change' }, { id: 'i', kind: 'issue-review', label: 'Jira', title: 'OPS-12 Cache limit', issueKey: 'OPS-12' }, { id: 'x', kind: 'action', label: 'Action', title: 'Send numbers' }, { id: 'm', kind: 'milestone', label: 'Date', title: 'Console: GA in 9 days' }];
+  const plan = dayPlan({ events, items: todo, agents, now: new Date(2026, 10, 13, 9, 50), workStart: '09:00', workEnd: '13:30' });
+  assert.deepEqual(plan.blocks.map((b) => [new Date(b.start).getHours() * 100 + new Date(b.start).getMinutes(), b.minutes, b.items.map((i) => i.id), b.spare]), [[950, 70, ['p', 'r', 'i', 'x'], 2], [1200, 90, [], 90]], 'the free lunch block counts as free time');
+  assert.deepEqual([plan.allDay, plan.next.title, plan.next.inMinutes, plan.meetingMinutes, plan.freeMinutes, plan.needMinutes, plan.unplaced], [['Holiday'], 'Review', 70, 75, 160, 68, 0]);
+  assert.deepEqual(plan.meetings.map((m) => [m.title, m.past, m.related.map((r) => r.title)]), [['Standup', true, []], ['Review', false, ['fix-cache', 'OPS-12 Cache limit']], ['Lunch walk', false, []]]);
+  const tight = dayPlan({ events, items: todo, now: new Date(2026, 10, 13, 10, 35), workStart: '09:00', workEnd: '12:00' });
+  assert.deepEqual([tight.blocks.map((b) => b.items.map((i) => i.id)), tight.unplaced], [[['p', 'i']], 2], 'what does not fit is left over, not squeezed in');
+  assert.equal(dayPlan({ events, items: todo, now: new Date(2026, 10, 13, 19, 0) }).blocks.length, 0, 'after hours: nothing planned');
+
+  // Settings and the calendar itself.
+  assert.deepEqual(calendarSettings({ calendar: { ics: ['webcal://cal.example/x.ics', 'ftp://no', '  '], workStart: '25:00', workEnd: '08:00' } }), { ics: ['https://cal.example/x.ics'], workStart: '09:00', workEnd: '18:00' });
+  const config = {};
+  const saved = [];
+  const cal = new Calendar({ config, now: () => new Date(2026, 10, 13, 9, 50), fetchText: async (u) => (u.includes('bad') ? '<html>Sign in</html>' : u.includes('down') ? Promise.reject(new Error('503')) : ics) });
+  assert.deepEqual(await cal.day({ items: todo }), { connected: false, workStart: '09:00', workEnd: '18:00' });
+  await assert.rejects(cal.set({ ics: ['https://bad.example/c.ics'] }), /didn't return a calendar/);
+  await assert.rejects(cal.set({ ics: ['https://down.example/c.ics'] }), /Couldn't read the calendar at down\.example: 503/);
+  await assert.rejects(cal.set({ ics: ['not a url'] }), /starts with https/);
+  const st = await cal.set({ ics: ['https://cal.example/secret-token/basic.ics'], workEnd: '17:00' }, (p) => saved.push(p));
+  assert.deepEqual([st.connected, st.sources.map((s) => s.name), saved[0].calendar.workEnd], [true, ['cal.example'], '17:00']);
+  const day = await cal.day({ items: todo, agents });
+  assert.ok(day.connected && day.meetings.some((m) => m.title.startsWith('Design review')) && day.allDay.includes('Company holiday'));
+  assert.doesNotMatch(JSON.stringify(day), /secret-token/, "the calendar's address is never shown");
+});

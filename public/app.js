@@ -39,6 +39,7 @@ import { initBugHunt } from '/bughunt.js';
 import { drawDiagram } from '/diagram.js';
 import { initValue } from '/value.js';
 import { initNews } from '/news.js';
+import { initPlan } from '/plan.js';
 import { initMcp } from '/mcp.js';
 import { initCodeMap } from '/codemap.js';
 import { initKeys } from '/keys.js';
@@ -68,11 +69,13 @@ const standupOnLoad = hashId === 'standup';
 const mapOnLoad = hashId === 'map';
 const valueOnLoad = hashId === 'value';
 const newsOnLoad = hashId === 'news';
+// "#plan" or "#plan/<dates|decisions|debt>".
+const planOnLoad = hashId === 'plan';
 const reviewsOnLoad = hashId === 'reviews';
 // "#mcp" or "#mcp/<agent>": the MCP window on its own.
 const mcpOnLoad = hashId === 'mcp';
 let watchShown = false;
-let selectedId = (watchOnLoad || standupOnLoad || mapOnLoad || valueOnLoad || newsOnLoad || reviewsOnLoad || mcpOnLoad ? null : hashId) || null;
+let selectedId = (watchOnLoad || standupOnLoad || mapOnLoad || valueOnLoad || newsOnLoad || planOnLoad || reviewsOnLoad || mcpOnLoad ? null : hashId) || null;
 let openTermOnLoad = hashView === 'term' || hashView === 'code' || isShell(hashView) || isBrowser(hashView);
 let filterText = '';
 // "Only agents created in the last N days": remembered in this browser.
@@ -279,6 +282,7 @@ const todayUi = initToday({
   openBugs: (show = 'open') => bugsUi.open({ show }),
   openChanges: (id) => (showTab('agents'), select(id), reviewUi.open(id)),
   openEval: (id) => (showTab('agents'), select(id), openDoc(id, 'eval')),
+  openPlan: (tab) => planUi.open(tab),
 });
 $('#today-btn').onclick = () => todayUi.open();
 // Designs: every agent's design doc, the ones waiting for your review first.
@@ -304,6 +308,21 @@ $('#value-btn').onclick = () => valueUi.open();
 // AI News: the frontier labs' latest releases, summarized.
 const newsUi = initNews({ api, $, esc, ago, toast: (m, ms) => toast(m, ms) });
 $('#news-btn').onclick = () => newsUi.open();
+// Plan: project dates with their checklists and reminders, the decision log, the tech debt radar.
+const planUi = initPlan({
+  api,
+  $,
+  esc,
+  ago,
+  toast: (m, ms) => toast(m, ms),
+  projects: () => projectsState.map((p) => ({ key: p.shortcut, name: p.name })),
+  openTab: (what, id) => {
+    if (what === 'agent') return showTab('agents'), select(id);
+    if (what === 'bugs') return bugsUi.open({ show: 'open' });
+    showTab(what);
+  },
+});
+$('#plan-btn').onclick = () => planUi.open();
 // MCP: the MCP servers and tools Claude Code has in a folder, and running one.
 const mcpUi = initMcp({ api, $, esc, ago, md: (t) => md(t), toast: (m, ms) => toast(m, ms), agents: () => [...agents.values()] });
 $('#mcp-btn').onclick = () => mcpUi.open(selectedId && agents.get(selectedId)?.workdir ? selectedId : null);
@@ -358,6 +377,7 @@ function shortcut(act) {
   if (act === 'bugs') return bugsUi.open();
   if (act === 'value') return valueUi.open();
   if (act === 'news') return newsUi.open();
+  if (act === 'plan') return planUi.open();
   if (act === 'today') return todayUi.open();
   if (act.startsWith('tab:')) return showTab(act.slice(4));
   return false;
@@ -4420,6 +4440,11 @@ function handleEvent(msg) {
       history.replaceState(null, '', '#');
       valueUi.open();
     }
+    if (planOnLoad && !watchShown) {
+      watchShown = true;
+      history.replaceState(null, '', '#');
+      planUi.open(hashView || 'dates');
+    }
     if (newsOnLoad && !watchShown) {
       watchShown = true;
       history.replaceState(null, '', '#');
@@ -4476,6 +4501,9 @@ function handleEvent(msg) {
     valueUi.changed();
   } else if (msg.t === 'news') {
     newsUi.changed();
+  } else if (msg.t === 'plan') {
+    planUi.changed();
+    todayUi.changed();
   } else if (msg.t === 'standup') {
     standupUi.set(msg.latest);
     if (msg.latest?.reason === 'scheduled' && msg.latest.items.length) toast('Standup ready: press Standup (or p) to play it', 8000);
