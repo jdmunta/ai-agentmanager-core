@@ -361,6 +361,16 @@ test('AI News: release notes summarized, the top labs from a web search, filters
   assert.deepEqual(r.chips, ['All 3', 'Anthropic 2', 'xAI 1'], 'the web search adds a lab without release notes here; the old one is left out');
   assert.ok(r.links.includes('https://example.com/batches'), 'its links');
 
+  // On a phone the list scrolls inside the window; it isn't cut off below it.
+  await width(390, 320);
+  const fit = await js(`(() => {
+    const d = document.querySelector('#news-dialog').getBoundingClientRect();
+    const l = document.querySelector('#news-body .news-list');
+    return { inside: l.getBoundingClientRect().bottom <= d.bottom + 1, scrolls: l.scrollHeight > l.clientHeight && getComputedStyle(l).overflowY === 'auto' };
+  })()`);
+  assert.deepEqual(fit, { inside: true, scrolls: true }, 'the news list scrolls on a small screen');
+  await width(1600);
+
   // Filters: a lab, then words.
   await js(`document.querySelector('[data-news-lab="xAI"]').click()`);
   await until(`JSON.stringify(${titles}) === '["Grok Fake 9"]'`, 'only xAI');

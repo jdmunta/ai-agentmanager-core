@@ -1291,7 +1291,7 @@ table.bench-cases tr.faster td:nth-child(5) { color: var(--green); font-weight: 
 .issues-dialog { width: min(1100px, calc(100% - 32px)); max-height: calc(100% - 32px); padding: 16px; }
 /* Only while open: a display on the dialog itself would keep a closed one on screen. */
 .issues-dialog[open] { display: flex; flex-direction: column; }
-#issues-body, #actions-body, #designs-body, #reviews-body { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+#issues-body, #actions-body, #designs-body, #reviews-body, #bugs-body, #plan-body, #news-body { display: flex; flex-direction: column; min-height: 0; flex: 1; }
 /* The lists: drag the corner to any size, or fill the window (⤢ or f). */
 .issues-dialog { resize: both; overflow: hidden; min-width: min(520px, calc(100% - 32px)); min-height: 240px; max-width: calc(100% - 16px); max-height: calc(100% - 16px); }
 .issues-dialog.expanded { width: calc(100% - 16px); height: calc(100% - 16px); }
@@ -1304,7 +1304,7 @@ table.bench-cases tr.faster td:nth-child(5) { color: var(--green); font-weight: 
 .issues-head .chip { font-size: 12px; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--border); background: var(--panel); cursor: pointer; }
 .issues-head .chip.active { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
 .issues-head .chip .count { opacity: 0.75; margin-left: 2px; }
-.issues-scroll { overflow: auto; min-height: 0; border: 1px solid var(--border); border-radius: var(--radius); }
+.issues-scroll { overflow: auto; -webkit-overflow-scrolling: touch; min-height: 0; border: 1px solid var(--border); border-radius: var(--radius); }
 table.issues { width: 100%; border-collapse: collapse; font-size: 13px; }
 table.issues th { position: sticky; top: 0; background: var(--panel-2); text-align: left; font-weight: 600; padding: 6px 10px; border-bottom: 1px solid var(--border); white-space: nowrap; }
 table.issues td { padding: 7px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
