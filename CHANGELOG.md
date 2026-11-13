@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.45.0 (2026-11-13)
+
+- **AI News.** **AI News** in the top bar (or `l`, `#news`, `agentmgr news`) lists what the frontier labs released in the last 30 days, newest first and grouped by day. Each entry has its lab, a summary of a sentence or two, a link to the release and the links from the note. Filter by lab or by words; what arrived since you last looked is marked *new* and counted on the button.
+- **Where it comes from.** The release notes of the Claude Platform, Claude Code, the OpenAI API and the Gemini API, read every 6 hours, and a web search once a day for the other top labs (xAI, Meta, Mistral and the rest). **Refresh** and **Search top labs** look now. Add release notes of your own with `"news": { "custom": [...] }` in config.json.
+- **Model calls, on your Claude plan.** One tool-less call per 25 new entries for the summaries (each entry once), and one Claude Code call a day for the web search, allowed only to search and read the web. What the search finds is as reliable as a web search: check the link. Turn either off with `"news": { "summaries": false, "search": false }`.
+
 ## 1.44.0 (2026-11-12)
 
 - **Whose session is this?** Expanded, in full screen and on a phone, the terminal bar shows the agent's name on the left, on every tab (Claude, Code, Shell, Browser). It follows a rename, and its tooltip has the agent's task.
