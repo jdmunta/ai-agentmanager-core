@@ -5258,3 +5258,41 @@ test("reviews: a reviewer agent on someone else's PR finds blockers and question
     await call('DELETE', '/projects/rvp');
   }
 });
+
+test('debug: the question goes into the agent\'s session, its report is read back, follow-ups and fixes continue it', async () => {
+  const [a] = (await call('POST', '/agents', { intent: 'Scale the importer' })).body;
+  await runningAgent(a.id);
+  const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/term/${a.id}`);
+  let out = '';
+  ws.on('message', (m) => {
+    const msg = JSON.parse(m.toString());
+    if (msg.t === 'o' || msg.t === 'hello') out += msg.d ?? msg.backlog;
+  });
+  await new Promise((r) => ws.on('open', r));
+  const file = path.join(fs.realpathSync(path.join(home, 'briefs', a.id)), 'DEBUG.md');
+  assert.equal((await call('POST', `/agents/${a.id}/debug`, { question: ' ' })).status, 400);
+  assert.equal((await call('POST', `/agents/${a.id}/debug`, { fix: true })).status, 409, 'no report to fix from yet');
+  assert.equal((await call('GET', `/agents/${a.id}/specs/debug`)).body.markdown, null);
+
+  const asked = await call('POST', `/agents/${a.id}/debug`, { question: 'E2E tests fail at max scale' });
+  assert.equal(asked.status, 200, JSON.stringify(asked.body));
+  assert.deepEqual(asked.body.debug.asks.map((x) => [x.kind, x.text]), [['debug', 'E2E tests fail at max scale']]);
+  assert.equal(asked.body.outbox, 1, 'queued like any message');
+  await waitFor(() => out.includes('Debug this: E2E tests fail at max scale') && out.includes(`Keep a report at ${file}`), 15000, 'typed into the session, with where the report goes');
+
+  // The agent writes the report; the page reads it, and the agent's record says when it changed.
+  fs.writeFileSync(file, '# Debug: importer at scale\n## Summary\nThe pool runs dry.\n## Code path\n```mermaid\nflowchart LR\n  A e1@--> B\n  e1@{ animate: true }\n```\n');
+  const report = (await call('GET', `/agents/${a.id}/specs/debug`)).body;
+  assert.match(report.markdown, /^# Debug: importer at scale/);
+  assert.equal((await agentNow(a.id)).specDocs.debug, report.updatedAt);
+
+  await waitFor(async () => (await agentNow(a.id)).outbox === 0, 15000, 'delivered');
+  const more = await call('POST', `/agents/${a.id}/debug`, { question: 'It only happens with 500 tenants' });
+  await waitFor(() => out.includes('Debug, continued: It only happens with 500 tenants'), 20000, 'the follow-up');
+  const fix = await call('POST', `/agents/${a.id}/debug`, { fix: '1 and 2' });
+  await waitFor(() => out.includes(`Apply the fixes from your debug report at ${file}: 1 and 2.`), 20000, 'the fixes asked for');
+  assert.deepEqual(fix.body.debug.asks.map((x) => x.kind), ['debug', 'follow-up', 'fix']);
+  assert.equal(more.body.debug.startedAt, asked.body.debug.startedAt);
+  ws.close();
+  await call('DELETE', `/agents/${a.id}`);
+});

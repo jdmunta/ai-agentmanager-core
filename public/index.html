@@ -147,7 +147,7 @@
             <button id="term-attach" class="ghost small" title="Attach files or images (you can also drop or paste them into the terminal)">📎 Attach</button>
             <input type="file" id="term-file" multiple hidden>
             <button id="term-fit" class="ghost small" title="Refit the terminal to the panel">Fit</button>
-            <button id="term-split-btn" class="ghost small desk-only" title="Split: the terminal on the left, and Code, Docs (diagrams) or Changes on the right">◫ Split</button>
+            <button id="term-split-btn" class="ghost small desk-only" title="Split: the terminal on the left, and Code, Docs (diagrams), Changes or Debug on the right">◫ Split</button>
             <button id="group-split" class="ghost small desk-only" title="Split the screen: a group to the right for another agent's session, as in VS Code (Cmd+\ on a Mac, or Ctrl+Shift+\; add Shift on a Mac, or Alt, to split down). Or drag an agent from the list onto the right or bottom edge">⊞ Split screen</button>
             <button id="term-max" class="ghost small desk-only" title="Expand to fill the window (Ctrl+Shift+E)">⤢ Expand</button>
             <button id="term-full" class="ghost small desk-only" title="Full screen (Esc to leave)">⛶ Full screen</button>
@@ -195,6 +195,7 @@
                   <button class="term-tab" data-side="code" role="tab" title="The agent's files">Code</button>
                   <button class="term-tab" data-side="docs" role="tab" title="Diagrams and the other documents">Docs</button>
                   <button class="term-tab" data-side="changes" role="tab" title="Its changes, explained one by one">Changes</button>
+                  <button class="term-tab" data-side="debug" role="tab" title="Debug: say what to debug; the agent investigates in its session and its report shows here, with animated diagrams of the code path and data flow, findings and recommended fixes">Debug</button>
                 </div>
                 <span class="spacer"></span>
                 <button type="button" class="ghost small" id="side-close" title="Close the split">✕</button>

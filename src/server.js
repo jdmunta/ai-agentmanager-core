@@ -651,6 +651,8 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
   api.post('/rules/dismiss', wrap((req) => (manager.rules.dismiss(...ruleArgs(req)), manager.rules.view())));
   api.post('/rules/remove', wrap((req) => (manager.rules.remove(...ruleArgs(req)), manager.rules.view())));
   api.post('/agents/:id/tell', wrap((req) => manager.tell(req.params.id, req.body?.text)));
+  // Debug: what to debug (or a follow-up), or `fix` to apply the report's fixes; the report is /specs/debug.
+  api.post('/agents/:id/debug', wrap((req) => manager.debug(req.params.id, { question: req.body?.question, fix: req.body?.fix ?? null })));
   api.post('/agents/:id/answer', wrap((req) => manager.answerQuestion(req.params.id, req.body?.question, req.body?.text)));
   api.post('/agents/:id/prompt-key', wrap((req) => manager.answerPrompt(req.params.id, String(req.body?.key ?? ''))));
   api.post('/agents/:id/stuck/dismiss', wrap((req) => manager.dismissStuck(req.params.id, req.body?.key)));

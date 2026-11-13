@@ -32,6 +32,9 @@ import {
   intentMarkdown,
   intentPath,
   readSpecDoc,
+  debugPath,
+  debugPrompt,
+  debugFixPrompt,
   specDocsInfo,
   specPath,
   specPrompt,
@@ -830,8 +833,30 @@ export class AgentManager extends EventEmitter {
   /** One of an agent's intent, spec and plan files. */
   specDoc(ref, name) {
     const agent = this.mustGet(ref);
-    if (!['intent', 'spec', 'plan', 'designdoc', 'benchmark'].includes(name)) throw Object.assign(new Error('Unknown file (intent, spec, plan, designdoc or benchmark)'), { status: 400 });
+    if (!['intent', 'spec', 'plan', 'designdoc', 'benchmark', 'debug'].includes(name)) throw Object.assign(new Error('Unknown file (intent, spec, plan, designdoc, benchmark or debug)'), { status: 400 });
     return readSpecDoc(agent.id, name) ?? { name, markdown: null };
+  }
+
+  /**
+   * Debug: ask the agent to investigate something in its session and keep a report (DEBUG.md) with
+   * diagrams of the code path and data flow, findings and recommended fixes. `question`: what to
+   * debug, or a follow-up once there is a report. `fix`: apply the report's fixes (which ones, in
+   * words; true for the ones it recommends). The message waits in the agent's queue like any other.
+   */
+  debug(ref, { question = '', fix = null } = {}) {
+    const agent = this.mustGet(ref);
+    if (!agent.workdir || agent.status === 'preparing') throw Object.assign(new Error('The agent has no folder to debug in yet'), { status: 409 });
+    const q = String(question ?? '').replace(/\s+/g, ' ').trim().slice(0, 2000);
+    const has = Boolean(readSpecDoc(agent.id, 'debug')?.markdown?.trim());
+    if (fix && !has) throw Object.assign(new Error('There is no debug report yet: say what to debug first'), { status: 409 });
+    if (!fix && q.length < 3) throw Object.assign(new Error('Say what to debug'), { status: 400 });
+    fs.mkdirSync(briefDir(agent.id), { recursive: true });
+    const file = path.join(fs.realpathSync(briefDir(agent.id)), path.basename(debugPath(agent.id)));
+    const which = fix === true ? '' : String(fix ?? '').replace(/\s+/g, ' ').trim().slice(0, 500);
+    this.tell(agent.id, fix ? debugFixPrompt(file, which) : debugPrompt(file, q, { again: has }), { source: 'debug' });
+    // What was asked, newest last, for the Debug tab.
+    const asks = [...(agent.debug?.asks ?? []), { text: fix ? `Apply fixes${which ? `: ${which}` : ''}` : q, kind: fix ? 'fix' : has ? 'follow-up' : 'debug', at: now() }].slice(-20);
+    return this.view(this.patch(agent.id, { debug: { asks, startedAt: agent.debug?.startedAt ?? now() } }));
   }
 
   /** The agent's sample demo page (HTML), once it has written one. */
@@ -2323,6 +2348,14 @@ export class AgentManager extends EventEmitter {
       const file = loadPlanFile(id, agent.planReview);
       // A new or revised plan waits for review again, unless it was already approved (then it's a progress update).
       if (file) this.patch(id, { planReview: { ...agent.planReview, ...file, status: agent.planReview.status === 'approved' ? 'approved' : 'review' } });
+    }
+    // A debug report written or updated: the page hears, and draws it.
+    if (agent.debug) {
+      let at = null;
+      try {
+        at = fs.statSync(debugPath(id)).mtime.toISOString();
+      } catch {}
+      if (at !== (agent.debug.reportAt ?? null)) this.patch(id, { debug: { ...this.store.get(id).debug, reportAt: at } });
     }
   }
 

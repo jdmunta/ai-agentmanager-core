@@ -27,6 +27,7 @@ Run one background [Claude Code](https://claude.com/claude-code) agent per inten
 - **Slack alerts.** A message in your channel when an agent needs input, finishes a backlog item, or fails.
 - **Priority.** Mark agents P0–P3. P0 and P1 are highlighted, and lists sort by priority.
 - **Share for review.** One click writes an **Analysis**, **Design**, **Flow** or **Proposal** document from the agent's work, a human time **Estimate** for planning, or the change's **Documentation** with an OpenAPI spec of any API changes. Copy it as Markdown, download it, or print it to PDF with diagrams.
+- **Debug.** Say what to debug (a failure, E2E instability at max scale, slowness under load) in the **Debug** tab beside an agent's session. The agent investigates there and writes a report next to it: animated diagrams of the code path and the data flow with where it breaks, findings with evidence, likely causes and recommended fixes. It changes no code until you press **Apply fixes**.
 - **AI News.** The frontier labs' latest releases in one list, newest first: Claude Platform, Claude Code, the OpenAI API and the Gemini API from their release notes, and the other top labs from a daily web search. Each is summarized in a sentence or two, with its links.
 - **MCP servers and tools.** See every MCP server Claude Code has in a folder (yours, the project's, claude.ai connectors and plugins) with its tools, sign in to the ones that need it, and run any tool directly, through Claude Code, or in an agent's session.
 - **Human vs AI.** It splits the open questions about the work into the top 5 that need your judgment and the ones a model can answer from the evidence. It answers those, then a second model double-checks every answer.
@@ -182,6 +183,7 @@ agentmgr explain <agent>                      # full briefing: ask, status, plan
 agentmgr remote on | off | status | rotate    # phone / remote access (see below)
 agentmgr backlog add "ask" -r <repo> [-p 1]   # queue work; also: ls, start, accept, reopen, move, limit, pause
 agentmgr notify slack --webhook <url>         # Slack alerts; also: test, status, on, off, event <name> on|off
+agentmgr debug <agent> "what goes wrong"       # debug with an agent; no question prints its report; --fix applies the fixes
 agentmgr news                                 # the frontier labs' latest releases, summarized (--refresh, --lab, --days)
 agentmgr inbox                                # prompts, questions, stuck agents and overlaps waiting on you
 agentmgr answer <agent> <question-id> "…"     # answer a question from the inbox
@@ -1146,6 +1148,30 @@ Usage comes from the session transcripts and is refreshed every few seconds whil
 - **Run in agent session** tells the agent to use the tool, with its conversation and context. The answer is in the session. This works for Claude Code agents.
 
 `agentmgr mcp run <agent|home> <server> <tool> [arguments or request]` does the first two, and `--session` the third. A destructive tool needs a second click. Plugins can refuse runs outside an agent's session with the `mcp.run` policy.
+
+## Debug
+
+**🐞 Debug** in an agent's detail (or the **Debug** tab of the split, **◫ Split** in the terminal bar) puts the agent's session on the left and the debug pane on the right. Type what is going wrong, for example *E2E tests fail at max scale after about 20 minutes* or *p99 latency triples under load*, and press **Debug** (or Enter).
+
+The agent investigates in its own session, with everything it already knows about the work: it reads the code on the path, the logs and the tests, reproduces the problem where it can (the failing test, a small load, a script) and measures. It keeps a report, drawn in the pane as it grows:
+
+| Section | What it has |
+|---|---|
+| Summary | What goes wrong, the most likely cause, and how sure it is |
+| Symptoms | What is seen and when (scale, load, timing), and how to reproduce it |
+| Code path | An animated flowchart of the path the failing request, job or test takes through the real files and functions; where it breaks is outlined red, what is only suspected dashed amber |
+| Data flow | An animated flowchart or sequence diagram of the data on that path: where it grows, waits, is dropped or goes wrong |
+| Interleaving | For timing, concurrency and load problems: the order of events that breaks |
+| Findings | Each with its evidence (file and line, a log line, a metric, a command and its output), marked confirmed or suspected |
+| Root cause | The causes, most likely first, with a confidence and what would confirm each |
+| Recommended fixes | Each with where, the effort, the risk and how to verify it |
+| Next checks | What to measure next, and what it needs from you |
+
+- **Follow-ups.** Type what you know or what to look at next and press **Ask**: the investigation continues and the report is brought up to date. If the agent needs something only you have (the scale it fails at, logs), it asks in its session on the left.
+- **Apply fixes.** The agent changes no repository code while it investigates. **Apply fixes** asks it to make the fixes (name them in the box, like *1 and 3*, or leave it empty for the ones it recommends), verify each the way the report says, and add a **Fixes applied** section with the result before and after.
+- **How it runs.** Your question is typed into the agent's session like any message: when it is idle, resuming it if it was closed. It uses the agent's own engine, model and permissions; no other model call is made. The report is `DEBUG.md` next to the agent's brief, outside the repository.
+
+`agentmgr debug <agent> "<what goes wrong>"` asks from the terminal, `agentmgr debug <agent>` prints the report, and `--fix ["1 and 3"]` applies fixes.
 
 ## AI News
 

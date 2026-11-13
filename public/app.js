@@ -2306,6 +2306,7 @@ function renderDetail() {
         ${a.aiReview?.verdict ? `<button data-act="overview" title="The AI review: what's done, what's missing, the risks">Overview${a.aiReview.seen ? '' : ' <span class="count">new</span>'}</button>` : ''}
         ${a.questions?.length ? `<button data-act="questions" title="What the agent asked you, and your answers">Questions${openQuestions(a) ? ` <span class="count">${openQuestions(a)}</span>` : ''}</button>` : ''}
         ${a.conflicts?.length ? `<button data-act="overlaps" title="Other agents changing the same files: which, who should merge first, and what to do">⚔ Overlaps <span class="count">${a.conflicts.length}</span></button>` : ''}
+        <button data-act="debug" class="desk-only" ${a.workdir && a.status !== 'preparing' ? '' : 'disabled'} title="Debug with this agent: say what to debug (a failure, instability at scale, slowness under load). It investigates in its session and writes a report beside it: animated diagrams of the code path and data flow, findings and recommended fixes">🐞 Debug${a.specDocs?.debug ? ' <span class="count">report</span>' : ''}</button>
         <button data-act="mcp" ${a.workdir && a.status !== 'preparing' ? '' : 'disabled'} title="The MCP servers and tools Claude Code has in this agent's folder; run one in its session or once in the workspace">MCP tools</button>
         <button data-act="fork" ${a.workdir && a.git?.branch ? '' : 'disabled'} title="A new agent with this one's code and conversation, in its own worktree, to try another approach">Fork</button>
         <button data-act="edit" title="Change its name, request, project, priority, permission mode or model">Edit</button>
@@ -3904,6 +3905,9 @@ $('#detail-body').addEventListener('click', async (e) => {
     case 'questions':
     case 'overlaps':
       return openNeeds(a.id, btn.dataset.act);
+    case 'debug':
+      term.open(a.id);
+      return sidePane.open('debug');
     case 'mcp':
       return mcpUi.open(a.id);
     case 'memory':
