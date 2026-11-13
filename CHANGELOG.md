@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.47.0 (2026-11-13)
+
+- **Plan.** **Plan** in the top bar (or `c`, `#plan`) has three tabs: Dates, Decisions and Debt. Its badge counts dates that are late or at risk.
+- **Dates.** Give a project its code complete, RC and GA dates. Each has a checklist: the app counts agents still working, unfinished backlog, open or failing pull requests and critical or high bugs, and you tick the rest (scope agreed, release notes, docs). A date is on track, at risk (a week or less away with counted work open), late or reached. **Show** opens what is behind a count; **Have an agent do it** puts an item on the project's backlog. Reminders come 14, 7, 3 and 1 days ahead, on the day and once when a date passes, with what is still open; dates show in Today from two weeks out. `agentmgr dates [project] --cc --rc --ga`.
+- **Decisions.** One log of what was decided and why: plans you approved or sent back with your notes, your answers to agents' questions, and the decisions in each agent's design doc. Entries stay after the agent is deleted. Add your own, filter by project or words, copy as Markdown. `agentmgr decisions [project] --md`.
+- **Debt.** Files ranked by how often they changed in 90 days, how many of those changes were fixes and how tangled they are, from git history, scanned weekly. **Hand to an agent** queues a refactor task; **Not debt** sets a file aside. `agentmgr debt [project] --scan`. Turn it off with `"debt": { "enabled": false }`.
+- **Your day.** Paste your calendar's private iCal address (Google or Outlook) in Today and it opens with your meetings, the free time between them with what needs you placed in it, and the agents or issues each meeting names. Read-only; the address stays on this computer and isn't shown again.
+- No model calls are added by any of this.
+
 ## 1.46.0 (2026-11-13)
 
 - **Debug.** **🐞 Debug** in an agent's detail (or the **Debug** tab of the split) puts the agent's session on the left and a debug pane on the right. Say what goes wrong (a failure, E2E instability at max scale, slowness under load) and the agent investigates in its own session: it reads the code and logs, reproduces and measures where it can, and changes no code yet.
