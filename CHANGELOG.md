@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.46.0 (2026-11-13)
+
+- **Debug.** **🐞 Debug** in an agent's detail (or the **Debug** tab of the split) puts the agent's session on the left and a debug pane on the right. Say what goes wrong (a failure, E2E instability at max scale, slowness under load) and the agent investigates in its own session: it reads the code and logs, reproduces and measures where it can, and changes no code yet.
+- **The report.** Drawn beside the session as the agent writes it: animated diagrams of the code path and the data flow, with where it breaks outlined red and what is only suspected dashed amber; the order of events for timing and load problems; findings with evidence, marked confirmed or suspected; the likely causes; and recommended fixes with how to verify each.
+- **Follow-ups and fixes.** **Ask** continues the investigation and brings the report up to date. **Apply fixes** has the agent make the fixes you name (or the ones it recommends), verify each and record the result before and after. From the terminal: `agentmgr debug <agent> "<what goes wrong>"`, and `--fix`.
+
 ## 1.45.0 (2026-11-13)
 
 - **AI News.** **AI News** in the top bar (or `l`, `#news`, `agentmgr news`) lists what the frontier labs released in the last 30 days, newest first and grouped by day. Each entry has its lab, a summary of a sentence or two, a link to the release and the links from the note. Filter by lab or by words; what arrived since you last looked is marked *new* and counted on the button.
