@@ -25,7 +25,11 @@ const freePort = () =>
     });
   });
 
-let home, daemon, chrome, ws, base;
+let home, daemon, chrome, ws, base, notes;
+// AI News reads its release notes from here, never the internet.
+const today = new Date().toISOString().slice(0, 10);
+const longDate = (d) => new Date(`${d}T12:00:00Z`).toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric', timeZone: 'UTC' });
+let notesMd = `## ${longDate(today)}\n\n* We launched **Model One** ([docs](https://example.com/one)).\n* Faster batches. See [batches](https://example.com/batches).\n`;
 let seq = 0;
 const pending = new Map();
 const errors = [];
@@ -70,7 +74,10 @@ before(async () => {
   home = fs.mkdtempSync(path.join(os.tmpdir(), 'agentmgr-browser-'));
   const port = await freePort();
   base = `http://127.0.0.1:${port}`;
-  fs.writeFileSync(path.join(home, 'config.json'), JSON.stringify({ claudeBin: process.execPath, claudeArgs: [path.join(here, 'fake-claude.js')], updates: { check: false }, judge: { enabled: false }, shell: '/bin/sh', gitRefreshSec: 1, conflictRefreshSec: 0 }));
+  const http = await import('node:http');
+  notes = http.createServer((req, res) => res.end(notesMd));
+  await new Promise((r) => notes.listen(0, '127.0.0.1', r));
+  fs.writeFileSync(path.join(home, 'config.json'), JSON.stringify({ claudeBin: process.execPath, claudeArgs: [path.join(here, 'fake-claude.js')], updates: { check: false }, judge: { enabled: false }, shell: '/bin/sh', gitRefreshSec: 1, conflictRefreshSec: 0, news: { sources: [], custom: [{ id: 'local', lab: 'Anthropic', label: 'Local notes', url: `http://127.0.0.1:${notes.address().port}/notes.md` }] } }));
   daemon = spawn(process.execPath, [path.join(here, '..', 'bin', 'agentmgr.js'), 'serve'], {
     env: { ...process.env, AGENTMGR_HOME: home, AGENTMGR_PORT: String(port), AGENTMGR_REMOTE: '0', AGENTMGR_PLUGINS: '', AGENTMGR_NO_GH: '1', CLAUDE_CONFIG_DIR: path.join(home, 'claude'), AGENTMGR_CLAUDE_DESKTOP_DIR: path.join(home, 'claude-desktop'), FAKE_CLAUDE_LOG: path.join(home, 'fake.log') },
     stdio: 'ignore',
@@ -119,6 +126,7 @@ const stopped = (child) => (child && child.exitCode === null && child.signalCode
 after(async () => {
   ws?.close();
   await Promise.all([stopped(chrome), stopped(daemon)]);
+  notes?.close();
   // Chrome's helper processes can still be writing its profile for a moment; a temp folder left behind isn't a failure.
   if (home) {
     try {
@@ -139,7 +147,7 @@ test('the top bar fits the window: the view buttons that do not fit go into More
       menuOk: document.querySelector('#menu-btn').getBoundingClientRect().right <= innerWidth,
     })`);
     assert.ok(r.page <= w, `${w}px: the page is ${r.page}px wide`);
-    assert.equal(r.inRow + r.inMore, 15, `${w}px: every view button is in the row or in More`);
+    assert.equal(r.inRow + r.inMore, 16, `${w}px: every view button is in the row or in More`);
     assert.ok(r.newOk && r.menuOk, `${w}px: New agents and the account menu are on screen`);
     if (w >= 1024) assert.ok(r.inRow >= 3, `${w}px: only ${r.inRow} buttons in the row`);
   }
@@ -324,5 +332,46 @@ test("overlaps: behind their own button in the agent's detail, not on the page",
   assert.match(card, /app\.js/, 'and the file');
   await js(`document.querySelector('#needs-close').click()`);
   for (const id of [x.id, y.id]) await fetch(`${base}/api/agents/${id}`, { method: 'DELETE', headers: { 'x-agentmgr': '1' } });
+  assert.deepEqual(errors, [], 'no errors on the page');
+});
+
+test('AI News: release notes summarized, the top labs from a web search, filters, and what is new', { skip }, async () => {
+  await js(`document.querySelector('#news-btn').click()`);
+  await until(`document.querySelector('#news-dialog').open && document.querySelector('[data-news="refresh"]')`, 'the AI News window');
+  await until(`!document.querySelector('[data-news="refresh"]').disabled`, 'not refreshing', 20_000);
+  await js(`document.querySelector('[data-news="refresh"]').click()`);
+  const titles = `[...document.querySelectorAll('#news-body .news-title')].map((a) => a.textContent)`;
+  await until(`${titles}.length === 3 && [...document.querySelectorAll('#news-body .news-summary')].every((p) => !p.classList.contains('hint'))`, 'three entries, each summarized', 30_000);
+  const r = await js(`({
+    titles: ${titles},
+    summaries: [...document.querySelectorAll('#news-body .news-summary')].map((p) => p.textContent),
+    day: document.querySelector('#news-body .news-day').textContent,
+    chips: [...document.querySelectorAll('[data-news-lab]')].map((c) => c.textContent.replace(/\\s+/g, ' ').trim()),
+    links: [...document.querySelectorAll('#news-body .news-links a')].map((a) => a.href),
+  })`);
+  assert.deepEqual([...r.titles].sort(), ['Faster batches.', 'Grok Fake 9', 'We launched Model One (docs).']);
+  assert.ok(r.summaries.includes('Fake summary: Faster batches.') && r.summaries.includes('A fake frontier model from the web search.'), JSON.stringify(r.summaries));
+  assert.equal(r.day, 'Today');
+  assert.deepEqual(r.chips, ['All 3', 'Anthropic 2', 'xAI 1'], 'the web search adds a lab without release notes here; the old one is left out');
+  assert.ok(r.links.includes('https://example.com/batches'), 'its links');
+
+  // Filters: a lab, then words.
+  await js(`document.querySelector('[data-news-lab="xAI"]').click()`);
+  await until(`JSON.stringify(${titles}) === '["Grok Fake 9"]'`, 'only xAI');
+  await js(`document.querySelector('[data-news-lab="all"]').click()`);
+  await js(`(() => { const f = document.querySelector('[data-news-find]'); f.focus(); f.value = 'batch'; f.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+  await until(`JSON.stringify(${titles}) === '["Faster batches."]' && document.activeElement?.matches('[data-news-find]')`, 'found by words, still typing');
+  await js(`(() => { const f = document.querySelector('[data-news-find]'); f.value = ''; f.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+
+  // Closing is the first look; what comes after it is new, counted on the button.
+  await js(`document.querySelector('[data-news="close"]').click()`);
+  await until(`(await (await fetch('/api/news')).json()).seenAt`, 'seen');
+  notesMd = notesMd.replace('\n\n', '\n\n* Brand new thing.\n');
+  await api('POST', '/news/refresh');
+  await until(`document.querySelector('#news-count').textContent === '1'`, 'one new on the button', 30_000);
+  await js(`document.querySelector('#news-btn').click()`);
+  await until(`[...document.querySelectorAll('#news-body .news-item.new .news-title')].map((a) => a.textContent).join() === 'Brand new thing.'`, 'marked new');
+  await js(`document.querySelector('[data-news="close"]').click()`);
+  await until(`document.querySelector('#news-count').textContent === ''`, 'the count cleared after looking');
   assert.deepEqual(errors, [], 'no errors on the page');
 });

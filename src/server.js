@@ -49,6 +49,7 @@ import { AgentkitReports } from './agentkit-reports.js';
 import { Builder } from './builder.js';
 import { Standup } from './standup.js';
 import { Value, valueSlack } from './value.js';
+import { News } from './news.js';
 import { Store } from './store.js';
 import { about, latestRelease } from './about.js';
 import { Support } from './support.js';
@@ -246,6 +247,14 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
       store.save();
       return r;
     },
+  });
+  // AI News: the frontier labs' latest releases, summarized (news.js).
+  let pushNews = () => {};
+  const news = new News({
+    store,
+    config,
+    onChange: () => pushNews(),
+    oneShot: (prompt, { web, timeoutMs } = {}) => manager.oneShot(null, prompt, { ...manager.writerFor({}), web, timeoutMs }),
   });
   const triggers = new Triggers({ manager, store, config, notifier });
   const budgets = new Budgets({ manager, store, config, notifier });
@@ -1000,6 +1009,13 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
   api.patch('/value/items/:id', wrap((req) => value.edit(req.params.id, req.body ?? {})));
   api.post('/value/items/:id/estimate', wrap((req) => value.estimate(req.params.id).then((it) => value.itemView(it))));
   api.post('/value/items/:id/exclude', wrap((req) => value.exclude(req.params.id, req.body?.excluded !== false)));
+  // AI News: the entries, a refresh now (answers at once; the page hears when it's done), and "seen".
+  api.get('/news', wrap(() => news.view()));
+  api.post('/news/refresh', wrap((req) => {
+    news.refresh({ search: req.body?.search === true ? true : null }).catch(() => {});
+    return news.view();
+  }));
+  api.post('/news/seen', wrap(() => news.seen()));
   api.get('/value/report', wrap((req) => value.report(String(req.query.kind ?? 'week'), { current: req.query.current === '1' })));
   api.post('/value/report', wrap((req) => value.sendReport(String(req.body?.kind ?? 'week'), { current: req.body?.current === true })));
   api.get('/value/value.csv', (req, res) => {
@@ -1347,6 +1363,7 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
   manager.on('change', (agent) => broadcast({ t: 'agent', agent }));
   pushStandup = (latest) => broadcast({ t: 'standup', latest });
   pushValue = () => broadcast({ t: 'value' });
+  pushNews = () => broadcast({ t: 'news' });
   reports.on('change', () => broadcast({ t: 'built', reports: reports.list() }));
   manager.rules.on('change', (rules) => broadcast({ t: 'rules', rules }));
   repeats.on('change', (view) => broadcast({ t: 'repeats', repeats: view }));
@@ -1484,6 +1501,7 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
     landing.close();
     standup.close();
     value.close();
+    news.close();
     reviews.close();
     hunts.close();
     benches.close();

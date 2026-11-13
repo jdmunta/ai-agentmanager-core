@@ -118,6 +118,19 @@ if (args.includes('--input-format') && args.includes('stream-json')) {
       if (!ok || JSON.stringify(facts).includes('#plainstandup')) return process.exit(1);
       return json({ intro: `Spoken intro for ${facts.length}.`, agents: facts.map((f) => ({ id: f.id, text: `Spoken: ${f.name} ${f.needs.length ? 'needs you.' : 'is fine.'}` })) });
     }
+    if (input.startsWith('Summarize these AI release notes')) {
+      // AI News: a summary for each entry; "#nosummary" in an entry fails the call.
+      const entries = JSON.parse(section('entries') || '[]');
+      if (!ok || JSON.stringify(entries).includes('#nosummary')) return process.exit(1);
+      return json({ summaries: Object.fromEntries(entries.map((e) => [e.id, `Fake summary: ${e.title.replace(/\.$/, '')}.`])) });
+    }
+    if (input.startsWith('Find the latest frontier AI releases')) {
+      // AI News' web search: only WebSearch and WebFetch, no MCP servers.
+      const tools = args[args.indexOf('--tools') + 1];
+      if (tools !== 'WebSearch,WebFetch' || args[args.indexOf('--allowedTools') + 1] !== tools || !args.includes('--strict-mcp-config')) return json({ items: [] });
+      const today = input.match(/today is (\d{4}-\d{2}-\d{2})/)[1];
+      return json({ items: [{ lab: 'xAI', date: today, title: 'Grok Fake 9', summary: 'A fake frontier model from the web search.', url: 'https://x.ai/news/grok-fake-9' }, { lab: 'Mistral AI', date: '2001-01-01', title: 'Too old', summary: 'Left out.', url: 'https://mistral.ai/old' }] });
+    }
     if (input.startsWith('Estimate the business value')) {
       // Value: an estimate from the facts; "#novalue" in the request fails the call.
       const facts = JSON.parse(section('facts') || '{}');

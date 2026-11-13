@@ -54,6 +54,8 @@ fs.writeFileSync(
     judge: { enabled: false },
     // No release checks against GitHub; the cap acts at once (its own test sets a limit).
     updates: { check: false },
+    // AI News reads public pages: never from the tests (its own tests use a local page).
+    news: { enabled: false },
     capGraceMs: 0,
     capDelayMs: 200,
     shell: '/bin/sh',

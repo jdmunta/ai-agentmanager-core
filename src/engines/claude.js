@@ -119,6 +119,13 @@ export default {
     return args;
   },
 
+  /** A one-shot call that may use only these of Claude Code's own tools (WebSearch, WebFetch), no MCP servers. */
+  webArgs: (config, { model, tools } = {}) => {
+    const args = ['-p', '--tools', tools.join(','), '--allowedTools', tools.join(','), '--strict-mcp-config', '--no-session-persistence', '--output-format', 'text'];
+    if (model) args.push('--model', model);
+    return args;
+  },
+
   /** Variables a nested Claude session would otherwise inherit from a parent one. */
   stripEnv: ['CLAUDECODE', 'CLAUDE_CODE_CHILD_SESSION', 'CLAUDE_CODE_ENTRYPOINT'],
 };
