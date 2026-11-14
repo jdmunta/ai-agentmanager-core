@@ -330,6 +330,7 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
     store,
     config,
     engines: () => listEngines(config),
+    probe: () => manager.readUsage(),
     onChange: () => pushUsage(),
     notify: async (text, plain) => {
       const n = loadNotify();
@@ -1134,6 +1135,8 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
   api.post('/milestones/:project/task', wrap((req) => milestones.task(req.params.project, req.body?.stage, req.body?.item)));
   // Plan → Decisions: the log (?project=<key>&q=<words>; ?format=markdown), one of your own, and removal.
   api.get('/usage', wrap(() => usage.view()));
+  // A reading taken now (a one-word Claude Code session, so its status line reports).
+  api.post('/usage/refresh', wrap(() => usage.refresh()));
   api.put('/usage', wrap((req) => {
     const b = req.body ?? {};
     const next = usage.update(b);

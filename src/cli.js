@@ -829,12 +829,15 @@ export async function main(argv) {
     .option('--warn <percent>', 'alert when a limit is this much used (or off)')
     .option('--hold <percent>', 'start no new agents on an engine this much used (or off)')
     .option('--default <engine>', 'the engine new agents start on')
+    .option('--now', 'take a reading now: a one-word Claude Code session on its smallest model (a very small amount of usage)')
     .option('--json', 'print JSON')
     .action(async (opts) => {
       await daemon();
       const patch = { ...(opts.warn !== undefined ? { warnAt: opts.warn } : {}), ...(opts.hold !== undefined ? { holdAt: opts.hold } : {}), ...(opts.default ? { engine: opts.default } : {}) };
-      const v = Object.keys(patch).length ? await api('PUT', '/usage', patch) : await api('GET', '/usage');
+      let v = Object.keys(patch).length ? await api('PUT', '/usage', patch) : await api('GET', '/usage');
+      if (opts.now) v = await api('POST', '/usage/refresh');
       if (opts.json) return console.log(JSON.stringify(v, null, 2));
+      if (v.problem) console.log(yellow(v.problem));
       const tone = { ok: green, warn: yellow, high: red, held: red, limited: red };
       for (const e of v.engines) {
         console.log(`${bold(e.label)}${e.id === v.default ? dim(' (default)') : ''}${e.level === 'held' ? red(' held for new work') : ''}`);

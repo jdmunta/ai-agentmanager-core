@@ -29,7 +29,7 @@ Run one background [Claude Code](https://claude.com/claude-code) agent per inten
 - **Share for review.** One click writes an **Analysis**, **Design**, **Flow** or **Proposal** document from the agent's work, a human time **Estimate** for planning, or the change's **Documentation** with an OpenAPI spec of any API changes. Copy it as Markdown, download it, or print it to PDF with diagrams.
 - **Plan.** A project's commitment dates (code complete, release candidate, GA) with a checklist of what is still open for each, reminders as they come near, and an at-risk or late flag. A **decision log** gathered from plan reviews, your answers and design docs. A **tech debt radar** from git history and the code. What is open can be handed to an agent.
 - **Your day.** Connect your calendar and Today lays the day out around your meetings: the free time between them with what needs you placed in it, and what each meeting is about.
-- **Debug.** Say what to debug (a failure, E2E instability at max scale, slowness under load) in the **Debug** tab beside an agent's session. The agent investigates there and writes a report next to it: animated diagrams of the code path and the data flow with where it breaks, findings with evidence, likely causes and recommended fixes. It changes no code until you press **Apply fixes**.
+- **Debug.** Say what to debug (a failure, instability at max scale, slowness under load) in the **Debug** tab beside an agent's session. The agent investigates there and writes a report next to it: animated diagrams of the code path and the data flow with where it breaks, findings with evidence, likely causes and recommended fixes. It changes no code until you press **Apply fixes**.
 - **Usage.** How much of each engine's plan limits is used and left (Claude Code's 5-hour session and week, Codex's), and when they reset: a chip by the connection light, an alert near a limit, an option to hold new work at a percent, and one click to start new agents on another engine.
 - **Reverse engineer.** Name a target (an app's folder, a binary, a website) and what you want to understand, in the **Reverse** tab beside an agent's session: the agent investigates with [REA](https://github.com/morluto/rea)'s tools and keeps a report with animated diagrams of how it works, the evidence, what could not be determined, and a plan to build your own version.
 - **Runbooks for support.** A runbook for the support team written from a release ticket, every ticket of an epic, or a project's code changes in a time frame: what changed, what customers may see, how to check it, troubleshooting, rollback, when to escalate, and what to confirm with engineering.
@@ -195,7 +195,7 @@ agentmgr reverse <agent> -t /path/to/app "how does search work"  # reverse engin
 agentmgr dates <project> --cc 2026-12-01 --rc 2026-12-10 --ga 2026-12-20   # commitment dates; no dates: where each stands
 agentmgr decisions [project] [--md]           # the decision log; --add "<question>" --decision "<what>" adds one
 agentmgr debt <project> --scan                # the tech debt radar: files that change often and are hard to read
-agentmgr usage                                # each engine's plan limits: used, left, resets (--warn 80, --hold 95, --default codex)
+agentmgr usage                                # each engine's plan limits: used, left, resets (--now, --warn 80, --hold 95, --default codex)
 agentmgr runbook --ticket REL-42              # a support runbook from a release ticket (or --epic KEY, or --since 2026-10-01 -p <project>; -o file.md)
 agentmgr decide                               # what waits for your decision, with its recommendation (--do <n>, --handled, --standing, --autonomy p=level, --priority, --risk)
 agentmgr os                                   # this computer and its load: processor, memory, disks, what each open session takes (--json)
@@ -1234,7 +1234,7 @@ A chip by the connection light shows the engine new agents start on with what is
 - **Hold new work at** a percent (off by default): no new agent starts on an engine at or past it; the backlog waits and New agents says why. Agents already running carry on.
 - **Start new agents here** makes another installed engine the default for new agents; agents already running stay where they are (**Continue on** moves one).
 
-These are numbers the engines hand out on this computer: no service is asked and no model is called. Turn it off with `"usage": { "enabled": false }` in config.json.
+These are numbers the engines hand out on this computer, so a reading is as old as the last reply of a session started here; Claude Code you use elsewhere moves the real numbers on meanwhile. **↻ Read now** (or `agentmgr usage --now`) brings them up to date: Claude Code only reports its limits to a session that has had a reply, so it starts a short one that says one word on its smallest model (a very small amount of usage) and removes it after. Nothing else calls a model. Turn it off with `"usage": { "enabled": false }` in config.json.
 
 ## Reverse engineer
 
@@ -1249,7 +1249,7 @@ These are numbers the engines hand out on this computer: no service is asked and
 
 ## Debug
 
-**🐞 Debug** in an agent's detail (or the **Debug** tab of the split, **◫ Split** in the terminal bar) puts the agent's session on the left and the debug pane on the right. Type what is going wrong, for example *E2E tests fail at max scale after about 20 minutes* or *p99 latency triples under load*, and press **Debug** (or Enter).
+**🐞 Debug** in an agent's detail (or the **Debug** tab of the split, **◫ Split** in the terminal bar) puts the agent's session on the left and the debug pane on the right. Type what is going wrong, for example *imports fail at max scale after about 20 minutes* or *p99 latency triples under load*, and press **Debug** (or Enter).
 
 The agent investigates in its own session, with everything it already knows about the work: it reads the code on the path, the logs and the tests, reproduces the problem where it can (the failing test, a small load, a script) and measures. It keeps a report, drawn in the pane as it grows:
 

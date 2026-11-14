@@ -4430,3 +4430,39 @@ test('usage: an engine\'s plan limits from Claude Code\'s status line and Codex\
   assert.deepEqual(JSON.parse(args[1]), { statusLine: { type: 'command', command: `${JSON.stringify(process.execPath)} "/x/status line.js"` } });
   u.close();
 });
+
+test('usage: a reading taken now starts one short session; what went wrong is said', async () => {
+  const { EngineUsage } = await import('../src/usage.js');
+  const file = path.join(tmp(), 'claude.json');
+  let clock = Date.parse('2026-03-10T12:00:00Z');
+  const soon = Math.floor(clock / 1000) + 3 * 3600;
+  const write = (used) => fs.writeFileSync(file, JSON.stringify({ at: new Date(clock).toISOString(), rate_limits: { five_hour: { used_percentage: used, resets_at: soon } } }));
+  let probes = 0;
+  let answer = 30;
+  const engines = [{ id: 'claude', label: 'Claude Code', installed: true }];
+  const u = new EngineUsage({ store: { data: {}, save() {} }, config: {}, engines: () => engines, file, now: () => clock, log() {}, timer: false, probe: async () => {
+    probes++;
+    if (answer === null) return false;
+    write(answer);
+    return true;
+  } });
+  // No reading yet: the session is started, and its numbers are the view's. Asked twice at once: one session.
+  const [a, b] = await Promise.all([u.refresh(), u.refresh()]);
+  assert.equal(probes, 1);
+  assert.equal(a, b);
+  assert.deepEqual([a.fresh, a.problem, a.engines[0].windows[0].used], [true, null, 30]);
+  // Later (Claude Code used elsewhere since): taken again.
+  clock += 3_600_000;
+  answer = 62;
+  const later = await u.refresh();
+  assert.deepEqual([probes, later.engines[0].windows[0].used, later.engines[0].windows[0].left], [2, 62, 38]);
+  // No reading came (not signed in, or a plan that reports none): said, and the last one stays.
+  clock += 60_000;
+  answer = null;
+  const none = await u.refresh();
+  assert.deepEqual([none.fresh, none.engines[0].windows[0].used], [false, 62]);
+  assert.match(none.problem, /gave no reading/);
+  // Without Claude Code there is nothing to ask.
+  engines[0].installed = false;
+  assert.match((await u.refresh()).problem, /not installed/);
+});

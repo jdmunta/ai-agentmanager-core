@@ -6,8 +6,9 @@
 //   Codex       - the rate limits Codex writes in its session logs, when it reports them.
 //   any engine  - a limit an agent actually hit ("usage limit reached… resets 3pm") counts as used
 //                 up until it resets.
-// Engines that report nothing are listed as that. Nothing is asked of any service, and no model is
-// called: these are numbers the engines already hand out on this computer.
+// Engines that report nothing are listed as that. These are numbers the engines already hand out on
+// this computer; nothing else is asked of any service. "Read now" is the one thing that uses a
+// model: a one-word session on Claude Code's smallest model, so there is a reply to report after.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -71,10 +72,11 @@ const NOTES = {
 export class EngineUsage {
   /**
    * `engines()`: the engines as listEngines gives them ({ id, label, installed }); `notify(text,
-   * plain)`: an alert; `store`: where the readings are kept between restarts.
+   * plain)`: an alert; `store`: where the readings are kept between restarts; `probe()`: takes a
+   * reading of Claude Code's limits now (a short session), resolving true once it is written.
    */
-  constructor({ store, config, engines, notify = null, onChange = () => {}, file = usageFile(), now = () => Date.now(), log = (m) => console.log(`[agentmgr] ${m}`), timer = true }) {
-    Object.assign(this, { store, config, engines, notify, onChange, file, now, log });
+  constructor({ store, config, engines, notify = null, probe = null, onChange = () => {}, file = usageFile(), now = () => Date.now(), log = (m) => console.log(`[agentmgr] ${m}`), timer = true }) {
+    Object.assign(this, { store, config, engines, notify, probe, onChange, file, now, log });
     this.fileAt = null;
     if (timer) {
       this.timer = setInterval(() => this.tick(), 20_000);
@@ -162,6 +164,32 @@ export class EngineUsage {
   tick() {
     if (!this.settings.enabled) return;
     this.readClaude();
+  }
+
+  /**
+   * A reading taken now. Claude Code only gives its numbers to a session that has had a reply, so
+   * this starts a short one that says one word (the probe).
+   * One at a time: asked again meanwhile, it is the same reading.
+   */
+  refresh() {
+    return (this.refreshing ??= (async () => {
+      let fresh = false;
+      let problem = null;
+      try {
+        const claude = this.engines().find((d) => d.id === 'claude');
+        if (!this.settings.enabled) problem = 'Usage readings are switched off';
+        else if (!this.probe || !claude || claude.installed === false) problem = 'Claude Code is not installed here, and no other engine can be asked for a reading';
+        else {
+          fresh = await this.probe();
+          this.readClaude();
+          if (!fresh) problem = 'Claude Code gave no reading. It reports its limits for Pro, Max and Ultra plans, once signed in';
+        }
+      } catch (e) {
+        problem = e.message;
+      }
+      this.onChange();
+      return { ...this.view(), fresh, problem };
+    })().finally(() => (this.refreshing = null)));
   }
 
   /** One engine as it stands now: its windows with what is left, and how worried to be. */

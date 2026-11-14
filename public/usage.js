@@ -11,6 +11,7 @@ export function initUsage({ api, $, esc, ago, toast }) {
   const chip = $('#usage-chip');
   let data = null;
   let again = null;
+  let reading = false;
 
   async function load({ quiet = false } = {}) {
     try {
@@ -50,8 +51,9 @@ export function initUsage({ api, $, esc, ago, toast }) {
           </div>`))
       .join('');
     return `<div class="plan-project usage-engine" data-usage-engine="${esc(e.id)}">
-      <div class="plan-project-head"><h3>${esc(e.label)}</h3><span class="tag usage-level ${esc(e.level)}">${esc(LEVEL[e.level] ?? e.level)}</span>${e.id === data.default ? '<span class="tag">new agents start here</span>' : ''}${e.installed ? '' : '<span class="tag">not installed</span>'}
+      <div class="plan-project-head"><h3>${esc(e.label)}</h3><span class="tag usage-level ${esc(e.level)}">${esc(LEVEL[e.level] ?? e.level)}</span>${e.installed ? '' : '<span class="tag">not installed</span>'}
         <span class="spacer"></span>${e.at ? `<span class="hint">read ${esc(ago(e.at))}${e.source ? ` from ${esc(e.source)}` : ''}</span>` : ''}
+        ${e.id === data.default ? `<button class="small usage-default-on" aria-pressed="true" data-usage-is-default="${esc(e.label)}" title="New agents start on ${esc(e.label)} unless you pick another engine for them. Press the button on another engine to move them there">✓ New agents start here</button>` : ''}
         ${e.installed && e.id !== data.default ? `<button class="small" data-usage-default="${esc(e.id)}" title="New agents start on ${esc(e.label)} unless you pick another engine for them. Agents already running stay where they are">Start new agents here</button>` : ''}</div>
       ${e.limited ? `<p class="issues-problem">An agent stopped at a limit${e.limited.resetsIn ? `; it resets ${esc(e.limited.resetsIn)}` : ''}: ${esc(e.limited.text)}</p>` : ''}
       ${rows}
@@ -65,14 +67,14 @@ export function initUsage({ api, $, esc, ago, toast }) {
     const s = data.settings;
     const level = (name, v, off) => `<select data-usage-set="${name}" aria-label="${name}"><option value="off" ${v ? '' : 'selected'}>${off}</option>${[50, 60, 70, 75, 80, 85, 90, 95, 100].map((n) => `<option value="${n}" ${v === n ? 'selected' : ''}>${n}% used</option>`).join('')}${v && ![50, 60, 70, 75, 80, 85, 90, 95, 100].includes(v) ? `<option value="${v}" selected>${v}% used</option>` : ''}</select>`;
     body.innerHTML = `
-      <div class="issues-head"><h2>Usage</h2><span class="hint">What is used and left of each engine's plan limits</span><span class="spacer"></span><button class="small" data-usage="refresh" title="Read again">↻</button><button class="small" data-usage="close" title="Close (Esc)">Close</button></div>
+      <div class="issues-head"><h2>Usage</h2><span class="hint">What is used and left of each engine's plan limits</span><span class="spacer"></span><button class="small" data-usage="refresh" ${reading ? 'disabled' : ''} title="Take a reading now. Claude Code only reports its limits to a session that has had a reply, so this starts a short one that says one word on its smallest model (a very small amount of usage)">${reading ? 'Reading…' : '↻ Read now'}</button><button class="small" data-usage="close" title="Close (Esc)">Close</button></div>
       <div class="issues-scroll usage-scroll">
         ${data.engines.map(engineHtml).join('') || '<p class="hint issues-empty">No engine is installed.</p>'}
         <div class="usage-settings">
           <label>Alert me at ${level('warnAt', s.warnAt, 'never')}</label>
           <label title="No new agent starts on an engine at or past this much of a limit (the backlog waits, and New agents says why). Agents already running carry on.">Hold new work at ${level('holdAt', s.holdAt, 'never')}</label>
         </div>
-        <p class="hint">These are numbers the engines hand out on this computer: Claude Code gives them to the status line of the sessions started here, Codex writes them in its session logs. No service is asked and no model is called. A limit an agent actually hits is shown for any engine until it resets, and the agent carries on by itself when it does.</p>
+        <p class="hint">These are numbers the engines hand out on this computer: Claude Code gives them to the status line of the sessions started here, Codex writes them in its session logs, so a reading is as old as the last reply of a session started here; Claude Code you use elsewhere moves the real numbers on meanwhile. <b>Read now</b> brings them up to date with a one-word session on Claude Code's smallest model. A limit an agent actually hits is shown for any engine until it resets, and the agent carries on by itself when it does.</p>
       </div>`;
   }
 
@@ -87,12 +89,30 @@ export function initUsage({ api, $, esc, ago, toast }) {
     draw();
   };
 
+  /** A reading as of now, not the last one a session happened to bring. */
+  async function readNow() {
+    if (reading) return;
+    reading = true;
+    draw();
+    try {
+      data = await api('POST', '/usage/refresh');
+      toast?.(data.problem ?? 'Read just now', data.problem ? 7000 : 2500);
+    } catch (e) {
+      toast?.(e.message, 6000);
+    }
+    reading = false;
+    drawChip();
+    if (dialog.open) draw();
+  }
+
   body.addEventListener('click', (e) => {
+    const on = e.target.closest('[data-usage-is-default]');
+    if (on) return toast?.(`New agents already start on ${on.dataset.usageIsDefault}. Press "Start new agents here" on another engine to move them`, 4000);
     const d = e.target.closest('[data-usage-default]');
     if (d) return save({ engine: d.dataset.usageDefault }, 'New agents start there from now on');
     const b = e.target.closest('[data-usage]')?.dataset.usage;
     if (b === 'close') dialog.close();
-    else if (b === 'refresh') load();
+    else if (b === 'refresh') readNow();
   });
   body.addEventListener('change', (e) => {
     const s = e.target.closest('[data-usage-set]');

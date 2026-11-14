@@ -20,6 +20,8 @@ export default {
    * For the sessions started here (not one-off calls): a status line that records the plan's usage
    * (usage.js). `script` is its path; your own status line still shows (see statusline.js).
    */
+  /** A session that says one word on the smallest model, so the status line has a reply to report after. */
+  usageProbeArgs: (sessionId) => ['--model', 'haiku', '--strict-mcp-config', '--session-id', sessionId, '--', 'Reply with the single word: ok'],
   usageArgs: (config, script) => (config.usage?.enabled === false ? [] : ['--settings', JSON.stringify({ statusLine: { type: 'command', command: `${JSON.stringify(process.execPath)} ${JSON.stringify(script)}` } })]),
 
   /** Options for every launch: permissions, model, a folder it may write to, extra instructions. */

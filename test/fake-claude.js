@@ -437,6 +437,17 @@ if (prompt.includes('#signin')) {
 if (prompt.includes('#waiting')) setTimeout(() => process.stdout.write('\r\nWhich database should I use for the cache, Postgres or SQLite?\r\n'), 200);
 // "#limit": stops at a usage limit, as Claude Code prints it.
 if (prompt.includes('#limit')) setTimeout(() => process.stdout.write('\r\n5-hour limit reached ∙ resets 11pm\r\n/upgrade to increase your usage limit.\r\n'), 200);
+// The one-word session Usage's "Read now" starts: the status line command of --settings is run with
+// the plan's limits, as Claude Code does once there is a reply.
+if (prompt === 'Reply with the single word: ok' && args.includes('--settings')) {
+  const { execSync } = await import('node:child_process');
+  const cmd = JSON.parse(args[args.indexOf('--settings') + 1]).statusLine.command;
+  const soon = Math.floor(Date.now() / 1000) + 3600;
+  setTimeout(() => {
+    process.stdout.write('\r\nok\r\n');
+    execSync(cmd, { input: JSON.stringify({ version: '9.9.10', model: { display_name: 'Haiku' }, rate_limits: { five_hour: { used_percentage: 12, resets_at: soon }, seven_day: { used_percentage: 44, resets_at: soon + 4 * 86400 } } }) });
+  }, 200);
+}
 if (prompt.includes('#finish')) setTimeout(() => process.stdout.write('\r\nAll done: the token refresh fix is in.\r\n'), 200);
 // The tool call a permission prompt asks about ("#run(<command>)", else npm test), in the transcript
 // before the menu shows, as Claude Code writes it; answering "1" gives it a result.

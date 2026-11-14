@@ -508,7 +508,7 @@ test('Debug: asked beside the session, the report drawn with its animated diagra
 
   // An idea fills the box; what you type instead is what's sent.
   await js(`document.querySelector('[data-debug-idea]').click()`);
-  assert.equal(await js(`document.querySelector('[data-debug-text]').value`), 'E2E tests unstable at max scale');
+  assert.equal(await js(`document.querySelector('[data-debug-text]').value`), 'Unstable at max scale');
   await js(`(() => { const t = document.querySelector('[data-debug-text]'); t.value = 'Imports stall at 500 tenants'; t.form.requestSubmit(); })()`);
   await until(`document.querySelector('.debug-asked summary')?.textContent === 'Asked (1)'`, 'the question listed');
   // The message is long: its end is what's still on screen (lines wrap, so spaces aside).
@@ -606,7 +606,7 @@ test('Usage: the chip by the connection light, every engine with what is used an
   assert.match(r.five, /^5-hour session\s*86% used\s*14% left\s*resets in 2h/);
   assert.match(r.week, /^Week\s*41% used\s*59% left\s*resets in 4 days/);
   assert.deepEqual([r.level, r.bar, r.warn, r.hold], ['Getting close', '86%', '80', 'off']);
-  assert.match(r.head, /new agents start here[\s\S]*from Claude Code 9\.9\.9/);
+  assert.match(r.head, /from Claude Code 9\.9\.9[\s\S]*✓ New agents start here/);
 
   try {
     // Hold new work at 85%: no new agent on Claude Code, and the reason is said.
@@ -620,12 +620,18 @@ test('Usage: the chip by the connection light, every engine with what is used an
     await until(`document.querySelector('[data-usage-default="codex"]')`, 'another installed engine is offered');
     await js(`document.querySelector('[data-usage-default="${other}"]').click()`);
     await until(`(await (await fetch('/api/usage')).json()).default === '${other}'`, 'new agents start there');
-    await until(`/new agents start here/.test(document.querySelector('[data-usage-engine="${other}"] .plan-project-head')?.textContent ?? '')`, 'marked in the window');
+    await until(`/New agents start here/.test(document.querySelector('[data-usage-engine="${other}"] .plan-project-head')?.textContent ?? '')`, 'marked in the window');
   } finally {
     // Whatever happened above, the tests after this one can start agents.
     await api('PUT', '/usage', { engine: 'claude', holdAt: 'off' });
   }
   await until(`document.querySelector('[data-usage-set="holdAt"]').value === 'off' && document.querySelector('[data-usage-engine="claude"] .usage-level').textContent === 'Getting close'`, 'not held any more');
+  // Read now: a one-word session brings the numbers as they are now, not as the last reply left them.
+  await js(`document.querySelector('[data-usage-is-default]').click()`);
+  await until(`[...document.querySelectorAll('.toast')].some((t) => /New agents already start on Claude Code/.test(t.textContent))`, 'pressing the engine new agents already start on says so');
+  await js(`document.querySelector('[data-usage="refresh"]').click()`);
+  await until(`/^5-hour session\\s*12% used\\s*88% left/.test(document.querySelector('[data-usage-window="five_hour"]')?.textContent.replace(/\\s+/g, ' ').trim() ?? '')`, 'a reading taken now', 30_000);
+  await until(`document.querySelector('[data-usage="refresh"]').textContent === '↻ Read now' && /from Claude Code 9\\.9\\.10/.test(document.querySelector('[data-usage-engine="claude"] .plan-project-head').textContent)`, 'where it came from');
   await js(`document.querySelector('[data-usage="close"]').click()`);
   assert.deepEqual(errors, [], 'no errors on the page');
 });

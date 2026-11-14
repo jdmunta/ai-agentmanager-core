@@ -78,8 +78,8 @@ export function initSide({ api, esc, toast, $, agents, codeUi, docHtml, renderDi
   // your own), and Reverse engineer also names a target and needs REA's tools.
   const ASK = {
     debug: {
-      ideas: ['E2E tests unstable at max scale', 'Slow or failing under load', 'A flaky test', 'A memory or connection leak', 'Wrong data end to end'],
-      first: 'What should it debug? For example: E2E tests fail at max scale after about 20 minutes',
+      ideas: ['Unstable at max scale', 'Slow or failing under load', 'A flaky test', 'A memory or connection leak', 'Wrong data end to end'],
+      first: 'What should it debug? For example: imports fail at max scale after about 20 minutes',
       more: 'A follow-up: what you know, what to look at next, or which fixes to apply',
       go: 'Debug',
       short: 'Say what to debug',
