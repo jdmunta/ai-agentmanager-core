@@ -999,6 +999,10 @@ form.dropping { outline: 2px dashed var(--accent, #6b8cff); outline-offset: 4px;
 .debug-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--accent); animation: debug-pulse 1.2s ease-in-out infinite; }
 @keyframes debug-pulse { 50% { opacity: .25; } }
 @media (prefers-reduced-motion: reduce) { .debug-dot { animation: none; } }
+.reverse-view input[data-reverse-target] { width: 100%; box-sizing: border-box; }
+.reverse-rea, .reverse-note { margin: 0; }
+.reverse-rea.missing { padding: 6px 10px; border-left: 3px solid var(--yellow); }
+.reverse-rea.ok { color: var(--green); }
 .debug-asked summary { cursor: pointer; color: var(--muted); font-size: 12.5px; }
 .debug-asked ol { margin: 6px 0 0; padding-left: 22px; }
 .side-pane { flex: none; width: var(--pane-w, 45%); display: flex; flex-direction: column; min-height: 0; border-left: 1px solid #30363d; background: var(--bg); color: var(--text); }

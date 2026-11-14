@@ -35,6 +35,9 @@ import {
   debugPath,
   debugPrompt,
   debugFixPrompt,
+  reversePath,
+  reversePrompt,
+  reverseBuildPrompt,
   specDocsInfo,
   specPath,
   specPrompt,
@@ -833,7 +836,7 @@ export class AgentManager extends EventEmitter {
   /** One of an agent's intent, spec and plan files. */
   specDoc(ref, name) {
     const agent = this.mustGet(ref);
-    if (!['intent', 'spec', 'plan', 'designdoc', 'benchmark', 'debug'].includes(name)) throw Object.assign(new Error('Unknown file (intent, spec, plan, designdoc, benchmark or debug)'), { status: 400 });
+    if (!['intent', 'spec', 'plan', 'designdoc', 'benchmark', 'debug', 'reverse'].includes(name)) throw Object.assign(new Error('Unknown file (intent, spec, plan, designdoc, benchmark, debug or reverse)'), { status: 400 });
     return readSpecDoc(agent.id, name) ?? { name, markdown: null };
   }
 
@@ -857,6 +860,31 @@ export class AgentManager extends EventEmitter {
     // What was asked, newest last, for the Debug tab.
     const asks = [...(agent.debug?.asks ?? []), { text: fix ? `Apply fixes${which ? `: ${which}` : ''}` : q, kind: fix ? 'fix' : has ? 'follow-up' : 'debug', at: now() }].slice(-20);
     return this.view(this.patch(agent.id, { debug: { asks, startedAt: agent.debug?.startedAt ?? now() } }));
+  }
+
+  /**
+   * Reverse engineer: ask the agent to work out how something in a target (an app's folder, a
+   * binary, a website) works, with REA's tools, and keep a report (REVERSE.md) with diagrams, the
+   * evidence, what could not be determined and a plan to build our own. `question`: what to
+   * understand, or a follow-up once there is a report. `build`: build our own version from the
+   * report (which part, in words; true for its plan). The message waits in the agent's queue.
+   */
+  reverse(ref, { target = '', question = '', build = null } = {}) {
+    const agent = this.mustGet(ref);
+    if (!agent.workdir || agent.status === 'preparing') throw Object.assign(new Error('The agent has no folder to work in yet'), { status: 409 });
+    const q = String(question ?? '').replace(/\s+/g, ' ').trim().slice(0, 2000);
+    const has = Boolean(readSpecDoc(agent.id, 'reverse')?.markdown?.trim());
+    // The target as given the first time stands for the follow-ups.
+    const t = String(target ?? '').replace(/\s+/g, ' ').trim().slice(0, 500) || agent.reverse?.target || '';
+    if (build && !has) throw Object.assign(new Error('There is no report yet: say what to reverse engineer first'), { status: 409 });
+    if (!build && q.length < 3) throw Object.assign(new Error('Say what you want to understand'), { status: 400 });
+    if (!build && !t) throw Object.assign(new Error("Name the target: an app's folder, a binary's path, or a website's address"), { status: 400 });
+    fs.mkdirSync(briefDir(agent.id), { recursive: true });
+    const file = path.join(fs.realpathSync(briefDir(agent.id)), path.basename(reversePath(agent.id)));
+    const which = build === true ? '' : String(build ?? '').replace(/\s+/g, ' ').trim().slice(0, 500);
+    this.tell(agent.id, build ? reverseBuildPrompt(file, which) : reversePrompt(file, { target: t, question: q, again: has }), { source: 'reverse' });
+    const asks = [...(agent.reverse?.asks ?? []), { text: build ? `Build it${which ? `: ${which}` : ''}` : q, kind: build ? 'build' : has ? 'follow-up' : 'reverse', at: now() }].slice(-20);
+    return this.view(this.patch(agent.id, { reverse: { ...agent.reverse, target: t, asks, startedAt: agent.reverse?.startedAt ?? now() } }));
   }
 
   /** The agent's sample demo page (HTML), once it has written one. */
@@ -2356,6 +2384,14 @@ export class AgentManager extends EventEmitter {
         at = fs.statSync(debugPath(id)).mtime.toISOString();
       } catch {}
       if (at !== (agent.debug.reportAt ?? null)) this.patch(id, { debug: { ...this.store.get(id).debug, reportAt: at } });
+    }
+    // The same for a reverse-engineering report.
+    if (agent.reverse) {
+      let at = null;
+      try {
+        at = fs.statSync(reversePath(id)).mtime.toISOString();
+      } catch {}
+      if (at !== (agent.reverse.reportAt ?? null)) this.patch(id, { reverse: { ...this.store.get(id).reverse, reportAt: at } });
     }
   }
 

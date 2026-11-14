@@ -4288,3 +4288,39 @@ test('runbooks: the tickets of a release or an epic from Jira, the code changes 
   assert.throws(() => rb.get(a.id), /No such runbook/);
   assert.equal(fs.existsSync(path.join(home, 'runbooks', `${a.id}.md`)), false);
 });
+
+test('reverse engineering: the prompts say analysis only and to build from behaviour; REA is found where Claude Code keeps its servers', async () => {
+  const { reversePrompt, reverseBuildPrompt } = await import('../src/brief.js');
+  const { isRea, reaStatus } = await import('../src/rea.js');
+  const first = reversePrompt('/b/REVERSE.md', { target: '/Applications/Notes.app', question: 'How does search work?' });
+  for (const want of ['Reverse engineer this: How does search work?\nTarget: /Applications/Notes.app', "Use REA's tools", '`npx rea-agents setup`', 'do not install it or anything else yourself', 'Hopper, Ghidra, IDA or Kuna', 'Analyse only: do not modify, patch or redistribute the target', 'Do not work on getting around licence checks, copy protection, sign-in', 'do not collect credentials, keys or personal data', 'Keep a report at /b/REVERSE.md', '## What could not be determined', '## Build it', 'No code, text or assets taken from the target', 'e1@{ animate: true }', 'classDef inferred']) assert.ok(first.includes(want), want);
+  const again = reversePrompt('/b/REVERSE.md', { target: '/Applications/Notes.app', question: 'And sync?', again: true });
+  assert.match(again, /^Reverse engineering, continued: And sync\?\nTarget: \/Applications\/Notes\.app\n/);
+  assert.match(again, /Still analysis only, and no changes to this repository unless I ask you to build/);
+  assert.doesNotMatch(again, /## Findings/, 'the shape is not repeated');
+  const build = reverseBuildPrompt('/b/REVERSE.md', 'the index table');
+  assert.match(build, /Build our own version from your reverse-engineering report at \/b\/REVERSE\.md: the index table\./);
+  assert.match(build, /copy no code, text, names of internal symbols or assets from the target, and add no dependency on it/);
+  assert.match(reverseBuildPrompt('/b/R.md', ''), /the plan under "Build it", the smallest useful piece first/);
+
+  // REA by its name, or by the package it runs; nothing else.
+  assert.equal(isRea('rea', {}), true);
+  assert.equal(isRea('REA-agents', {}), true);
+  assert.equal(isRea('tools', { command: 'npx', args: ['-y', 'rea-agents@latest', 'mcp'] }), true);
+  assert.equal(isRea('tools', { command: 'node', args: ['/Users/me/.npm/_npx/abc/node_modules/rea-agents/dist/main.js'] }), true);
+  assert.equal(isRea('react', { command: 'npx', args: ['react-devtools'] }), false);
+  assert.equal(isRea('area', { command: 'area-agents' }), false);
+
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'agentmgr-rea-'));
+  const work = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'agentmgr-rea-work-')));
+  const config = path.join(home, '.claude.json');
+  assert.deepEqual(reaStatus(work, { config }), { registered: false, where: null, name: null, setup: 'npx rea-agents setup' }, 'no settings file at all');
+  fs.writeFileSync(config, JSON.stringify({ mcpServers: { github: { command: 'gh-mcp' } }, projects: { [work]: { mcpServers: { re: { command: 'npx', args: ['rea-agents', 'mcp'] } } } } }));
+  assert.deepEqual(reaStatus(work, { config }), { registered: true, where: 'this folder, in your Claude Code settings', name: 're', setup: 'npx rea-agents setup' });
+  assert.equal(reaStatus(null, { config }).registered, false, 'not for every folder');
+  fs.writeFileSync(config, JSON.stringify({ mcpServers: { rea: { command: 'node', args: ['x.js'] } } }));
+  assert.deepEqual([reaStatus(null, { config }).where, reaStatus(work, { config }).where], ['your Claude Code settings', 'your Claude Code settings']);
+  fs.writeFileSync(config, '{ not json');
+  fs.writeFileSync(path.join(work, '.mcp.json'), JSON.stringify({ mcpServers: { rea: { command: 'rea', args: ['mcp'] } } }));
+  assert.equal(reaStatus(work, { config }).where, "the project's .mcp.json");
+});

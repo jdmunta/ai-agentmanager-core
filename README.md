@@ -30,6 +30,7 @@ Run one background [Claude Code](https://claude.com/claude-code) agent per inten
 - **Plan.** A project's commitment dates (code complete, release candidate, GA) with a checklist of what is still open for each, reminders as they come near, and an at-risk or late flag. A **decision log** gathered from plan reviews, your answers and design docs. A **tech debt radar** from git history and the code. What is open can be handed to an agent.
 - **Your day.** Connect your calendar and Today lays the day out around your meetings: the free time between them with what needs you placed in it, and what each meeting is about.
 - **Debug.** Say what to debug (a failure, E2E instability at max scale, slowness under load) in the **Debug** tab beside an agent's session. The agent investigates there and writes a report next to it: animated diagrams of the code path and the data flow with where it breaks, findings with evidence, likely causes and recommended fixes. It changes no code until you press **Apply fixes**.
+- **Reverse engineer.** Name a target (an app's folder, a binary, a website) and what you want to understand, in the **Reverse** tab beside an agent's session: the agent investigates with [REA](https://github.com/morluto/rea)'s tools and keeps a report with animated diagrams of how it works, the evidence, what could not be determined, and a plan to build your own version.
 - **Runbooks for support.** A runbook for the support team written from a release ticket, every ticket of an epic, or a project's code changes in a time frame: what changed, what customers may see, how to check it, troubleshooting, rollback, when to escalate, and what to confirm with engineering.
 - **Decide.** Help with the decisions, not only the tasks: a plan to review or an agent's question arrives with its options, the one recommended, why, and the risk; calls you keep making become standing decisions that are handled for you and reported; the backlog is ranked by impact; a date at risk is laid out as choices; and past decisions are looked back on.
 - **OS.** The computer the agents run on and how loaded it is right now: processor, load average, memory, swap and disks with the last ten minutes, what each open agent session takes, and the busiest processes.
@@ -189,6 +190,7 @@ agentmgr remote on | off | status | rotate    # phone / remote access (see below
 agentmgr backlog add "ask" -r <repo> [-p 1]   # queue work; also: ls, start, accept, reopen, move, limit, pause
 agentmgr notify slack --webhook <url>         # Slack alerts; also: test, status, on, off, event <name> on|off
 agentmgr debug <agent> "what goes wrong"       # debug with an agent; no question prints its report; --fix applies the fixes
+agentmgr reverse <agent> -t /path/to/app "how does search work"  # reverse engineer with an agent and REA; no question prints the report; --build builds your own
 agentmgr dates <project> --cc 2026-12-01 --rc 2026-12-10 --ga 2026-12-20   # commitment dates; no dates: where each stands
 agentmgr decisions [project] [--md]           # the decision log; --add "<question>" --decision "<what>" adds one
 agentmgr debt <project> --scan                # the tech debt radar: files that change often and are hard to read
@@ -1218,6 +1220,17 @@ With it, Today opens with **Your day**:
 - **What a meeting is about:** the agents, pull requests and issues its title or description names (a Jira key, `#482`, an agent's or project's name), to open before you walk in.
 
 Repeating meetings, time zones, moved or cancelled occurrences and events marked *free* are understood. Several calendars can be added; **Disconnect** forgets them. In config.json: `"calendar": { "ics": ["https://…"], "workStart": "09:00", "workEnd": "18:00" }`.
+
+## Reverse engineer
+
+**🔍 Reverse engineer** in an agent's detail (or the **Reverse** tab of the split) puts the agent's session on the left and a pane on the right. Name a **target** (an app's folder or `.asar`, a binary's path, a website's address) and what you want to understand ("how does search work in this app"). The agent investigates in its own session with the tools of [REA](https://github.com/morluto/rea), the "Reverse Engineer Anything" MCP server, and changes nothing.
+
+- **The report**, drawn beside the session as the agent writes it: what the target is, how the feature works as an animated diagram, the data and interfaces (storage, formats, calls between processes, network requests), findings with their evidence marked confirmed or inferred, what could not be determined, and a plan for building your own version in this project.
+- **Follow-ups and building.** **Ask** continues the investigation. **Build it in my project** has the agent write your own version from the behaviour the report describes, with tests: its own code, nothing copied from the target.
+- **REA is set up by you.** The pane says whether REA is registered with Claude Code for the agent's folder (read from Claude Code's settings and the project's `.mcp.json`; a plugin that brings REA is not seen there). If it isn't, run `npx rea-agents setup` in a terminal and restart the agent's session: the app installs nothing. Native binaries also need Hopper, Ghidra, IDA or Kuna; JavaScript, Electron and websites need nothing more.
+- **What it is for.** Software you own or are allowed to analyse: a licence or the law may restrict reverse engineering someone else's product. The agent is told to analyse only, not to work on getting around licence checks, copy protection or sign-in, not to collect credentials or personal data, and to build from behaviour without copying code or assets.
+
+`agentmgr reverse <agent> -t <target> "<what to understand>"` asks from the terminal, `agentmgr reverse <agent>` prints the report, and `--build` builds your own.
 
 ## Debug
 

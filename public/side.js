@@ -1,7 +1,8 @@
 // The split view: the terminal (Claude, a shell or a browser tab) stays on the left, and the right
 // pane shows the same agent's Code, its Docs (Diagrams by default), its Changes explained one by
-// one, or Debug: you say what to debug, the agent investigates in its session on the left and its
-// report (animated code path and data flow, findings, fixes) grows here. On, the tab and the
+// one, Debug: you say what to debug, the agent investigates in its session on the left and its
+// report (animated code path and data flow, findings, fixes) grows here; or Reverse engineer: the
+// same for how something in an app, a binary or a website works, with REA's tools. On, the tab and the
 // document are remembered in this browser.
 import { parseDiff } from '/review.js';
 import { cardHtml, explainButton, listenParts as walkParts, walkthroughOf } from '/walkthrough.js';
@@ -66,97 +67,150 @@ export function initSide({ api, esc, toast, $, agents, codeUi, docHtml, renderDi
     if (st.tab === 'code') codeUi.open(st.agentId);
     else if (st.tab === 'docs') renderDocs(true);
     else if (st.tab === 'debug') renderDebug(true);
+    else if (st.tab === 'reverse') renderReverse(true);
     else renderChanges(true);
     refit();
   }
 
-  // ------------------------------------------------------------ Debug
-  const DEBUG_IDEAS = ['E2E tests unstable at max scale', 'Slow or failing under load', 'A flaky test', 'A memory or connection leak', 'Wrong data end to end'];
-  const drafts = new Map(); // agent id -> what's typed and not sent
+  // ------------------------------------------------------------ Debug and Reverse engineer
+  // Two investigations of the same shape: you ask, the agent investigates in its session, and its
+  // report grows here. They differ in their words, in what follows the report (fixes, or building
+  // your own), and Reverse engineer also names a target and needs REA's tools.
+  const ASK = {
+    debug: {
+      ideas: ['E2E tests unstable at max scale', 'Slow or failing under load', 'A flaky test', 'A memory or connection leak', 'Wrong data end to end'],
+      first: 'What should it debug? For example: E2E tests fail at max scale after about 20 minutes',
+      more: 'A follow-up: what you know, what to look at next, or which fixes to apply',
+      go: 'Debug',
+      short: 'Say what to debug',
+      sent: 'Sent to the agent: it investigates in its session',
+      then: { key: 'fix', label: 'Apply fixes', sent: 'Asked the agent to apply the fixes', title: "Ask the agent to make the report's fixes, verify each and record the result. Name the ones you want in the box (for example: 1 and 3), or leave it empty for the ones it recommends" },
+      waiting: 'the report shows here once it has the code path',
+      empty: 'Say what is going wrong: a failure, instability at scale, slowness under load. The agent investigates in its session (it reads the code and logs, reproduces and measures where it can) and writes a report here: animated diagrams of the code path and the data flow with where it breaks, what it found with evidence, the likely causes, and the fixes it recommends. It changes no code until you ask for a fix.',
+    },
+    reverse: {
+      ideas: ['How does search work?', 'How is data stored and synced?', 'What does it send over the network?', 'How does the plugin system load code?', 'What file format does it save?'],
+      first: 'What do you want to understand? For example: how does search work in this app',
+      more: 'A follow-up: where to look next, or which part to build',
+      go: 'Investigate',
+      short: 'Say what you want to understand',
+      sent: 'Sent to the agent: it investigates in its session',
+      then: { key: 'build', label: 'Build it in my project', sent: 'Asked the agent to build it from the report', title: 'Ask the agent to build your own version in this project from what the report describes: its own code, nothing copied from the target, with tests. Name the part you want in the box, or leave it empty for the plan under "Build it"' },
+      waiting: 'the report shows here once it knows the shape of the target',
+      empty: "Name a target (an app's folder, a binary, a website) and what you want to understand about it. The agent investigates in its session with REA's tools and writes a report here: how it works with animated diagrams, the evidence behind each claim, what is confirmed and what is inferred, what could not be determined, and a plan for building your own version. It changes nothing until you ask it to build.",
+    },
+  };
+  const drafts = new Map(); // "<agent>:<kind>" -> what's typed and not sent
+  const rea = new Map(); // agent id -> whether REA is registered for its folder
   /** Read the report; `want` is the change time the agent's record names, so each version is read once. */
-  async function loadDebug(want) {
+  async function loadAsk(kind, want) {
     const id = st.agentId;
-    const key = `${id}:debug`;
+    const key = `${id}:${kind}`;
     files.set(key, { ...files.get(key), loading: true });
-    const r = await api('GET', `/agents/${id}/specs/debug`).catch(() => null);
+    const r = await api('GET', `/agents/${id}/specs/${kind}`).catch(() => null);
     files.set(key, { markdown: r?.markdown ?? null, at: r?.updatedAt ?? null, want, loaded: true });
-    if (st.agentId === id && st.on && st.tab === 'debug') renderDebug(false);
+    if (st.agentId === id && st.on && st.tab === kind) renderAsk(kind, false);
+  }
+  async function loadRea() {
+    const id = st.agentId;
+    rea.set(id, { loading: true });
+    rea.set(id, (await api('GET', `/agents/${id}/reverse/rea`).catch(() => null)) ?? { unknown: true });
+    if (st.agentId === id && st.on && st.tab === 'reverse') renderAsk('reverse', true);
   }
 
-  function renderDebug(force) {
+  /** What Reverse engineer needs said above its box: whether REA is there, and what it is for. */
+  function reverseNotes(a) {
+    const r = rea.get(a?.id);
+    if (!r && a?.workdir) loadRea();
+    const setup = r?.registered
+      ? `<p class="hint reverse-rea ok">REA is registered in ${esc(r.where)}. Native binaries also need Hopper, Ghidra, IDA or Kuna; JavaScript, Electron and websites need nothing more.</p>`
+      : r && !r.loading && !r.unknown
+        ? `<p class="hint reverse-rea missing"><b>REA was not found</b> in Claude Code's settings for this agent. Set it up in a terminal with <code>${esc(r.setup)}</code>, then restart this agent's session. (If REA came with a plugin, it is not seen here and will still work.) <button type="button" class="link" data-reverse-recheck>Check again</button></p>`
+        : '';
+    return `${setup}<p class="hint reverse-note">For software you own or are allowed to analyse: a licence or the law may restrict reverse engineering someone else's product. The agent is told to analyse only, not to get around licence checks or sign-in, and to build from behaviour without copying code or assets.</p>`;
+  }
+
+  function renderAsk(kind, force) {
+    const w = ASK[kind];
     const a = agents.get(st.agentId);
-    const d = files.get(`${st.agentId}:debug`);
-    const want = a?.specDocs?.debug ?? null;
-    if ((!d || (d.loaded && d.want !== want)) && !d?.loading) loadDebug(want);
-    const asks = a?.debug?.asks ?? [];
+    const d = files.get(`${st.agentId}:${kind}`);
+    const want = a?.specDocs?.[kind] ?? null;
+    if ((!d || (d.loaded && d.want !== want)) && !d?.loading) loadAsk(kind, want);
+    const asks = a?.[kind]?.asks ?? [];
     const working = Boolean(a?.runtime?.busy || a?.outbox);
     const has = Boolean(d?.markdown);
-    const sig = `debug|${st.agentId}|${d?.at}|${Boolean(d?.loaded)}|${asks.length}|${working}|${Boolean(a?.workdir)}`;
+    const r = rea.get(st.agentId);
+    const sig = `${kind}|${st.agentId}|${d?.at}|${Boolean(d?.loaded)}|${asks.length}|${working}|${Boolean(a?.workdir)}|${kind === 'reverse' ? `${r?.registered}|${Boolean(r?.loading)}|${a?.reverse?.target ?? ''}` : ''}`;
     if (!force && sig === st.sig) return;
     st.sig = sig;
     // What's being typed, and where the caret is, survive the redraw.
-    const old = body.querySelector('[data-debug-text]');
-    if (old) drafts.set(st.agentId, old.value);
-    const typing = old && document.activeElement === old ? [old.selectionStart, old.selectionEnd] : null;
+    const old = body.querySelector(`[data-${kind}-text]`);
+    const key = `${st.agentId}:${kind}`;
+    if (old) drafts.set(key, old.value);
+    const oldTarget = body.querySelector('[data-reverse-target]');
+    if (kind === 'reverse' && oldTarget) drafts.set(`${key}:target`, oldTarget.value);
+    const focused = [old, oldTarget].find((el) => el && document.activeElement === el);
+    const typing = focused ? [focused === old ? `[data-${kind}-text]` : '[data-reverse-target]', focused.selectionStart, focused.selectionEnd] : null;
     const top = body.querySelector('.side-scroll')?.scrollTop ?? 0;
-    const draft = drafts.get(st.agentId) ?? '';
-    const ideas = has || asks.length ? '' : `<div class="debug-ideas">${DEBUG_IDEAS.map((t) => `<button type="button" class="chip" data-debug-idea>${esc(t)}</button>`).join('')}</div>`;
+    const draft = drafts.get(key) ?? '';
+    const ideas = has || asks.length ? '' : `<div class="debug-ideas">${w.ideas.map((t) => `<button type="button" class="chip" data-ask-idea data-${kind}-idea>${esc(t)}</button>`).join('')}</div>`;
     const status = !asks.length
       ? ''
       : working
-        ? `<p class="hint debug-status"><span class="debug-dot"></span> The agent is investigating in its session${has ? '; the report below updates as it writes' : '; the report shows here once it has the code path'}.</p>`
+        ? `<p class="hint debug-status"><span class="debug-dot"></span> The agent is investigating in its session${has ? '; the report below updates as it writes' : `; ${w.waiting}`}.</p>`
         : has
           ? ''
           : '<p class="hint debug-status">Asked. The report shows here when the agent has written it; its session on the left has what it is doing or asking.</p>';
     const asked = asks.length
-      ? `<details class="debug-asked"><summary>Asked (${asks.length})</summary><ol>${asks.map((x) => `<li>${x.kind === 'fix' ? '<span class="tag">fix</span> ' : ''}${esc(x.text)}</li>`).join('')}</ol></details>`
+      ? `<details class="debug-asked"><summary>Asked (${asks.length})</summary><ol>${asks.map((x) => `<li>${x.kind === w.then.key ? `<span class="tag">${w.then.key}</span> ` : ''}${esc(x.text)}</li>`).join('')}</ol></details>`
       : '';
-    const report = has
-      ? `<div class="md debug-report">${docHtml(d.markdown)}</div>`
-      : d?.loaded
-        ? asks.length
-          ? ''
-          : `<p class="hint">Say what is going wrong: a failure, instability at scale, slowness under load. The agent investigates in its session (it reads the code and logs, reproduces and measures where it can) and writes a report here: animated diagrams of the code path and the data flow with where it breaks, what it found with evidence, the likely causes, and the fixes it recommends. It changes no code until you press <b>Apply fixes</b>.</p>`
-        : '<p class="hint">Loading…</p>';
-    body.innerHTML = `<div class="side-scroll debug-view">
-      <form class="debug-ask" data-debug-form>
-        <textarea data-debug-text rows="2" ${a?.workdir ? '' : 'disabled'} placeholder="${has ? 'A follow-up: what you know, what to look at next, or which fixes to apply' : 'What should it debug? For example: E2E tests fail at max scale after about 20 minutes'}">${esc(draft)}</textarea>
+    const report = has ? `<div class="md debug-report">${docHtml(d.markdown)}</div>` : d?.loaded ? (asks.length ? '' : `<p class="hint">${esc(w.empty)}</p>`) : '<p class="hint">Loading…</p>';
+    const target = kind === 'reverse' ? `<input data-reverse-target ${a?.workdir ? '' : 'disabled'} value="${esc(drafts.get(`${key}:target`) ?? a?.reverse?.target ?? '')}" placeholder="The target: /Applications/Notes.app, ~/Downloads/app.asar, a binary's path, or https://example.com" aria-label="The target" />` : '';
+    body.innerHTML = `<div class="side-scroll debug-view ${kind}-view">
+      <form class="debug-ask" data-ask-form="${kind}" data-${kind}-form>
+        ${target}
+        <textarea data-${kind}-text rows="2" ${a?.workdir ? '' : 'disabled'} placeholder="${esc(has ? w.more : w.first)}">${esc(draft)}</textarea>
         ${ideas}
         <div class="debug-actions">
           <span class="hint">${has && d.at ? `Report updated ${esc(new Date(d.at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }))}` : ''}</span>
           <span class="spacer"></span>
-          ${has ? `<button type="button" class="small" data-debug-fix title="Ask the agent to make the report's fixes, verify each and record the result. Name the ones you want in the box (for example: 1 and 3), or leave it empty for the ones it recommends">Apply fixes</button>` : ''}
-          <button class="small primary" ${a?.workdir ? '' : 'disabled'}>${has ? 'Ask' : 'Debug'}</button>
+          ${has ? `<button type="button" class="small" data-${kind}-${w.then.key} title="${esc(w.then.title)}">${esc(w.then.label)}</button>` : ''}
+          <button class="small primary" ${a?.workdir ? '' : 'disabled'}>${has ? 'Ask' : w.go}</button>
         </div>
       </form>
+      ${kind === 'reverse' ? reverseNotes(a) : ''}
       ${status}${asked}${report}
     </div>`;
-    const text = body.querySelector('[data-debug-text]');
     if (typing) {
-      text.focus();
-      text.setSelectionRange(...typing);
+      const el = body.querySelector(typing[0]);
+      el.focus();
+      el.setSelectionRange(typing[1], typing[2]);
     }
     body.querySelector('.side-scroll').scrollTop = top;
     renderDiagrams(body);
   }
+  const renderDebug = (force) => renderAsk('debug', force);
+  const renderReverse = (force) => renderAsk('reverse', force);
 
-  async function sendDebug(payload) {
+  async function sendAsk(kind, payload) {
     const id = st.agentId;
+    const w = ASK[kind];
     try {
-      agents.set(id, await api('POST', `/agents/${id}/debug`, payload));
-      drafts.delete(id);
-      const text = body.querySelector('[data-debug-text]');
+      agents.set(id, await api('POST', `/agents/${id}/${kind}`, payload));
+      drafts.delete(`${id}:${kind}`);
+      const text = body.querySelector(`[data-${kind}-text]`);
       if (text) text.value = '';
-      toast(payload.fix ? 'Asked the agent to apply the fixes' : 'Sent to the agent: it investigates in its session', 3000);
+      toast(payload[w.then.key] ? w.then.sent : w.sent, 3000);
     } catch (err) {
       toast(`Error: ${err.message}`, 5000);
     }
-    if (st.agentId === id && st.tab === 'debug') renderDebug(true);
+    if (st.agentId === id && st.tab === kind) renderAsk(kind, true);
   }
   // While the agent works, the report is read again now and then: it writes it as it goes.
   setInterval(() => {
     const a = agents.get(st.agentId);
-    if (st.on && st.tab === 'debug' && a?.debug && (a.runtime?.busy || a.outbox) && !files.get(`${a.id}:debug`)?.loading) loadDebug(a.specDocs?.debug ?? null);
+    const kind = st.tab;
+    if (st.on && ASK[kind] && a?.[kind] && (a.runtime?.busy || a.outbox) && !files.get(`${a.id}:${kind}`)?.loading) loadAsk(kind, a.specDocs?.[kind] ?? null);
   }, 5000);
 
   // ------------------------------------------------------------ Docs
@@ -248,13 +302,15 @@ export function initSide({ api, esc, toast, $, agents, codeUi, docHtml, renderDi
     if (tab) return setTab(tab.dataset.side);
     if (e.target.closest('#side-close')) return toggle(false);
     if (e.target.closest('[data-side-reload]')) return loadChanges();
-    const idea = e.target.closest('[data-debug-idea]');
+    const idea = e.target.closest('[data-ask-idea]');
     if (idea) {
-      const text = body.querySelector('[data-debug-text]');
+      const text = body.querySelector(`[data-${st.tab}-text]`);
       text.value = idea.textContent;
       return text.focus();
     }
-    if (e.target.closest('[data-debug-fix]')) return sendDebug({ fix: body.querySelector('[data-debug-text]').value.trim() || true });
+    if (e.target.closest('[data-debug-fix]')) return sendAsk('debug', { fix: body.querySelector('[data-debug-text]').value.trim() || true });
+    if (e.target.closest('[data-reverse-build]')) return sendAsk('reverse', { build: body.querySelector('[data-reverse-text]').value.trim() || true });
+    if (e.target.closest('[data-reverse-recheck]')) return loadRea();
     try {
       if (e.target.closest('[data-side-explain]')) {
         agents.set(st.agentId, await api('POST', `/agents/${st.agentId}/docs/walkthrough?background=1`));
@@ -270,15 +326,19 @@ export function initSide({ api, esc, toast, $, agents, codeUi, docHtml, renderDi
     }
   });
   pane.addEventListener('submit', (e) => {
-    if (!e.target.matches('[data-debug-form]')) return;
+    const kind = e.target.dataset.askForm;
+    if (!ASK[kind]) return;
     e.preventDefault();
-    const question = body.querySelector('[data-debug-text]').value.trim();
-    if (question.length < 3) return toast('Say what to debug', 3000);
-    sendDebug({ question });
+    const question = body.querySelector(`[data-${kind}-text]`).value.trim();
+    if (question.length < 3) return toast(ASK[kind].short, 3000);
+    if (kind === 'debug') return sendAsk('debug', { question });
+    const target = body.querySelector('[data-reverse-target]').value.trim();
+    if (!target) return toast("Name the target: an app's folder, a binary's path, or a website's address", 4000);
+    sendAsk('reverse', { question, target });
   });
   // Enter sends; Shift+Enter is a new line.
   pane.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.target.matches('[data-debug-text]')) {
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.target.matches('[data-debug-text], [data-reverse-text]')) {
       e.preventDefault();
       e.target.form.requestSubmit();
     }
@@ -345,6 +405,7 @@ export function initSide({ api, esc, toast, $, agents, codeUi, docHtml, renderDi
       if (!st.on || a.id !== st.agentId) return;
       if (st.tab === 'docs') renderDocs(false);
       else if (st.tab === 'debug') renderDebug(false);
+      else if (st.tab === 'reverse') renderReverse(false);
       else if (st.tab === 'changes') renderChanges(false);
     },
   };

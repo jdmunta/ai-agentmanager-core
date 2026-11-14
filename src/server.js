@@ -53,6 +53,7 @@ import { News } from './news.js';
 import { System } from './system.js';
 import { Advisor } from './advisor.js';
 import { Runbooks } from './runbooks.js';
+import { reaStatus } from './rea.js';
 import { Milestones } from './milestones.js';
 import { Decisions } from './decisions.js';
 import { Debt } from './debt.js';
@@ -743,6 +744,10 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
   api.post('/rules/dismiss', wrap((req) => (manager.rules.dismiss(...ruleArgs(req)), manager.rules.view())));
   api.post('/rules/remove', wrap((req) => (manager.rules.remove(...ruleArgs(req)), manager.rules.view())));
   api.post('/agents/:id/tell', wrap((req) => manager.tell(req.params.id, req.body?.text)));
+  // Reverse engineer: a target and what to understand (or a follow-up), or `build` to build our own from the report; the report is /specs/reverse.
+  api.post('/agents/:id/reverse', wrap((req) => manager.reverse(req.params.id, { target: req.body?.target, question: req.body?.question, build: req.body?.build ?? null })));
+  // Whether REA is registered with Claude Code for this agent's folder (read from Claude Code's files; nothing is run).
+  api.get('/agents/:id/reverse/rea', wrap((req) => reaStatus(manager.mustGet(req.params.id).workdir ?? null)));
   // Debug: what to debug (or a follow-up), or `fix` to apply the report's fixes; the report is /specs/debug.
   api.post('/agents/:id/debug', wrap((req) => manager.debug(req.params.id, { question: req.body?.question, fix: req.body?.fix ?? null })));
   api.post('/agents/:id/answer', wrap((req) => manager.answerQuestion(req.params.id, req.body?.question, req.body?.text)));
