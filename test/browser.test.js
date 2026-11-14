@@ -100,14 +100,19 @@ before(async () => {
   }
 
   const cdpPort = await freePort();
-  chrome = spawn(chromeBin, ['--headless=new', `--remote-debugging-port=${cdpPort}`, `--user-data-dir=${path.join(home, 'chrome')}`, '--no-first-run', '--no-default-browser-check', ...(process.platform === 'linux' ? ['--no-sandbox'] : []), 'about:blank'], { stdio: 'ignore' });
+  // A loaded CI runner can take long to open Chrome's first page, or lose it: wait, then start it once more.
   let target;
-  for (let i = 0; i < 100 && !target; i++) {
-    await sleep(150);
-    try {
-      target = (await (await fetch(`http://127.0.0.1:${cdpPort}/json`)).json()).find((t) => t.type === 'page');
-    } catch {}
+  for (let attempt = 0; attempt < 2 && !target; attempt++) {
+    chrome?.kill('SIGKILL');
+    chrome = spawn(chromeBin, ['--headless=new', `--remote-debugging-port=${cdpPort}`, `--user-data-dir=${path.join(home, 'chrome')}`, '--no-first-run', '--no-default-browser-check', ...(process.platform === 'linux' ? ['--no-sandbox'] : []), 'about:blank'], { stdio: 'ignore' });
+    for (let i = 0; i < 200 && !target; i++) {
+      await sleep(150);
+      try {
+        target = (await (await fetch(`http://127.0.0.1:${cdpPort}/json`)).json()).find((t) => t.type === 'page');
+      } catch {}
+    }
   }
+  assert.ok(target, 'Chrome opened a page to drive');
   ws = new WebSocket(target.webSocketDebuggerUrl, { perMessageDeflate: false });
   await new Promise((r) => ws.once('open', r));
   ws.on('message', (data) => {
