@@ -67,6 +67,7 @@
               <span id="me-where" class="hint"></span>
             </div>
             <button role="menuitem" id="usage-btn" title="What is used and left of each engine's plan limits (Claude Code's 5-hour session and week, Codex's), and when they reset">Usage…</button>
+            <button role="menuitem" id="skills-btn" title="Skills: the Agent Skills Claude Code has here (yours and each project's), which agents used them, and adding more from a repository">Skills…</button>
             <button role="menuitem" id="settings-btn">Settings…</button>
             <button role="menuitem" id="worklog-btn" title="What your agents got done: pull requests, bugs fixed, issues filed; kept in a spreadsheet for reviews">Work record…</button>
             <button role="menuitem" id="cleanup-btn" title="Close agents idle for a while, and delete old closed ones">Clean up…</button>
@@ -426,6 +427,9 @@
     </dialog>
     <dialog id="plan-dialog" class="issues-dialog plan-dialog" aria-label="Plan">
       <div id="plan-body"></div>
+    </dialog>
+    <dialog id="skills-dialog" class="issues-dialog skills-dialog" aria-label="Skills">
+      <div id="skills-body"></div>
     </dialog>
     <dialog id="usage-dialog" class="issues-dialog usage-dialog" aria-label="Usage">
       <div id="usage-body"></div>

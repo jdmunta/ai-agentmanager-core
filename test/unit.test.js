@@ -4542,3 +4542,80 @@ test('lean output: long command output trimmed (errors kept, the whole kept in a
   assert.equal(on.hooks.PostToolUse[0].matcher, 'Bash');
   assert.ok(on.hooks.PostToolUse[0].hooks[0].command.endsWith('"/x/le an.js"'));
 });
+
+test('skills: what is here, what a repository offers, adding, checking for a newer version, updating and removing', async () => {
+  const { Skills, findSkills, parseSkill, repoUrl, skillUses } = await import('../src/skills.js');
+  assert.deepEqual(parseSkill('---\nname: pdf\ndescription: >\n  Read and fill\n  PDF forms.\nlicense: MIT\n---\n# PDF\nDo it.'), { name: 'pdf', description: 'Read and fill PDF forms.', body: '# PDF\nDo it.' });
+  assert.deepEqual(parseSkill('---\nname: "x"\ndescription: \'One: two\'\n---\n').description, 'One: two');
+  assert.equal(parseSkill('# No front matter').name, null);
+  assert.equal(repoUrl('anthropics/skills'), 'https://github.com/anthropics/skills.git');
+  assert.equal(repoUrl('https://github.com/obra/superpowers/tree/main/skills'), 'https://github.com/obra/superpowers.git');
+  assert.equal(repoUrl('https://gitlab.com/group/sub/repo.git'), 'https://gitlab.com/group/sub/repo.git');
+  for (const bad of ['', 'justone', 'git@github.com:a/b.git', 'http://github.com/a/b', 'https://user:pw@github.com/a/b', 'file:///etc', '--upload-pack=x']) assert.equal(repoUrl(bad), null, bad);
+  assert.deepEqual(skillUses('{"type":"tool_use","name":"Skill","input":{"skill":"pdf"}} … {"name":"Skill","input":{"skill":"pdf","args":"x"}} {"name":"Skill","description":"Invoke"} {"name":"Skill","input":{"skill":"team:review"}}'), { pdf: 2, 'team:review': 1 });
+
+  // A repository with two skills (one with a script) and things that are not skills.
+  const root = tmp();
+  const repo = path.join(root, 'repo');
+  const put = (file, text) => (fs.mkdirSync(path.dirname(file), { recursive: true }), fs.writeFileSync(file, text));
+  put(path.join(repo, 'skills', 'pdf', 'SKILL.md'), '---\nname: pdf\ndescription: Read and fill PDF forms.\n---\n# PDF\n');
+  put(path.join(repo, 'skills', 'pdf', 'scripts', 'fill.py'), 'print(1)\n');
+  put(path.join(repo, 'skills', 'notes', 'SKILL.md'), '---\nname: notes\ndescription: Keep notes.\n---\n');
+  put(path.join(repo, 'README.md'), '# Skills');
+  put(path.join(repo, 'node_modules', 'x', 'SKILL.md'), '---\nname: no\n---\n');
+  fs.symlinkSync('/etc/hosts', path.join(repo, 'skills', 'notes', 'link'));
+  assert.deepEqual(findSkills(repo).map((s) => [s.name, s.path, s.files, s.scripts]), [['notes', 'skills/notes', 1, []], ['pdf', 'skills/pdf', 2, ['scripts/fill.py']]]);
+
+  const personal = path.join(root, 'home', 'skills');
+  const project = path.join(root, 'web');
+  put(path.join(project, '.claude', 'skills', 'deploy', 'SKILL.md'), '---\nname: deploy\ndescription: Ship it.\n---\n');
+  const session = path.join(root, 's.jsonl');
+  fs.writeFileSync(session, '{"type":"tool_use","name":"Skill","input":{"skill":"deploy"}}\n');
+  const cloned = [];
+  const data = {};
+  const s = new Skills({ store: { data, save() {} }, projects: () => [{ key: 'web', name: 'Web', dir: project }, { key: 'gone', name: 'Gone', dir: path.join(root, 'nope') }], sessions: () => [{ id: 'a1', name: 'fix-login', file: session }, { id: 'a2', name: 'none', file: path.join(root, 'missing') }], cache: path.join(root, 'cache'), personal: () => personal, now: () => '2026-11-14T10:00:00.000Z', clone: async (url, dir) => (cloned.push(url), fs.cpSync(repo, dir, { recursive: true, verbatimSymlinks: true })) });
+
+  let v = s.list();
+  assert.deepEqual(v.places.map((p) => [p.id, p.label, p.skills.map((x) => x.id)]), [['personal', 'Yours (every project)', []], ['project:web', 'Web', ['project:web/deploy']]]);
+  assert.deepEqual(v.places[1].skills[0].usedBy, [{ id: 'a1', name: 'fix-login', times: 1 }]);
+  assert.equal(v.places[1].skills[0].source, null, 'added by hand');
+
+  // A look first: nothing is copied.
+  const offer = await s.preview('owner/skills');
+  assert.deepEqual(cloned, ['https://github.com/owner/skills.git']);
+  assert.deepEqual(offer.skills.map((x) => [x.folder, x.scripts.length, x.installedIn]), [['notes', 0, []], ['pdf', 1, []]]);
+  assert.equal(offer.skills[0].dir, undefined, 'no paths of this computer in what is offered');
+  assert.equal(fs.existsSync(personal), false);
+  await assert.rejects(() => s.preview('not a repo'), /Give a repository/);
+
+  // Adding copies the skill's own files (no links out of it) and remembers where it came from.
+  const added = await s.install({ repo: 'owner/skills', names: ['pdf', 'notes'], place: 'personal' });
+  assert.deepEqual([added.added, added.skipped], [['pdf', 'notes'], []]);
+  assert.deepEqual(fs.readdirSync(path.join(personal, 'notes')), ['SKILL.md']);
+  assert.equal(fs.readFileSync(path.join(personal, 'pdf', 'scripts', 'fill.py'), 'utf8'), 'print(1)\n');
+  v = s.list();
+  assert.deepEqual(v.places[0].skills.map((x) => [x.id, x.source.repo, x.source.path, x.edited]), [['personal/notes', 'https://github.com/owner/skills.git', 'skills/notes', false], ['personal/pdf', 'https://github.com/owner/skills.git', 'skills/pdf', false]]);
+  assert.deepEqual((await s.install({ repo: 'owner/skills', names: ['pdf'], place: 'personal' })).skipped, ['pdf'], 'one already there is left alone');
+  await assert.rejects(() => s.install({ repo: 'owner/skills', names: ['nope'] }), /nope is not in/);
+  await assert.rejects(() => s.install({ repo: 'owner/skills', names: [], place: 'personal' }), /Pick at least one/);
+  await assert.rejects(() => s.install({ repo: 'owner/skills', names: ['pdf'], place: 'project:nope' }), /No such place/);
+  assert.match(s.show('personal/pdf').markdown, /^---\nname: pdf/);
+  assert.deepEqual(s.show('personal/pdf').list.map((f) => [f.path, f.script]), [['scripts/fill.py', true], ['SKILL.md', false]]);
+
+  // Nothing new there; then the repository moves on, and the copy here is edited too.
+  assert.deepEqual(await s.check('personal/pdf').then((c) => [c.changed, c.edited]), [false, false]);
+  put(path.join(repo, 'skills', 'pdf', 'SKILL.md'), '---\nname: pdf\ndescription: Read, fill and sign PDF forms.\n---\n# PDF 2\n');
+  fs.appendFileSync(path.join(personal, 'pdf', 'SKILL.md'), '\nmy note\n');
+  assert.deepEqual(await s.check('personal/pdf').then((c) => [c.changed, c.edited]), [true, true]);
+  assert.equal(s.list().places[0].skills[1].edited, true);
+  await assert.rejects(() => s.check('project:web/deploy'), /not added from a repository/);
+  v = await s.update('personal/pdf');
+  assert.deepEqual([v.places[0].skills[1].description, v.places[0].skills[1].edited], ['Read, fill and sign PDF forms.', false]);
+
+  // Removing deletes the folder, and only a skill's.
+  for (const bad of ['personal/../x', 'personal/', 'nowhere/pdf', 'personal/none']) assert.throws(() => s.remove(bad), /No such/, bad);
+  v = s.remove('personal/notes');
+  assert.deepEqual(v.places[0].skills.map((x) => x.id), ['personal/pdf']);
+  assert.equal(fs.existsSync(path.join(personal, 'notes')), false);
+  assert.equal(data.skills.sources['personal/notes'], undefined);
+});

@@ -43,6 +43,7 @@ import { initPlan } from '/plan.js';
 import { initSystem } from '/system.js';
 import { adviceHtml, initDecide } from '/decide.js';
 import { initUsage } from '/usage.js';
+import { initSkills } from '/skills.js';
 import { initMcp } from '/mcp.js';
 import { initCodeMap } from '/codemap.js';
 import { initKeys } from '/keys.js';
@@ -354,6 +355,8 @@ $('#decide-btn').onclick = () => decideUi.open();
 // Usage: each engine's plan limits, used and left (the chip by the connection light opens it).
 const usageUi = initUsage({ api, $, esc, ago, toast: (m, ms) => toast(m, ms) });
 $('#usage-btn').onclick = () => usageUi.open();
+const skillsUi = initSkills({ api, $, esc, ago, md: (t) => md(t), toast: (m, ms) => toast(m, ms), openAgent: (id) => select(id) });
+$('#skills-btn').onclick = () => skillsUi.open();
 // MCP: the MCP servers and tools Claude Code has in a folder, and running one.
 const mcpUi = initMcp({ api, $, esc, ago, md: (t) => md(t), toast: (m, ms) => toast(m, ms), agents: () => [...agents.values()] });
 $('#mcp-btn').onclick = () => mcpUi.open(selectedId && agents.get(selectedId)?.workdir ? selectedId : null);
@@ -412,6 +415,7 @@ function shortcut(act) {
   if (act === 'os') return osUi.open();
   if (act === 'decide') return decideUi.open();
   if (act === 'usage') return usageUi.open();
+  if (act === 'skills') return skillsUi.open();
   if (act === 'today') return todayUi.open();
   if (act.startsWith('tab:')) return showTab(act.slice(4));
   return false;

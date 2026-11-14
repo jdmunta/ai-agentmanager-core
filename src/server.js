@@ -56,6 +56,7 @@ import { Runbooks } from './runbooks.js';
 import { reaStatus } from './rea.js';
 import { EngineUsage, codexWindows } from './usage.js';
 import { leanSettings, leanStats, leanSweep } from './lean.js';
+import { Skills } from './skills.js';
 import { Milestones } from './milestones.js';
 import { Decisions } from './decisions.js';
 import { Debt } from './debt.js';
@@ -343,6 +344,12 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
   manager.on('limit', ({ engine, text, resetAt }) => usage.limited(engine, { text, resetAt }));
   manager.plugins.api('usage', config).policy((action, details) => usage.policy(action, details));
   usage.tick();
+  // Skills: Claude Code's Agent Skills here, and adding more from a repository (skills.js).
+  const skills = new Skills({
+    store,
+    projects: () => manager.listProjects().filter((p) => p.dir).map((p) => ({ key: p.shortcut ?? p.key, name: p.name ?? p.shortcut, dir: p.dir })),
+    sessions: () => manager.store.list().filter((a) => engineOf(a).id === 'claude' && a.workdir && a.sessionId).map((a) => ({ id: a.id, name: a.name, file: engineOf(a).sessionFile(a.workdir, a.sessionId) })),
+  });
   // Runbooks for the support team, from a release ticket, an epic, or the code changes of a time frame (runbooks.js).
   const runbooks = new Runbooks({
     store,
@@ -1164,6 +1171,14 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
     pushUsage();
     return usageView();
   }));
+  // Skills: the list; one to read (?id=); what a repository offers; adding, checking, updating and removing.
+  api.get('/skills', wrap(() => skills.list()));
+  api.get('/skills/one', wrap((req) => skills.show(String(req.query.id ?? ''))));
+  api.post('/skills/preview', wrap((req) => skills.preview(req.body?.repo)));
+  api.post('/skills', wrap((req) => skills.install(req.body ?? {})));
+  api.post('/skills/check', wrap((req) => skills.check(String(req.body?.id ?? ''))));
+  api.post('/skills/update', wrap((req) => skills.update(String(req.body?.id ?? ''))));
+  api.delete('/skills', wrap((req) => skills.remove(String(req.query.id ?? ''))));
   api.get('/runbooks', wrap(() => runbooks.list()));
   api.post('/runbooks', wrap((req) => runbooks.create(req.body ?? {})));
   api.get('/runbooks/:id', (req, res) => {

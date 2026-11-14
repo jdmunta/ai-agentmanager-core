@@ -824,6 +824,52 @@ export async function main(argv) {
     });
 
   program
+    .command('skills [action] [arg] [names...]')
+    .description("Claude Code's Agent Skills here: ls (default), show <id>, look <repo>, add <repo> <names...>, check <id>, update <id>, rm <id>")
+    .option('--to <place>', 'where to add: personal (default) or project:<shortcut>', 'personal')
+    .option('--json', 'print JSON')
+    .action(async (action = 'ls', arg, names, opts) => {
+      await daemon();
+      const out = (v) => console.log(JSON.stringify(v, null, 2));
+      const print = (v) => {
+        if (opts.json) return out(v);
+        for (const p of v.places) {
+          console.log(`${bold(p.label)} ${dim(p.dir)}`);
+          for (const s of p.skills) console.log(`  ${s.id.padEnd(34)} ${dim((s.description ?? 'no description').slice(0, 80))}${s.scripts.length ? yellow(` ${s.scripts.length} script(s)`) : ''}${s.source ? dim(` · ${s.source.repo.replace(/^https:\/\/github\.com\//, '').replace(/\.git$/, '')}@${s.source.commit ?? '?'}`) : ''}${s.edited ? yellow(' · edited here') : ''}${s.usedBy.length ? dim(` · used by ${s.usedBy.length}`) : ''}`);
+          if (!p.skills.length) console.log(dim('  none'));
+        }
+      };
+      if (action === 'ls') return print(await api('GET', '/skills'));
+      if (!arg) throw new Error(`agentmgr skills ${action} needs ${['look', 'add'].includes(action) ? 'a repository' : "a skill's id (see agentmgr skills)"}`);
+      if (action === 'show') {
+        const s = await api('GET', `/skills/one?id=${encodeURIComponent(arg)}`);
+        return opts.json ? out(s) : console.log(s.markdown.trimEnd());
+      }
+      if (action === 'look') {
+        const o = await api('POST', '/skills/preview', { repo: arg });
+        if (opts.json) return out(o);
+        console.log(`${bold(o.repo)} ${dim(o.commit ?? '')}`);
+        for (const s of o.skills) console.log(`  ${s.folder.padEnd(28)} ${dim((s.description ?? 'no description').slice(0, 90))}${s.scripts.length ? yellow(` ${s.scripts.length} script(s)`) : ''}`);
+        return console.log(dim(`Add some: agentmgr skills add ${arg} <names...>   (read a skill before you add it: its scripts run with your access)`));
+      }
+      if (action === 'add') {
+        if (!names.length) throw new Error('Name the skills to add (agentmgr skills look <repo> lists them)');
+        const r = await api('POST', '/skills', { repo: arg, names, place: opts.to });
+        if (opts.json) return out(r);
+        if (r.added.length) console.log(`${green('+')} ${r.added.join(', ')} ${dim(`in ${r.place}`)}`);
+        if (r.skipped.length) console.log(yellow(`Already there, left as they are: ${r.skipped.join(', ')} (agentmgr skills update <id> brings one up to date)`));
+        return;
+      }
+      if (action === 'check') {
+        const c = await api('POST', '/skills/check', { id: arg });
+        return opts.json ? out(c) : console.log(c.gone ? yellow('No longer in its repository') : c.changed ? yellow(`A newer version is there (${c.latest}); you have ${c.current}${c.edited ? ', edited here' : ''}`) : green('Up to date'));
+      }
+      if (action === 'update') return print(await api('POST', '/skills/update', { id: arg }));
+      if (action === 'rm') return print(await api('DELETE', `/skills?id=${encodeURIComponent(arg)}`));
+      throw new Error(`Unknown action ${action} (ls, show, look, add, check, update, rm)`);
+    });
+
+  program
     .command('usage')
     .description("Each engine's plan limits: how much is used and left, and when it resets")
     .option('--warn <percent>', 'alert when a limit is this much used (or off)')

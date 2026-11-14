@@ -659,6 +659,35 @@ test('Usage: the chip by the connection light, every engine with what is used an
   assert.deepEqual(errors, [], 'no errors on the page');
 });
 
+test('Skills: the skills Claude Code has here with their scripts flagged, one read, and one removed', { skip }, async () => {
+  const dir = path.join(home, 'claude', 'skills', 'pdf');
+  fs.mkdirSync(path.join(dir, 'scripts'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'SKILL.md'), '---\nname: pdf\ndescription: Read and fill PDF forms.\n---\n# Working with PDFs\n\nUse the script.\n');
+  fs.writeFileSync(path.join(dir, 'scripts', 'fill.py'), 'print(1)\n');
+  await js(`document.querySelector('#skills-btn').click()`);
+  await until(`document.querySelector('#skills-dialog').open && document.querySelector('[data-skill="personal/pdf"]')`, 'the Skills window');
+  const row = await js(`document.querySelector('[data-skill="personal/pdf"]').textContent.replace(/\\s+/g, ' ').trim()`);
+  assert.match(row, /^pdf ?1 script Read .*Remove Read and fill PDF forms\. added by hand ?2 files/);
+  assert.equal(await js(`document.querySelector('[data-skills-place="personal"] h3').textContent`), 'Yours (every project)');
+  assert.equal(await js(`Boolean(document.querySelector('[data-skill-check="personal/pdf"]'))`), false, 'nothing to check for one added by hand');
+  // Read it: its files, and its instructions without the front matter.
+  await js(`document.querySelector('[data-skill-show="personal/pdf"]').click()`);
+  await until(`document.querySelector('#skills-body .md h1')?.textContent === 'Working with PDFs'`, 'the skill to read');
+  assert.match(await js(`document.querySelector('.skills-files').textContent.replace(/\\s+/g, ' ')`), /2 files, 1 of them script.*scripts\/fill\.py .*script/);
+  assert.equal(await js(`/name: pdf/.test(document.querySelector('#skills-body .md').textContent)`), false);
+  await js(`document.querySelector('[data-skills="back"]').click()`);
+  // A repository that is not one is refused before anything is fetched.
+  await js(`(() => { const f = document.querySelector('[data-skills-form]'); f.repo.value = 'not a repository'; f.requestSubmit(); })()`);
+  await until(`[...document.querySelectorAll('.toast')].some((t) => /Give a repository/.test(t.textContent))`, 'a bad repository refused');
+  // Removed: its folder is gone.
+  await api('DELETE', '/skills?id=' + encodeURIComponent('personal/pdf'));
+  await js(`document.querySelector('[data-skills="refresh"]').click()`);
+  await until(`!document.querySelector('[data-skill="personal/pdf"]') && /No skills here/.test(document.querySelector('[data-skills-place="personal"]').textContent)`, 'the skill gone');
+  assert.equal(fs.existsSync(dir), false);
+  await js(`document.querySelector('[data-skills="close"]').click()`);
+  assert.deepEqual(errors, [], 'no errors on the page');
+});
+
 test('Plan: project dates with checklists, the decision log, the tech debt radar; Today shows the date and the day around a meeting', { skip }, async () => {
   // A project with an agent at work in its folder, and one that is a git repository.
   for (const n of ['p1', 'p3']) fs.mkdirSync(path.join(home, n));
