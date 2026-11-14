@@ -38,6 +38,9 @@ import {
   debugPrompt,
   debugFixPrompt,
   reversePath,
+  securityPath,
+  securityPrompt,
+  securityFixPrompt,
   reversePrompt,
   reverseBuildPrompt,
   specDocsInfo,
@@ -838,7 +841,7 @@ export class AgentManager extends EventEmitter {
   /** One of an agent's intent, spec and plan files. */
   specDoc(ref, name) {
     const agent = this.mustGet(ref);
-    if (!['intent', 'spec', 'plan', 'designdoc', 'benchmark', 'debug', 'reverse'].includes(name)) throw Object.assign(new Error('Unknown file (intent, spec, plan, designdoc, benchmark, debug or reverse)'), { status: 400 });
+    if (!['intent', 'spec', 'plan', 'designdoc', 'benchmark', 'debug', 'reverse', 'security'].includes(name)) throw Object.assign(new Error('Unknown file (intent, spec, plan, designdoc, benchmark, debug, reverse or security)'), { status: 400 });
     return readSpecDoc(agent.id, name) ?? { name, markdown: null };
   }
 
@@ -862,6 +865,28 @@ export class AgentManager extends EventEmitter {
     // What was asked, newest last, for the Debug tab.
     const asks = [...(agent.debug?.asks ?? []), { text: fix ? `Apply fixes${which ? `: ${which}` : ''}` : q, kind: fix ? 'fix' : has ? 'follow-up' : 'debug', at: now() }].slice(-20);
     return this.view(this.patch(agent.id, { debug: { asks, startedAt: agent.debug?.startedAt ?? now() } }));
+  }
+
+  /**
+   * Security audit: ask the agent to audit the code in its session and keep a report
+   * (SECURITY-AUDIT.md): the attack surface, findings by severity with evidence, each checked a
+   * second time before it is listed, what was found sound and what was not covered. `question`:
+   * what to audit (nothing: the whole project), or a follow-up once there is a report. `fix`: fix
+   * the report's findings (which ones, in words; true for the verified ones). Waits in the queue.
+   */
+  security(ref, { question = '', fix = null } = {}) {
+    const agent = this.mustGet(ref);
+    if (!agent.workdir || agent.status === 'preparing') throw Object.assign(new Error('The agent has no folder to audit yet'), { status: 409 });
+    const q = String(question ?? '').replace(/\s+/g, ' ').trim().slice(0, 2000);
+    const has = Boolean(readSpecDoc(agent.id, 'security')?.markdown?.trim());
+    if (fix && !has) throw Object.assign(new Error('There is no audit report yet: start the audit first'), { status: 409 });
+    if (!fix && has && q.length < 3) throw Object.assign(new Error('Say what to look at next'), { status: 400 });
+    fs.mkdirSync(briefDir(agent.id), { recursive: true });
+    const file = path.join(fs.realpathSync(briefDir(agent.id)), path.basename(securityPath(agent.id)));
+    const which = fix === true ? '' : String(fix ?? '').replace(/\s+/g, ' ').trim().slice(0, 500);
+    this.tell(agent.id, fix ? securityFixPrompt(file, which) : securityPrompt(file, q, { again: has }), { source: 'security' });
+    const asks = [...(agent.security?.asks ?? []), { text: fix ? `Fix findings${which ? `: ${which}` : ''}` : q || 'The whole project', kind: fix ? 'fix' : has ? 'follow-up' : 'audit', at: now() }].slice(-20);
+    return this.view(this.patch(agent.id, { security: { ...agent.security, asks, startedAt: agent.security?.startedAt ?? now() } }));
   }
 
   /**
@@ -2441,6 +2466,14 @@ export class AgentManager extends EventEmitter {
         at = fs.statSync(debugPath(id)).mtime.toISOString();
       } catch {}
       if (at !== (agent.debug.reportAt ?? null)) this.patch(id, { debug: { ...this.store.get(id).debug, reportAt: at } });
+    }
+    // And for a security audit.
+    if (agent.security) {
+      let at = null;
+      try {
+        at = fs.statSync(securityPath(id)).mtime.toISOString();
+      } catch {}
+      if (at !== (agent.security.reportAt ?? null)) this.patch(id, { security: { ...this.store.get(id).security, reportAt: at } });
     }
     // The same for a reverse-engineering report.
     if (agent.reverse) {

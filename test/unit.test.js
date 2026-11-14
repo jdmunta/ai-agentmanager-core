@@ -4466,3 +4466,20 @@ test('usage: a reading taken now starts one short session; what went wrong is sa
   engines[0].installed = false;
   assert.match((await u.refresh()).problem, /not installed/);
 });
+
+test('security audit: the messages that start, continue and fix an audit', async () => {
+  const { securityPrompt, securityFixPrompt, SPEC_DOCS } = await import('../src/brief.js');
+  assert.ok(SPEC_DOCS.security('a1').endsWith('/a1/SECURITY-AUDIT.md'));
+  const whole = securityPrompt('/b/S.md', '');
+  assert.match(whole, /^Security audit: this whole project, the most exposed parts first\n/);
+  const first = securityPrompt('/b/S.md', '  the import API ');
+  assert.match(first, /^Security audit: the import API\n/);
+  for (const part of ['Work in phases', 'Check every finding again, independently', 'ask it to disprove it', 'No finding is listed on a pattern match alone', 'read-only', 'do not write working exploit code', 'never copied into the report', 'Keep a report at /b/S.md', '## Attack surface', '## Findings', '## Checked and sound', '## Not covered', '## Recommended order', 'e1@{ animate: true }', 'classDef fault', 'npm audit']) assert.ok(first.includes(part), part);
+  const more = securityPrompt('/b/S.md', 'Look at the webhook handler', { again: true });
+  assert.match(more, /^Security audit, continued: Look at the webhook handler\n/);
+  assert.ok(more.includes('/b/S.md') && !more.includes('## Attack surface'), 'a follow-up does not repeat the shape');
+  assert.match(securityFixPrompt('/b/S.md', '1 and 3'), /^Fix the findings from your security audit at \/b\/S\.md: 1 and 3\.\n[\s\S]*a test that fails without the fix/);
+  assert.match(securityFixPrompt('/b/S.md', ''), /: the verified ones, in the recommended order\./);
+  // The fake engine (and a shell) would take "exit" in a message as a command.
+  for (const m of [whole, first, more, securityFixPrompt('/b/S.md', '')]) assert.doesNotMatch(m, /\bexit\b/);
+});

@@ -576,6 +576,22 @@ test('Reverse engineer: a target and a question beside the session, whether REA 
   await js(`(() => { const t = document.querySelector('[data-reverse-text]'); t.focus(); t.value = 'the index table'; })()`);
   await js(`document.querySelector('[data-reverse-build]').click()`);
   await until(`document.querySelector('.debug-asked summary')?.textContent === 'Asked (2)' && document.querySelector('.debug-asked li:last-child').textContent.trim() === 'build Build it: the index table'`, 'the build asked for');
+  // Security audit on the same agent: nothing named audits the whole project; the report, then fixes by number.
+  await js(`document.querySelector('[data-side="security"]').click()`);
+  await until(`document.querySelector('[data-security-text]') && !document.querySelector('[data-reverse-target]')`, 'the Security tab');
+  assert.equal(await js(`document.querySelector('[data-security-form] button.primary').textContent`), 'Audit');
+  assert.match(await js(`document.querySelector('.security-view').textContent`), /does not replace a penetration test/);
+  await js(`document.querySelector('[data-security-form]').requestSubmit()`);
+  await until(`document.querySelector('.debug-asked summary')?.textContent === 'Asked (1)' && document.querySelector('.debug-asked li').textContent.trim() === 'The whole project'`, 'the audit asked for');
+  fs.writeFileSync(path.join(dir, 'SECURITY-AUDIT.md'), '# Security audit: the whole project\n## Summary\nOne high finding. 0 critical, 1 high, 0 medium, 0 low.\n## Attack surface\n```mermaid\nflowchart LR\n  A["POST /import"] e1@--> B["readFile"]\n  e1@{ animate: true }\n  classDef fault stroke:#ef4444,stroke-width:3px\n  class B fault\n```\n## Findings\n| # | Severity | Title | Where | Status |\n|---|---|---|---|---|\n| 1 | high | Path traversal in import | src/import.js:12 | verified |\n');
+  await until(`document.querySelector('.debug-report h1')?.textContent === 'Security audit: the whole project'`, 'the audit report', 20_000);
+  await until(`document.querySelector('.debug-report .diagram svg') && document.querySelector('.debug-report table')`, 'its diagram and findings table', 20_000);
+  await js(`document.querySelector('[data-security-form]').requestSubmit()`);
+  await sleep(300);
+  assert.equal(await js(`document.querySelector('.debug-asked summary').textContent`), 'Asked (1)', 'a follow-up says what to look at');
+  await js(`(() => { document.querySelector('[data-security-text]').value = '1'; })()`);
+  await js(`document.querySelector('[data-security-fix]').click()`);
+  await until(`document.querySelector('.debug-asked summary')?.textContent === 'Asked (2)' && document.querySelector('.debug-asked li:last-child').textContent.trim() === 'fix Fix findings: 1'`, 'the fix asked for');
   // Debug on the same agent is its own thing.
   await js(`document.querySelector('[data-side="debug"]').click()`);
   await until(`document.querySelector('[data-debug-text]') && !document.querySelector('[data-reverse-target]')`, 'the Debug tab');

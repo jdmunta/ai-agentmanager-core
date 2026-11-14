@@ -723,7 +723,9 @@ export const DEBUG_FILE = 'DEBUG.md';
 export const debugPath = (agentId) => path.join(briefDir(agentId), DEBUG_FILE);
 export const REVERSE_FILE = 'REVERSE.md';
 export const reversePath = (agentId) => path.join(briefDir(agentId), REVERSE_FILE);
-export const SPEC_DOCS = { intent: intentPath, spec: specPath, plan: planPath, designdoc: designPath, benchmark: benchPath, demo: demoPath, debug: debugPath, reverse: reversePath };
+export const SECURITY_FILE = 'SECURITY-AUDIT.md';
+export const securityPath = (agentId) => path.join(briefDir(agentId), SECURITY_FILE);
+export const SPEC_DOCS = { intent: intentPath, spec: specPath, plan: planPath, designdoc: designPath, benchmark: benchPath, demo: demoPath, debug: debugPath, reverse: reversePath, security: securityPath };
 
 // ------------------------------------------------------------------ debug
 
@@ -860,6 +862,77 @@ export function reverseBuildPrompt(file, what) {
     'Write it from the behaviour the report describes, in this project\'s own style: copy no code, text, names of internal symbols or assets from the target, and add no dependency on it. ' +
     'Add tests for the behaviour, run them, and where the report says the target does something badly, do it better. ' +
     'Then update the report: add a "## Built" section (what was built, where, how it was verified, and what differs from the target on purpose).'
+  );
+}
+
+// ------------------------------------------------------------------ security audit
+
+// Security audit: you say what to audit (or nothing, for the whole project); the agent goes through
+// the code in its own session in phases (what is exposed, then each class of weakness on the paths
+// from there), checks every finding a second time before it is listed, and keeps a report at
+// SECURITY-AUDIT.md: the attack surface as a diagram, the findings by severity with evidence, what
+// was checked and found sound, and what was not covered. It changes no code until you ask for fixes.
+
+const SECURITY_SHAPE = [
+  '# Security audit: <what was audited>',
+  '## Summary',
+  'Two or three sentences: the overall state, the most serious finding, and how much of the scope was covered. Then one line of counts: critical, high, medium, low.',
+  '## Scope',
+  'What was audited (folders, services, the commit), what was left out, and what the project is and who can reach it (the internet, signed-in users, the local network, only this computer).',
+  '## Attack surface',
+  'One ```mermaid flowchart of where untrusted input enters (HTTP routes, webhooks, files, CLI arguments, queues, other services) and the path it takes to what matters (the database, the file system, a shell, secrets, other users\' data), with the trust boundaries. Real names from the code.',
+  '## Findings',
+  'A Markdown table first: #, Severity, Title, Where (file:line), Status. Then one "### <#>. <title>" section a finding, most severe first, each with: Severity (critical, high, medium or low) and why that level here; Where (file:line and function); What is wrong, in two or three sentences; Evidence (the lines of code, and the path from the input to the weak spot); Impact (what someone could do, and who: anyone, a signed-in user, someone on the network); Status: "verified" (the second check confirmed the path is reachable) or "needs a look" (plausible, not confirmed, and why); Fix (the change, where, effort S, M or L, and how to test it).',
+  '## Checked and sound',
+  'What you looked for and did not find, by class (for example: SQL built from input, secrets in the repository, path traversal), with where you looked. So the next audit knows what was covered.',
+  '## Not covered',
+  'What was out of reach or out of time: dependencies not scanned, infrastructure, a service whose code is not here. And what you need from the user to cover it.',
+  '## Recommended order',
+  'The fixes in the order to make them, with the reason (severity, how exposed, how cheap).',
+].join('\n');
+
+const SECURITY_METHOD =
+  'Work in phases. 1) Map it: what the project is, how it is reached, and every place untrusted input comes in. ' +
+  '2) Follow the input: along each path from there, look for injection (SQL, shell, template, path), missing or wrong authentication and authorization (including one user reaching another\'s data), secrets in code, config or logs, unsafe deserialization and file handling, server-side requests to addresses the input names, cross-site scripting and request forgery, weak or home-made cryptography, unsafe defaults, and missing limits on size, rate or cost. ' +
+  '3) Dependencies and configuration: run the project\'s own audit command if it has one (npm audit, pip-audit, cargo audit, govulncheck and the like, read-only), and read the deployment and CI configuration that is in the repository. ' +
+  '4) Check every finding again, independently, before it goes in the report: start from the weak spot and prove the path back to input an attacker controls, looking for the validation, the framework default or the caller that would stop it. With subagents available, give each finding to a fresh one with only the claim and the file, and ask it to disprove it. A finding that does not survive is dropped; one you could not settle is listed as "needs a look". No finding is listed on a pattern match alone.';
+
+const SECURITY_RULES =
+  'Rules: this is a defensive review of our own code, read-only. Do not change the repository yet, do not send requests to systems that are running in production or belong to someone else, and do not write working exploit code: the evidence is the code path, described precisely enough for the fix. ' +
+  'Secrets you come across are named by where they are, never copied into the report. Severity is for this project as it is deployed, not for the class of bug in general.';
+
+const SECURITY_DIAGRAMS =
+  'The diagram: valid Mermaid, at most about 18 nodes, labels of five words or fewer (quote labels with punctuation, e.g. A["POST /api/import"]), no HTML in labels. Animate the paths untrusted input takes: give those edges ids and animate them, e.g.\n' +
+  '    A e1@--> B\n    e1@{ animate: true }\n' +
+  'Mark where a verified finding is: `classDef fault stroke:#ef4444,stroke-width:3px`, then `class X fault`; and one that needs a look: `classDef suspect stroke:#f59e0b,stroke-width:3px,stroke-dasharray:4`, then `class Y suspect`.';
+
+/** The message that starts (or continues) a security audit in the agent's session. */
+export function securityPrompt(file, question, { again = false } = {}) {
+  const q = String(question ?? '').trim();
+  if (again) {
+    return (
+      `Security audit, continued: ${q}\n` +
+      `Carry on and bring the report at ${file} up to date: same sections, the diagram redrawn where the picture changed, each finding's status re-marked, the counts in the summary corrected. ` +
+      'The same rules: read-only, every new finding checked a second time before it is listed, and no changes to the repository unless I ask for fixes. Answer me here in a few lines, and say what changed in the report.'
+    );
+  }
+  return (
+    `Security audit: ${q || 'this whole project, the most exposed parts first'}\n` +
+    `${SECURITY_METHOD}\n${SECURITY_RULES}\n` +
+    `Keep a report at ${file} (Markdown; the file is outside the repository: never copy it in or commit it). Write a first version once the attack surface is mapped, and update it as each phase finishes. Short and specific, in these sections:\n` +
+    `${SECURITY_SHAPE}\n${SECURITY_DIAGRAMS}\n` +
+    'When the report is written, tell me in a few lines what you found, most serious first, and what you could not cover.'
+  );
+}
+
+/** The message that asks for the report's fixes to be made. */
+export function securityFixPrompt(file, which) {
+  const w = String(which ?? '').trim();
+  return (
+    `Fix the findings from your security audit at ${file}: ${w || 'the verified ones, in the recommended order'}.\n` +
+    'For each: make the smallest change that closes it, add a test that fails without the fix (the unsafe input is refused, the other user is turned away), and run the tests. Fix the cause, not the one call site: look for the same pattern elsewhere and say where you found it. ' +
+    'Leave the findings marked "needs a look" alone unless I named them. ' +
+    'Then update the report: mark each finding fixed (the commit or the files, and the test that covers it) or say why it was left, and correct the counts in the summary.'
   );
 }
 

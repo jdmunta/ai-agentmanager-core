@@ -1724,6 +1724,31 @@ export async function main(argv) {
     });
 
   program
+    .command('audit')
+    .description("Security audit with an agent: it goes through the code in its session, checks each finding a second time, and keeps a report with the attack surface, findings by severity with evidence, and fixes. With no question and a report already there: print the report")
+    .argument('<agent>')
+    .argument('[scope...]', 'what to audit (nothing: the whole project), or a follow-up once there is a report')
+    .option('--start', 'start an audit of the whole project (when no scope is given)')
+    .option('--fix [which]', "fix the report's findings: which ones in words (\"1 and 3\"), or the verified ones")
+    .action(async (ref, scope, opts) => {
+      await daemon();
+      const a = await resolveAgent(ref);
+      const q = scope.join(' ').trim();
+      if (opts.fix) {
+        await api('POST', `/agents/${a.id}/security`, { fix: opts.fix === true ? q || true : opts.fix });
+        return console.log(`${green('✓')} asked ${a.name} to fix the findings, each with a test, and record it in the report`);
+      }
+      if (q || opts.start) {
+        await api('POST', `/agents/${a.id}/security`, { question: q });
+        return console.log(`${green('✓')} sent to ${a.name}; it audits in its session. The report: agentmgr audit ${ref}`);
+      }
+      const r = await api('GET', `/agents/${a.id}/specs/security`);
+      if (!r.markdown) return console.log(dim(`No audit report yet. Start one: agentmgr audit ${ref} --start, or agentmgr audit ${ref} "the import API"`));
+      console.log(r.markdown.trimEnd());
+      console.log(dim(`\n(updated ${new Date(r.updatedAt).toLocaleString()})`));
+    });
+
+  program
     .command('reverse')
     .description("Reverse engineer with an agent and REA's tools: name a target and what to understand; it keeps a report with diagrams, the evidence, what could not be determined and a plan to build your own. With no question: print the report")
     .argument('<agent>')

@@ -767,6 +767,8 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
   api.post('/agents/:id/reverse', wrap((req) => manager.reverse(req.params.id, { target: req.body?.target, question: req.body?.question, build: req.body?.build ?? null })));
   // Whether REA is registered with Claude Code for this agent's folder (read from Claude Code's files; nothing is run).
   api.get('/agents/:id/reverse/rea', wrap((req) => reaStatus(manager.mustGet(req.params.id).workdir ?? null)));
+  // Security audit: what to audit (nothing: the whole project) or a follow-up, or `fix` to fix the report's findings; the report is /specs/security.
+  api.post('/agents/:id/security', wrap((req) => manager.security(req.params.id, { question: req.body?.question, fix: req.body?.fix ?? null })));
   // Debug: what to debug (or a follow-up), or `fix` to apply the report's fixes; the report is /specs/debug.
   api.post('/agents/:id/debug', wrap((req) => manager.debug(req.params.id, { question: req.body?.question, fix: req.body?.fix ?? null })));
   api.post('/agents/:id/answer', wrap((req) => manager.answerQuestion(req.params.id, req.body?.question, req.body?.text)));
