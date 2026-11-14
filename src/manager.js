@@ -1718,6 +1718,60 @@ export class AgentManager extends EventEmitter {
     return resumed;
   }
 
+  /**
+   * A reading of Claude Code's plan limits taken now: a short session that says one word, so its
+   * status line (statusline.js) writes the numbers. In a folder of its own; its transcript is
+   * removed after. Resolves true once the reading is written.
+   */
+  readUsage({ timeoutMs = 45_000, settleMs = 3000 } = {}) {
+    const engine = engineOf(DEFAULT_ENGINE);
+    if (!engine.usageProbeArgs || !installed(engine, this.config)) return Promise.resolve(false);
+    const dir = path.join(path.dirname(usageFile()), 'probe');
+    fs.mkdirSync(dir, { recursive: true });
+    const cwd = fs.realpathSync(dir);
+    try {
+      engine.trust(cwd); // the app's own empty folder: no "do you trust this folder?" to answer
+    } catch {}
+    const sessionId = crypto.randomUUID();
+    const mtime = () => {
+      try {
+        return fs.statSync(usageFile()).mtimeMs;
+      } catch {
+        return 0;
+      }
+    };
+    const before = mtime();
+    return new Promise((resolve) => {
+      let proc;
+      try {
+        proc = pty.spawn(engine.bin(this.config), [...engine.extraArgs(this.config), ...engine.usageArgs(this.config, statusLineScript()), ...engine.usageProbeArgs(sessionId)], { name: 'xterm-256color', cols: 120, rows: 34, cwd, env: this.childEnv(null) });
+      } catch {
+        return resolve(false);
+      }
+      const started = Date.now();
+      let wrote = null;
+      let done = false;
+      const finish = (ok) => {
+        if (done) return;
+        done = true;
+        clearInterval(timer);
+        try {
+          proc.kill();
+        } catch {}
+        fs.rm(engine.sessionFile(cwd, sessionId), { force: true }, () => {});
+        resolve(ok);
+      };
+      // The first reading can come as the reply starts; a moment more catches the one after it.
+      const timer = setInterval(() => {
+        if (!wrote && mtime() > before) wrote = Date.now();
+        if (wrote && Date.now() - wrote >= settleMs) finish(true);
+        else if (Date.now() - started > timeoutMs) finish(Boolean(wrote));
+      }, 250);
+      proc.onData(() => {});
+      proc.onExit(() => finish(Boolean(wrote) || mtime() > before));
+    });
+  }
+
   childEnv(agent) {
     const env = { ...process.env, ...(agent ? { AGENTMGR_AGENT_ID: agent.id } : {}), TERM: 'xterm-256color', COLORTERM: 'truecolor', AGENTMGR_TERMINAL: '1', AGENTMGR_USAGE_FILE: usageFile(), AGENTMGR_USER_STATUSLINE: ownStatusLine() };
     for (const key of STRIP_ENV) delete env[key];

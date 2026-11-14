@@ -1467,6 +1467,7 @@ table.plan-debt code { overflow-wrap: anywhere; }
 .usage-level.ok { color: var(--green); }
 .usage-level.warn { color: var(--yellow); border-color: var(--yellow); }
 .usage-level.high, .usage-level.held, .usage-level.limited { color: var(--red); border-color: var(--red); }
+.usage-default-on, .usage-default-on:hover { color: var(--green); border-color: var(--green); }
 .usage-settings { display: flex; gap: 18px; flex-wrap: wrap; margin: 6px 0 8px; font-size: 13px; }
 .usage-settings label { display: flex; flex-direction: row; align-items: center; gap: 6px; margin: 0; }
 .usage-settings select { width: auto; }
