@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.49.0 (2026-11-14)
+
+- **Decide.** **Decide** in the top bar (or `q`, `#decide`, `agentmgr decide`) helps with the decisions, not only the tasks. A plan waiting for review or an agent's question comes with its options, the one recommended, why, the evidence, the risk, how sure it is, and whether it is hard to undo; one click carries out any option, and the same recommendation is on the item's Inbox card. The reasoning is the AI judge's, on your own plan, within its daily budget; with the judge off nothing is recommended or decided.
+- **Standing decisions and autonomy.** A call you keep making is offered as a standing decision once three of your decisions agree (or write your own); when one applies it is carried out for you and reported under **Handled for you** and by the new *decided* alert. Per project you choose how much may be decided without you: ask everything, only standing decisions (the default, so nothing changes until you make one), what is sure and easy to undo, or most things. Anything hard to undo always waits for you unless a standing decision covers it.
+- **Try both.** A question's options, each tried by its own agent as a race, so you decide from the results.
+- **Priority by impact.** Each project's open backlog ranked by what it is worth now (the nearest date, what it unblocks, risk removed), with the reason beside each item; **Use this order** reorders the queue.
+- **Dates at risk as choices.** A date that is at risk or late is laid out as three choices: hold the least valuable queued items until after it, move the date, or run more agents. One is recommended; picking one carries it out and records it in the decision log.
+- **Looking back.** Two days after a decision, what followed it; for the ones that went badly the judge writes the lesson, and the lessons are given to the next recommendation. The decision log now also says why, who decided, and how it held up.
+- **Runbooks for the support team.** **Plan → Runbooks** (or `agentmgr runbook`) writes a runbook from a release ticket (with what it links to and its fix versions), every ticket of an epic, or a project's code changes in a time frame: what changed, what customers may see, how to check it, troubleshooting, rolling back, when to escalate, and replies to send. It states only what the tickets and code support and lists the rest under *To confirm with engineering*. Edit it, revise it with a note, copy or download it as Markdown, or print it.
+- **Fix.** AI News showed a weekday instead of "Today" for a release dated today ahead of your time zone.
+
 ## 1.48.0 (2026-11-13)
 
 - **OS.** **OS** in the top bar (or `u`, `#os`, `agentmgr os`) shows the computer the agents run on and how loaded it is right now: the processor in use and the load average against the number of cores, memory and swap, and the free space on your disks, with a line of the last ten minutes for processor and memory. A tag sums it up: light load, busy or heavy load.
