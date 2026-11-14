@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.51.1 (2026-11-14)
+
+- **Usage: Read now.** The Usage window's ↻ only re-read the last saved reading, which is as old as the last reply of a session started here; Claude Code used elsewhere moved the real numbers on meanwhile. **↻ Read now** (or `agentmgr usage --now`) takes a reading on the spot. Claude Code only reports its limits to a session that has had a reply, so it starts a short session that says one word on its smallest model (a very small amount of usage) and removes it after. The chip and the once-a-minute update never start a session.
+- **The engine new agents start on** shows a pressed **✓ New agents start here** button where the other engines have **Start new agents here**, instead of a label that looked like a button that did nothing.
+- **Debug:** the examples no longer name E2E tests.
+
 ## 1.51.0 (2026-11-14)
 
 - **Usage: what is left of each engine's plan.** A chip by the connection light shows the engine new agents start on with what is used of its limits (`Claude Code 5h 23% · wk 41%`), amber then red as a limit nears. Click it (or **Usage…** in the menu, `z`, `agentmgr usage`) for every engine: each limit's percent used, percent left, and when it resets.
