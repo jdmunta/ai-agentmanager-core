@@ -721,7 +721,9 @@ export const BENCH_FILE = 'BENCHMARK.md';
 export const benchPath = (agentId) => path.join(briefDir(agentId), BENCH_FILE);
 export const DEBUG_FILE = 'DEBUG.md';
 export const debugPath = (agentId) => path.join(briefDir(agentId), DEBUG_FILE);
-export const SPEC_DOCS = { intent: intentPath, spec: specPath, plan: planPath, designdoc: designPath, benchmark: benchPath, demo: demoPath, debug: debugPath };
+export const REVERSE_FILE = 'REVERSE.md';
+export const reversePath = (agentId) => path.join(briefDir(agentId), REVERSE_FILE);
+export const SPEC_DOCS = { intent: intentPath, spec: specPath, plan: planPath, designdoc: designPath, benchmark: benchPath, demo: demoPath, debug: debugPath, reverse: reversePath };
 
 // ------------------------------------------------------------------ debug
 
@@ -785,6 +787,79 @@ export function debugFixPrompt(file, which) {
     `Apply the fixes from your debug report at ${file}: ${w || 'the ones you recommend, the safest first'}.\n` +
     'Make each change, then verify it the way the report says (run the test, the reproduction or the load again) and compare with what you measured before. ' +
     'Then update the report: add a "## Fixes applied" section (what changed, where, and the result before and after), and re-mark the findings. If a fix does not hold up, revert it and say why.'
+  );
+}
+
+// ------------------------------------------------------------------ reverse engineering
+
+// Reverse engineer: you name a target (an app's folder, a binary, a website) and what you want to
+// understand about it; the agent investigates in its own session with REA's tools (the "Reverse
+// Engineer Anything" MCP server, github.com/morluto/rea) and keeps a report at REVERSE.md: how the
+// feature works with animated diagrams, the evidence behind each claim, what could not be
+// determined, and a plan for building your own version. It changes nothing until you ask it to build.
+
+const REVERSE_SHAPE = [
+  '# Reverse engineering: <the feature> in <the target>',
+  '## Summary',
+  'Two or three sentences: how it works, and how sure you are.',
+  '## Target',
+  'What it is (name, version, platform), what kind (Electron or JavaScript app, native binary, .NET assembly, website), and which tools and providers you used on it.',
+  '## How it works',
+  'One ```mermaid flowchart of the path the feature takes through the real modules, functions or components you found, from what the user does to the result.',
+  '## Data and interfaces',
+  'One ```mermaid flowchart LR or sequenceDiagram of the data on that path: what is stored and where, formats, the calls between processes, and the network requests. Then a short list of the formats and endpoints by name.',
+  '## Findings',
+  'Numbered. Each with its evidence (a module or file path, a function or symbol, an address, a string, a request) and "confirmed" (seen directly) or "inferred" (reasoned from what was seen).',
+  '## What could not be determined',
+  'What is obfuscated, missing, server-side or out of reach of the tools you had, and what would be needed to find out.',
+  '## Build it',
+  'A plan for our own version in this project, from the behaviour described above: the pieces, where they go in this codebase, the order, effort (S, M, L) for each, and what to do differently or better. No code, text or assets taken from the target.',
+  '## Next checks',
+  'What to look at next, and what you need from the user (another build of the app, a sample file, an account).',
+].join('\n');
+
+const REVERSE_DIAGRAMS =
+  'Diagrams: valid Mermaid, at most about 15 nodes each, labels of five words or fewer (quote labels with punctuation, e.g. A["Parse (JSON)"]), no HTML in labels, real names from the target. ' +
+  'Animate the path in every flowchart: give its edges ids and animate them, e.g.\n' +
+  '    A e1@--> B\n    B e2@-->|"rows"| C\n    e1@{ animate: true }\n    e2@{ animate: true }\n' +
+  'Mark what is only inferred: `classDef inferred stroke:#f59e0b,stroke-width:3px,stroke-dasharray:4`, then `class Y inferred`; and what could not be seen: `classDef unknown stroke:#9ca3af,stroke-dasharray:2`, then `class Z unknown`.';
+
+const REVERSE_RULES =
+  'Rules: this is for understanding how something works so we can build our own. Analyse only: do not modify, patch or redistribute the target, and do not change this repository yet. ' +
+  'Do not work on getting around licence checks, copy protection, sign-in or other access controls, and do not collect credentials, keys or personal data you come across: if that is what is asked, or the only way forward, stop and tell me. ' +
+  'Say what you saw, not what you assume: every claim in the report names its evidence.';
+
+/** The message that starts (or continues) a reverse-engineering investigation in the agent's session. */
+export function reversePrompt(file, { target = '', question = '', again = false } = {}) {
+  const q = String(question ?? '').trim();
+  const t = String(target ?? '').trim();
+  if (again) {
+    return (
+      `Reverse engineering, continued: ${q}${t ? `\nTarget: ${t}` : ''}\n` +
+      `Carry on and bring the report at ${file} up to date: same sections, diagrams redrawn where the picture changed, findings re-marked confirmed or inferred. ` +
+      'Still analysis only, and no changes to this repository unless I ask you to build. Answer me here in a few lines, and say what changed in the report.'
+    );
+  }
+  return (
+    `Reverse engineer this: ${q}\nTarget: ${t}\n` +
+    "Use REA's tools (the \"Reverse Engineer Anything\" MCP server) to inspect the target: start with what kind of target it is, then follow the feature from what the user does down to the code and data behind it. " +
+    "If REA's tools are not available in this session, say so in one line and stop: it is set up with `npx rea-agents setup` (which I run myself, then restart this session); do not install it or anything else yourself. " +
+    'For a native binary REA needs a provider (Hopper, Ghidra, IDA or Kuna): if none is configured, say which is missing rather than guessing from strings alone.\n' +
+    `${REVERSE_RULES}\n` +
+    `Keep a report at ${file} (Markdown; the file is outside the repository: never copy it in or commit it). Write a first version as soon as you know the shape of the target, and update it as you learn. Short and specific, in these sections:\n` +
+    `${REVERSE_SHAPE}\n${REVERSE_DIAGRAMS}\n` +
+    'When the report is written, tell me in a few lines how it works and what you could not determine.'
+  );
+}
+
+/** The message that asks for our own version to be built from the report. */
+export function reverseBuildPrompt(file, what) {
+  const w = String(what ?? '').trim();
+  return (
+    `Build our own version from your reverse-engineering report at ${file}: ${w || 'the plan under "Build it", the smallest useful piece first'}.\n` +
+    'Write it from the behaviour the report describes, in this project\'s own style: copy no code, text, names of internal symbols or assets from the target, and add no dependency on it. ' +
+    'Add tests for the behaviour, run them, and where the report says the target does something badly, do it better. ' +
+    'Then update the report: add a "## Built" section (what was built, where, how it was verified, and what differs from the target on purpose).'
   );
 }
 

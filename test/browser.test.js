@@ -527,6 +527,58 @@ test('Debug: asked beside the session, the report drawn with its animated diagra
   assert.deepEqual(errors, [], 'no errors on the page');
 });
 
+test('Reverse engineer: a target and a question beside the session, whether REA is there, the report with its diagram, and building your own', { skip }, async () => {
+  const a = (await api('GET', '/agents')).find((v) => v.intent === 'Task 3');
+  await js(`document.querySelector('#agent-list li[data-id="${a.id}"]').click()`);
+  await until(`document.querySelector('#detail-body button[data-act="reverse"]')`, 'the Reverse engineer button');
+  await js(`document.querySelector('#detail-body button[data-act="reverse"]').click()`);
+  await until(`!document.querySelector('#side-pane').hidden && document.querySelector('[data-side="reverse"]').classList.contains('active') && document.querySelector('[data-reverse-text]')`, 'the Reverse tab beside the session');
+  assert.equal(await js(`document.querySelector('[data-reverse-form] button.primary').textContent`), 'Investigate');
+  assert.equal(await js(`Boolean(document.querySelector('[data-reverse-build]'))`), false, 'nothing to build before a report');
+  // REA is not registered here: said, with how to set it up; and what this is for.
+  await until(`document.querySelector('.reverse-rea.missing')`, 'REA not found');
+  assert.match(await js(`document.querySelector('.reverse-rea.missing').textContent`), /REA was not found[\s\S]*npx rea-agents setup[\s\S]*restart this agent's session/);
+  assert.match(await js(`document.querySelector('.reverse-note').textContent`), /software you own or are allowed to analyse/);
+
+  // A question needs a target; with both it goes to the agent's session, rules and all.
+  await js(`document.querySelector('[data-reverse-idea]').click()`);
+  assert.equal(await js(`document.querySelector('[data-reverse-text]').value`), 'How does search work?');
+  await js(`document.querySelector('[data-reverse-form]').requestSubmit()`);
+  await sleep(300);
+  assert.equal(await js(`document.querySelectorAll('.debug-asked').length`), 0, 'not sent without a target');
+  await js(`(() => { document.querySelector('[data-reverse-target]').value = '/Applications/Notes.app'; document.querySelector('[data-reverse-form]').requestSubmit(); })()`);
+  await until(`document.querySelector('.debug-asked summary')?.textContent === 'Asked (1)'`, 'the question listed');
+  await until(`document.querySelector('#terminal .xterm-rows').textContent.replace(/\\s/g, '').includes('whatyoucouldnotdetermine.')`, "typed into the agent's session", 20_000);
+  const sent = (await api('GET', '/agents')).find((v) => v.id === a.id).reverse;
+  assert.deepEqual([sent.target, sent.asks.map((x) => [x.kind, x.text])], ['/Applications/Notes.app', [['reverse', 'How does search work?']]]);
+
+  // REA registered in the project's .mcp.json: seen on Check again.
+  fs.writeFileSync(path.join(a.workdir, '.mcp.json'), JSON.stringify({ mcpServers: { rea: { command: 'node', args: ['/opt/rea/main.js'] } } }));
+  await js(`document.querySelector('[data-reverse-recheck]').click()`);
+  await until(`document.querySelector('.reverse-rea.ok')`, 'REA found');
+  assert.match(await js(`document.querySelector('.reverse-rea.ok').textContent`), /REA is registered in the project's \.mcp\.json/);
+  fs.rmSync(path.join(a.workdir, '.mcp.json'));
+
+  // The agent writes its report: drawn here, the path animated; then our own version is asked for, by part.
+  const dir = path.join(home, 'briefs', a.id);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'REVERSE.md'), '# Reverse engineering: search in Notes\n## Summary\nAn SQLite full-text index.\n## How it works\n```mermaid\nflowchart LR\n  A["SearchBar"] e1@--> B["fts5 query"]\n  e1@{ animate: true }\n  classDef inferred stroke:#f59e0b,stroke-dasharray:4\n  class B inferred\n```\n## Findings\n1. Uses FTS5 (confirmed).\n## Build it\n1. An index table.\n');
+  await until(`document.querySelector('.debug-report h1')?.textContent === 'Reverse engineering: search in Notes'`, 'the report', 20_000);
+  await until(`document.querySelector('.debug-report .diagram svg')`, 'its diagram drawn', 20_000);
+  assert.equal(await js(`document.querySelector('[data-reverse-form] button.primary').textContent`), 'Ask');
+  assert.equal(await js(`document.querySelector('[data-reverse-target]').value`), '/Applications/Notes.app', 'the target is remembered');
+  await until(`/report/.test(document.querySelector('#detail-body button[data-act="reverse"]').textContent)`, 'the button says there is a report');
+  await js(`(() => { const t = document.querySelector('[data-reverse-text]'); t.focus(); t.value = 'the index table'; })()`);
+  await js(`document.querySelector('[data-reverse-build]').click()`);
+  await until(`document.querySelector('.debug-asked summary')?.textContent === 'Asked (2)' && document.querySelector('.debug-asked li:last-child').textContent.trim() === 'build Build it: the index table'`, 'the build asked for');
+  // Debug on the same agent is its own thing.
+  await js(`document.querySelector('[data-side="debug"]').click()`);
+  await until(`document.querySelector('[data-debug-text]') && !document.querySelector('[data-reverse-target]')`, 'the Debug tab');
+  assert.equal(await js(`document.querySelectorAll('.debug-asked').length`), 0, 'nothing asked there');
+  await js(`document.querySelector('#side-close').click()`);
+  assert.deepEqual(errors, [], 'no errors on the page');
+});
+
 test('Plan: project dates with checklists, the decision log, the tech debt radar; Today shows the date and the day around a meeting', { skip }, async () => {
   // A project with an agent at work in its folder, and one that is a git repository.
   for (const n of ['p1', 'p3']) fs.mkdirSync(path.join(home, n));

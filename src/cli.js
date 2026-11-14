@@ -1699,6 +1699,33 @@ export async function main(argv) {
     });
 
   program
+    .command('reverse')
+    .description("Reverse engineer with an agent and REA's tools: name a target and what to understand; it keeps a report with diagrams, the evidence, what could not be determined and a plan to build your own. With no question: print the report")
+    .argument('<agent>')
+    .argument('[question...]', 'what to understand, or a follow-up once there is a report')
+    .option('-t, --target <target>', "the app's folder, the binary's path or the website's address (needed the first time)")
+    .option('--build [what]', 'build your own version from the report: which part in words, or its plan')
+    .action(async (ref, question, opts) => {
+      await daemon();
+      const a = await resolveAgent(ref);
+      const q = question.join(' ').trim();
+      if (opts.build) {
+        await api('POST', `/agents/${a.id}/reverse`, { build: opts.build === true ? q || true : opts.build });
+        return console.log(`${green('✓')} asked ${a.name} to build it from the report, in this project's own code`);
+      }
+      if (q) {
+        const rea = await api('GET', `/agents/${a.id}/reverse/rea`);
+        if (!rea.registered) console.log(yellow(`REA was not found in Claude Code's settings for this agent. If it isn't set up: ${rea.setup} (then restart the agent's session).`));
+        await api('POST', `/agents/${a.id}/reverse`, { question: q, target: opts.target });
+        return console.log(`${green('✓')} sent to ${a.name}; it investigates in its session. The report: agentmgr reverse ${ref}`);
+      }
+      const r = await api('GET', `/agents/${a.id}/specs/reverse`);
+      if (!r.markdown) return console.log(dim(`No report yet. Start one: agentmgr reverse ${ref} -t /path/to/app "how does search work"`));
+      console.log(r.markdown.trimEnd());
+      console.log(dim(`\n(updated ${new Date(r.updatedAt).toLocaleString()})`));
+    });
+
+  program
     .command('fork')
     .description("A new agent with this one's code and conversation, in its own worktree")
     .argument('<agent>')
