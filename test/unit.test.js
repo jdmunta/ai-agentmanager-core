@@ -4466,3 +4466,156 @@ test('usage: a reading taken now starts one short session; what went wrong is sa
   engines[0].installed = false;
   assert.match((await u.refresh()).problem, /not installed/);
 });
+
+test('security audit: the messages that start, continue and fix an audit', async () => {
+  const { securityPrompt, securityFixPrompt, SPEC_DOCS } = await import('../src/brief.js');
+  assert.ok(SPEC_DOCS.security('a1').endsWith('/a1/SECURITY-AUDIT.md'));
+  const whole = securityPrompt('/b/S.md', '');
+  assert.match(whole, /^Security audit: this whole project, the most exposed parts first\n/);
+  const first = securityPrompt('/b/S.md', '  the import API ');
+  assert.match(first, /^Security audit: the import API\n/);
+  for (const part of ['Work in phases', 'Check every finding again, independently', 'ask it to disprove it', 'No finding is listed on a pattern match alone', 'read-only', 'do not write working exploit code', 'never copied into the report', 'Keep a report at /b/S.md', '## Attack surface', '## Findings', '## Checked and sound', '## Not covered', '## Recommended order', 'e1@{ animate: true }', 'classDef fault', 'npm audit']) assert.ok(first.includes(part), part);
+  const more = securityPrompt('/b/S.md', 'Look at the webhook handler', { again: true });
+  assert.match(more, /^Security audit, continued: Look at the webhook handler\n/);
+  assert.ok(more.includes('/b/S.md') && !more.includes('## Attack surface'), 'a follow-up does not repeat the shape');
+  assert.match(securityFixPrompt('/b/S.md', '1 and 3'), /^Fix the findings from your security audit at \/b\/S\.md: 1 and 3\.\n[\s\S]*a test that fails without the fix/);
+  assert.match(securityFixPrompt('/b/S.md', ''), /: the verified ones, in the recommended order\./);
+  // The fake engine (and a shell) would take "exit" in a message as a command.
+  for (const m of [whole, first, more, securityFixPrompt('/b/S.md', '')]) assert.doesNotMatch(m, /\bexit\b/);
+});
+
+test('lean output: long command output trimmed (errors kept, the whole kept in a file), short output left alone, and the hook that does it', async () => {
+  const { fold, leanHook, leanSettings, leanStats, leanSweep, leanText, plain } = await import('../src/lean.js');
+  assert.equal(plain('\x1b[32mok\x1b[0m\r\n10%\r50%\r100% done\nplain'), 'ok\n100% done\nplain');
+  assert.deepEqual(fold(['a', 'test 1 passed (3ms)', 'test 2 passed (12ms)', 'test 3 passed (1ms)', 'test 4 passed (7ms)', 'test 5 passed (2ms)', 'z']), ['a', 'test 1 passed (3ms)', '  … 3 more lines like it …', 'test 5 passed (2ms)', 'z']);
+  assert.equal(fold(['x 1', 'x 2', 'x 3']).length, 3, 'a short run stays');
+  // Short: left alone.
+  assert.equal(leanText('one\ntwo\nthree'), null);
+  // Long and varied: the start, the end, and from the middle the trouble with the line before it.
+  const words = (i) => `step ${'abcdefghij'[i % 10]}${'klmnopqrst'[(i * 7) % 10]}${'uvwxyz'[(i * 3) % 6]} of module ${'qwertyuiop'.slice(i % 7, (i % 7) + 3)}-${'asdfghjkl'[(i * 5) % 9]}`;
+  const lines = Array.from({ length: 600 }, (_, i) => words(i));
+  lines[300] = 'compiling the parser';
+  lines[301] = 'src/parse.c:41: error: expected ; before }';
+  lines[450] = 'warning: unused variable n';
+  const out = leanText(lines.join('\n'), { where: '/h/lean/a1/t1.txt' });
+  const got = out.text.split('\n');
+  assert.equal(out.before, 600);
+  assert.ok(out.after < 100, `${out.after} lines`);
+  assert.deepEqual(got.slice(0, 30), lines.slice(0, 30), 'the start');
+  assert.deepEqual(got.slice(-51, -1), lines.slice(-50), 'the end');
+  for (const l of ['compiling the parser', 'src/parse.c:41: error: expected ; before }', 'warning: unused variable n']) assert.ok(got.includes(l), l);
+  assert.ok(got.some((l) => /^ {2}… \d+ lines left out …$/.test(l)));
+  assert.match(got.at(-1), /^\[lean output: 600 lines trimmed to \d+; errors and warnings kept\. The whole output is in \/h\/lean\/a1\/t1\.txt: read it/);
+  assert.ok(out.saved > 5000);
+
+  // The hook: only shell commands, only long output; the whole output and the count are kept.
+  const dir = path.join(tmp(), 'lean', 'a1');
+  const event = (stdout, extra = {}) => ({ tool_name: 'Bash', tool_use_id: 'toolu_01', tool_input: { command: 'make' }, tool_response: { stdout, stderr: 'note', interrupted: false, isImage: false }, ...extra });
+  assert.equal(leanHook(event('short'), { dir }), null);
+  assert.equal(leanHook(event(lines.join('\n'), { tool_name: 'Read' }), { dir }), null);
+  assert.equal(leanHook(event(lines.join('\n')), { dir: null }), null);
+  const a = leanHook(event(lines.join('\n')), { dir });
+  assert.equal(a.hookSpecificOutput.hookEventName, 'PostToolUse');
+  const upd = a.hookSpecificOutput.updatedToolOutput;
+  assert.deepEqual([upd.stderr, upd.interrupted, upd.isImage], ['note', false, false], "the rest of the tool's output as it was");
+  assert.ok(upd.stdout.includes(path.join(dir, 'toolu_01.txt')) && upd.stdout.length < lines.join('\n').length / 2);
+  const whole = fs.readFileSync(path.join(dir, 'toolu_01.txt'), 'utf8');
+  assert.ok(whole.startsWith('$ make\n\n') && whole.includes(lines[200]) && whole.endsWith('--- stderr ---\nnote'));
+  leanHook(event(lines.join('\n'), { tool_use_id: 'toolu_02' }), { dir });
+  const stats = leanStats(path.dirname(dir));
+  assert.equal(stats.calls, 2);
+  assert.ok(stats.tokens > 2000);
+  // Old whole outputs go; the counts stay.
+  assert.equal(leanSweep(path.dirname(dir), Date.now() + 3 * 86_400_000), 2);
+  assert.equal(leanStats(path.dirname(dir)).calls, 2);
+
+  // Off unless switched on; with it on, the session's one --settings carries the hook beside the status line.
+  assert.equal(leanSettings({}).enabled, false);
+  assert.equal(leanSettings({ lean: { enabled: true } }).enabled, true);
+  const { ENGINES } = await import('../src/engines/index.js');
+  const engine = ENGINES.claude;
+  assert.deepEqual(engine.settingsArgs({ usage: { enabled: false } }, { statusLine: '/x/s.js', lean: '/x/lean.js' }), []);
+  const off = JSON.parse(engine.settingsArgs({}, { statusLine: '/x/s.js', lean: '/x/lean.js' })[1]);
+  assert.deepEqual(Object.keys(off), ['statusLine']);
+  const on = JSON.parse(engine.settingsArgs({ lean: { enabled: true } }, { statusLine: '/x/s.js', lean: '/x/le an.js' })[1]);
+  assert.deepEqual(Object.keys(on), ['statusLine', 'hooks']);
+  assert.equal(on.hooks.PostToolUse[0].matcher, 'Bash');
+  assert.ok(on.hooks.PostToolUse[0].hooks[0].command.endsWith('"/x/le an.js"'));
+});
+
+test('skills: what is here, what a repository offers, adding, checking for a newer version, updating and removing', async () => {
+  const { Skills, findSkills, parseSkill, repoUrl, skillUses } = await import('../src/skills.js');
+  assert.deepEqual(parseSkill('---\nname: pdf\ndescription: >\n  Read and fill\n  PDF forms.\nlicense: MIT\n---\n# PDF\nDo it.'), { name: 'pdf', description: 'Read and fill PDF forms.', body: '# PDF\nDo it.' });
+  assert.deepEqual(parseSkill('---\nname: "x"\ndescription: \'One: two\'\n---\n').description, 'One: two');
+  assert.equal(parseSkill('# No front matter').name, null);
+  assert.equal(repoUrl('anthropics/skills'), 'https://github.com/anthropics/skills.git');
+  assert.equal(repoUrl('https://github.com/obra/superpowers/tree/main/skills'), 'https://github.com/obra/superpowers.git');
+  assert.equal(repoUrl('https://gitlab.com/group/sub/repo.git'), 'https://gitlab.com/group/sub/repo.git');
+  for (const bad of ['', 'justone', 'git@github.com:a/b.git', 'http://github.com/a/b', 'https://user:pw@github.com/a/b', 'file:///etc', '--upload-pack=x']) assert.equal(repoUrl(bad), null, bad);
+  assert.deepEqual(skillUses('{"type":"tool_use","name":"Skill","input":{"skill":"pdf"}} … {"name":"Skill","input":{"skill":"pdf","args":"x"}} {"name":"Skill","description":"Invoke"} {"name":"Skill","input":{"skill":"team:review"}}'), { pdf: 2, 'team:review': 1 });
+
+  // A repository with two skills (one with a script) and things that are not skills.
+  const root = tmp();
+  const repo = path.join(root, 'repo');
+  const put = (file, text) => (fs.mkdirSync(path.dirname(file), { recursive: true }), fs.writeFileSync(file, text));
+  put(path.join(repo, 'skills', 'pdf', 'SKILL.md'), '---\nname: pdf\ndescription: Read and fill PDF forms.\n---\n# PDF\n');
+  put(path.join(repo, 'skills', 'pdf', 'scripts', 'fill.py'), 'print(1)\n');
+  put(path.join(repo, 'skills', 'notes', 'SKILL.md'), '---\nname: notes\ndescription: Keep notes.\n---\n');
+  put(path.join(repo, 'README.md'), '# Skills');
+  put(path.join(repo, 'node_modules', 'x', 'SKILL.md'), '---\nname: no\n---\n');
+  fs.symlinkSync('/etc/hosts', path.join(repo, 'skills', 'notes', 'link'));
+  assert.deepEqual(findSkills(repo).map((s) => [s.name, s.path, s.files, s.scripts]), [['notes', 'skills/notes', 1, []], ['pdf', 'skills/pdf', 2, ['scripts/fill.py']]]);
+
+  const personal = path.join(root, 'home', 'skills');
+  const project = path.join(root, 'web');
+  put(path.join(project, '.claude', 'skills', 'deploy', 'SKILL.md'), '---\nname: deploy\ndescription: Ship it.\n---\n');
+  const session = path.join(root, 's.jsonl');
+  fs.writeFileSync(session, '{"type":"tool_use","name":"Skill","input":{"skill":"deploy"}}\n');
+  const cloned = [];
+  const data = {};
+  const s = new Skills({ store: { data, save() {} }, projects: () => [{ key: 'web', name: 'Web', dir: project }, { key: 'gone', name: 'Gone', dir: path.join(root, 'nope') }], sessions: () => [{ id: 'a1', name: 'fix-login', file: session }, { id: 'a2', name: 'none', file: path.join(root, 'missing') }], cache: path.join(root, 'cache'), personal: () => personal, now: () => '2026-11-14T10:00:00.000Z', clone: async (url, dir) => (cloned.push(url), fs.cpSync(repo, dir, { recursive: true, verbatimSymlinks: true })) });
+
+  let v = s.list();
+  assert.deepEqual(v.places.map((p) => [p.id, p.label, p.skills.map((x) => x.id)]), [['personal', 'Yours (every project)', []], ['project:web', 'Web', ['project:web/deploy']]]);
+  assert.deepEqual(v.places[1].skills[0].usedBy, [{ id: 'a1', name: 'fix-login', times: 1 }]);
+  assert.equal(v.places[1].skills[0].source, null, 'added by hand');
+
+  // A look first: nothing is copied.
+  const offer = await s.preview('owner/skills');
+  assert.deepEqual(cloned, ['https://github.com/owner/skills.git']);
+  assert.deepEqual(offer.skills.map((x) => [x.folder, x.scripts.length, x.installedIn]), [['notes', 0, []], ['pdf', 1, []]]);
+  assert.equal(offer.skills[0].dir, undefined, 'no paths of this computer in what is offered');
+  assert.equal(fs.existsSync(personal), false);
+  await assert.rejects(() => s.preview('not a repo'), /Give a repository/);
+
+  // Adding copies the skill's own files (no links out of it) and remembers where it came from.
+  const added = await s.install({ repo: 'owner/skills', names: ['pdf', 'notes'], place: 'personal' });
+  assert.deepEqual([added.added, added.skipped], [['pdf', 'notes'], []]);
+  assert.deepEqual(fs.readdirSync(path.join(personal, 'notes')), ['SKILL.md']);
+  assert.equal(fs.readFileSync(path.join(personal, 'pdf', 'scripts', 'fill.py'), 'utf8'), 'print(1)\n');
+  v = s.list();
+  assert.deepEqual(v.places[0].skills.map((x) => [x.id, x.source.repo, x.source.path, x.edited]), [['personal/notes', 'https://github.com/owner/skills.git', 'skills/notes', false], ['personal/pdf', 'https://github.com/owner/skills.git', 'skills/pdf', false]]);
+  assert.deepEqual((await s.install({ repo: 'owner/skills', names: ['pdf'], place: 'personal' })).skipped, ['pdf'], 'one already there is left alone');
+  await assert.rejects(() => s.install({ repo: 'owner/skills', names: ['nope'] }), /nope is not in/);
+  await assert.rejects(() => s.install({ repo: 'owner/skills', names: [], place: 'personal' }), /Pick at least one/);
+  await assert.rejects(() => s.install({ repo: 'owner/skills', names: ['pdf'], place: 'project:nope' }), /No such place/);
+  assert.match(s.show('personal/pdf').markdown, /^---\nname: pdf/);
+  assert.deepEqual(s.show('personal/pdf').list.map((f) => [f.path, f.script]), [['scripts/fill.py', true], ['SKILL.md', false]]);
+
+  // Nothing new there; then the repository moves on, and the copy here is edited too.
+  assert.deepEqual(await s.check('personal/pdf').then((c) => [c.changed, c.edited]), [false, false]);
+  put(path.join(repo, 'skills', 'pdf', 'SKILL.md'), '---\nname: pdf\ndescription: Read, fill and sign PDF forms.\n---\n# PDF 2\n');
+  fs.appendFileSync(path.join(personal, 'pdf', 'SKILL.md'), '\nmy note\n');
+  assert.deepEqual(await s.check('personal/pdf').then((c) => [c.changed, c.edited]), [true, true]);
+  assert.equal(s.list().places[0].skills[1].edited, true);
+  await assert.rejects(() => s.check('project:web/deploy'), /not added from a repository/);
+  v = await s.update('personal/pdf');
+  assert.deepEqual([v.places[0].skills[1].description, v.places[0].skills[1].edited], ['Read, fill and sign PDF forms.', false]);
+
+  // Removing deletes the folder, and only a skill's.
+  for (const bad of ['personal/../x', 'personal/', 'nowhere/pdf', 'personal/none']) assert.throws(() => s.remove(bad), /No such/, bad);
+  v = s.remove('personal/notes');
+  assert.deepEqual(v.places[0].skills.map((x) => x.id), ['personal/pdf']);
+  assert.equal(fs.existsSync(path.join(personal, 'notes')), false);
+  assert.equal(data.skills.sources['personal/notes'], undefined);
+});

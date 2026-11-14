@@ -1295,7 +1295,7 @@ table.bench-cases tr.faster td:nth-child(5) { color: var(--green); font-weight: 
 .issues-dialog { width: min(1100px, calc(100% - 32px)); max-height: calc(100% - 32px); padding: 16px; }
 /* Only while open: a display on the dialog itself would keep a closed one on screen. */
 .issues-dialog[open] { display: flex; flex-direction: column; }
-#issues-body, #actions-body, #designs-body, #reviews-body, #bugs-body, #plan-body, #news-body, #os-body, #decide-body, #usage-body { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+#issues-body, #actions-body, #designs-body, #reviews-body, #bugs-body, #plan-body, #news-body, #os-body, #decide-body, #usage-body, #skills-body { display: flex; flex-direction: column; min-height: 0; flex: 1; }
 /* The lists: drag the corner to any size, or fill the window (⤢ or f). */
 .issues-dialog { resize: both; overflow: hidden; min-width: min(520px, calc(100% - 32px)); min-height: 240px; max-width: calc(100% - 16px); max-height: calc(100% - 16px); }
 .issues-dialog.expanded { width: calc(100% - 16px); height: calc(100% - 16px); }
@@ -1468,6 +1468,28 @@ table.plan-debt code { overflow-wrap: anywhere; }
 .usage-level.warn { color: var(--yellow); border-color: var(--yellow); }
 .usage-level.high, .usage-level.held, .usage-level.limited { color: var(--red); border-color: var(--red); }
 .usage-default-on, .usage-default-on:hover { color: var(--green); border-color: var(--green); }
+.skills-dialog { width: min(860px, calc(100% - 32px)); }
+.skills-scroll { border: 0; }
+.skills-add { display: flex; gap: 8px; margin: 0 0 10px; }
+.skills-add input { flex: 1; min-width: 0; }
+.skills-offer { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin: 0 0 12px; }
+.skills-offer p { margin: 0 0 8px; }
+.skills-pick { display: flex; flex-direction: column; gap: 6px; max-height: 300px; overflow: auto; margin: 0 0 8px; }
+.skills-pick-row { display: flex; flex-direction: row; gap: 8px; align-items: baseline; margin: 0; font-weight: 400; }
+.skills-pick-row input { width: auto; }
+.skills-add-actions { display: flex; gap: 8px; align-items: center; }
+.skills-add-actions label { display: flex; flex-direction: row; align-items: center; gap: 6px; margin: 0; }
+.skills-add-actions select { width: auto; }
+.skills-row { padding: 8px 0; border-top: 1px solid var(--border); }
+.skills-row-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.skills-desc { margin: 4px 0; font-size: 13px; }
+.skills-meta { display: flex; gap: 14px; flex-wrap: wrap; }
+.skills-warn { color: var(--yellow); border-color: var(--yellow); }
+.skills-ok { color: var(--green); }
+.skills-files ul { margin: 6px 0 10px; padding-left: 18px; font-size: 13px; }
+.usage-lean { display: flex; flex-direction: column; gap: 2px; margin: 4px 0 10px; font-size: 13px; }
+.usage-lean label { margin: 0; display: flex; gap: 8px; align-items: baseline; font-weight: 400; }
+.usage-lean label input { width: auto; }
 .usage-settings { display: flex; gap: 18px; flex-wrap: wrap; margin: 6px 0 8px; font-size: 13px; }
 .usage-settings label { display: flex; flex-direction: row; align-items: center; gap: 6px; margin: 0; }
 .usage-settings select { width: auto; }

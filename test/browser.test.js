@@ -576,6 +576,22 @@ test('Reverse engineer: a target and a question beside the session, whether REA 
   await js(`(() => { const t = document.querySelector('[data-reverse-text]'); t.focus(); t.value = 'the index table'; })()`);
   await js(`document.querySelector('[data-reverse-build]').click()`);
   await until(`document.querySelector('.debug-asked summary')?.textContent === 'Asked (2)' && document.querySelector('.debug-asked li:last-child').textContent.trim() === 'build Build it: the index table'`, 'the build asked for');
+  // Security audit on the same agent: nothing named audits the whole project; the report, then fixes by number.
+  await js(`document.querySelector('[data-side="security"]').click()`);
+  await until(`document.querySelector('[data-security-text]') && !document.querySelector('[data-reverse-target]')`, 'the Security tab');
+  assert.equal(await js(`document.querySelector('[data-security-form] button.primary').textContent`), 'Audit');
+  assert.match(await js(`document.querySelector('.security-view').textContent`), /does not replace a penetration test/);
+  await js(`document.querySelector('[data-security-form]').requestSubmit()`);
+  await until(`document.querySelector('.debug-asked summary')?.textContent === 'Asked (1)' && document.querySelector('.debug-asked li').textContent.trim() === 'The whole project'`, 'the audit asked for');
+  fs.writeFileSync(path.join(dir, 'SECURITY-AUDIT.md'), '# Security audit: the whole project\n## Summary\nOne high finding. 0 critical, 1 high, 0 medium, 0 low.\n## Attack surface\n```mermaid\nflowchart LR\n  A["POST /import"] e1@--> B["readFile"]\n  e1@{ animate: true }\n  classDef fault stroke:#ef4444,stroke-width:3px\n  class B fault\n```\n## Findings\n| # | Severity | Title | Where | Status |\n|---|---|---|---|---|\n| 1 | high | Path traversal in import | src/import.js:12 | verified |\n');
+  await until(`document.querySelector('.debug-report h1')?.textContent === 'Security audit: the whole project'`, 'the audit report', 20_000);
+  await until(`document.querySelector('.debug-report .diagram svg') && document.querySelector('.debug-report table')`, 'its diagram and findings table', 20_000);
+  await js(`document.querySelector('[data-security-form]').requestSubmit()`);
+  await sleep(300);
+  assert.equal(await js(`document.querySelector('.debug-asked summary').textContent`), 'Asked (1)', 'a follow-up says what to look at');
+  await js(`(() => { document.querySelector('[data-security-text]').value = '1'; })()`);
+  await js(`document.querySelector('[data-security-fix]').click()`);
+  await until(`document.querySelector('.debug-asked summary')?.textContent === 'Asked (2)' && document.querySelector('.debug-asked li:last-child').textContent.trim() === 'fix Fix findings: 1'`, 'the fix asked for');
   // Debug on the same agent is its own thing.
   await js(`document.querySelector('[data-side="debug"]').click()`);
   await until(`document.querySelector('[data-debug-text]') && !document.querySelector('[data-reverse-target]')`, 'the Debug tab');
@@ -626,6 +642,13 @@ test('Usage: the chip by the connection light, every engine with what is used an
     await api('PUT', '/usage', { engine: 'claude', holdAt: 'off' });
   }
   await until(`document.querySelector('[data-usage-set="holdAt"]').value === 'off' && document.querySelector('[data-usage-engine="claude"] .usage-level').textContent === 'Getting close'`, 'not held any more');
+  // Lean output: off until switched on; then the sessions started from now on trim long command output.
+  assert.equal(await js(`document.querySelector('[data-usage-lean]').checked`), false);
+  await js(`document.querySelector('[data-usage-lean]').click()`);
+  await until(`(await (await fetch('/api/usage')).json()).lean.enabled === true && document.querySelector('[data-usage-lean]')?.checked`, 'lean output on');
+  assert.match(await js(`document.querySelector('.usage-lean').textContent`), /Nothing long enough to trim yet/);
+  await api('PUT', '/usage', { lean: false });
+  await until(`document.querySelector('[data-usage-lean]')?.checked === false`, 'and off again');
   // Read now: a one-word session brings the numbers as they are now, not as the last reply left them.
   await js(`document.querySelector('[data-usage-is-default]').click()`);
   await until(`[...document.querySelectorAll('.toast')].some((t) => /New agents already start on Claude Code/.test(t.textContent))`, 'pressing the engine new agents already start on says so');
@@ -633,6 +656,35 @@ test('Usage: the chip by the connection light, every engine with what is used an
   await until(`/^5-hour session\\s*12% used\\s*88% left/.test(document.querySelector('[data-usage-window="five_hour"]')?.textContent.replace(/\\s+/g, ' ').trim() ?? '')`, 'a reading taken now', 30_000);
   await until(`document.querySelector('[data-usage="refresh"]').textContent === '↻ Read now' && /from Claude Code 9\\.9\\.10/.test(document.querySelector('[data-usage-engine="claude"] .plan-project-head').textContent)`, 'where it came from');
   await js(`document.querySelector('[data-usage="close"]').click()`);
+  assert.deepEqual(errors, [], 'no errors on the page');
+});
+
+test('Skills: the skills Claude Code has here with their scripts flagged, one read, and one removed', { skip }, async () => {
+  const dir = path.join(home, 'claude', 'skills', 'pdf');
+  fs.mkdirSync(path.join(dir, 'scripts'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'SKILL.md'), '---\nname: pdf\ndescription: Read and fill PDF forms.\n---\n# Working with PDFs\n\nUse the script.\n');
+  fs.writeFileSync(path.join(dir, 'scripts', 'fill.py'), 'print(1)\n');
+  await js(`document.querySelector('#skills-btn').click()`);
+  await until(`document.querySelector('#skills-dialog').open && document.querySelector('[data-skill="personal/pdf"]')`, 'the Skills window');
+  const row = await js(`document.querySelector('[data-skill="personal/pdf"]').textContent.replace(/\\s+/g, ' ').trim()`);
+  assert.match(row, /^pdf ?1 script Read .*Remove Read and fill PDF forms\. added by hand ?2 files/);
+  assert.equal(await js(`document.querySelector('[data-skills-place="personal"] h3').textContent`), 'Yours (every project)');
+  assert.equal(await js(`Boolean(document.querySelector('[data-skill-check="personal/pdf"]'))`), false, 'nothing to check for one added by hand');
+  // Read it: its files, and its instructions without the front matter.
+  await js(`document.querySelector('[data-skill-show="personal/pdf"]').click()`);
+  await until(`document.querySelector('#skills-body .md h1')?.textContent === 'Working with PDFs'`, 'the skill to read');
+  assert.match(await js(`document.querySelector('.skills-files').textContent.replace(/\\s+/g, ' ')`), /2 files, 1 of them script.*scripts\/fill\.py .*script/);
+  assert.equal(await js(`/name: pdf/.test(document.querySelector('#skills-body .md').textContent)`), false);
+  await js(`document.querySelector('[data-skills="back"]').click()`);
+  // A repository that is not one is refused before anything is fetched.
+  await js(`(() => { const f = document.querySelector('[data-skills-form]'); f.repo.value = 'not a repository'; f.requestSubmit(); })()`);
+  await until(`[...document.querySelectorAll('.toast')].some((t) => /Give a repository/.test(t.textContent))`, 'a bad repository refused');
+  // Removed: its folder is gone.
+  await api('DELETE', '/skills?id=' + encodeURIComponent('personal/pdf'));
+  await js(`document.querySelector('[data-skills="refresh"]').click()`);
+  await until(`!document.querySelector('[data-skill="personal/pdf"]') && /No skills here/.test(document.querySelector('[data-skills-place="personal"]').textContent)`, 'the skill gone');
+  assert.equal(fs.existsSync(dir), false);
+  await js(`document.querySelector('[data-skills="close"]').click()`);
   assert.deepEqual(errors, [], 'no errors on the page');
 });
 

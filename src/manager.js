@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { ownStatusLine } from './trust.js';
 import { statusLineScript, usageFile } from './usage.js';
+import { leanScript } from './lean.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -38,6 +39,9 @@ import {
   debugPrompt,
   debugFixPrompt,
   reversePath,
+  securityPath,
+  securityPrompt,
+  securityFixPrompt,
   reversePrompt,
   reverseBuildPrompt,
   specDocsInfo,
@@ -152,6 +156,9 @@ import {
 // Per-session markers a parent Claude Code session sets. Inherited, they make the
 // agent think it is a nested child session (which, among other things, turns
 // transcript saving off, so the session could never be resumed).
+/** Where the whole of an agent's trimmed command outputs are kept (lean.js). */
+export const leanDir = (agentId) => path.join(paths.home, 'lean', agentId);
+
 const STRIP_ENV = [
   'AI_AGENT',
   'CLAUDECODE',
@@ -838,7 +845,7 @@ export class AgentManager extends EventEmitter {
   /** One of an agent's intent, spec and plan files. */
   specDoc(ref, name) {
     const agent = this.mustGet(ref);
-    if (!['intent', 'spec', 'plan', 'designdoc', 'benchmark', 'debug', 'reverse'].includes(name)) throw Object.assign(new Error('Unknown file (intent, spec, plan, designdoc, benchmark, debug or reverse)'), { status: 400 });
+    if (!['intent', 'spec', 'plan', 'designdoc', 'benchmark', 'debug', 'reverse', 'security'].includes(name)) throw Object.assign(new Error('Unknown file (intent, spec, plan, designdoc, benchmark, debug, reverse or security)'), { status: 400 });
     return readSpecDoc(agent.id, name) ?? { name, markdown: null };
   }
 
@@ -862,6 +869,28 @@ export class AgentManager extends EventEmitter {
     // What was asked, newest last, for the Debug tab.
     const asks = [...(agent.debug?.asks ?? []), { text: fix ? `Apply fixes${which ? `: ${which}` : ''}` : q, kind: fix ? 'fix' : has ? 'follow-up' : 'debug', at: now() }].slice(-20);
     return this.view(this.patch(agent.id, { debug: { asks, startedAt: agent.debug?.startedAt ?? now() } }));
+  }
+
+  /**
+   * Security audit: ask the agent to audit the code in its session and keep a report
+   * (SECURITY-AUDIT.md): the attack surface, findings by severity with evidence, each checked a
+   * second time before it is listed, what was found sound and what was not covered. `question`:
+   * what to audit (nothing: the whole project), or a follow-up once there is a report. `fix`: fix
+   * the report's findings (which ones, in words; true for the verified ones). Waits in the queue.
+   */
+  security(ref, { question = '', fix = null } = {}) {
+    const agent = this.mustGet(ref);
+    if (!agent.workdir || agent.status === 'preparing') throw Object.assign(new Error('The agent has no folder to audit yet'), { status: 409 });
+    const q = String(question ?? '').replace(/\s+/g, ' ').trim().slice(0, 2000);
+    const has = Boolean(readSpecDoc(agent.id, 'security')?.markdown?.trim());
+    if (fix && !has) throw Object.assign(new Error('There is no audit report yet: start the audit first'), { status: 409 });
+    if (!fix && has && q.length < 3) throw Object.assign(new Error('Say what to look at next'), { status: 400 });
+    fs.mkdirSync(briefDir(agent.id), { recursive: true });
+    const file = path.join(fs.realpathSync(briefDir(agent.id)), path.basename(securityPath(agent.id)));
+    const which = fix === true ? '' : String(fix ?? '').replace(/\s+/g, ' ').trim().slice(0, 500);
+    this.tell(agent.id, fix ? securityFixPrompt(file, which) : securityPrompt(file, q, { again: has }), { source: 'security' });
+    const asks = [...(agent.security?.asks ?? []), { text: fix ? `Fix findings${which ? `: ${which}` : ''}` : q || 'The whole project', kind: fix ? 'fix' : has ? 'follow-up' : 'audit', at: now() }].slice(-20);
+    return this.view(this.patch(agent.id, { security: { ...agent.security, asks, startedAt: agent.security?.startedAt ?? now() } }));
   }
 
   /**
@@ -1428,8 +1457,15 @@ export class AgentManager extends EventEmitter {
       const dir = fs.realpathSync(uploads);
       writableDir = writableDir ? [writableDir, dir].flat() : dir;
     }
-    // A status line that records the plan's usage (not in a container: the script isn't there).
-    return { extra: [...engine.extraArgs(this.config), ...(agent.isolation === 'container' ? [] : engine.usageArgs?.(this.config, statusLineScript()) ?? [])], permissionMode: agent.permissionMode, model: agent.model, writableDir, instructions: prompts.join('\n\n') || null, agents, allowedTools };
+    // A status line that records the plan's usage, and with lean output on the hook that trims long
+    // command output (not in a container: the scripts aren't there).
+    const own = agent.isolation !== 'container' && Boolean(engine.settingsArgs);
+    if (own && this.config.lean?.enabled === true) {
+      // Where the whole of a trimmed output is kept: readable without a permission prompt.
+      fs.mkdirSync(leanDir(agent.id), { recursive: true });
+      writableDir = [writableDir ?? [], fs.realpathSync(leanDir(agent.id))].flat();
+    }
+    return { extra: [...engine.extraArgs(this.config), ...(own ? engine.settingsArgs(this.config, { statusLine: statusLineScript(), lean: leanScript() }) : [])], permissionMode: agent.permissionMode, model: agent.model, writableDir, instructions: prompts.join('\n\n') || null, agents, allowedTools };
   }
 
   /** Spawn the agent's engine in a PTY, reusing its terminal clients and scrollback. */
@@ -1773,7 +1809,7 @@ export class AgentManager extends EventEmitter {
   }
 
   childEnv(agent) {
-    const env = { ...process.env, ...(agent ? { AGENTMGR_AGENT_ID: agent.id } : {}), TERM: 'xterm-256color', COLORTERM: 'truecolor', AGENTMGR_TERMINAL: '1', AGENTMGR_USAGE_FILE: usageFile(), AGENTMGR_USER_STATUSLINE: ownStatusLine() };
+    const env = { ...process.env, ...(agent ? { AGENTMGR_AGENT_ID: agent.id, AGENTMGR_LEAN_DIR: leanDir(agent.id) } : {}), TERM: 'xterm-256color', COLORTERM: 'truecolor', AGENTMGR_TERMINAL: '1', AGENTMGR_USAGE_FILE: usageFile(), AGENTMGR_USER_STATUSLINE: ownStatusLine() };
     for (const key of STRIP_ENV) delete env[key];
     return env;
   }
@@ -2441,6 +2477,14 @@ export class AgentManager extends EventEmitter {
         at = fs.statSync(debugPath(id)).mtime.toISOString();
       } catch {}
       if (at !== (agent.debug.reportAt ?? null)) this.patch(id, { debug: { ...this.store.get(id).debug, reportAt: at } });
+    }
+    // And for a security audit.
+    if (agent.security) {
+      let at = null;
+      try {
+        at = fs.statSync(securityPath(id)).mtime.toISOString();
+      } catch {}
+      if (at !== (agent.security.reportAt ?? null)) this.patch(id, { security: { ...this.store.get(id).security, reportAt: at } });
     }
     // The same for a reverse-engineering report.
     if (agent.reverse) {

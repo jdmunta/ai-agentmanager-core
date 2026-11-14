@@ -68,6 +68,7 @@ export function initSide({ api, esc, toast, $, agents, codeUi, docHtml, renderDi
     else if (st.tab === 'docs') renderDocs(true);
     else if (st.tab === 'debug') renderDebug(true);
     else if (st.tab === 'reverse') renderReverse(true);
+    else if (st.tab === 'security') renderAsk('security', true);
     else renderChanges(true);
     refit();
   }
@@ -87,6 +88,18 @@ export function initSide({ api, esc, toast, $, agents, codeUi, docHtml, renderDi
       then: { key: 'fix', label: 'Apply fixes', sent: 'Asked the agent to apply the fixes', title: "Ask the agent to make the report's fixes, verify each and record the result. Name the ones you want in the box (for example: 1 and 3), or leave it empty for the ones it recommends" },
       waiting: 'the report shows here once it has the code path',
       empty: 'Say what is going wrong: a failure, instability at scale, slowness under load. The agent investigates in its session (it reads the code and logs, reproduces and measures where it can) and writes a report here: animated diagrams of the code path and the data flow with where it breaks, what it found with evidence, the likely causes, and the fixes it recommends. It changes no code until you ask for a fix.',
+    },
+    security: {
+      ideas: ['The whole project', 'Everything reachable without signing in', 'File uploads and downloads', 'Who can see whose data', 'Secrets and how they are stored'],
+      first: 'What should it audit? Leave empty for the whole project, or name a part: the import API, the login flow',
+      more: 'A follow-up: where to look next, a finding to check again, or which findings to fix',
+      go: 'Audit',
+      short: 'Say what to look at next',
+      optional: true,
+      sent: 'Sent to the agent: it audits in its session',
+      then: { key: 'fix', label: 'Fix findings', sent: 'Asked the agent to fix the findings', title: 'Ask the agent to fix the findings, each with a test that fails without the fix, and record it in the report. Name the ones you want in the box (for example: 1 and 3), or leave it empty for the verified ones in the recommended order' },
+      waiting: 'the report shows here once it has mapped what is exposed',
+      empty: 'A defensive review of your own code. The agent maps where untrusted input comes in, follows it through the code looking for each class of weakness, runs the project\'s own dependency audit, and checks every finding a second time before listing it. The report shows here: the attack surface as an animated diagram, findings by severity with the evidence and the fix, what was checked and found sound, and what was not covered. It changes no code until you ask for fixes, and it finds what a careful reader finds: it does not replace a penetration test.',
     },
     reverse: {
       ideas: ['How does search work?', 'How is data stored and synced?', 'What does it send over the network?', 'How does the plugin system load code?', 'What file format does it save?'],
@@ -309,6 +322,7 @@ export function initSide({ api, esc, toast, $, agents, codeUi, docHtml, renderDi
       return text.focus();
     }
     if (e.target.closest('[data-debug-fix]')) return sendAsk('debug', { fix: body.querySelector('[data-debug-text]').value.trim() || true });
+    if (e.target.closest('[data-security-fix]')) return sendAsk('security', { fix: body.querySelector('[data-security-text]').value.trim() || true });
     if (e.target.closest('[data-reverse-build]')) return sendAsk('reverse', { build: body.querySelector('[data-reverse-text]').value.trim() || true });
     if (e.target.closest('[data-reverse-recheck]')) return loadRea();
     try {
@@ -330,15 +344,17 @@ export function initSide({ api, esc, toast, $, agents, codeUi, docHtml, renderDi
     if (!ASK[kind]) return;
     e.preventDefault();
     const question = body.querySelector(`[data-${kind}-text]`).value.trim();
-    if (question.length < 3) return toast(ASK[kind].short, 3000);
-    if (kind === 'debug') return sendAsk('debug', { question });
+    // An audit with nothing named is of the whole project; a follow-up says what.
+    const whole = ASK[kind].optional && !question && !body.querySelector(`[data-${kind}-fix]`);
+    if (question.length < 3 && !whole) return toast(ASK[kind].short, 3000);
+    if (kind !== 'reverse') return sendAsk(kind, { question });
     const target = body.querySelector('[data-reverse-target]').value.trim();
     if (!target) return toast("Name the target: an app's folder, a binary's path, or a website's address", 4000);
     sendAsk('reverse', { question, target });
   });
   // Enter sends; Shift+Enter is a new line.
   pane.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.target.matches('[data-debug-text], [data-reverse-text]')) {
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.target.matches('[data-debug-text], [data-reverse-text], [data-security-text]')) {
       e.preventDefault();
       e.target.form.requestSubmit();
     }
@@ -406,6 +422,7 @@ export function initSide({ api, esc, toast, $, agents, codeUi, docHtml, renderDi
       if (st.tab === 'docs') renderDocs(false);
       else if (st.tab === 'debug') renderDebug(false);
       else if (st.tab === 'reverse') renderReverse(false);
+      else if (st.tab === 'security') renderAsk('security', false);
       else if (st.tab === 'changes') renderChanges(false);
     },
   };

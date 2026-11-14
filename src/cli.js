@@ -824,16 +824,63 @@ export async function main(argv) {
     });
 
   program
+    .command('skills [action] [arg] [names...]')
+    .description("Claude Code's Agent Skills here: ls (default), show <id>, look <repo>, add <repo> <names...>, check <id>, update <id>, rm <id>")
+    .option('--to <place>', 'where to add: personal (default) or project:<shortcut>', 'personal')
+    .option('--json', 'print JSON')
+    .action(async (action = 'ls', arg, names, opts) => {
+      await daemon();
+      const out = (v) => console.log(JSON.stringify(v, null, 2));
+      const print = (v) => {
+        if (opts.json) return out(v);
+        for (const p of v.places) {
+          console.log(`${bold(p.label)} ${dim(p.dir)}`);
+          for (const s of p.skills) console.log(`  ${s.id.padEnd(34)} ${dim((s.description ?? 'no description').slice(0, 80))}${s.scripts.length ? yellow(` ${s.scripts.length} script(s)`) : ''}${s.source ? dim(` · ${s.source.repo.replace(/^https:\/\/github\.com\//, '').replace(/\.git$/, '')}@${s.source.commit ?? '?'}`) : ''}${s.edited ? yellow(' · edited here') : ''}${s.usedBy.length ? dim(` · used by ${s.usedBy.length}`) : ''}`);
+          if (!p.skills.length) console.log(dim('  none'));
+        }
+      };
+      if (action === 'ls') return print(await api('GET', '/skills'));
+      if (!arg) throw new Error(`agentmgr skills ${action} needs ${['look', 'add'].includes(action) ? 'a repository' : "a skill's id (see agentmgr skills)"}`);
+      if (action === 'show') {
+        const s = await api('GET', `/skills/one?id=${encodeURIComponent(arg)}`);
+        return opts.json ? out(s) : console.log(s.markdown.trimEnd());
+      }
+      if (action === 'look') {
+        const o = await api('POST', '/skills/preview', { repo: arg });
+        if (opts.json) return out(o);
+        console.log(`${bold(o.repo)} ${dim(o.commit ?? '')}`);
+        for (const s of o.skills) console.log(`  ${s.folder.padEnd(28)} ${dim((s.description ?? 'no description').slice(0, 90))}${s.scripts.length ? yellow(` ${s.scripts.length} script(s)`) : ''}`);
+        return console.log(dim(`Add some: agentmgr skills add ${arg} <names...>   (read a skill before you add it: its scripts run with your access)`));
+      }
+      if (action === 'add') {
+        if (!names.length) throw new Error('Name the skills to add (agentmgr skills look <repo> lists them)');
+        const r = await api('POST', '/skills', { repo: arg, names, place: opts.to });
+        if (opts.json) return out(r);
+        if (r.added.length) console.log(`${green('+')} ${r.added.join(', ')} ${dim(`in ${r.place}`)}`);
+        if (r.skipped.length) console.log(yellow(`Already there, left as they are: ${r.skipped.join(', ')} (agentmgr skills update <id> brings one up to date)`));
+        return;
+      }
+      if (action === 'check') {
+        const c = await api('POST', '/skills/check', { id: arg });
+        return opts.json ? out(c) : console.log(c.gone ? yellow('No longer in its repository') : c.changed ? yellow(`A newer version is there (${c.latest}); you have ${c.current}${c.edited ? ', edited here' : ''}`) : green('Up to date'));
+      }
+      if (action === 'update') return print(await api('POST', '/skills/update', { id: arg }));
+      if (action === 'rm') return print(await api('DELETE', `/skills?id=${encodeURIComponent(arg)}`));
+      throw new Error(`Unknown action ${action} (ls, show, look, add, check, update, rm)`);
+    });
+
+  program
     .command('usage')
     .description("Each engine's plan limits: how much is used and left, and when it resets")
     .option('--warn <percent>', 'alert when a limit is this much used (or off)')
     .option('--hold <percent>', 'start no new agents on an engine this much used (or off)')
     .option('--default <engine>', 'the engine new agents start on')
+    .option('--lean <on|off>', 'lean output: trim long command output before the agent reads it (Claude Code; sessions started from now on)')
     .option('--now', 'take a reading now: a one-word Claude Code session on its smallest model (a very small amount of usage)')
     .option('--json', 'print JSON')
     .action(async (opts) => {
       await daemon();
-      const patch = { ...(opts.warn !== undefined ? { warnAt: opts.warn } : {}), ...(opts.hold !== undefined ? { holdAt: opts.hold } : {}), ...(opts.default ? { engine: opts.default } : {}) };
+      const patch = { ...(opts.warn !== undefined ? { warnAt: opts.warn } : {}), ...(opts.hold !== undefined ? { holdAt: opts.hold } : {}), ...(opts.default ? { engine: opts.default } : {}), ...(opts.lean !== undefined ? { lean: /^(on|true|yes|1)$/i.test(opts.lean) } : {}) };
       let v = Object.keys(patch).length ? await api('PUT', '/usage', patch) : await api('GET', '/usage');
       if (opts.now) v = await api('POST', '/usage/refresh');
       if (opts.json) return console.log(JSON.stringify(v, null, 2));
@@ -845,6 +892,7 @@ export async function main(argv) {
         for (const w of e.windows) console.log(`  ${w.label.padEnd(16)} ${w.used === null ? dim('reset; no reading since') : (tone[e.level] ?? ((x) => x))(`${String(Math.round(w.used)).padStart(3)}% used  ${String(Math.round(w.left)).padStart(3)}% left`)}${w.resetsIn ? dim(`  resets ${w.resetsIn}`) : ''}${w.stale ? dim('  (an old reading)') : ''}`);
         if (e.note) console.log(`  ${dim(e.note)}`);
       }
+      if (v.lean) console.log(dim(`Lean output ${v.lean.enabled ? 'on' : 'off'}${v.lean.calls ? ` · ${v.lean.calls} outputs trimmed, about ${v.lean.tokens.toLocaleString()} tokens not read` : ''}`));
       console.log(dim(`Warn at ${v.settings.warnAt ?? 'off'}${v.settings.warnAt ? '%' : ''} · hold new work at ${v.settings.holdAt ?? 'off'}${v.settings.holdAt ? '%' : ''}`));
     });
 
@@ -1719,6 +1767,31 @@ export async function main(argv) {
       }
       const r = await api('GET', `/agents/${a.id}/specs/debug`);
       if (!r.markdown) return console.log(dim(`No debug report yet. Start one: agentmgr debug ${ref} "what goes wrong"`));
+      console.log(r.markdown.trimEnd());
+      console.log(dim(`\n(updated ${new Date(r.updatedAt).toLocaleString()})`));
+    });
+
+  program
+    .command('audit')
+    .description("Security audit with an agent: it goes through the code in its session, checks each finding a second time, and keeps a report with the attack surface, findings by severity with evidence, and fixes. With no question and a report already there: print the report")
+    .argument('<agent>')
+    .argument('[scope...]', 'what to audit (nothing: the whole project), or a follow-up once there is a report')
+    .option('--start', 'start an audit of the whole project (when no scope is given)')
+    .option('--fix [which]', "fix the report's findings: which ones in words (\"1 and 3\"), or the verified ones")
+    .action(async (ref, scope, opts) => {
+      await daemon();
+      const a = await resolveAgent(ref);
+      const q = scope.join(' ').trim();
+      if (opts.fix) {
+        await api('POST', `/agents/${a.id}/security`, { fix: opts.fix === true ? q || true : opts.fix });
+        return console.log(`${green('✓')} asked ${a.name} to fix the findings, each with a test, and record it in the report`);
+      }
+      if (q || opts.start) {
+        await api('POST', `/agents/${a.id}/security`, { question: q });
+        return console.log(`${green('✓')} sent to ${a.name}; it audits in its session. The report: agentmgr audit ${ref}`);
+      }
+      const r = await api('GET', `/agents/${a.id}/specs/security`);
+      if (!r.markdown) return console.log(dim(`No audit report yet. Start one: agentmgr audit ${ref} --start, or agentmgr audit ${ref} "the import API"`));
       console.log(r.markdown.trimEnd());
       console.log(dim(`\n(updated ${new Date(r.updatedAt).toLocaleString()})`));
     });

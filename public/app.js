@@ -43,6 +43,7 @@ import { initPlan } from '/plan.js';
 import { initSystem } from '/system.js';
 import { adviceHtml, initDecide } from '/decide.js';
 import { initUsage } from '/usage.js';
+import { initSkills } from '/skills.js';
 import { initMcp } from '/mcp.js';
 import { initCodeMap } from '/codemap.js';
 import { initKeys } from '/keys.js';
@@ -354,6 +355,8 @@ $('#decide-btn').onclick = () => decideUi.open();
 // Usage: each engine's plan limits, used and left (the chip by the connection light opens it).
 const usageUi = initUsage({ api, $, esc, ago, toast: (m, ms) => toast(m, ms) });
 $('#usage-btn').onclick = () => usageUi.open();
+const skillsUi = initSkills({ api, $, esc, ago, md: (t) => md(t), toast: (m, ms) => toast(m, ms), openAgent: (id) => select(id) });
+$('#skills-btn').onclick = () => skillsUi.open();
 // MCP: the MCP servers and tools Claude Code has in a folder, and running one.
 const mcpUi = initMcp({ api, $, esc, ago, md: (t) => md(t), toast: (m, ms) => toast(m, ms), agents: () => [...agents.values()] });
 $('#mcp-btn').onclick = () => mcpUi.open(selectedId && agents.get(selectedId)?.workdir ? selectedId : null);
@@ -412,6 +415,7 @@ function shortcut(act) {
   if (act === 'os') return osUi.open();
   if (act === 'decide') return decideUi.open();
   if (act === 'usage') return usageUi.open();
+  if (act === 'skills') return skillsUi.open();
   if (act === 'today') return todayUi.open();
   if (act.startsWith('tab:')) return showTab(act.slice(4));
   return false;
@@ -2367,6 +2371,7 @@ function renderDetail() {
         ${a.questions?.length ? `<button data-act="questions" title="What the agent asked you, and your answers">Questions${openQuestions(a) ? ` <span class="count">${openQuestions(a)}</span>` : ''}</button>` : ''}
         ${a.conflicts?.length ? `<button data-act="overlaps" title="Other agents changing the same files: which, who should merge first, and what to do">⚔ Overlaps <span class="count">${a.conflicts.length}</span></button>` : ''}
         <button data-act="debug" class="desk-only" ${a.workdir && a.status !== 'preparing' ? '' : 'disabled'} title="Debug with this agent: say what to debug (a failure, instability at scale, slowness under load). It investigates in its session and writes a report beside it: animated diagrams of the code path and data flow, findings and recommended fixes">🐞 Debug${a.specDocs?.debug ? ' <span class="count">report</span>' : ''}</button>
+        <button data-act="security" class="desk-only" ${a.workdir && a.status !== 'preparing' ? '' : 'disabled'} title="Security audit with this agent: it maps where untrusted input comes in, follows it through the code, checks each finding a second time, and writes a report beside its session: the attack surface, findings by severity with evidence and fixes, and what was not covered. It changes no code until you ask for fixes">🛡 Security audit${a.specDocs?.security ? ' <span class="count">report</span>' : ''}</button>
         <button data-act="reverse" class="desk-only" ${a.workdir && a.status !== 'preparing' ? '' : 'disabled'} title="Reverse engineer with this agent and REA's tools: name a target (an app's folder, a binary, a website) and what you want to understand. It investigates in its session and writes a report beside it: how it works with animated diagrams, the evidence, what could not be determined, and a plan to build your own version">🔍 Reverse engineer${a.specDocs?.reverse ? ' <span class="count">report</span>' : ''}</button>
         <button data-act="mcp" ${a.workdir && a.status !== 'preparing' ? '' : 'disabled'} title="The MCP servers and tools Claude Code has in this agent's folder; run one in its session or once in the workspace">MCP tools</button>
         <button data-act="fork" ${a.workdir && a.git?.branch ? '' : 'disabled'} title="A new agent with this one's code and conversation, in its own worktree, to try another approach">Fork</button>
@@ -3976,6 +3981,9 @@ $('#detail-body').addEventListener('click', async (e) => {
     case 'reverse':
       term.open(a.id);
       return sidePane.open('reverse');
+    case 'security':
+      term.open(a.id);
+      return sidePane.open('security');
     case 'mcp':
       return mcpUi.open(a.id);
     case 'memory':

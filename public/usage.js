@@ -74,6 +74,10 @@ export function initUsage({ api, $, esc, ago, toast }) {
           <label>Alert me at ${level('warnAt', s.warnAt, 'never')}</label>
           <label title="No new agent starts on an engine at or past this much of a limit (the backlog waits, and New agents says why). Agents already running carry on.">Hold new work at ${level('holdAt', s.holdAt, 'never')}</label>
         </div>
+        <div class="usage-lean">
+          <label class="check" title="Long command output (test runs, installs, builds) is trimmed before the agent reads it: colours and progress redraws go, runs of near-identical lines are folded, and of a long middle only the lines that look like errors or warnings stay. The start and end are kept, and the whole output is saved to a file the agent can read. Claude Code only; applies to sessions started from now on"><input type="checkbox" data-usage-lean ${data.lean?.enabled ? 'checked' : ''} /> <b>Lean output</b>: trim long command output before the agent reads it</label>
+          <span class="hint">${data.lean?.calls ? `${data.lean.calls.toLocaleString()} output${data.lean.calls === 1 ? '' : 's'} trimmed, about ${data.lean.tokens >= 1000 ? `${Math.round(data.lean.tokens / 1000).toLocaleString()}k` : data.lean.tokens} tokens not read` : data.lean?.enabled ? 'Nothing long enough to trim yet. Sessions started from now on use it.' : 'Makes a limit last longer. Nothing is lost: the whole output is kept in a file the agent can read.'}</span>
+        </div>
         <p class="hint">These are numbers the engines hand out on this computer: Claude Code gives them to the status line of the sessions started here, Codex writes them in its session logs, so a reading is as old as the last reply of a session started here; Claude Code you use elsewhere moves the real numbers on meanwhile. <b>Read now</b> brings them up to date with a one-word session on Claude Code's smallest model. A limit an agent actually hits is shown for any engine until it resets, and the agent carries on by itself when it does.</p>
       </div>`;
   }
@@ -115,6 +119,8 @@ export function initUsage({ api, $, esc, ago, toast }) {
     else if (b === 'refresh') readNow();
   });
   body.addEventListener('change', (e) => {
+    const lean = e.target.closest('[data-usage-lean]');
+    if (lean) return save({ lean: lean.checked }, lean.checked ? 'Lean output is on for sessions started from now on' : 'Lean output is off for sessions started from now on');
     const s = e.target.closest('[data-usage-set]');
     if (s) save({ [s.dataset.usageSet]: s.value }, 'Saved');
   });

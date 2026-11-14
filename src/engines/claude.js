@@ -22,7 +22,21 @@ export default {
    */
   /** A session that says one word on the smallest model, so the status line has a reply to report after. */
   usageProbeArgs: (sessionId) => ['--model', 'haiku', '--strict-mcp-config', '--session-id', sessionId, '--', 'Reply with the single word: ok'],
-  usageArgs: (config, script) => (config.usage?.enabled === false ? [] : ['--settings', JSON.stringify({ statusLine: { type: 'command', command: `${JSON.stringify(process.execPath)} ${JSON.stringify(script)}` } })]),
+  usageArgs(config, script) {
+    return this.settingsArgs(config, { statusLine: script });
+  },
+  /**
+   * The one --settings of a session started here: the status line that records the plan's usage,
+   * and, with lean output on, the hook that trims long command output before the agent reads it
+   * (lean.js). Both are commands run with this daemon's Node.
+   */
+  settingsArgs(config, { statusLine = null, lean = null } = {}) {
+    const run = (script) => `${JSON.stringify(process.execPath)} ${JSON.stringify(script)}`;
+    const s = {};
+    if (statusLine && config.usage?.enabled !== false) s.statusLine = { type: 'command', command: run(statusLine) };
+    if (lean && config.lean?.enabled === true) s.hooks = { PostToolUse: [{ matcher: 'Bash', hooks: [{ type: 'command', command: run(lean), timeout: 15 }] }] };
+    return Object.keys(s).length ? ['--settings', JSON.stringify(s)] : [];
+  },
 
   /** Options for every launch: permissions, model, a folder it may write to, extra instructions. */
   optionArgs({ permissionMode, model, writableDir, instructions, agents, allowedTools }) {

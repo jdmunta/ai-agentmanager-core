@@ -55,6 +55,8 @@ import { Advisor } from './advisor.js';
 import { Runbooks } from './runbooks.js';
 import { reaStatus } from './rea.js';
 import { EngineUsage, codexWindows } from './usage.js';
+import { leanSettings, leanStats, leanSweep } from './lean.js';
+import { Skills } from './skills.js';
 import { Milestones } from './milestones.js';
 import { Decisions } from './decisions.js';
 import { Debt } from './debt.js';
@@ -342,6 +344,12 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
   manager.on('limit', ({ engine, text, resetAt }) => usage.limited(engine, { text, resetAt }));
   manager.plugins.api('usage', config).policy((action, details) => usage.policy(action, details));
   usage.tick();
+  // Skills: Claude Code's Agent Skills here, and adding more from a repository (skills.js).
+  const skills = new Skills({
+    store,
+    projects: () => manager.listProjects().filter((p) => p.dir).map((p) => ({ key: p.shortcut ?? p.key, name: p.name ?? p.shortcut, dir: p.dir })),
+    sessions: () => manager.store.list().filter((a) => engineOf(a).id === 'claude' && a.workdir && a.sessionId).map((a) => ({ id: a.id, name: a.name, file: engineOf(a).sessionFile(a.workdir, a.sessionId) })),
+  });
   // Runbooks for the support team, from a release ticket, an epic, or the code changes of a time frame (runbooks.js).
   const runbooks = new Runbooks({
     store,
@@ -767,6 +775,8 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
   api.post('/agents/:id/reverse', wrap((req) => manager.reverse(req.params.id, { target: req.body?.target, question: req.body?.question, build: req.body?.build ?? null })));
   // Whether REA is registered with Claude Code for this agent's folder (read from Claude Code's files; nothing is run).
   api.get('/agents/:id/reverse/rea', wrap((req) => reaStatus(manager.mustGet(req.params.id).workdir ?? null)));
+  // Security audit: what to audit (nothing: the whole project) or a follow-up, or `fix` to fix the report's findings; the report is /specs/security.
+  api.post('/agents/:id/security', wrap((req) => manager.security(req.params.id, { question: req.body?.question, fix: req.body?.fix ?? null })));
   // Debug: what to debug (or a follow-up), or `fix` to apply the report's fixes; the report is /specs/debug.
   api.post('/agents/:id/debug', wrap((req) => manager.debug(req.params.id, { question: req.body?.question, fix: req.body?.fix ?? null })));
   api.post('/agents/:id/answer', wrap((req) => manager.answerQuestion(req.params.id, req.body?.question, req.body?.text)));
@@ -1134,9 +1144,14 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
   api.post('/milestones/:project/reach', wrap((req) => milestones.reach(req.params.project, req.body?.stage, req.body?.reached !== false)));
   api.post('/milestones/:project/task', wrap((req) => milestones.task(req.params.project, req.body?.stage, req.body?.item)));
   // Plan → Decisions: the log (?project=<key>&q=<words>; ?format=markdown), one of your own, and removal.
-  api.get('/usage', wrap(() => usage.view()));
+  // Lean output (lean.js) rides with Usage: whether it is on, and what trimming has saved.
+  const leanHome = path.join(paths.home, 'lean');
+  const usageView = (v = usage.view()) => ({ ...v, lean: { enabled: leanSettings(config).enabled, ...leanStats(leanHome) } });
+  leanSweep(leanHome);
+  setInterval(() => leanSweep(leanHome), 6 * 3_600_000).unref();
+  api.get('/usage', wrap(() => usageView()));
   // A reading taken now (a one-word Claude Code session, so its status line reports).
-  api.post('/usage/refresh', wrap(() => usage.refresh()));
+  api.post('/usage/refresh', wrap(async () => usageView(await usage.refresh())));
   api.put('/usage', wrap((req) => {
     const b = req.body ?? {};
     const next = usage.update(b);
@@ -1147,10 +1162,23 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
       config.engine = b.engine;
       patch.engine = b.engine;
     }
+    // Lean output: on or off, for the sessions started from now on.
+    if ('lean' in b) {
+      config.lean = { ...config.lean, enabled: b.lean === true || b.lean === 'on' };
+      patch.lean = config.lean;
+    }
     saveConfig(patch);
     pushUsage();
-    return usage.view();
+    return usageView();
   }));
+  // Skills: the list; one to read (?id=); what a repository offers; adding, checking, updating and removing.
+  api.get('/skills', wrap(() => skills.list()));
+  api.get('/skills/one', wrap((req) => skills.show(String(req.query.id ?? ''))));
+  api.post('/skills/preview', wrap((req) => skills.preview(req.body?.repo)));
+  api.post('/skills', wrap((req) => skills.install(req.body ?? {})));
+  api.post('/skills/check', wrap((req) => skills.check(String(req.body?.id ?? ''))));
+  api.post('/skills/update', wrap((req) => skills.update(String(req.body?.id ?? ''))));
+  api.delete('/skills', wrap((req) => skills.remove(String(req.query.id ?? ''))));
   api.get('/runbooks', wrap(() => runbooks.list()));
   api.post('/runbooks', wrap((req) => runbooks.create(req.body ?? {})));
   api.get('/runbooks/:id', (req, res) => {
