@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.50.0 (2026-11-14)
+
+- **Reverse engineer.** **🔍 Reverse engineer** in an agent's detail (or the **Reverse** tab of the split, or `agentmgr reverse`) puts the agent's session on the left and a pane on the right. Name a target (an app's folder, a binary's path, a website's address) and what you want to understand; the agent investigates in its own session with the tools of [REA](https://github.com/morluto/rea), the "Reverse Engineer Anything" MCP server, and changes nothing.
+- **The report.** Drawn beside the session as the agent writes it: what the target is, how the feature works as an animated diagram, the data and interfaces, findings with their evidence marked confirmed or inferred, what could not be determined, and a plan for building your own version.
+- **Build it in my project.** The agent writes your own version from the behaviour the report describes, with tests: its own code, nothing copied from the target.
+- **REA is set up by you.** The pane says whether REA is registered with Claude Code for the agent's folder; if it isn't, run `npx rea-agents setup` in a terminal and restart the agent's session. The app installs nothing. Native binaries also need Hopper, Ghidra, IDA or Kuna.
+- **What it is for.** Software you own or are allowed to analyse. The agent is told to analyse only, not to work on getting around licence checks, copy protection or sign-in, and not to collect credentials or personal data.
+
 ## 1.49.0 (2026-11-14)
 
 - **Decide.** **Decide** in the top bar (or `q`, `#decide`, `agentmgr decide`) helps with the decisions, not only the tasks. A plan waiting for review or an agent's question comes with its options, the one recommended, why, the evidence, the risk, how sure it is, and whether it is hard to undo; one click carries out any option, and the same recommendation is on the item's Inbox card. The reasoning is the AI judge's, on your own plan, within its daily budget; with the judge off nothing is recommended or decided.
