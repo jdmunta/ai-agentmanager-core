@@ -41,6 +41,7 @@ import { initValue } from '/value.js';
 import { initNews } from '/news.js';
 import { initPlan } from '/plan.js';
 import { initSystem } from '/system.js';
+import { adviceHtml, initDecide } from '/decide.js';
 import { initMcp } from '/mcp.js';
 import { initCodeMap } from '/codemap.js';
 import { initKeys } from '/keys.js';
@@ -73,15 +74,19 @@ const newsOnLoad = hashId === 'news';
 // "#plan" or "#plan/<dates|decisions|debt>".
 const planOnLoad = hashId === 'plan';
 const osOnLoad = hashId === 'os';
+// "#decide" or "#decide/<waiting|handled|standing|priority|tradeoffs|lookback>".
+const decideOnLoad = hashId === 'decide';
 const reviewsOnLoad = hashId === 'reviews';
 // "#mcp" or "#mcp/<agent>": the MCP window on its own.
 const mcpOnLoad = hashId === 'mcp';
 let watchShown = false;
-let selectedId = (watchOnLoad || standupOnLoad || mapOnLoad || valueOnLoad || newsOnLoad || planOnLoad || osOnLoad || reviewsOnLoad || mcpOnLoad ? null : hashId) || null;
+let selectedId = (watchOnLoad || standupOnLoad || mapOnLoad || valueOnLoad || newsOnLoad || planOnLoad || osOnLoad || decideOnLoad || reviewsOnLoad || mcpOnLoad ? null : hashId) || null;
 let openTermOnLoad = hashView === 'term' || hashView === 'code' || isShell(hashView) || isBrowser(hashView);
 let filterText = '';
 // Only agents whose session is open (the "running" count above the list, clicked).
 let listRunning = false;
+// Decide: the recommendations shown on inbox cards come from it (set once the page is wired).
+let decideUi = null;
 // "Only agents created in the last N days": remembered in this browser.
 const recent = (() => {
   try {
@@ -330,6 +335,20 @@ $('#plan-btn').onclick = () => planUi.open();
 // OS: this computer and its load right now.
 const osUi = initSystem({ api, $, esc, toast: (m, ms) => toast(m, ms), openAgent: (id) => (showTab('agents'), select(id)) });
 $('#os-btn').onclick = () => osUi.open();
+// Decide: recommendations on what waits for you, standing decisions, impact, trade-offs, looking back.
+decideUi = initDecide({
+  api,
+  $,
+  esc,
+  ago,
+  toast: (m, ms) => toast(m, ms),
+  openAgent: (id, { plan } = {}) => (showTab('agents'), select(id), plan && openPlan(id)),
+  openRace: (id) => openRace(id),
+  openPlan: (tab) => planUi.open(tab),
+  // The inbox cards and an open agent's cards show the recommendation as soon as it is written.
+  onData: () => (renderInbox(), selectedId && renderDetail()),
+});
+$('#decide-btn').onclick = () => decideUi.open();
 // MCP: the MCP servers and tools Claude Code has in a folder, and running one.
 const mcpUi = initMcp({ api, $, esc, ago, md: (t) => md(t), toast: (m, ms) => toast(m, ms), agents: () => [...agents.values()] });
 $('#mcp-btn').onclick = () => mcpUi.open(selectedId && agents.get(selectedId)?.workdir ? selectedId : null);
@@ -386,6 +405,7 @@ function shortcut(act) {
   if (act === 'news') return newsUi.open();
   if (act === 'plan') return planUi.open();
   if (act === 'os') return osUi.open();
+  if (act === 'decide') return decideUi.open();
   if (act === 'today') return todayUi.open();
   if (act.startsWith('tab:')) return showTab(act.slice(4));
   return false;
@@ -1607,13 +1627,15 @@ function needCard(it, { inDetail = false } = {}) {
     const title = a.planReview.markdown?.match(/^#\s+(.+)$/m)?.[1] ?? 'Implementation plan';
     body = `<p class="need-title">${esc(title)}</p>
       <p class="hint">Written ${ago(a.planReview.updatedAt)}. The agent waits for your approval before changing anything.</p>
-      <div class="need-actions"><button class="small primary" data-ib="plan-open">Review plan</button><button class="small" data-ib="plan-approve">Approve as is</button></div>`;
+      ${adviceHtml(decideUi?.brief(it.key), esc)}
+      <div class="need-actions"><button class="small ${decideUi?.brief(it.key)?.options.length ? '' : 'primary'}" data-ib="plan-open">Review plan</button>${decideUi?.brief(it.key)?.options.length ? '' : '<button class="small" data-ib="plan-approve">Approve as is</button>'}</div>`;
   } else if (it.kind === 'question') {
     const q = it.q;
     body = `<p class="need-title">${esc(q.question)}</p>
       ${q.context ? `<p class="hint">${esc(q.context)}</p>` : ''}
       ${q.default ? `<p class="hint">Proceeding with <b>${esc(q.default)}</b> until you answer.</p>` : ''}
-      <div class="need-actions">${q.options.map((o) => `<button class="small" data-ib="answer" data-text="${esc(o)}">${esc(o)}</button>`).join('')}</div>
+      ${adviceHtml(decideUi?.brief(it.key), esc)}
+      ${decideUi?.brief(it.key)?.options.length ? '' : `<div class="need-actions">${q.options.map((o) => `<button class="small" data-ib="answer" data-text="${esc(o)}">${esc(o)}</button>`).join('')}</div>`}
       <form class="need-reply" data-ib-form="answer" data-q="${q.id}">
         <input data-draft="${esc(it.key)}:text" placeholder="Or type an answer…" value="${draft('text')}" />
         <button class="small primary">Send</button>
@@ -1702,6 +1724,8 @@ function renderInbox() {
 }
 
 async function onNeed(e) {
+  // A recommendation's own buttons (Decide draws them on plan and question cards).
+  if (decideUi?.handle(e)) return e.preventDefault();
   const judge = e.target.closest('[data-judge]');
   if (judge) {
     e.preventDefault();
@@ -4459,6 +4483,11 @@ function handleEvent(msg) {
       history.replaceState(null, '', '#');
       planUi.open(hashView || 'dates');
     }
+    if (decideOnLoad && !watchShown) {
+      watchShown = true;
+      history.replaceState(null, '', '#');
+      decideUi.open(hashView || 'waiting');
+    }
     if (osOnLoad && !watchShown) {
       watchShown = true;
       history.replaceState(null, '', '#');
@@ -4520,6 +4549,8 @@ function handleEvent(msg) {
     valueUi.changed();
   } else if (msg.t === 'news') {
     newsUi.changed();
+  } else if (msg.t === 'advisor') {
+    decideUi.changed();
   } else if (msg.t === 'plan') {
     planUi.changed();
     todayUi.changed();

@@ -21,6 +21,7 @@ export const EVENT_DEFAULTS = {
   standup: true, // the daily standup is ready to play
   value: true, // a scheduled value report (week, month, quarter)
   milestone: true, // a project's date (code complete, RC, GA) is coming up, at risk or late
+  decided: true, // something was decided for you (a standing decision, or within the autonomy you set)
 };
 
 // Alerts the AI judge may hold for the digest or drop; the rest are always sent at once.

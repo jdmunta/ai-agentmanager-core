@@ -1291,7 +1291,7 @@ table.bench-cases tr.faster td:nth-child(5) { color: var(--green); font-weight: 
 .issues-dialog { width: min(1100px, calc(100% - 32px)); max-height: calc(100% - 32px); padding: 16px; }
 /* Only while open: a display on the dialog itself would keep a closed one on screen. */
 .issues-dialog[open] { display: flex; flex-direction: column; }
-#issues-body, #actions-body, #designs-body, #reviews-body, #bugs-body, #plan-body, #news-body, #os-body { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+#issues-body, #actions-body, #designs-body, #reviews-body, #bugs-body, #plan-body, #news-body, #os-body, #decide-body { display: flex; flex-direction: column; min-height: 0; flex: 1; }
 /* The lists: drag the corner to any size, or fill the window (⤢ or f). */
 .issues-dialog { resize: both; overflow: hidden; min-width: min(520px, calc(100% - 32px)); min-height: 240px; max-width: calc(100% - 16px); max-height: calc(100% - 16px); }
 .issues-dialog.expanded { width: calc(100% - 16px); height: calc(100% - 16px); }
@@ -1448,6 +1448,47 @@ table.plan-debt .plan-score b { position: relative; padding-left: 6px; }
 .plan-bar-fill { position: absolute; left: 0; top: 6px; bottom: 6px; background: color-mix(in srgb, var(--red) 22%, transparent); border-radius: 3px; }
 table.plan-debt code { overflow-wrap: anywhere; }
 /* AI News: a day heading, then each release with its lab, summary and links. */
+/* ---------- Decide: recommendations, standing decisions, impact, dates at risk, looking back */
+.decide-dialog { width: min(1080px, calc(100% - 32px)); }
+.decide-scroll { border: 0; }
+.decide-list { list-style: none; margin: 0 0 12px; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.decide-card { border: 1px solid var(--border); border-radius: var(--radius); background: var(--panel); padding: 10px 12px; }
+.decide-card.new, .decide-card.offer { border-left: 3px solid var(--accent); }
+.decide-card.revisit { border-left: 3px solid var(--yellow); }
+.decide-card.off { opacity: .6; }
+.decide-card-head { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; margin-bottom: 6px; }
+.decide-advice { margin: 8px 0; padding: 8px 10px; border-left: 3px solid var(--accent); background: color-mix(in srgb, var(--accent) 6%, transparent); border-radius: 0 6px 6px 0; }
+.decide-card .decide-advice { margin: 0; padding: 0; border: 0; background: none; }
+.decide-rec { margin: 0 0 4px; overflow-wrap: anywhere; }
+.decide-why { margin: 0 0 6px; line-height: 1.45; }
+.decide-tag { color: var(--accent); border-color: var(--accent); }
+.decide-hard { color: var(--red); border-color: var(--red); }
+.decide-sure { white-space: nowrap; }
+.decide-sure.high { color: var(--green); }
+.decide-sure.mid { color: var(--yellow); }
+.decide-evidence, .decide-options, .decide-cut { margin: 4px 0 6px; padding-left: 18px; font-size: 13px; }
+.decide-options li.rec { list-style: '★ '; }
+.decide-none { margin: 4px 0; }
+.decide-form input[name="when"] { flex: 2 1 260px; min-width: 0; }
+.decide-form input[name="text"] { flex: 1 1 200px; min-width: 0; }
+.decide-on { display: inline-flex; flex-direction: row; gap: 4px; align-items: center; margin: 0; font-size: 12px; }
+.decide-h { margin: 18px 0 4px; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+table.decide-autonomy { width: auto; }
+table.decide-autonomy td { padding: 4px 12px 4px 0; border: 0; }
+table.decide-impact { width: 100%; }
+table.decide-impact .num { width: 28px; text-align: right; }
+.decide-level.high { color: var(--red); border-color: var(--red); }
+.decide-level.medium { color: var(--yellow); }
+.decide-choices { list-style: none; margin: 10px 0 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 10px; }
+.decide-choices > li { border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; background: var(--bg); }
+.decide-choices > li.rec { border-color: var(--accent); }
+.decide-choices p { margin: 4px 0; font-size: 13px; }
+.decide-outcome.revisit { color: var(--yellow); border-color: var(--yellow); }
+.decide-outcome.held { color: var(--green); }
+.decide-lessons { margin: 0 0 12px; padding: 8px 12px; border: 1px dashed var(--border); border-radius: var(--radius); font-size: 13px; }
+.decide-lessons ul { margin: 4px 0 0; padding-left: 18px; }
+.nowrap { white-space: nowrap; }
+
 /* ---------- OS: this computer and its load */
 .os-dialog { width: min(1080px, calc(100% - 32px)); }
 .os-scroll { border: 0; }

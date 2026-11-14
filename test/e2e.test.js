@@ -58,6 +58,8 @@ fs.writeFileSync(
     news: { enabled: false },
     // No repository scans in the background either.
     debt: { autoDays: 0 },
+    // No recommendations either: the judge's own test counts its calls.
+    decide: { enabled: false },
     capGraceMs: 0,
     capDelayMs: 200,
     shell: '/bin/sh',

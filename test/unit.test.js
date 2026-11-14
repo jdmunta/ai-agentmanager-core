@@ -27,6 +27,7 @@ import { commentsMessage, parseBaseRef, prBase } from '../src/review.js';
 import { parseDiff } from '../public/review.js';
 import { normalizeReview, parsePrUrl, recheckMessage, reviewDraft, reviewRows, reviewerPrompt, Reviews } from '../src/reviews.js';
 import { reviewerSpeech } from '../public/reviews.js';
+import { Advisor, briefPrompt, impactScore, lookBackSigns, mayAct, normalizeBrief, pace, standingFallback, tradeoffOptions } from '../src/advisor.js';
 import { cpuTimes, loadLevel, parseMeminfo, parsePs, parseSwapUsage, parseVmStat, System, treeUsage } from '../src/system.js';
 import { actionDue, dueAt, dueWords, todayAside, todayItems, todaySpeech } from '../src/today.js';
 import { VERDICTS, gapsOf, leadPrompt, readCoverage, readVerdict, subagents, summarize, teamPrompt } from '../src/teams.js';
@@ -3890,4 +3891,249 @@ test('OS: memory, swap and processes read from the system; a session with everyt
   assert.ok(v.processes.count > 1 && v.processes.top.length > 1 && v.processes.top[0].cpu >= v.processes.top[1].cpu, 'busiest first');
   assert.deepEqual(v.agents.list.map((a) => a.id), ['a1'], 'only sessions that are open');
   assert.ok(v.agents.list[0].mem > 0 && v.agents.list[0].count >= 1);
+});
+
+test('Decide: a recommendation on what waits, standing decisions and autonomy, impact, a date at risk as choices, and looking back', async () => {
+  const { Decisions } = await import('../src/decisions.js');
+  // How much may be decided without you.
+  const brief = (over = {}) => ({ options: [{ label: 'Approve', action: 'approve', text: '' }, { label: 'Send back', action: 'changes', text: 'add a rollback step' }], recommend: 0, confidence: 0.9, undo: 'easy', standing: null, ...over });
+  assert.equal(mayAct('ask', brief({ standing: 's1' })), false, 'ask me everything');
+  assert.equal(mayAct('standing', brief()), false, 'no standing decision applies');
+  assert.equal(mayAct('standing', brief({ standing: 's1', confidence: 0.75 })), true);
+  assert.equal(mayAct('standing', brief({ standing: 's1', confidence: 0.5 })), false, 'not sure the standing decision fits');
+  assert.equal(mayAct('safe', brief()), true, 'sure and easy to undo');
+  assert.equal(mayAct('safe', brief({ confidence: 0.8 })), false);
+  assert.equal(mayAct('safe', brief({ undo: 'hard' })), false, 'hard to undo always waits');
+  assert.equal(mayAct('most', brief({ confidence: 0.72 })), true);
+  assert.equal(mayAct('most', brief({ confidence: 0.72, undo: 'hard' })), false);
+  assert.equal(mayAct('most', brief({ undo: 'hard', standing: 's1' })), true, 'unless a standing decision covers it');
+  assert.equal(mayAct('most', brief({ recommend: 1, options: [{ label: 'Approve', action: 'approve' }, { label: 'Send back', action: 'changes', text: '' }] })), false, 'nothing to send back');
+
+  // A reply made safe.
+  const planItem = { kind: 'plan' };
+  const nb = normalizeBrief({ options: [{ label: 'Approve', action: 'approve' }, { label: 'Send back', action: 'changes', text: '' }, { label: 'Delete it', action: 'delete', text: 'x' }], recommend: 7, why: 'w', evidence: ['e', '', 3], undo: 'weird', confidence: 4, standing: 'nope' }, planItem, [{ id: 's1' }]);
+  assert.deepEqual(nb.options.map((o) => o.action), ['approve'], 'unknown actions and an empty send-back are dropped');
+  assert.deepEqual([nb.recommend, nb.undo, nb.confidence, nb.standing], [0, 'easy', 1, null]);
+  assert.equal(normalizeBrief({ options: [{ action: 'answer', text: 'yes' }] }, planItem), null, 'a plan cannot be answered');
+  assert.match(briefPrompt({ kind: 'question', agentName: 'A', intent: 'Do it', project: 'P', question: 'Which db?', options: ['pg', 'sqlite'] }, { standing: [{ id: 's1', when: 'asked about the db', action: 'answer', text: 'pg' }], lessons: ['Ask for a rollback'] }), /\[s1\] when asked about the db -> answer: pg[\s\S]*Ask for a rollback/);
+
+  // Impact by plain rules, pace, and a date at risk as choices.
+  const t0 = Date.parse('2026-03-10T12:00:00Z');
+  const stage = { id: 'rc', label: 'Release candidate', date: '2026-03-14', daysLeft: 4, words: 'in 4 days', status: 'at-risk', reached: null };
+  const p2 = impactScore({ title: 'Polish the settings page', priority: 2, createdAt: '2026-03-09T00:00:00Z', status: 'queued' }, { stage, now: t0 });
+  const fix = impactScore({ title: 'Fix the crash on save', priority: 2, createdAt: '2026-02-01T00:00:00Z', status: 'queued' }, { stage, now: t0 });
+  assert.ok(fix.score > p2.score && fix.reasons.includes('a fix') && fix.reasons.some((r) => /waiting \d+ days/.test(r)) && p2.reasons.includes('Release candidate in 4 days'), JSON.stringify([p2, fix]));
+  assert.ok(impactScore({ title: 'x', priority: 0, createdAt: '2026-03-09T00:00:00Z' }, { now: t0 }).score > impactScore({ title: 'x', priority: 3, createdAt: '2026-03-09T00:00:00Z' }, { now: t0 }).score);
+  assert.equal(pace([{ status: 'done', doneAt: '2026-03-09T00:00:00Z' }, { status: 'done', doneAt: '2026-03-01T00:00:00Z' }, { status: 'done', doneAt: '2026-01-01T00:00:00Z' }, { status: 'queued' }], { now: t0 }), 0.14, 'two in two weeks');
+  const ranked = ['a', 'b', 'c', 'd', 'e', 'f'].map((id, i) => ({ id, title: `Item ${id}`, status: i === 0 ? 'active' : 'queued' }));
+  const tr = tradeoffOptions({ stage, ranked, perDay: 1, limit: 2 });
+  assert.deepEqual([tr.open, tr.need, tr.slip], [6, 6, 2]);
+  assert.deepEqual(tr.options.map((o) => o.id), ['cut', 'move', 'add']);
+  assert.deepEqual(tr.options[0].items.map((i) => i.id), ['f', 'e'], 'the least valuable queued items, as many as do not fit');
+  assert.deepEqual([tr.options[1].days, tr.options[1].date, tr.options[2].limit], [2, '2026-03-16', 3]);
+  assert.equal(tr.recommend, 'add', 'a gap of a day or two');
+  assert.equal(tradeoffOptions({ stage: { ...stage, daysLeft: 1 }, ranked, perDay: 0.5, limit: 2 }).recommend, 'move', 'too wide to close');
+
+  // What followed a decision.
+  const dec = { kind: 'plan', decision: 'Approved', at: '2026-03-01T00:00:00Z' };
+  assert.deepEqual(lookBackSigns(dec, { prs: { 1: { state: 'MERGED' } } }), { outcome: 'held', signs: ['the work landed'] });
+  assert.equal(lookBackSigns(dec, { prs: { 1: { state: 'OPEN', checks: { state: 'failed' } } }, aiReview: { verdict: 'partial', missing: ['tests'] } }).outcome, 'revisit');
+  assert.equal(lookBackSigns(dec, { status: 'running' }).outcome, 'early');
+  assert.equal(lookBackSigns(dec, { status: 'running' }, { item: { reopened: 2 } }).signs[0], 'the work was reopened 2 times');
+  assert.deepEqual(standingFallback([1, 2, 3].map(() => ({ kind: 'question', project: 'P', title: 'Which package manager?', chose: 'pnpm' }))).map((o) => [o.action, o.text, o.count]), [['answer', 'pnpm', 3]]);
+
+  // The whole of it, with a judge that answers from a script.
+  let clock = Date.parse('2026-03-10T12:00:00Z');
+  const data = {};
+  const agents = new Map();
+  const store = { data, save() {}, list: () => [...agents.values()], get: (id) => agents.get(id) ?? null };
+  const project = { key: 'repo:p', shortcut: 'p', name: 'Proj' };
+  const told = [];
+  const questions = { a2: [{ id: 'q1', question: 'Which database?', context: 'Needs one.', options: ['Postgres', 'SQLite'], default: 'SQLite' }] };
+  const asked = [];
+  const script = {};
+  const judge = {
+    enabled: true,
+    usage: () => ({ calls: asked.length, cap: 300 }),
+    feedback() {},
+    ask: async (key, agent, prompt) => {
+      asked.push(key);
+      const d = script[key.split(':')[0]]?.(key, prompt);
+      return d ? { confidence: 0, ...d } : null;
+    },
+  };
+  const manager = {
+    judge,
+    listProjects: () => [project],
+    approvePlan: (id, note) => (told.push(['approve', id, note]), Object.assign(agents.get(id).planReview, { status: 'approved', decidedAt: new Date(clock).toISOString(), note })),
+    requestPlanChanges: (id, note) => (told.push(['changes', id, note]), Object.assign(agents.get(id).planReview, { status: 'changes', decidedAt: new Date(clock).toISOString(), note })),
+    answerQuestion: (id, qid, text) => (told.push(['answer', id, qid, text]), (agents.get(id).answers = { ...agents.get(id).answers, [qid]: { text, at: new Date(clock).toISOString() } })),
+  };
+  const items = [];
+  const backlog = {
+    items: () => [...items].sort((a, b) => a.priority - b.priority || a.order - b.order),
+    get: (id) => items.find((i) => i.id === id),
+    update: (id, f) => Object.assign(items.find((i) => i.id === id), f),
+    reorder(ids) {
+      const q = this.items().filter((i) => i.status === 'queued');
+      const slots = q.map((i) => i.order).sort((a, b) => a - b);
+      ids.map((id) => q.find((i) => i.id === id)).filter(Boolean).forEach((i, n) => (i.order = slots[n]));
+    },
+    limitFor: () => 2,
+    settings: (s) => (backlog.set = s),
+    dispatch: async () => [],
+  };
+  let stages = [];
+  const milestones = { stages: () => stages, set: (key, dates) => (milestones.moved = [key, dates]) };
+  const races = { create: (r) => ((races.made = r), { id: 'r1' }) };
+  const decisions = new Decisions({ store, agents: () => store.list(), projectOf: () => project, questions: (a) => questions[a.id] ?? [], timer: false, now: () => new Date(clock).toISOString() });
+  const sent = [];
+  const adv = new Advisor({ store, manager, backlog, milestones, decisions, races, questions: (a) => questions[a.id] ?? [], projectOf: () => project, notify: async (t) => sent.push(t), now: () => clock, log() {}, timer: false });
+
+  // A plan waiting, and a question: each gets its brief; nothing is decided at the default level.
+  agents.set('a1', { id: 'a1', name: 'planner', intent: 'Add export', planReview: { status: 'review', markdown: '# Export plan\n\n1. Do it', updatedAt: '2026-03-10T11:00:00Z' } });
+  agents.set('a2', { id: 'a2', name: 'asker', intent: 'Add storage', repo: 'https://x/y.git' });
+  script.advise = (key) =>
+    key.startsWith('advise:plan')
+      ? { options: [{ label: 'Approve', action: 'approve', consequence: 'It starts' }, { label: 'Send back', action: 'changes', text: 'Add a rollback step', consequence: 'A day later' }], recommend: 1, why: 'No rollback.', evidence: ['Step 1 migrates data'], risk: 'A day lost', undo: 'easy', confidence: 0.9 }
+      : { options: [{ label: 'Postgres', action: 'answer', text: 'Postgres', consequence: 'Needs a server' }, { label: 'SQLite', action: 'answer', text: 'SQLite', consequence: 'One file' }], recommend: 0, why: 'Others use it.', evidence: [], risk: '', undo: 'hard', confidence: 0.9 };
+  await adv.tick();
+  let v = adv.view();
+  assert.deepEqual(v.briefs.map((b) => [b.key, b.options[b.recommend].label, b.undo]), [['plan:a1', 'Send back', 'easy'], ['q:a2:q1', 'Postgres', 'hard']]);
+  assert.equal(told.length, 0, 'only standing decisions act by default, and there are none');
+  assert.equal(v.briefs[1].canRace, true);
+  await adv.tick();
+  assert.equal(asked.filter((k) => k.startsWith('advise:')).length, 2, 'a brief is written once');
+
+  // You take the other option: carried out, remembered as not followed, and in the decision log with the reasoning.
+  await adv.apply('plan:a1', 0);
+  assert.deepEqual(told[0], ['approve', 'a1', null]);
+  assert.deepEqual(data.advisor.history.map((h) => [h.kind, h.chose, h.followed, h.by]), [['plan', 'Approve', false, 'you']]);
+  const logged = Object.values(data.decisions.items).find((d) => d.kind === 'plan');
+  assert.deepEqual([logged.decision, logged.reason, logged.followed, logged.recommended, logged.by], ['Approved', 'No rollback.', false, 'Send back', 'you']);
+  await assert.rejects(() => adv.apply('plan:a1', 0), /no longer waiting/);
+
+  // Evidence first: both options of the question, each tried by its own agent.
+  assert.equal(adv.race('q:a2:q1').race, 'r1');
+  assert.deepEqual(races.made.variants.map((x) => x.instructions), ['Postgres', 'SQLite']);
+  assert.match(races.made.intent, /Add storage[\s\S]*Which database\?/);
+
+  // Hard to undo: even "most" waits. A standing decision covers it, and then it is decided and reported.
+  adv.setAutonomy('repo:p', 'most');
+  await adv.tick();
+  assert.equal(told.length, 1, 'hard to undo waits for you');
+  const rule = adv.addStanding({ kind: 'question', project: 'p', when: 'an agent asks which database to use', action: 'answer', text: 'Postgres' });
+  assert.throws(() => adv.addStanding({ kind: 'plan', when: 'the plan is small', action: 'answer', text: 'x' }), /approve or changes/);
+  assert.throws(() => adv.addStanding({ kind: 'plan', when: 'the plan lacks tests', action: 'changes' }), /what to send back/);
+  script.advise = (key, prompt) => ({ options: [{ label: 'Postgres', action: 'answer', text: 'Postgres' }, { label: 'SQLite', action: 'answer', text: 'SQLite' }], recommend: 0, why: 'Your standing decision.', undo: 'hard', confidence: 0.8, standing: prompt.includes(`[${rule.id}]`) ? rule.id : null });
+  adv.setAutonomy('repo:p', 'standing');
+  adv.refresh('q:a2:q1');
+  await adv.tick();
+  await new Promise((r) => setTimeout(r, 10));
+  assert.deepEqual(told.at(-1), ['answer', 'a2', 'q1', 'Postgres']);
+  v = adv.view();
+  assert.deepEqual(v.handled.map((h) => [h.did, h.standingWhen, h.isNew]), [['Answered: Postgres', 'an agent asks which database to use', true]]);
+  assert.equal(v.standing[0].uses, 1);
+  assert.equal(v.briefs.length, 0);
+  assert.match(sent[0], /Decided for you on \*Proj\*: Which database\?/);
+  const ans = data.decisions.items['answer:a2:q1'];
+  assert.deepEqual([ans.by, ans.standing, ans.reason], ['auto', rule.id, 'Your standing decision.']);
+  assert.match(decisions.markdown(), /Decided for you:\*\* by a standing decision of yours/);
+  adv.seen();
+  assert.equal(adv.view().newHandled, 0);
+
+  // Sure and easy to undo: decided at "safe"; the agent is told why.
+  agents.set('a3', { id: 'a3', name: 'bumper', intent: 'Bump deps', planReview: { status: 'review', markdown: '# Bump lodash\n\nOne line.' } });
+  script.advise = () => ({ options: [{ label: 'Approve', action: 'approve' }, { label: 'Send back', action: 'changes', text: 'x' }], recommend: 0, why: 'A one-line bump with tests.', undo: 'easy', confidence: 0.95 });
+  adv.setAutonomy('repo:p', 'safe');
+  await adv.tick();
+  await new Promise((r) => setTimeout(r, 10));
+  assert.deepEqual(told.at(-1).slice(0, 2), ['approve', 'a3']);
+  assert.match(told.at(-1)[2], /Decided for you on the recommendation: A one-line bump with tests\./);
+  adv.setAutonomy('repo:p', 'ask');
+
+  // Decided elsewhere (the plan dialog): learned from all the same. Three alike: a standing decision is offered.
+  for (const n of [4, 5, 6]) {
+    agents.set(`a${n}`, { id: `a${n}`, name: `dep${n}`, intent: 'Bump deps', planReview: { status: 'review', markdown: `# Bump dep ${n}` } });
+    await adv.tick();
+    clock += 60_000;
+    manager.approvePlan(`a${n}`, null);
+  }
+  script.standing = (key, prompt) => (/Bump dep 4[\s\S]*Bump dep 6/.test(prompt) ? { offers: [{ kind: 'plan', project: 'Proj', when: 'the plan only bumps a dependency', action: 'approve', text: '', basedOn: [2, 3, 4], confidence: 0.8 }, { kind: 'plan', project: null, when: 'always', action: 'approve', basedOn: [1], confidence: 0.9 }] } : { offers: [] });
+  await adv.tick();
+  await adv.learn({ force: true });
+  v = adv.view();
+  assert.deepEqual(v.offers.map((o) => [o.when, o.projectName, o.count]), [['the plan only bumps a dependency', 'Proj', 3]], 'an offer needs three decisions behind it');
+  assert.equal(v.agreement.decided, 4);
+  assert.equal(v.agreement.followed, 3);
+  adv.acceptOffer(v.offers[0].id);
+  v = adv.view();
+  assert.deepEqual([v.offers.length, v.standing.length, v.standing[0].source], [0, 2, 'offered']);
+  await adv.learn({ force: true });
+  assert.equal(adv.view().offers.length, 0, 'not offered again');
+
+  // The backlog by impact: plain rules at once, the judge's ranking when it arrives; Use this order.
+  items.push(
+    { id: 'i1', title: 'Polish settings', priority: 2, order: 1, status: 'queued', projectKey: 'repo:p', createdAt: '2026-03-09T00:00:00Z', notes: '' },
+    { id: 'i2', title: 'Fix the crash on save', priority: 2, order: 2, status: 'queued', projectKey: 'repo:p', createdAt: '2026-03-09T00:00:00Z', notes: '' },
+    { id: 'i3', title: 'Write the migration', priority: 2, order: 3, status: 'queued', projectKey: 'repo:p', createdAt: '2026-03-09T00:00:00Z', notes: '' },
+    { id: 'i0', title: 'Shipped', priority: 2, order: 0, status: 'done', doneAt: '2026-03-09T00:00:00Z', projectKey: 'repo:p', createdAt: '2026-03-01T00:00:00Z' },
+  );
+  script.impact = () => ({ order: [{ id: 'i3', impact: 'high', why: 'RC needs it', unblocks: ['i2'], priority: 1 }, { id: 'i2', impact: 'high', why: 'Users lose work' }, { id: 'i1', impact: 'low', why: 'Cosmetic' }, { id: 'zz', impact: 'low', why: 'gone' }], confidence: 0.8 });
+  assert.deepEqual(adv.impact('repo:p', { ask: false }).items.map((i) => i.id), ['i2', 'i1', 'i3'], 'by plain rules: the fix first');
+  assert.equal(adv.view().impact[0].by, 'rules', 'a glance asks nothing');
+  assert.equal(asked.filter((k) => k.startsWith('impact:')).length, 0);
+  adv.view({ think: true });
+  await new Promise((r) => setTimeout(r, 10));
+  const im = adv.impact('repo:p');
+  assert.deepEqual([im.by, im.inOrder, im.items.map((i) => i.id).join(), im.items[0].suggest, im.items[0].why], ['judge', false, 'i3,i2,i1', 1, 'RC needs it']);
+  const after = adv.applyImpact('repo:p');
+  assert.deepEqual(backlog.items().filter((i) => i.status === 'queued').map((i) => [i.id, i.priority]), [['i3', 1], ['i2', 2], ['i1', 2]]);
+  assert.equal(after.by, 'rules', 'the items changed, so the ranking is asked for again when looked at');
+
+  // A date at risk: the choices, the judge's pick, and carrying one out.
+  stages = [{ ...stage, checklist: [{ auto: true, ok: false, text: '3 backlog items not finished', count: 3 }] }, { id: 'ga', label: 'GA', date: '2026-03-20', daysLeft: 10, words: 'in 10 days', status: 'on-track', reached: null, checklist: [] }];
+  script.tradeoff = () => ({ recommend: 'cut', why: 'Polish can wait.', confidence: 0.8 });
+  assert.equal(adv.tradeoffs()[0].by, 'rules');
+  await new Promise((r) => setTimeout(r, 10));
+  const risk = adv.tradeoffs()[0];
+  assert.deepEqual([risk.key, risk.by, risk.recommend, risk.why, risk.options.map((o) => o.id).join()], ['repo:p:rc', 'judge', 'cut', 'Polish can wait.', 'cut,move,add']);
+  const cutIds = risk.options[0].items.map((i) => i.id);
+  adv.applyTradeoff('repo:p:rc', 'cut');
+  assert.ok(cutIds.length && cutIds.every((id) => backlog.get(id).heldUntil === '2026-03-15' && /Held until after Release candidate/.test(backlog.get(id).notes)), JSON.stringify(items));
+  const td = Object.values(data.decisions.items).find((d) => d.kind === 'tradeoff');
+  assert.deepEqual([td.title, td.why], [`Release candidate (2026-03-14) at risk: ${risk.options[0].label.toLowerCase()}`, 'Polish can wait.']);
+  adv.applyTradeoff('repo:p:rc', 'move');
+  assert.deepEqual(milestones.moved[0], 'repo:p');
+  assert.equal(Object.keys(milestones.moved[1]).join(), 'rc,ga', 'the later date moves with it');
+  assert.throws(() => adv.applyTradeoff('repo:p:ga', 'move'), /no longer at risk/);
+  stages = [];
+
+  // Looking back: what followed, the judge's lesson, and the lesson given to the next recommendation.
+  clock += 3 * 86_400_000;
+  agents.get('a1').aiReview = { verdict: 'partial', missing: ['no rollback'] };
+  agents.get('a3').prs = { 7: { state: 'MERGED' } };
+  script.lookback = (key, prompt) => ({ items: [{ id: logged.id, verdict: 'revisit', lesson: 'Send a plan back when it migrates data without a rollback.' }].filter(() => prompt.includes(logged.id)) });
+  const lb = await adv.lookBack();
+  const row = (id) => lb.items.find((r) => r.agentId === id);
+  assert.deepEqual([row('a1').outcome, row('a1').lesson, row('a3').outcome], ['revisit', 'Send a plan back when it migrates data without a rollback.', 'held']);
+  assert.deepEqual(lb.lessons, ['Send a plan back when it migrates data without a rollback.']);
+  assert.equal(data.decisions.items[logged.id].outcome, 'revisit');
+  assert.match(decisions.markdown(), /Worth another look:\*\* Send a plan back when it migrates data/);
+  agents.set('a9', { id: 'a9', name: 'next', intent: 'Migrate', planReview: { status: 'review', markdown: '# Migrate users' } });
+  script.advise = (key, prompt) => (/What earlier decisions taught:\n- Send a plan back when it migrates data/.test(prompt) ? { options: [{ label: 'Approve', action: 'approve' }], recommend: 0, why: 'ok', confidence: 0.5 } : null);
+  await adv.tick();
+  assert.equal(adv.view().briefs.find((b) => b.key === 'plan:a9').options.length, 1, 'the lesson reached the prompt');
+
+  // The judge off: the card says so, and nothing is ever decided.
+  judge.enabled = false;
+  judge.ask = async () => null;
+  adv.setAutonomy('repo:p', 'most');
+  agents.set('a10', { id: 'a10', name: 'quiet', intent: 'X', planReview: { status: 'review', markdown: '# Quiet plan' } });
+  const n = told.length;
+  await adv.tick();
+  assert.match(adv.view().briefs.find((b) => b.key === 'plan:a10').none, /AI judge is off/);
+  assert.equal(told.length, n);
+  adv.close();
+  decisions.close();
 });

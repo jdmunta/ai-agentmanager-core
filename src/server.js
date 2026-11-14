@@ -51,6 +51,7 @@ import { Standup } from './standup.js';
 import { Value, valueSlack } from './value.js';
 import { News } from './news.js';
 import { System } from './system.js';
+import { Advisor } from './advisor.js';
 import { Milestones } from './milestones.js';
 import { Decisions } from './decisions.js';
 import { Debt } from './debt.js';
@@ -299,6 +300,26 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
     questions: (a) => (NO_REPO.has(a.kind) ? [] : loadQuestions(a.id)),
     designDoc: (id) => readSpecDoc(id, 'designdoc'),
     onChange: () => pushPlan(),
+  });
+  // Decide: a recommendation on what waits for you, standing decisions, impact, trade-offs (advisor.js).
+  let pushAdvisor = () => {};
+  const advisor = new Advisor({
+    store,
+    manager,
+    backlog,
+    milestones,
+    decisions,
+    races,
+    projectOf,
+    questions: (a) => (NO_REPO.has(a.kind) ? [] : loadQuestions(a.id)),
+    bugs: (key) => hunts.list().findings.filter((f) => ['open', 'fixing', 'pr'].includes(f.status) && ['critical', 'high'].includes(f.severity) && manager.resolveProject(f.project)?.key === key).length,
+    enabled: () => config.decide?.enabled !== false,
+    onChange: () => pushAdvisor(),
+    notify: async (text, plain) => {
+      const n = loadNotify();
+      if (!n.enabled || !n.events.decided) return;
+      await sendSlack(text, n, plain);
+    },
   });
   const debt = new Debt({
     store,
@@ -1079,6 +1100,21 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
   api.post('/milestones/:project/reach', wrap((req) => milestones.reach(req.params.project, req.body?.stage, req.body?.reached !== false)));
   api.post('/milestones/:project/task', wrap((req) => milestones.task(req.params.project, req.body?.stage, req.body?.item)));
   // Plan → Decisions: the log (?project=<key>&q=<words>; ?format=markdown), one of your own, and removal.
+  api.get('/advisor', wrap((req) => advisor.view({ think: req.query.think === '1' })));
+  api.post('/advisor/briefs/apply', wrap((req) => advisor.apply(String(req.body?.key ?? ''), Number(req.body?.option), { text: typeof req.body?.text === 'string' ? req.body.text : null })));
+  api.post('/advisor/briefs/race', wrap((req) => advisor.race(String(req.body?.key ?? ''))));
+  api.post('/advisor/briefs/refresh', wrap((req) => advisor.refresh(String(req.body?.key ?? ''))));
+  api.put('/advisor/autonomy', wrap((req) => advisor.setAutonomy(manager.resolveProject(req.body?.project)?.key ?? req.body?.project, req.body?.level)));
+  api.post('/advisor/standing', wrap((req) => advisor.addStanding(req.body ?? {})));
+  api.post('/advisor/standing/:id', wrap((req) => advisor.updateStanding(req.params.id, req.body ?? {})));
+  api.delete('/advisor/standing/:id', wrap((req) => advisor.removeStanding(req.params.id)));
+  api.post('/advisor/offers/:id/accept', wrap((req) => advisor.acceptOffer(req.params.id)));
+  api.post('/advisor/offers/:id/dismiss', wrap((req) => advisor.dismissOffer(req.params.id)));
+  api.post('/advisor/impact/apply', wrap((req) => advisor.applyImpact(manager.resolveProject(req.body?.project)?.key ?? req.body?.project)));
+  api.post('/advisor/tradeoffs/apply', wrap((req) => advisor.applyTradeoff(String(req.body?.key ?? ''), String(req.body?.option ?? ''))));
+  api.post('/advisor/lookback', wrap(() => advisor.lookBack({ force: true })));
+  api.post('/advisor/learn', wrap(async () => ({ offers: await advisor.learn({ force: true }) })));
+  api.post('/advisor/seen', wrap(() => advisor.seen()));
   api.get('/decisions', (req, res) => {
     try {
       const project = req.query.project ? String(req.query.project) : null;
@@ -1466,6 +1502,7 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
   pushValue = () => broadcast({ t: 'value' });
   pushNews = () => broadcast({ t: 'news' });
   pushPlan = () => broadcast({ t: 'plan' });
+  pushAdvisor = () => broadcast({ t: 'advisor' });
   reports.on('change', () => broadcast({ t: 'built', reports: reports.list() }));
   manager.rules.on('change', (rules) => broadcast({ t: 'rules', rules }));
   repeats.on('change', (view) => broadcast({ t: 'repeats', repeats: view }));
@@ -1607,6 +1644,7 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
     system.close();
     milestones.close();
     decisions.close();
+    advisor.close();
     debt.close();
     reviews.close();
     hunts.close();

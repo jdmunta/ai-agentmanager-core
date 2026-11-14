@@ -40,7 +40,8 @@ export function initNews({ api, $, esc, ago, toast }) {
     const d = new Date(`${date}T12:00:00`);
     const today = new Date();
     const days = Math.round((new Date(today.toDateString()) - new Date(d.toDateString())) / 86_400_000);
-    if (days === 0) return 'Today';
+    // A release dated today somewhere ahead of this time zone is still today's news here.
+    if (days <= 0) return 'Today';
     if (days === 1) return 'Yesterday';
     return d.toLocaleDateString([], { weekday: 'long', month: 'short', day: 'numeric', ...(d.getFullYear() === today.getFullYear() ? {} : { year: 'numeric' }) });
   }

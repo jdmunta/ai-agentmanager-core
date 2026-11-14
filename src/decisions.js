@@ -7,7 +7,7 @@
 import crypto from 'node:crypto';
 
 const MAX = 2000;
-export const DECISION_KINDS = { plan: 'Plan review', answer: 'Your answer', design: 'Design', manual: 'Added by you' };
+export const DECISION_KINDS = { plan: 'Plan review', answer: 'Your answer', design: 'Design', tradeoff: 'Trade-off', manual: 'Added by you' };
 const err = (status, message) => Object.assign(new Error(message), { status });
 const clip = (s, n) => {
   const t = String(s ?? '').replace(/\s+/g, ' ').trim();
@@ -143,6 +143,30 @@ export class Decisions {
     return this.state.items[id];
   }
 
+  /** One made elsewhere in the app (a trade-off on a date at risk): logged as it is. */
+  record({ kind = 'manual', project, title, decision, why = null, agentId = null, agentName = null } = {}) {
+    if (!project?.key) throw err(400, 'Pick the project it belongs to');
+    const id = `${kind}:${crypto.randomBytes(4).toString('hex')}`;
+    this.state.items[id] = { id, kind, at: this.now(), project: { key: project.key, name: project.name }, agentId, agentName, title: clip(title, 300), decision: clip(decision, 1000), why: clip(why, 1000) || null, superseded: false };
+    this.store.save();
+    this.onChange();
+    return this.state.items[id];
+  }
+
+  /** What is known about one beyond what was gathered: the reasoning it was made on, who made it, how it held up. */
+  annotate(id, fields = {}) {
+    const it = this.state.items[id];
+    if (!it) return null;
+    // `reason` is the recommendation's reasoning, beside `why` (your own note), which stays as gathered.
+    for (const k of ['reason', 'by', 'recommended', 'followed', 'confidence', 'standing', 'outcome', 'lesson']) {
+      if (!(k in fields)) continue;
+      it[k] = typeof fields[k] === 'string' ? clip(fields[k], 1000) : fields[k];
+    }
+    this.store.save();
+    this.onChange();
+    return it;
+  }
+
   /** Take one off the log (it isn't gathered again). */
   remove(id) {
     const st = this.state;
@@ -163,7 +187,7 @@ export class Decisions {
     const words = String(q ?? '').trim().toLowerCase();
     const live = new Set(this.agents().map((a) => a.id));
     const items = all
-      .filter((i) => (!project || i.project.key === project) && (!words || `${i.title} ${i.decision} ${i.why ?? ''} ${i.agentName ?? ''} ${i.project.name}`.toLowerCase().includes(words)))
+      .filter((i) => (!project || i.project.key === project) && (!words || `${i.title} ${i.decision} ${i.why ?? ''} ${i.reason ?? ''} ${i.agentName ?? ''} ${i.project.name}`.toLowerCase().includes(words)))
       .map((i) => ({ ...i, kindLabel: DECISION_KINDS[i.kind] ?? i.kind, agentGone: Boolean(i.agentId) && !live.has(i.agentId) }));
     return { items, total: all.length, projects: [...counts.values()].sort((a, b) => a.name.localeCompare(b.name)), kinds: DECISION_KINDS };
   }
@@ -179,7 +203,9 @@ export class Decisions {
       out.push(`## ${name}`, '');
       for (const i of list) {
         out.push(`### ${i.title}`, '', `- **Decided:** ${i.decision}`);
-        if (i.why) out.push(`- **Why:** ${i.why}`);
+        if (i.why || i.reason) out.push(`- **Why:** ${i.why || i.reason}`);
+        if (i.by === 'auto') out.push(`- **Decided for you:** ${i.standing ? 'by a standing decision of yours' : 'on the recommendation'}`);
+        if (i.outcome === 'revisit') out.push(`- **Worth another look:** ${i.lesson || 'what followed did not go as planned'}`);
         out.push(`- **When:** ${String(i.at).slice(0, 10)} · ${i.kindLabel}${i.agentName ? ` · agent ${i.agentName}` : ''}${i.superseded ? ' · replaced since' : ''}`, '');
       }
     }
