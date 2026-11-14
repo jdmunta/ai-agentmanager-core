@@ -75,6 +75,8 @@ const DEFAULTS = {
   // Plan: the tech debt radar (see DEBT_DEFAULTS in debt.js) and the calendar Today is planned around
   // (its private iCal addresses and the working day; see CALENDAR_DEFAULTS in calendar.js).
   debt: { enabled: true },
+  // Decide: recommendations on what waits for you, standing decisions, impact and trade-offs (advisor.js).
+  decide: { enabled: true },
   calendar: { ics: [], workStart: '09:00', workEnd: '18:00' },
   // AI News: the frontier labs' latest releases, summarized; see NEWS_DEFAULTS in news.js for every field.
   news: { enabled: true },

@@ -153,7 +153,7 @@ test('the top bar fits the window: the view buttons that do not fit go into More
       menuOk: document.querySelector('#menu-btn').getBoundingClientRect().right <= innerWidth,
     })`);
     assert.ok(r.page <= w, `${w}px: the page is ${r.page}px wide`);
-    assert.equal(r.inRow + r.inMore, 18, `${w}px: every view button is in the row or in More`);
+    assert.equal(r.inRow + r.inMore, 19, `${w}px: every view button is in the row or in More`);
     assert.ok(r.newOk && r.menuOk, `${w}px: New agents and the account menu are on screen`);
     if (w >= 1024) assert.ok(r.inRow >= 3, `${w}px: only ${r.inRow} buttons in the row`);
   }
@@ -379,6 +379,64 @@ test('OS: this computer and its load, what an open session takes; the running co
   await until(`${ids}.includes('${a.id}') && !${ids}.includes('${b.id}') && document.querySelector('#running-btn').getAttribute('aria-pressed') === 'true'`, 'only the running one');
   await js(`document.querySelector('#running-btn').click()`);
   await until(`${ids}.includes('${b.id}') && document.querySelector('#running-btn').getAttribute('aria-pressed') === 'false'`, 'all again');
+  for (const id of [a.id, b.id]) await fetch(`${base}/api/agents/${id}`, { method: 'DELETE', headers: { 'x-agentmgr': '1' } });
+  assert.deepEqual(errors, [], 'no errors on the page');
+});
+
+test('Decide: a question arrives with a recommendation, on its inbox card too; doing it; a standing decision then answers the next one', { skip }, async () => {
+  await api('PUT', '/judge', { enabled: true });
+  const mk = async (intent) => {
+    const [a] = await api('POST', '/agents', { intents: [intent], workdir: home });
+    await until(`(await (await fetch('/api/agents')).json()).find((v) => v.id === '${a.id}')?.questions?.length === 1`, 'its question', 20_000);
+    return a;
+  };
+  const a = await mk('Pick a store #question');
+  // Looked at now, not at the next 20-second round.
+  await api('POST', '/advisor/briefs/refresh', { key: '' });
+  await until(`document.querySelector('#decide-count').textContent === '1'`, 'one waiting on the button', 20_000);
+  await js(`document.querySelector('#decide-btn').click()`);
+  await until(`document.querySelector('#decide-dialog').open && document.querySelector('#decide-body .decide-card .decide-rec')`, 'the Decide window with its card');
+  const card = await js(`document.querySelector('#decide-body .decide-card').textContent.replace(/\\s+/g, ' ')`);
+  assert.match(card, /Postgres or SQLite for the cache\?/);
+  assert.match(card, /Recommended Postgres 90% sure/);
+  assert.match(card, /Fake reasoning: Postgres\./);
+  assert.match(card, /Fake evidence/);
+  assert.match(card, /Risk: Fake risk/);
+  assert.match(card, /SQLite → Fake consequence of SQLite/);
+  assert.match(card, /Try both/);
+  await js(`document.querySelector('[data-decide="close"]').click()`);
+
+  // The same recommendation on the inbox card.
+  await js(`document.querySelector('.side-tab[data-tab="inbox"], [data-tab="inbox"]').click()`);
+  await until(`document.querySelector('#inbox-view [data-need="q:${a.id}:"] .decide-advice, #inbox-view .decide-advice')`, 'the recommendation in the inbox');
+  await js(`document.querySelector('#inbox-view .decide-advice [data-decide-apply="0"]').click()`);
+  await until(`Object.values((await (await fetch('/api/agents')).json()).find((v) => v.id === '${a.id}').answers ?? {})[0]?.text === 'Postgres'`, 'answered as recommended');
+  await until(`document.querySelector('#decide-count').textContent === ''`, 'nothing waiting');
+  const log = await api('GET', '/decisions');
+  const d = log.items.find((i) => i.agentId === a.id);
+  assert.deepEqual([d.decision, d.reason, d.followed, d.by], ['Postgres', 'Fake reasoning: Postgres.', true, 'you']);
+
+  // A standing decision, written in the window; the next agent's question is answered without you.
+  await js(`document.querySelector('#decide-btn').click()`);
+  await js(`document.querySelector('[data-decide-tab="standing"]').click()`);
+  await js(`document.querySelector('[data-decide="add"]').click()`);
+  await js(`(() => { const f = document.querySelector('[data-decide-form="standing"]'); f.kind.value = 'question'; f.when.value = 'an agent asks which store to use for the cache'; f.action.value = 'answer'; f.text.value = 'Postgres'; f.requestSubmit(); })()`);
+  await until(`document.querySelector('#decide-body .decide-card .decide-rec')?.textContent.includes('an agent asks which store to use for the cache')`, 'the standing decision listed');
+  assert.match(await js(`document.querySelector('.decide-autonomy select').value`), /^standing$/, 'only standing decisions act by default');
+  const b = await mk('Pick a store again #question');
+  await api('POST', '/advisor/briefs/refresh', { key: '' });
+  await until(`Object.values((await (await fetch('/api/agents')).json()).find((v) => v.id === '${b.id}').answers ?? {})[0]?.text === 'Postgres'`, 'decided for you', 20_000);
+  await js(`document.querySelector('[data-decide-tab="handled"]').click()`);
+  await until(`document.querySelector('#decide-body .decide-card')?.textContent.includes('Answered: Postgres')`, 'reported under Handled for you');
+  assert.match(await js(`document.querySelector('#decide-body .decide-card').textContent.replace(/\\s+/g, ' ')`), /By your standing decision: when an agent asks which store to use for the cache\./);
+  // The other tabs draw.
+  for (const t of ['priority', 'tradeoffs', 'lookback', 'waiting']) {
+    await js(`document.querySelector('[data-decide-tab="${t}"]').click()`);
+    await until(`document.querySelector('[data-decide-tab="${t}"]').classList.contains('active') && document.querySelector('#decide-body .decide-scroll')`, `the ${t} tab`);
+  }
+  await js(`document.querySelector('[data-decide="close"]').click()`);
+  await js(`document.querySelector('[data-tab="agents"]').click()`);
+  await api('PUT', '/judge', { enabled: false });
   for (const id of [a.id, b.id]) await fetch(`${base}/api/agents/${id}`, { method: 'DELETE', headers: { 'x-agentmgr': '1' } });
   assert.deepEqual(errors, [], 'no errors on the page');
 });

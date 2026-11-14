@@ -170,6 +170,8 @@ export class Backlog extends EventEmitter {
       if (it.agentId && this.store.get(it.agentId)) this.manager.update(it.agentId, { priority: it.priority });
     }
     if ('notes' in fields) it.notes = String(fields.notes ?? '');
+    // Held back until a day (YYYY-MM-DD): cut from a date at risk, picked up again after it.
+    if ('heldUntil' in fields) it.heldUntil = /^\d{4}-\d{2}-\d{2}$/.test(String(fields.heldUntil ?? '')) ? fields.heldUntil : null;
     this.changed();
     return it;
   }
@@ -188,6 +190,16 @@ export class Backlog extends EventEmitter {
     peers.forEach((x, k) => (x.order = base + k));
     this.changed();
     return it;
+  }
+
+  /** Put the queued items named in this order (each keeps its priority, which still comes first). */
+  reorder(ids) {
+    const queued = this.items().filter((x) => x.status === 'queued');
+    const rank = new Map(ids.map((id, i) => [id, i]));
+    const slots = queued.map((x) => x.order).sort((x, y) => x - y);
+    [...queued].sort((x, y) => (rank.get(x.id) ?? 1e6) - (rank.get(y.id) ?? 1e6) || x.order - y.order).forEach((x, i) => (x.order = slots[i]));
+    this.changed();
+    return this.items();
   }
 
   remove(id) {
@@ -284,6 +296,7 @@ export class Backlog extends EventEmitter {
       this.changed();
       return it;
     }
+    it.reopened = (it.reopened ?? 0) + 1;
     // Only a brief update after this point counts as "done" again.
     Object.assign(it, { status: 'active', reviewAt: null, doneAt: null, activeSince: now() });
     this.changed();
@@ -436,6 +449,7 @@ export class Backlog extends EventEmitter {
       for (const it of items) {
         if (active >= max) break;
         if (it.status !== 'queued') continue;
+        if (it.heldUntil && it.heldUntil > new Date().toISOString().slice(0, 10)) continue;
         const busy = items.filter((x) => x.projectKey === it.projectKey && x.status === 'active').length;
         if (busy >= this.limitFor(it.projectKey)) continue;
         this.launch(it);

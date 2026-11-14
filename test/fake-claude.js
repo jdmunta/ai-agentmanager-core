@@ -112,6 +112,21 @@ if (args.includes('--input-format') && args.includes('stream-json')) {
     }
     // The AI judge: JSON verdicts (see src/judge.js).
     const json = (o) => process.stdout.write(JSON.stringify(o), () => process.exit(0));
+    if (input.startsWith('You advise a senior engineer')) {
+      // Decide: a recommendation on a plan or a question; a standing decision named in the prompt applies.
+      const opts = input.match(/^Its options: (.+)$/m)?.[1].split(' | ');
+      const standing = input.match(/^- \[(s[0-9a-f]{6})\] when /m)?.[1] ?? null;
+      return json({
+        options: opts ? opts.map((o) => ({ label: o, action: 'answer', text: o, consequence: `Fake consequence of ${o}` })) : [{ label: 'Approve', action: 'approve', consequence: 'It starts' }, { label: 'Send back', action: 'changes', text: 'Add a rollback step', consequence: 'A round later' }],
+        recommend: 0,
+        why: `Fake reasoning: ${opts ? opts[0] : 'the plan is sound'}.`,
+        evidence: ['Fake evidence'],
+        risk: 'Fake risk',
+        undo: 'easy',
+        confidence: 0.9,
+        standing,
+      });
+    }
     if (input.startsWith('Write a short spoken standup')) {
       // The standup: each agent's facts, worded; "#plainstandup" in a fact fails the call.
       const facts = JSON.parse(section('facts') || '[]');

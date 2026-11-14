@@ -824,6 +824,71 @@ export async function main(argv) {
     });
 
   program
+    .command('decide')
+    .description('What waits for your decision with its recommendation; standing decisions; the backlog by impact; dates at risk')
+    .option('--do <n>', 'carry out the recommendation of the nth item waiting')
+    .option('--handled', 'what was decided for you')
+    .option('--standing', 'your standing decisions, and the autonomy of each project')
+    .option('--autonomy <project=level>', 'how much may be decided without you: ask, standing, safe or most')
+    .option('--priority', 'the backlog by impact')
+    .option('--risk', 'dates at risk, as choices')
+    .option('--json', 'print JSON')
+    .action(async (opts) => {
+      await daemon();
+      if (opts.autonomy) {
+        const [project, level] = String(opts.autonomy).split('=');
+        await api('PUT', '/advisor/autonomy', { project, level });
+      }
+      let v = await api('GET', '/advisor?think=1');
+      if (opts.do) {
+        const b = v.briefs.filter((x) => x.options.length)[Number(opts.do) - 1];
+        if (!b) return console.log(red('No such item waiting with a recommendation'));
+        v = await api('POST', '/advisor/briefs/apply', { key: b.key, option: b.recommend });
+        console.log(green(`Done: ${b.options[b.recommend].label} on "${b.title}"`));
+      }
+      if (opts.json) return console.log(JSON.stringify(v, null, 2));
+      const pc = (c) => (c == null ? '' : dim(` ${Math.round(c * 100)}% sure`));
+      if (opts.handled) {
+        if (!v.handled.length) return console.log(dim('Nothing has been decided for you yet.'));
+        for (const h of v.handled) console.log(`${dim(h.at.slice(0, 16).replace('T', ' '))}  ${bold(h.project)}  ${h.title}\n    ${h.did}${pc(h.confidence)}\n    ${dim(h.why)}`);
+        return;
+      }
+      if (opts.standing) {
+        for (const o of v.offers) console.log(`${yellow('offered')}  when ${o.when} -> ${o.action}${o.text ? `: ${o.text}` : ''} ${dim(`(seen ${o.count} times)`)}`);
+        for (const r of v.standing) console.log(`${r.on === false ? dim('off') : green('on ')}  ${dim(r.projectName ?? 'every project')}  when ${r.when} -> ${r.action}${r.text ? `: ${r.text}` : ''} ${dim(`(used ${r.uses ?? 0})`)}`);
+        if (!v.offers.length && !v.standing.length) console.log(dim('No standing decisions yet.'));
+        console.log(dim('Autonomy'));
+        for (const p of v.autonomy) console.log(`  ${(p.shortcut ?? p.name).padEnd(14)} ${p.level.padEnd(9)} ${dim(v.levels.find((l) => l.id === p.level)?.label ?? '')}`);
+        return;
+      }
+      if (opts.priority) {
+        if (!v.impact.length) return console.log(dim('No open backlog items.'));
+        for (const p of v.impact) {
+          console.log(`${bold(p.project.name)} ${dim(p.by === 'judge' ? 'ranked by the AI judge' : 'ranked by plain rules')}`);
+          for (const i of p.items) console.log(`  ${String(i.rank).padStart(2)}. ${i.level.padEnd(6)} ${i.title}\n      ${dim(i.why)}`);
+        }
+        return;
+      }
+      if (opts.risk) {
+        if (!v.tradeoffs.length) return console.log(dim('No date is at risk.'));
+        for (const t of v.tradeoffs) {
+          console.log(`${bold(`${t.project.name}: ${t.stage.label}`)} ${t.stage.date} ${yellow(t.stage.words)}`);
+          for (const o of t.options) console.log(`  ${o.id === t.recommend ? green('*') : ' '} ${o.label}: ${o.what}${o.id === t.recommend ? `\n      ${dim(t.why)}` : ''}`);
+        }
+        return;
+      }
+      if (!v.judge.enabled) console.log(yellow('The AI judge is off, so nothing is recommended.'));
+      if (!v.briefs.length) return console.log(dim('Nothing is waiting for a decision.'));
+      v.briefs.forEach((b, i) => {
+        const rec = b.options[b.recommend];
+        console.log(`${String(i + 1).padStart(2)}. ${bold(b.title)} ${dim(`${b.kind} · ${b.project} · ${b.agentName}`)}`);
+        if (!rec) return console.log(`    ${dim(b.none ?? 'No recommendation.')}`);
+        console.log(`    ${green('Recommended:')} ${rec.label}${rec.action !== 'approve' && rec.text ? `: ${rec.text}` : ''}${pc(b.confidence)}${b.undo === 'hard' ? red(' hard to undo') : ''}\n    ${b.why}${b.risk ? `\n    ${dim(`Risk: ${b.risk}`)}` : ''}`);
+      });
+      console.log(dim('agentmgr decide --do <n> carries out a recommendation.'));
+    });
+
+  program
     .command('os')
     .description('This computer and its load right now: processor, memory, disks, and what each open agent session takes')
     .option('--json', 'print JSON')

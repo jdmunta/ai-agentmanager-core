@@ -30,6 +30,7 @@ Run one background [Claude Code](https://claude.com/claude-code) agent per inten
 - **Plan.** A project's commitment dates (code complete, release candidate, GA) with a checklist of what is still open for each, reminders as they come near, and an at-risk or late flag. A **decision log** gathered from plan reviews, your answers and design docs. A **tech debt radar** from git history and the code. What is open can be handed to an agent.
 - **Your day.** Connect your calendar and Today lays the day out around your meetings: the free time between them with what needs you placed in it, and what each meeting is about.
 - **Debug.** Say what to debug (a failure, E2E instability at max scale, slowness under load) in the **Debug** tab beside an agent's session. The agent investigates there and writes a report next to it: animated diagrams of the code path and the data flow with where it breaks, findings with evidence, likely causes and recommended fixes. It changes no code until you press **Apply fixes**.
+- **Decide.** Help with the decisions, not only the tasks: a plan to review or an agent's question arrives with its options, the one recommended, why, and the risk; calls you keep making become standing decisions that are handled for you and reported; the backlog is ranked by impact; a date at risk is laid out as choices; and past decisions are looked back on.
 - **OS.** The computer the agents run on and how loaded it is right now: processor, load average, memory, swap and disks with the last ten minutes, what each open agent session takes, and the busiest processes.
 - **AI News.** The frontier labs' latest releases in one list, newest first: Claude Platform, Claude Code, the OpenAI API and the Gemini API from their release notes, and the other top labs from a daily web search. Each is summarized in a sentence or two, with its links.
 - **MCP servers and tools.** See every MCP server Claude Code has in a folder (yours, the project's, claude.ai connectors and plugins) with its tools, sign in to the ones that need it, and run any tool directly, through Claude Code, or in an agent's session.
@@ -190,6 +191,7 @@ agentmgr debug <agent> "what goes wrong"       # debug with an agent; no questio
 agentmgr dates <project> --cc 2026-12-01 --rc 2026-12-10 --ga 2026-12-20   # commitment dates; no dates: where each stands
 agentmgr decisions [project] [--md]           # the decision log; --add "<question>" --decision "<what>" adds one
 agentmgr debt <project> --scan                # the tech debt radar: files that change often and are hard to read
+agentmgr decide                               # what waits for your decision, with its recommendation (--do <n>, --handled, --standing, --autonomy p=level, --priority, --risk)
 agentmgr os                                   # this computer and its load: processor, memory, disks, what each open session takes (--json)
 agentmgr news                                 # the frontier labs' latest releases, summarized (--refresh, --lab, --days)
 agentmgr inbox                                # prompts, questions, stuck agents and overlaps waiting on you
@@ -1238,6 +1240,20 @@ The agent investigates in its own session, with everything it already knows abou
 - **How it runs.** Your question is typed into the agent's session like any message: when it is idle, resuming it if it was closed. It uses the agent's own engine, model and permissions; no other model call is made. The report is `DEBUG.md` next to the agent's brief, outside the repository.
 
 `agentmgr debug <agent> "<what goes wrong>"` asks from the terminal, `agentmgr debug <agent>` prints the report, and `--fix ["1 and 3"]` applies fixes.
+
+## Decide
+
+**Decide** in the top bar (or `q`, `#decide`, or `agentmgr decide`) helps with the decisions themselves. The reasoning is the AI judge's: one tool-less call each, on your own Claude or Codex plan, within the judge's daily budget. With the judge off nothing is recommended and nothing is decided for you.
+
+- **Waiting.** A plan waiting for review, or a question an agent asks, comes with its options, the one recommended, why, the evidence, the risk, how sure it is, and whether it is hard to undo. One click carries out the recommendation or another option. The same recommendation is on the item's Inbox card. However you decide, the decision log (Plan → Decisions) gets the reasoning and whether you went with the recommendation.
+- **Try both.** For a question with two or more options, each option is tried by its own agent as a race, so you decide from the results side by side.
+- **Standing decisions.** A call you made once for every time it comes up, such as "when the plan only bumps a dependency, approve". Offered when three of your decisions agree (and never as broad as "always approve"), or written by you. When one applies it is carried out for you, and reported under **Handled for you** with the reasoning and in Slack (the *decided* alert).
+- **How much may be decided without you**, per project: *Ask me everything*; *Only my standing decisions* (the default, so nothing changes until you make one); *Also what is sure and easy to undo* (85% or more); *Most things; ask when unsure* (70% or more). Anything hard to undo always waits for you unless a standing decision of yours covers it.
+- **Priority.** Each project's open backlog ranked by impact: the nearest date, what an item unblocks, risk removed, age, with the reason beside each. Plain rules rank at once; the judge's ranking replaces them when the window is open. **Use this order** reorders the queue (and sets a priority the judge found wrong), and free agents pick from the top.
+- **Dates at risk.** A date that is at risk or late (Plan → Dates) as choices: hold the least valuable queued items until after the date, move the date by what the recent pace says is missing (later dates move with it), or run more agents at once. One is recommended; picking one carries it out and records it as a decision.
+- **Looking back.** Two days after a decision, what followed it: the work landed, or it was sent back, judged incomplete, failed its checks, was reopened, or a date was missed. For the ones worth another look the judge writes the lesson, and the lessons are given to the next recommendation.
+
+Turn it all off with `"decide": { "enabled": false }` in config.json.
 
 ## OS
 
