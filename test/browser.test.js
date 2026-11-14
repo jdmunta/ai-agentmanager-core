@@ -643,6 +643,8 @@ test('Plan: project dates with checklists, the decision log, the tech debt radar
   await js(`document.querySelector('[data-plan-tab="dates"]').click()`);
   await until(`document.querySelector('[data-plan="add"]') && !document.querySelector('[data-plan="add"]').disabled`, 'projects to add dates for');
   await js(`document.querySelector('[data-plan="add"]').click()`);
+  // The window first shows the projects it knew before; the one just made arrives with its refresh.
+  await until(`document.querySelector('form[data-plan-dates=""] option[value=${JSON.stringify(w1.shortcut)}]')`, 'the new project in the form', 20_000);
   await js(`(() => { const f = document.querySelector('form[data-plan-dates=""]'); f.project.value = ${JSON.stringify(w1.shortcut)}; f.codeComplete.value = '${iso(3)}'; f.rc.value = '${iso(10)}'; f.ga.value = '${iso(30)}'; f.requestSubmit(); })()`);
   await until(`document.querySelectorAll('.plan-stage').length === 3`, 'the three dates');
   const stages = await js(`[...document.querySelectorAll('.plan-stage')].map((s) => [s.querySelector('b').textContent, s.querySelector('.tag').textContent, s.querySelector('.plan-left').textContent, s.querySelectorAll('.plan-reminder').length])`);
