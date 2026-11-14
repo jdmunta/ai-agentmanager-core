@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.52.0 (2026-11-14)
+
+- **Lean output.** A switch in **Usage** (off by default; `agentmgr usage --lean on`): long command output (test runs, installs, builds) is trimmed before the agent reads it, so a plan's limits last longer. Colour codes and progress redraws go, runs of near-identical lines are folded, and of a long middle only the lines that look like errors or warnings stay. The start and end are kept, and the whole output is saved to a file the agent is told about and can read. Usage shows how many outputs were trimmed and about how many tokens were not read. Claude Code only, for sessions started after you switch it on.
+- **Skills.** **Skills…** in the menu (or `agentmgr skills`) lists the Agent Skills Claude Code has here, yours and each project's, with which agents used them. Add more from a git repository (`anthropics/skills`, or any https address): you see what it offers first, with each skill's scripts flagged, then pick. A skill added here remembers its repository and commit: **Check** says when a newer version is there, **Update** brings it, and one you edited is marked. A project's skills are files in its repository, so commit them for agents in their own worktrees to get them.
+- **Security audit.** **🛡 Security audit** in an agent's detail (or the **Security** tab of the split, or `agentmgr audit`): the agent maps where untrusted input comes in, follows it through the code, runs the project's own dependency audit, and checks every finding a second time before listing it. The report beside its session has the attack surface as an animated diagram, findings by severity with evidence and a fix, what was checked and found sound, and what was not covered. No code changes until you press **Fix findings**. It does not replace a penetration test.
+
 ## 1.51.1 (2026-11-14)
 
 - **Usage: Read now.** The Usage window's ↻ only re-read the last saved reading, which is as old as the last reply of a session started here; Claude Code used elsewhere moved the real numbers on meanwhile. **↻ Read now** (or `agentmgr usage --now`) takes a reading on the spot. Claude Code only reports its limits to a session that has had a reply, so it starts a short session that says one word on its smallest model (a very small amount of usage) and removes it after. The chip and the once-a-minute update never start a session.
