@@ -824,6 +824,47 @@ export async function main(argv) {
     });
 
   program
+    .command('runbook [id]')
+    .description('Runbooks for the support team, written from a release ticket, an epic, or the code changes of a time frame')
+    .option('--ticket <key>', 'from a release ticket: it, what it links to, its sub-tasks and its fix versions')
+    .option('--epic <key>', 'from every ticket of an epic')
+    .option('--since <date>', "from a project's code changes since YYYY-MM-DD (with -p)")
+    .option('--until <date>', 'the end of the time frame (default: now)')
+    .option('-p, --project <project>', 'the project (needed with --since)')
+    .option('--title <title>', 'its title')
+    .option('--note <text>', 'what to cover in particular')
+    .option('-o, --out <file>', 'save the Markdown to a file instead of printing it')
+    .action(async (id, opts) => {
+      await daemon();
+      const source = opts.ticket ? 'ticket' : opts.epic ? 'epic' : opts.since ? 'code' : null;
+      if (!source && !id) {
+        const v = await api('GET', '/runbooks');
+        if (!v.items.length) return console.log(dim('No runbooks yet: agentmgr runbook --ticket REL-42 | --epic PROJ-100 | --since 2026-10-01 -p <project>'));
+        for (const r of v.items) console.log(`${r.id}  ${(r.status === 'ready' ? green : r.status === 'failed' ? red : yellow)(r.status.padEnd(7))} ${r.title} ${dim(r.updatedAt.slice(0, 10))}${r.error ? `\n    ${red(r.error)}` : ''}`);
+        return;
+      }
+      if (source) {
+        ({ id } = await api('POST', '/runbooks', { source, key: opts.ticket ?? opts.epic, project: opts.project, since: opts.since, until: opts.until, title: opts.title, note: opts.note }));
+        process.stderr.write(dim('Gathering the facts and writing it (a few minutes)…\n'));
+      }
+      let r = await api('GET', `/runbooks/${id}`);
+      for (let i = 0; r.status === 'writing' && i < 400; i++) {
+        await new Promise((res) => setTimeout(res, 2000));
+        r = await api('GET', `/runbooks/${id}`);
+      }
+      if (r.status !== 'ready') {
+        console.error(red(r.error ?? 'It is still being written'));
+        process.exitCode = 1;
+        return;
+      }
+      if (opts.out) {
+        fs.writeFileSync(opts.out, r.markdown);
+        return console.log(green(`Saved ${opts.out}`));
+      }
+      console.log(r.markdown);
+    });
+
+  program
     .command('decide')
     .description('What waits for your decision with its recommendation; standing decisions; the backlog by impact; dates at risk')
     .option('--do <n>', 'carry out the recommendation of the nth item waiting')

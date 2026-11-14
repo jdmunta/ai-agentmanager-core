@@ -30,6 +30,7 @@ Run one background [Claude Code](https://claude.com/claude-code) agent per inten
 - **Plan.** A project's commitment dates (code complete, release candidate, GA) with a checklist of what is still open for each, reminders as they come near, and an at-risk or late flag. A **decision log** gathered from plan reviews, your answers and design docs. A **tech debt radar** from git history and the code. What is open can be handed to an agent.
 - **Your day.** Connect your calendar and Today lays the day out around your meetings: the free time between them with what needs you placed in it, and what each meeting is about.
 - **Debug.** Say what to debug (a failure, E2E instability at max scale, slowness under load) in the **Debug** tab beside an agent's session. The agent investigates there and writes a report next to it: animated diagrams of the code path and the data flow with where it breaks, findings with evidence, likely causes and recommended fixes. It changes no code until you press **Apply fixes**.
+- **Runbooks for support.** A runbook for the support team written from a release ticket, every ticket of an epic, or a project's code changes in a time frame: what changed, what customers may see, how to check it, troubleshooting, rollback, when to escalate, and what to confirm with engineering.
 - **Decide.** Help with the decisions, not only the tasks: a plan to review or an agent's question arrives with its options, the one recommended, why, and the risk; calls you keep making become standing decisions that are handled for you and reported; the backlog is ranked by impact; a date at risk is laid out as choices; and past decisions are looked back on.
 - **OS.** The computer the agents run on and how loaded it is right now: processor, load average, memory, swap and disks with the last ten minutes, what each open agent session takes, and the busiest processes.
 - **AI News.** The frontier labs' latest releases in one list, newest first: Claude Platform, Claude Code, the OpenAI API and the Gemini API from their release notes, and the other top labs from a daily web search. Each is summarized in a sentence or two, with its links.
@@ -191,6 +192,7 @@ agentmgr debug <agent> "what goes wrong"       # debug with an agent; no questio
 agentmgr dates <project> --cc 2026-12-01 --rc 2026-12-10 --ga 2026-12-20   # commitment dates; no dates: where each stands
 agentmgr decisions [project] [--md]           # the decision log; --add "<question>" --decision "<what>" adds one
 agentmgr debt <project> --scan                # the tech debt radar: files that change often and are hard to read
+agentmgr runbook --ticket REL-42              # a support runbook from a release ticket (or --epic KEY, or --since 2026-10-01 -p <project>; -o file.md)
 agentmgr decide                               # what waits for your decision, with its recommendation (--do <n>, --handled, --standing, --autonomy p=level, --priority, --risk)
 agentmgr os                                   # this computer and its load: processor, memory, disks, what each open session takes (--json)
 agentmgr news                                 # the frontier labs' latest releases, summarized (--refresh, --lab, --days)
@@ -1240,6 +1242,18 @@ The agent investigates in its own session, with everything it already knows abou
 - **How it runs.** Your question is typed into the agent's session like any message: when it is idle, resuming it if it was closed. It uses the agent's own engine, model and permissions; no other model call is made. The report is `DEBUG.md` next to the agent's brief, outside the repository.
 
 `agentmgr debug <agent> "<what goes wrong>"` asks from the terminal, `agentmgr debug <agent>` prints the report, and `--fix ["1 and 3"]` applies fixes.
+
+## Runbooks for the support team
+
+**Plan → Runbooks** (or `agentmgr runbook`) writes a runbook for the people who answer customers, from one of three sources:
+
+- **A release ticket**: the ticket, what it links to, its sub-tasks, and every ticket in its fix versions (up to 150).
+- **An epic**: every ticket of the epic.
+- **Code changes**: a project's commits in a time frame (since a day, until a day or now), the diffs of the most telling and most changed files (settings, migrations, flags, routes and messages first), and the Jira tickets the commits name.
+
+Tickets are read from Jira with the site and API token in Settings → Jira; code is read from the project's repository on this computer. One tool-less model call then writes the runbook, on your own plan: a summary, what changed, what customers may see or ask, how to check it is working, troubleshooting, known issues, settings and migrations, rolling back, when to escalate, replies you can send, and sources. It is told to state only what the tickets and code support and to put every open question under **To confirm with engineering**, so have an engineer read it before support relies on it.
+
+Open one to read it, **Edit** it, **Revise** it with a note (written again from the tickets and code as they are now, keeping what still holds and your edits), **Copy** it or **Download** it as Markdown for your knowledge base, or **Print** it. Runbooks are Markdown files in `~/.agentmanager/runbooks`.
 
 ## Decide
 

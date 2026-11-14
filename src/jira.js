@@ -267,3 +267,78 @@ export async function issueFields({ key, site }, { jira = loadJira(), fetchImpl 
     return null;
   }
 }
+
+/** One issue as a runbook needs it: what it is, what it says, and what it is tied to. */
+function detailOf(i, site) {
+  const f = i?.fields ?? {};
+  const names = (list) => (Array.isArray(list) ? list : []).map((x) => (typeof x === 'string' ? x : x?.name)).filter((n) => typeof n === 'string').map((n) => n.slice(0, 80));
+  const links = (Array.isArray(f.issuelinks) ? f.issuelinks : [])
+    .map((l) => {
+      const other = l?.outwardIssue ?? l?.inwardIssue;
+      return other?.key ? { key: other.key, how: String((l.outwardIssue ? l.type?.outward : l.type?.inward) ?? l.type?.name ?? 'relates to').slice(0, 40), summary: typeof other.fields?.summary === 'string' ? other.fields.summary.slice(0, 200) : null } : null;
+    })
+    .filter(Boolean);
+  const comments = (Array.isArray(f.comment?.comments) ? f.comment.comments : []).slice(-3).map((c) => descriptionText(c?.body).replace(/\s+/g, ' ').trim().slice(0, 500)).filter(Boolean);
+  return {
+    key: i.key,
+    url: `${site}/browse/${i.key}`,
+    summary: typeof f.summary === 'string' ? f.summary.trim().slice(0, 300) : '',
+    type: typeof f.issuetype?.name === 'string' ? f.issuetype.name.slice(0, 40) : null,
+    status: typeof f.status?.name === 'string' ? f.status.name.slice(0, 60) : null,
+    priority: typeof f.priority?.name === 'string' ? f.priority.name.slice(0, 30) : null,
+    resolution: typeof f.resolution?.name === 'string' ? f.resolution.name.slice(0, 40) : null,
+    labels: names(f.labels),
+    components: names(f.components),
+    fixVersions: names(f.fixVersions),
+    parent: typeof f.parent?.key === 'string' ? f.parent.key : null,
+    subtasks: (Array.isArray(f.subtasks) ? f.subtasks : []).map((s) => s?.key).filter((k) => typeof k === 'string'),
+    links,
+    description: descriptionText(f.description).trim().slice(0, 3000),
+    comments,
+  };
+}
+
+const DETAIL_FIELDS = ['summary', 'status', 'issuetype', 'priority', 'resolution', 'labels', 'components', 'fixVersions', 'parent', 'subtasks', 'issuelinks', 'description', 'comment'];
+
+/**
+ * The issues a JQL query finds, in full (see detailOf), up to `max`. Needs the site and token from
+ * Settings → Jira. Throws with the reason in words when Jira can't be asked or refuses the query.
+ */
+export async function searchIssues(jql, { jira = loadJira(), fetchImpl = fetch, timeoutMs = 20_000, max = 100 } = {}) {
+  if (!jira.site || !jira.token) throw Object.assign(new Error('Jira is not set up: add your site and API token in Settings → Jira'), { status: 400 });
+  const headers = { accept: 'application/json', 'content-type': 'application/json', authorization: authOf(jira) };
+  const out = [];
+  let next = null;
+  let startAt = 0;
+  // Jira Cloud pages with a token, Server and Data Center with startAt.
+  for (let page = 0; page < 5 && out.length < max; page++) {
+    const n = Math.min(100, max - out.length);
+    const q = new URLSearchParams({ jql, fields: DETAIL_FIELDS.join(','), maxResults: String(n), startAt: String(startAt) });
+    let res;
+    try {
+      res = await jiraGet(
+        fetchImpl,
+        jira.site,
+        { path: '/rest/api/3/search/jql', init: { method: 'POST', body: JSON.stringify({ jql, fields: DETAIL_FIELDS, maxResults: n, ...(next ? { nextPageToken: next } : {}) }) } },
+        { path: `/rest/api/2/search?${q}`, init: { method: 'GET' } },
+        { headers, signal: AbortSignal.timeout(timeoutMs) },
+      );
+    } catch (e) {
+      throw Object.assign(new Error(reasonOf(jira.site, null, e)), { status: 502 });
+    }
+    if (!res.ok) {
+      let said = '';
+      try {
+        said = ((await res.json())?.errorMessages ?? []).join(' ').slice(0, 300);
+      } catch {}
+      throw Object.assign(new Error(res.status === 400 && said ? `Jira did not accept the query: ${said}` : reasonOf(jira.site, res)), { status: res.status === 400 ? 400 : 502, jql: res.status === 400 });
+    }
+    const body = await res.json();
+    const issues = (body?.issues ?? []).filter((i) => typeof i?.key === 'string' && /^[A-Z][A-Z0-9_]+-\d+$/.test(i.key));
+    out.push(...issues.map((i) => detailOf(i, jira.site)));
+    next = typeof body?.nextPageToken === 'string' ? body.nextPageToken : null;
+    startAt += issues.length;
+    if (!issues.length || (!next && (body?.isLast === true || body?.total === undefined || startAt >= body.total))) break;
+  }
+  return out;
+}

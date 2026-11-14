@@ -601,3 +601,68 @@ test('Plan: project dates with checklists, the decision log, the tech debt radar
   await js(`document.querySelector('[data-today="close"]').click()`);
   assert.deepEqual(errors, [], 'no errors on the page');
 });
+
+test('Runbooks: written from the code changes of a time frame, read, revised, edited and deleted in Plan', { skip }, async () => {
+  // A project that is a git repository with two commits; one names a Jira ticket (Jira is not set up here).
+  const repo = path.join(home, 'rb');
+  fs.mkdirSync(repo);
+  const git = (...args) => execFileSync('git', ['-c', 'commit.gpgsign=false', '-c', 'user.email=t@t', '-c', 'user.name=t', ...args], { cwd: repo });
+  git('init', '-q', '-b', 'main');
+  fs.writeFileSync(path.join(repo, 'config.js'), 'export const retry_limit = 3;\n');
+  git('add', '.');
+  git('commit', '-q', '-m', 'Add retries');
+  fs.writeFileSync(path.join(repo, 'config.js'), 'export const retry_limit = 5;\n');
+  git('commit', '-q', '-am', 'SUP-7 Raise retry_limit to 5');
+  await api('POST', '/projects', { shortcut: 'rbproj', dir: repo });
+
+  await js(`document.querySelector('#plan-btn').click()`);
+  await until(`document.querySelector('#plan-dialog').open && document.querySelector('[data-plan-tab="runbooks"]')`, 'the Plan window');
+  await js(`document.querySelector('[data-plan-tab="runbooks"]').click()`);
+  await until(`document.querySelector('[data-rb-form="new"] input[name="key"]')`, 'the Runbooks tab, a release ticket first');
+  await js(`document.querySelector('[data-rb-source="code"]').click()`);
+  await until(`document.querySelector('[data-rb-form="new"] select[name="project"] option[value="rbproj"]')`, 'the project to read');
+  await js(`(() => { const f = document.querySelector('[data-rb-form="new"]'); f.project.value = 'rbproj'; f.since.value = '2020-01-01'; f.note.value = 'Cover the retries'; f.requestSubmit(); })()`);
+  await until(`document.querySelector('.rb-list .rb-status.ready')`, 'written', 30_000);
+  const row = await js(`document.querySelector('.rb-list tr').textContent.replace(/\\s+/g, ' ')`);
+  assert.match(row, /Fake runbook for the changes to the code of rb from 2020-01-01 until now/, 'titled by its own heading');
+  assert.match(row, /rb: code changes since 2020-01-01 · 2 commits, 1 file /);
+
+  // Read it: the chatter before the title is gone, the table is a table, and the diff reached the model.
+  await js(`document.querySelector('[data-rb-open]').click()`);
+  await until(`document.querySelector('#rb-doc h1')`, 'the runbook');
+  const doc = await js(`({ h1: document.querySelector('#rb-doc h1').textContent, text: document.querySelector('#rb-doc').textContent, table: document.querySelectorAll('#rb-doc table tr').length, h2: [...document.querySelectorAll('#rb-doc h2')].map((h) => h.textContent) })`);
+  assert.doesNotMatch(doc.text, /Here you go/);
+  assert.match(doc.text, /Written from 0 tickets and 2 commits\./);
+  assert.match(doc.text, /Saw the diff of retry_limit\./);
+  assert.match(doc.text, /Cover the retries/);
+  assert.ok(doc.table >= 2 && doc.h2.includes('To confirm with engineering'), JSON.stringify(doc.h2));
+
+  // Revise with a note, then edit by hand.
+  await js(`(() => { const f = document.querySelector('[data-rb-form="revise"]'); f.note.value = 'Add the on-call rota'; f.requestSubmit(); })()`);
+  await until(`/Revised\\./.test(document.querySelector('#rb-doc')?.textContent ?? '') && /Add the on-call rota/.test(document.querySelector('#rb-doc').textContent)`, 'revised with the note', 30_000);
+  await js(`document.querySelector('[data-rb="edit"]').click()`);
+  await until(`document.querySelector('[data-rb-text]')`, 'the editor');
+  await js(`(() => { const t = document.querySelector('[data-rb-text]'); t.value = t.value.replace('Check the setting.', 'Check the setting in Admin.'); document.querySelector('[data-rb="save"]').click(); })()`);
+  await until(`/Check the setting in Admin\\./.test(document.querySelector('#rb-doc')?.textContent ?? '')`, 'your edit saved');
+  const id = (await api('GET', '/runbooks')).items[0].id;
+  assert.equal((await api('GET', '/runbooks')).items[0].edited, true);
+  const dl = await js(`const rbRes = await fetch('/api/runbooks/${id}?format=markdown'); ({ type: rbRes.headers.get('content-type'), name: rbRes.headers.get('content-disposition'), text: await rbRes.text() })`);
+  assert.match(dl.type, /text\/markdown/);
+  assert.match(dl.name, /attachment; filename=".*\.md"/);
+  assert.match(dl.text, /^# Fake runbook[\s\S]*Check the setting in Admin\./);
+
+  // What can't be written says why: a ticket needs Jira, a time frame needs commits.
+  await js(`document.querySelector('[data-rb="back"]').click()`);
+  await js(`(() => { const f = document.querySelector('[data-rb-form="new"]'); f.project.value = 'rbproj'; f.since.value = '2000-01-01'; f.until.value = '2000-01-02'; f.requestSubmit(); })()`);
+  await until(`/Nothing was committed in rb between 2000-01-01 and 2000-01-02/.test(document.querySelector('.rb-list')?.textContent ?? '')`, 'no commits in the frame', 20_000);
+  assert.equal((await fetch(`${base}/api/runbooks`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-agentmgr': '1' }, body: JSON.stringify({ source: 'code', project: 'rbproj', since: '2999-01-01' }) })).status, 400, 'a time frame in the future');
+  await js(`document.querySelector('[data-rb-source="ticket"]').click()`);
+  await js(`(() => { const f = document.querySelector('[data-rb-form="new"]'); f.key.value = 'https://x.atlassian.net/browse/rel-42'; f.requestSubmit(); })()`);
+  await until(`/Release ticket REL-42[\\s\\S]*Jira is not set up/.test(document.querySelector('.rb-list')?.textContent ?? '')`, 'Jira is not set up', 20_000);
+  for (let n = 3; n > 0; n--) {
+    await js(`document.querySelector('[data-rb-remove]:not([disabled])').click()`);
+    await until(`document.querySelectorAll('.rb-list tr').length === ${n - 1}`, `${n - 1} left`);
+  }
+  await js(`document.querySelector('[data-plan="close"]').click()`);
+  assert.deepEqual(errors, [], 'no errors on the page');
+});
