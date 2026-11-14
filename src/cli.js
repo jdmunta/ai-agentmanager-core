@@ -829,11 +829,12 @@ export async function main(argv) {
     .option('--warn <percent>', 'alert when a limit is this much used (or off)')
     .option('--hold <percent>', 'start no new agents on an engine this much used (or off)')
     .option('--default <engine>', 'the engine new agents start on')
+    .option('--lean <on|off>', 'lean output: trim long command output before the agent reads it (Claude Code; sessions started from now on)')
     .option('--now', 'take a reading now: a one-word Claude Code session on its smallest model (a very small amount of usage)')
     .option('--json', 'print JSON')
     .action(async (opts) => {
       await daemon();
-      const patch = { ...(opts.warn !== undefined ? { warnAt: opts.warn } : {}), ...(opts.hold !== undefined ? { holdAt: opts.hold } : {}), ...(opts.default ? { engine: opts.default } : {}) };
+      const patch = { ...(opts.warn !== undefined ? { warnAt: opts.warn } : {}), ...(opts.hold !== undefined ? { holdAt: opts.hold } : {}), ...(opts.default ? { engine: opts.default } : {}), ...(opts.lean !== undefined ? { lean: /^(on|true|yes|1)$/i.test(opts.lean) } : {}) };
       let v = Object.keys(patch).length ? await api('PUT', '/usage', patch) : await api('GET', '/usage');
       if (opts.now) v = await api('POST', '/usage/refresh');
       if (opts.json) return console.log(JSON.stringify(v, null, 2));
@@ -845,6 +846,7 @@ export async function main(argv) {
         for (const w of e.windows) console.log(`  ${w.label.padEnd(16)} ${w.used === null ? dim('reset; no reading since') : (tone[e.level] ?? ((x) => x))(`${String(Math.round(w.used)).padStart(3)}% used  ${String(Math.round(w.left)).padStart(3)}% left`)}${w.resetsIn ? dim(`  resets ${w.resetsIn}`) : ''}${w.stale ? dim('  (an old reading)') : ''}`);
         if (e.note) console.log(`  ${dim(e.note)}`);
       }
+      if (v.lean) console.log(dim(`Lean output ${v.lean.enabled ? 'on' : 'off'}${v.lean.calls ? ` · ${v.lean.calls} outputs trimmed, about ${v.lean.tokens.toLocaleString()} tokens not read` : ''}`));
       console.log(dim(`Warn at ${v.settings.warnAt ?? 'off'}${v.settings.warnAt ? '%' : ''} · hold new work at ${v.settings.holdAt ?? 'off'}${v.settings.holdAt ? '%' : ''}`));
     });
 

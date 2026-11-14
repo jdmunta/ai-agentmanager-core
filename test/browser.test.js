@@ -642,6 +642,13 @@ test('Usage: the chip by the connection light, every engine with what is used an
     await api('PUT', '/usage', { engine: 'claude', holdAt: 'off' });
   }
   await until(`document.querySelector('[data-usage-set="holdAt"]').value === 'off' && document.querySelector('[data-usage-engine="claude"] .usage-level').textContent === 'Getting close'`, 'not held any more');
+  // Lean output: off until switched on; then the sessions started from now on trim long command output.
+  assert.equal(await js(`document.querySelector('[data-usage-lean]').checked`), false);
+  await js(`document.querySelector('[data-usage-lean]').click()`);
+  await until(`(await (await fetch('/api/usage')).json()).lean.enabled === true && document.querySelector('[data-usage-lean]')?.checked`, 'lean output on');
+  assert.match(await js(`document.querySelector('.usage-lean').textContent`), /Nothing long enough to trim yet/);
+  await api('PUT', '/usage', { lean: false });
+  await until(`document.querySelector('[data-usage-lean]')?.checked === false`, 'and off again');
   // Read now: a one-word session brings the numbers as they are now, not as the last reply left them.
   await js(`document.querySelector('[data-usage-is-default]').click()`);
   await until(`[...document.querySelectorAll('.toast')].some((t) => /New agents already start on Claude Code/.test(t.textContent))`, 'pressing the engine new agents already start on says so');

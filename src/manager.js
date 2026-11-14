@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { ownStatusLine } from './trust.js';
 import { statusLineScript, usageFile } from './usage.js';
+import { leanScript } from './lean.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -155,6 +156,9 @@ import {
 // Per-session markers a parent Claude Code session sets. Inherited, they make the
 // agent think it is a nested child session (which, among other things, turns
 // transcript saving off, so the session could never be resumed).
+/** Where the whole of an agent's trimmed command outputs are kept (lean.js). */
+export const leanDir = (agentId) => path.join(paths.home, 'lean', agentId);
+
 const STRIP_ENV = [
   'AI_AGENT',
   'CLAUDECODE',
@@ -1453,8 +1457,15 @@ export class AgentManager extends EventEmitter {
       const dir = fs.realpathSync(uploads);
       writableDir = writableDir ? [writableDir, dir].flat() : dir;
     }
-    // A status line that records the plan's usage (not in a container: the script isn't there).
-    return { extra: [...engine.extraArgs(this.config), ...(agent.isolation === 'container' ? [] : engine.usageArgs?.(this.config, statusLineScript()) ?? [])], permissionMode: agent.permissionMode, model: agent.model, writableDir, instructions: prompts.join('\n\n') || null, agents, allowedTools };
+    // A status line that records the plan's usage, and with lean output on the hook that trims long
+    // command output (not in a container: the scripts aren't there).
+    const own = agent.isolation !== 'container' && Boolean(engine.settingsArgs);
+    if (own && this.config.lean?.enabled === true) {
+      // Where the whole of a trimmed output is kept: readable without a permission prompt.
+      fs.mkdirSync(leanDir(agent.id), { recursive: true });
+      writableDir = [writableDir ?? [], fs.realpathSync(leanDir(agent.id))].flat();
+    }
+    return { extra: [...engine.extraArgs(this.config), ...(own ? engine.settingsArgs(this.config, { statusLine: statusLineScript(), lean: leanScript() }) : [])], permissionMode: agent.permissionMode, model: agent.model, writableDir, instructions: prompts.join('\n\n') || null, agents, allowedTools };
   }
 
   /** Spawn the agent's engine in a PTY, reusing its terminal clients and scrollback. */
@@ -1798,7 +1809,7 @@ export class AgentManager extends EventEmitter {
   }
 
   childEnv(agent) {
-    const env = { ...process.env, ...(agent ? { AGENTMGR_AGENT_ID: agent.id } : {}), TERM: 'xterm-256color', COLORTERM: 'truecolor', AGENTMGR_TERMINAL: '1', AGENTMGR_USAGE_FILE: usageFile(), AGENTMGR_USER_STATUSLINE: ownStatusLine() };
+    const env = { ...process.env, ...(agent ? { AGENTMGR_AGENT_ID: agent.id, AGENTMGR_LEAN_DIR: leanDir(agent.id) } : {}), TERM: 'xterm-256color', COLORTERM: 'truecolor', AGENTMGR_TERMINAL: '1', AGENTMGR_USAGE_FILE: usageFile(), AGENTMGR_USER_STATUSLINE: ownStatusLine() };
     for (const key of STRIP_ENV) delete env[key];
     return env;
   }

@@ -4483,3 +4483,62 @@ test('security audit: the messages that start, continue and fix an audit', async
   // The fake engine (and a shell) would take "exit" in a message as a command.
   for (const m of [whole, first, more, securityFixPrompt('/b/S.md', '')]) assert.doesNotMatch(m, /\bexit\b/);
 });
+
+test('lean output: long command output trimmed (errors kept, the whole kept in a file), short output left alone, and the hook that does it', async () => {
+  const { fold, leanHook, leanSettings, leanStats, leanSweep, leanText, plain } = await import('../src/lean.js');
+  assert.equal(plain('\x1b[32mok\x1b[0m\r\n10%\r50%\r100% done\nplain'), 'ok\n100% done\nplain');
+  assert.deepEqual(fold(['a', 'test 1 passed (3ms)', 'test 2 passed (12ms)', 'test 3 passed (1ms)', 'test 4 passed (7ms)', 'test 5 passed (2ms)', 'z']), ['a', 'test 1 passed (3ms)', '  … 3 more lines like it …', 'test 5 passed (2ms)', 'z']);
+  assert.equal(fold(['x 1', 'x 2', 'x 3']).length, 3, 'a short run stays');
+  // Short: left alone.
+  assert.equal(leanText('one\ntwo\nthree'), null);
+  // Long and varied: the start, the end, and from the middle the trouble with the line before it.
+  const words = (i) => `step ${'abcdefghij'[i % 10]}${'klmnopqrst'[(i * 7) % 10]}${'uvwxyz'[(i * 3) % 6]} of module ${'qwertyuiop'.slice(i % 7, (i % 7) + 3)}-${'asdfghjkl'[(i * 5) % 9]}`;
+  const lines = Array.from({ length: 600 }, (_, i) => words(i));
+  lines[300] = 'compiling the parser';
+  lines[301] = 'src/parse.c:41: error: expected ; before }';
+  lines[450] = 'warning: unused variable n';
+  const out = leanText(lines.join('\n'), { where: '/h/lean/a1/t1.txt' });
+  const got = out.text.split('\n');
+  assert.equal(out.before, 600);
+  assert.ok(out.after < 100, `${out.after} lines`);
+  assert.deepEqual(got.slice(0, 30), lines.slice(0, 30), 'the start');
+  assert.deepEqual(got.slice(-51, -1), lines.slice(-50), 'the end');
+  for (const l of ['compiling the parser', 'src/parse.c:41: error: expected ; before }', 'warning: unused variable n']) assert.ok(got.includes(l), l);
+  assert.ok(got.some((l) => /^ {2}… \d+ lines left out …$/.test(l)));
+  assert.match(got.at(-1), /^\[lean output: 600 lines trimmed to \d+; errors and warnings kept\. The whole output is in \/h\/lean\/a1\/t1\.txt: read it/);
+  assert.ok(out.saved > 5000);
+
+  // The hook: only shell commands, only long output; the whole output and the count are kept.
+  const dir = path.join(tmp(), 'lean', 'a1');
+  const event = (stdout, extra = {}) => ({ tool_name: 'Bash', tool_use_id: 'toolu_01', tool_input: { command: 'make' }, tool_response: { stdout, stderr: 'note', interrupted: false, isImage: false }, ...extra });
+  assert.equal(leanHook(event('short'), { dir }), null);
+  assert.equal(leanHook(event(lines.join('\n'), { tool_name: 'Read' }), { dir }), null);
+  assert.equal(leanHook(event(lines.join('\n')), { dir: null }), null);
+  const a = leanHook(event(lines.join('\n')), { dir });
+  assert.equal(a.hookSpecificOutput.hookEventName, 'PostToolUse');
+  const upd = a.hookSpecificOutput.updatedToolOutput;
+  assert.deepEqual([upd.stderr, upd.interrupted, upd.isImage], ['note', false, false], "the rest of the tool's output as it was");
+  assert.ok(upd.stdout.includes(path.join(dir, 'toolu_01.txt')) && upd.stdout.length < lines.join('\n').length / 2);
+  const whole = fs.readFileSync(path.join(dir, 'toolu_01.txt'), 'utf8');
+  assert.ok(whole.startsWith('$ make\n\n') && whole.includes(lines[200]) && whole.endsWith('--- stderr ---\nnote'));
+  leanHook(event(lines.join('\n'), { tool_use_id: 'toolu_02' }), { dir });
+  const stats = leanStats(path.dirname(dir));
+  assert.equal(stats.calls, 2);
+  assert.ok(stats.tokens > 2000);
+  // Old whole outputs go; the counts stay.
+  assert.equal(leanSweep(path.dirname(dir), Date.now() + 3 * 86_400_000), 2);
+  assert.equal(leanStats(path.dirname(dir)).calls, 2);
+
+  // Off unless switched on; with it on, the session's one --settings carries the hook beside the status line.
+  assert.equal(leanSettings({}).enabled, false);
+  assert.equal(leanSettings({ lean: { enabled: true } }).enabled, true);
+  const { ENGINES } = await import('../src/engines/index.js');
+  const engine = ENGINES.claude;
+  assert.deepEqual(engine.settingsArgs({ usage: { enabled: false } }, { statusLine: '/x/s.js', lean: '/x/lean.js' }), []);
+  const off = JSON.parse(engine.settingsArgs({}, { statusLine: '/x/s.js', lean: '/x/lean.js' })[1]);
+  assert.deepEqual(Object.keys(off), ['statusLine']);
+  const on = JSON.parse(engine.settingsArgs({ lean: { enabled: true } }, { statusLine: '/x/s.js', lean: '/x/le an.js' })[1]);
+  assert.deepEqual(Object.keys(on), ['statusLine', 'hooks']);
+  assert.equal(on.hooks.PostToolUse[0].matcher, 'Bash');
+  assert.ok(on.hooks.PostToolUse[0].hooks[0].command.endsWith('"/x/le an.js"'));
+});

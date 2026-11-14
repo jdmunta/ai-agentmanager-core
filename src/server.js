@@ -55,6 +55,7 @@ import { Advisor } from './advisor.js';
 import { Runbooks } from './runbooks.js';
 import { reaStatus } from './rea.js';
 import { EngineUsage, codexWindows } from './usage.js';
+import { leanSettings, leanStats, leanSweep } from './lean.js';
 import { Milestones } from './milestones.js';
 import { Decisions } from './decisions.js';
 import { Debt } from './debt.js';
@@ -1136,9 +1137,14 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
   api.post('/milestones/:project/reach', wrap((req) => milestones.reach(req.params.project, req.body?.stage, req.body?.reached !== false)));
   api.post('/milestones/:project/task', wrap((req) => milestones.task(req.params.project, req.body?.stage, req.body?.item)));
   // Plan → Decisions: the log (?project=<key>&q=<words>; ?format=markdown), one of your own, and removal.
-  api.get('/usage', wrap(() => usage.view()));
+  // Lean output (lean.js) rides with Usage: whether it is on, and what trimming has saved.
+  const leanHome = path.join(paths.home, 'lean');
+  const usageView = (v = usage.view()) => ({ ...v, lean: { enabled: leanSettings(config).enabled, ...leanStats(leanHome) } });
+  leanSweep(leanHome);
+  setInterval(() => leanSweep(leanHome), 6 * 3_600_000).unref();
+  api.get('/usage', wrap(() => usageView()));
   // A reading taken now (a one-word Claude Code session, so its status line reports).
-  api.post('/usage/refresh', wrap(() => usage.refresh()));
+  api.post('/usage/refresh', wrap(async () => usageView(await usage.refresh())));
   api.put('/usage', wrap((req) => {
     const b = req.body ?? {};
     const next = usage.update(b);
@@ -1149,9 +1155,14 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
       config.engine = b.engine;
       patch.engine = b.engine;
     }
+    // Lean output: on or off, for the sessions started from now on.
+    if ('lean' in b) {
+      config.lean = { ...config.lean, enabled: b.lean === true || b.lean === 'on' };
+      patch.lean = config.lean;
+    }
     saveConfig(patch);
     pushUsage();
-    return usage.view();
+    return usageView();
   }));
   api.get('/runbooks', wrap(() => runbooks.list()));
   api.post('/runbooks', wrap((req) => runbooks.create(req.body ?? {})));
