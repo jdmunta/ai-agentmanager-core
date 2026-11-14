@@ -77,6 +77,8 @@ const DEFAULTS = {
   debt: { enabled: true },
   // Decide: recommendations on what waits for you, standing decisions, impact and trade-offs (advisor.js).
   decide: { enabled: true },
+  // Usage: each engine's plan limits, used and left; warn at a percent, hold new work at a percent (usage.js).
+  usage: { enabled: true, warnAt: 80, holdAt: null },
   calendar: { ics: [], workStart: '09:00', workEnd: '18:00' },
   // AI News: the frontier labs' latest releases, summarized; see NEWS_DEFAULTS in news.js for every field.
   news: { enabled: true },

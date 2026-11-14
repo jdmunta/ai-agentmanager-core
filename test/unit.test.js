@@ -4324,3 +4324,109 @@ test('reverse engineering: the prompts say analysis only and to build from behav
   fs.writeFileSync(path.join(work, '.mcp.json'), JSON.stringify({ mcpServers: { rea: { command: 'rea', args: ['mcp'] } } }));
   assert.equal(reaStatus(work, { config }).where, "the project's .mcp.json");
 });
+
+test('usage: an engine\'s plan limits from Claude Code\'s status line and Codex\'s logs; what is left, alerts once, holding new work', async () => {
+  const { EngineUsage, claudeWindows, codexWindows, untilWords, usageSettings } = await import('../src/usage.js');
+  const { ownStatusLine } = await import('../src/trust.js');
+  const t0 = Date.parse('2026-03-10T12:00:00Z');
+  const sec = (iso) => Date.parse(iso) / 1000;
+
+  // The two shapes, as the engines give them.
+  assert.deepEqual(claudeWindows({ five_hour: { used_percentage: 23.46, resets_at: sec('2026-03-10T15:00:00Z') }, seven_day: { used_percentage: 41.2, resets_at: sec('2026-03-14T00:00:00Z') } }), [
+    { id: 'five_hour', label: '5-hour session', used: 23.5, resetsAt: '2026-03-10T15:00:00.000Z' },
+    { id: 'seven_day', label: 'Week', used: 41.2, resetsAt: '2026-03-14T00:00:00.000Z' },
+  ]);
+  assert.deepEqual(claudeWindows({ seven_day: { used_percentage: 140 } }), [{ id: 'seven_day', label: 'Week', used: 100, resetsAt: null }], 'a window may be absent; a number is kept in range');
+  assert.deepEqual(claudeWindows(null), []);
+  assert.deepEqual(codexWindows({ primary: { used_percent: 12, window_minutes: 300, resets_in_seconds: 3600 }, secondary: { used_percent: 55.5, window_minutes: 10080, resets_at: sec('2026-03-14T00:00:00Z') } }, t0), [
+    { id: 'primary', label: '5-hour session', used: 12, resetsAt: '2026-03-10T13:00:00.000Z' },
+    { id: 'secondary', label: 'Week', used: 55.5, resetsAt: '2026-03-14T00:00:00.000Z' },
+  ]);
+  assert.deepEqual(codexWindows({ primary: null, secondary: { used_percent: 'x' } }, t0), []);
+  assert.deepEqual([untilWords('2026-03-10T12:40:00Z', t0), untilWords('2026-03-10T14:10:00Z', t0), untilWords('2026-03-14T12:00:00Z', t0), untilWords('2026-03-10T11:00:00Z', t0)], ['in 40m', 'in 2h 10m', 'in 4 days', 'now']);
+  assert.deepEqual(usageSettings({ usage: { warnAt: 'off', holdAt: '95' } }), { enabled: true, warnAt: null, holdAt: 95 });
+  assert.deepEqual(usageSettings({}), { enabled: true, warnAt: 80, holdAt: null });
+
+  // The status line: records what Claude Code hands it, and still shows a line (yours, when you have one).
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'agentmgr-usage-'));
+  const file = path.join(home, 'usage', 'claude.json');
+  const script = new URL('../src/statusline.js', import.meta.url).pathname;
+  const line = (input, env = {}) => execFileSync(process.execPath, [script], { input: typeof input === 'string' ? input : JSON.stringify(input), env: { ...process.env, AGENTMGR_USAGE_FILE: file, AGENTMGR_USER_STATUSLINE: '', ...env }, encoding: 'utf8' });
+  const limits = { five_hour: { used_percentage: 23.5, resets_at: sec('2026-03-10T15:00:00Z') }, seven_day: { used_percentage: 41.2, resets_at: sec('2026-03-14T00:00:00Z') } };
+  assert.equal(line({ model: { display_name: 'Opus' }, version: '2.1.311', rate_limits: limits }), 'Opus · 5h 24% · week 41%');
+  const written = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.deepEqual([written.rate_limits, written.version, written.model], [limits, '2.1.311', 'Opus']);
+  assert.equal(line({ model: { display_name: 'Opus' } }), 'Opus', 'no limits in this reading');
+  assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')).rate_limits, limits, 'the last reading is kept');
+  assert.equal(line('not json'), '', 'never fails the session');
+  assert.equal(line({ model: { display_name: 'Opus' }, rate_limits: limits }, { AGENTMGR_USER_STATUSLINE: `${JSON.stringify(process.execPath)} -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>process.stdout.write('mine:'+JSON.parse(s).model.display_name))"` }), 'mine:Opus', 'your own status line, given the same input');
+  const cdir = path.join(home, 'claude');
+  fs.mkdirSync(cdir);
+  assert.equal(ownStatusLine(cdir), '');
+  fs.writeFileSync(path.join(cdir, 'settings.json'), JSON.stringify({ statusLine: { type: 'command', command: '~/.claude/line.sh' } }));
+  assert.equal(ownStatusLine(cdir), '~/.claude/line.sh');
+
+  // The readings kept, and what follows from them.
+  let clock = t0;
+  const data = {};
+  const config = { usage: { warnAt: 80, holdAt: null } };
+  const sent = [];
+  const engines = [{ id: 'claude', label: 'Claude Code', installed: true }, { id: 'codex', label: 'Codex', installed: true }, { id: 'muse', label: 'Muse Code', installed: false }];
+  const u = new EngineUsage({ store: { data, save() {} }, config, engines: () => engines, notify: async (t, plain) => sent.push(plain), file, now: () => clock, log() {}, timer: false });
+  fs.writeFileSync(file, JSON.stringify({ at: new Date(clock).toISOString(), rate_limits: limits, version: '2.1.311' }));
+  u.tick();
+  let v = u.view();
+  assert.deepEqual(v.engines.map((e) => [e.id, e.level]), [['claude', 'ok'], ['codex', 'unknown']], 'an engine not installed and never read is left out');
+  assert.deepEqual(v.engines[0].windows.map((w) => [w.label, w.used, w.left, w.resetsIn]), [['5-hour session', 23.5, 76.5, 'in 3h'], ['Week', 41.2, 58.8, 'in 4 days']]);
+  assert.equal(v.engines[0].source, 'Claude Code 2.1.311');
+  assert.match(v.engines[1].note, /Codex's session logs/);
+  assert.equal(sent.length, 0);
+
+  // Past the warning level: one alert for that window, not one per reading.
+  clock += 60_000;
+  u.record('claude', claudeWindows({ five_hour: { used_percentage: 84, resets_at: sec('2026-03-10T15:00:00Z') } }));
+  u.record('claude', claudeWindows({ five_hour: { used_percentage: 88, resets_at: sec('2026-03-10T15:00:00Z') } }), { at: new Date(clock + 1000).toISOString() });
+  assert.deepEqual(sent, ['Claude Code: 84% of the 5-hour session limit is used (16% left); it resets in 2h 59m']);
+  v = u.view();
+  assert.deepEqual([v.engines[0].level, v.engines[0].top, v.engines[0].windows.map((w) => w.used).join(), v.worst.id], ['warn', 88, '88,41.2', 'claude'], 'the week keeps its last reading');
+  assert.equal(u.record('claude', claudeWindows({ five_hour: { used_percentage: 10 } }), { at: '2026-03-01T00:00:00.000Z' }), false, 'an older reading read late changes nothing');
+
+  // Hold new work: no new agent on that engine; others are free; off again, free again.
+  assert.equal(u.policy('agent.create', { input: { engine: 'claude' } }), undefined, 'not held unless you say so');
+  u.update({ holdAt: 85 });
+  assert.deepEqual(u.policy('agent.create', { input: { engine: 'claude' } }), { allow: false, reason: 'Claude Code is held for new work: 88% of its 5-hour session limit is used (resets in 2h 59m). Start it on another engine, wait for the reset, or change "hold new work" in Usage' });
+  assert.equal(u.policy('agent.create', { input: { engine: 'codex' } }), undefined);
+  assert.equal(u.policy('agent.start', { agent: { engine: 'claude' } }), undefined, 'agents already there carry on');
+  assert.equal(u.view().engines[0].level, 'held');
+  assert.throws(() => u.update({ holdAt: 500 }), /1 to 100, or off/);
+
+  // The window resets: the old number no longer holds, nothing is held, and the next one alerts afresh.
+  clock = Date.parse('2026-03-10T15:00:01Z');
+  v = u.view();
+  assert.deepEqual(v.engines[0].windows.map((w) => [w.used, w.reset]), [[null, true], [41.2, false]]);
+  assert.equal(v.engines[0].level, 'ok');
+  assert.equal(u.policy('agent.create', { input: { engine: 'claude' } }), undefined);
+  u.record('claude', claudeWindows({ five_hour: { used_percentage: 90, resets_at: sec('2026-03-10T20:00:00Z') } }));
+  assert.equal(sent.length, 2, 'a new window, a new alert');
+
+  // Codex from its log; a limit actually hit, on any engine, until it resets.
+  u.record('codex', codexWindows({ primary: { used_percent: 97, window_minutes: 300, resets_in_seconds: 600 } }, clock), { source: 'Codex session log' });
+  assert.deepEqual([u.view().engines[1].level, u.view().engines[1].windows[0].resetsIn], ['held', 'in 10m']);
+  u.update({ holdAt: 'off' });
+  assert.equal(u.view().engines[1].level, 'high');
+  u.limited('claude', { text: 'Claude usage limit reached', resetAt: '2026-03-10T16:00:00.000Z' });
+  v = u.view();
+  assert.deepEqual([v.engines[0].level, v.engines[0].limited.resetsIn, v.worst.id], ['limited', 'in 1h', 'claude']);
+  u.update({ holdAt: 99 });
+  assert.match(u.policy('agent.create', { input: { engine: 'claude' } }).reason, /it stopped at a limit \(resets in 1h\)/);
+  clock = Date.parse('2026-03-10T16:00:01Z');
+  assert.equal(u.view().engines[0].limited, null, 'reset');
+
+  // Turned off: nothing is added to a launch.
+  const { default: claude } = await import('../src/engines/claude.js');
+  assert.deepEqual(claude.usageArgs({ usage: { enabled: false } }, '/x/statusline.js'), []);
+  const args = claude.usageArgs({}, '/x/status line.js');
+  assert.equal(args[0], '--settings');
+  assert.deepEqual(JSON.parse(args[1]), { statusLine: { type: 'command', command: `${JSON.stringify(process.execPath)} "/x/status line.js"` } });
+  u.close();
+});

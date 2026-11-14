@@ -54,6 +54,7 @@ import { System } from './system.js';
 import { Advisor } from './advisor.js';
 import { Runbooks } from './runbooks.js';
 import { reaStatus } from './rea.js';
+import { EngineUsage, codexWindows } from './usage.js';
 import { Milestones } from './milestones.js';
 import { Decisions } from './decisions.js';
 import { Debt } from './debt.js';
@@ -323,6 +324,23 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
       await sendSlack(text, n, plain);
     },
   });
+  // Usage: each engine's plan limits, used and left (usage.js).
+  let pushUsage = () => {};
+  const usage = new EngineUsage({
+    store,
+    config,
+    engines: () => listEngines(config),
+    onChange: () => pushUsage(),
+    notify: async (text, plain) => {
+      const n = loadNotify();
+      if (!n.enabled || !n.events.usage) return;
+      await sendSlack(text, n, plain);
+    },
+  });
+  manager.on('usage', ({ engine, limits, at }) => engine === 'codex' && usage.record('codex', codexWindows(limits, Date.parse(at) || Date.now()), { at: at ?? undefined, source: 'Codex session log' }));
+  manager.on('limit', ({ engine, text, resetAt }) => usage.limited(engine, { text, resetAt }));
+  manager.plugins.api('usage', config).policy((action, details) => usage.policy(action, details));
+  usage.tick();
   // Runbooks for the support team, from a release ticket, an epic, or the code changes of a time frame (runbooks.js).
   const runbooks = new Runbooks({
     store,
@@ -1115,6 +1133,21 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
   api.post('/milestones/:project/reach', wrap((req) => milestones.reach(req.params.project, req.body?.stage, req.body?.reached !== false)));
   api.post('/milestones/:project/task', wrap((req) => milestones.task(req.params.project, req.body?.stage, req.body?.item)));
   // Plan → Decisions: the log (?project=<key>&q=<words>; ?format=markdown), one of your own, and removal.
+  api.get('/usage', wrap(() => usage.view()));
+  api.put('/usage', wrap((req) => {
+    const b = req.body ?? {};
+    const next = usage.update(b);
+    const patch = { usage: next };
+    // The engine new agents start on, when none is named.
+    if (typeof b.engine === 'string') {
+      if (!listEngines(config).some((e) => e.id === b.engine && e.installed)) throw fail(400, 'No such engine installed');
+      config.engine = b.engine;
+      patch.engine = b.engine;
+    }
+    saveConfig(patch);
+    pushUsage();
+    return usage.view();
+  }));
   api.get('/runbooks', wrap(() => runbooks.list()));
   api.post('/runbooks', wrap((req) => runbooks.create(req.body ?? {})));
   api.get('/runbooks/:id', (req, res) => {
@@ -1532,6 +1565,7 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
   pushNews = () => broadcast({ t: 'news' });
   pushPlan = () => broadcast({ t: 'plan' });
   pushAdvisor = () => broadcast({ t: 'advisor' });
+  pushUsage = () => broadcast({ t: 'usage' });
   reports.on('change', () => broadcast({ t: 'built', reports: reports.list() }));
   manager.rules.on('change', (rules) => broadcast({ t: 'rules', rules }));
   repeats.on('change', (view) => broadcast({ t: 'repeats', repeats: view }));
@@ -1674,6 +1708,7 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
     milestones.close();
     decisions.close();
     advisor.close();
+    usage.close();
     debt.close();
     reviews.close();
     hunts.close();

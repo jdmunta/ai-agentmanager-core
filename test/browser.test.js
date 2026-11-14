@@ -83,7 +83,7 @@ before(async () => {
   const http = await import('node:http');
   notes = http.createServer((req, res) => res.end(req.url.endsWith('.ics') ? calIcs() : notesMd));
   await new Promise((r) => notes.listen(0, '127.0.0.1', r));
-  fs.writeFileSync(path.join(home, 'config.json'), JSON.stringify({ claudeBin: process.execPath, claudeArgs: [path.join(here, 'fake-claude.js')], updates: { check: false }, judge: { enabled: false }, shell: '/bin/sh', gitRefreshSec: 1, conflictRefreshSec: 0, news: { sources: [], custom: [{ id: 'local', lab: 'Anthropic', label: 'Local notes', url: `http://127.0.0.1:${notes.address().port}/notes.md` }] } }));
+  fs.writeFileSync(path.join(home, 'config.json'), JSON.stringify({ claudeBin: process.execPath, claudeArgs: [path.join(here, 'fake-claude.js')], updates: { check: false }, judge: { enabled: false }, shell: '/bin/sh', gitRefreshSec: 1, conflictRefreshSec: 0, engines: { codex: { bin: path.join(here, 'fake-codex.js') } }, news: { sources: [], custom: [{ id: 'local', lab: 'Anthropic', label: 'Local notes', url: `http://127.0.0.1:${notes.address().port}/notes.md` }] } }));
   daemon = spawn(process.execPath, [path.join(here, '..', 'bin', 'agentmgr.js'), 'serve'], {
     env: { ...process.env, AGENTMGR_HOME: home, AGENTMGR_PORT: String(port), AGENTMGR_REMOTE: '0', AGENTMGR_PLUGINS: '', AGENTMGR_NO_GH: '1', CLAUDE_CONFIG_DIR: path.join(home, 'claude'), AGENTMGR_CLAUDE_DESKTOP_DIR: path.join(home, 'claude-desktop'), FAKE_CLAUDE_LOG: path.join(home, 'fake.log') },
     stdio: 'ignore',
@@ -100,14 +100,19 @@ before(async () => {
   }
 
   const cdpPort = await freePort();
-  chrome = spawn(chromeBin, ['--headless=new', `--remote-debugging-port=${cdpPort}`, `--user-data-dir=${path.join(home, 'chrome')}`, '--no-first-run', '--no-default-browser-check', ...(process.platform === 'linux' ? ['--no-sandbox'] : []), 'about:blank'], { stdio: 'ignore' });
+  // A loaded CI runner can take long to open Chrome's first page, or lose it: wait, then start it once more.
   let target;
-  for (let i = 0; i < 100 && !target; i++) {
-    await sleep(150);
-    try {
-      target = (await (await fetch(`http://127.0.0.1:${cdpPort}/json`)).json()).find((t) => t.type === 'page');
-    } catch {}
+  for (let attempt = 0; attempt < 2 && !target; attempt++) {
+    chrome?.kill('SIGKILL');
+    chrome = spawn(chromeBin, ['--headless=new', `--remote-debugging-port=${cdpPort}`, `--user-data-dir=${path.join(home, 'chrome')}`, '--no-first-run', '--no-default-browser-check', ...(process.platform === 'linux' ? ['--no-sandbox'] : []), 'about:blank'], { stdio: 'ignore' });
+    for (let i = 0; i < 200 && !target; i++) {
+      await sleep(150);
+      try {
+        target = (await (await fetch(`http://127.0.0.1:${cdpPort}/json`)).json()).find((t) => t.type === 'page');
+      } catch {}
+    }
   }
+  assert.ok(target, 'Chrome opened a page to drive');
   ws = new WebSocket(target.webSocketDebuggerUrl, { perMessageDeflate: false });
   await new Promise((r) => ws.once('open', r));
   ws.on('message', (data) => {
@@ -579,6 +584,52 @@ test('Reverse engineer: a target and a question beside the session, whether REA 
   assert.deepEqual(errors, [], 'no errors on the page');
 });
 
+test('Usage: the chip by the connection light, every engine with what is used and left, the alert and hold levels, and where new agents start', { skip }, async () => {
+  // Nothing read yet: no chip. Then Claude Code's status line writes its numbers (as statusline.js does).
+  assert.equal(await js(`document.querySelector('#usage-chip').hidden`), true);
+  const soon = Math.floor(Date.now() / 1000) + 2 * 3600 + 60;
+  fs.mkdirSync(path.join(home, 'usage'), { recursive: true });
+  fs.writeFileSync(path.join(home, 'usage', 'claude.json'), JSON.stringify({ at: new Date().toISOString(), version: '9.9.9', rate_limits: { five_hour: { used_percentage: 86, resets_at: soon }, seven_day: { used_percentage: 41.2, resets_at: soon + 4 * 86400 } } }));
+  await until(`!document.querySelector('#usage-chip').hidden && document.querySelector('#usage-chip').textContent === 'Claude Code 5h 86% · wk 41%'`, 'the chip', 40_000);
+  assert.equal(await js(`document.querySelector('#usage-chip').classList.contains('warn')`), true, 'past the alert level');
+  await js(`document.querySelector('#usage-chip').click()`);
+  await until(`document.querySelector('#usage-dialog').open && document.querySelector('[data-usage-engine="claude"] [data-usage-window="five_hour"]')`, 'the Usage window');
+  const r = await js(`({
+    five: document.querySelector('[data-usage-window="five_hour"]').textContent.replace(/\\s+/g, ' ').trim(),
+    week: document.querySelector('[data-usage-window="seven_day"]').textContent.replace(/\\s+/g, ' ').trim(),
+    level: document.querySelector('[data-usage-engine="claude"] .usage-level').textContent,
+    head: document.querySelector('[data-usage-engine="claude"] .plan-project-head').textContent.replace(/\\s+/g, ' '),
+    bar: document.querySelector('[data-usage-window="five_hour"] .os-meter span').style.width,
+    warn: document.querySelector('[data-usage-set="warnAt"]').value,
+    hold: document.querySelector('[data-usage-set="holdAt"]').value,
+  })`);
+  assert.match(r.five, /^5-hour session\s*86% used\s*14% left\s*resets in 2h/);
+  assert.match(r.week, /^Week\s*41% used\s*59% left\s*resets in 4 days/);
+  assert.deepEqual([r.level, r.bar, r.warn, r.hold], ['Getting close', '86%', '80', 'off']);
+  assert.match(r.head, /new agents start here[\s\S]*from Claude Code 9\.9\.9/);
+
+  try {
+    // Hold new work at 85%: no new agent on Claude Code, and the reason is said.
+    await js(`(() => { const s = document.querySelector('[data-usage-set="holdAt"]'); s.value = '85'; s.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+    await until(`document.querySelector('[data-usage-engine="claude"] .usage-level')?.textContent === 'Held for new work'`, 'held');
+    const refused = await fetch(`${base}/api/agents`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-agentmgr': '1' }, body: JSON.stringify({ intents: ['Held back'], workdir: home }) });
+    assert.match((await refused.json()).error, /Claude Code is held for new work: 86% of its 5-hour session limit is used/);
+    assert.ok(refused.status >= 400);
+    // Another engine is one click away for new agents; then back.
+    const other = 'codex';
+    await until(`document.querySelector('[data-usage-default="codex"]')`, 'another installed engine is offered');
+    await js(`document.querySelector('[data-usage-default="${other}"]').click()`);
+    await until(`(await (await fetch('/api/usage')).json()).default === '${other}'`, 'new agents start there');
+    await until(`/new agents start here/.test(document.querySelector('[data-usage-engine="${other}"] .plan-project-head')?.textContent ?? '')`, 'marked in the window');
+  } finally {
+    // Whatever happened above, the tests after this one can start agents.
+    await api('PUT', '/usage', { engine: 'claude', holdAt: 'off' });
+  }
+  await until(`document.querySelector('[data-usage-set="holdAt"]').value === 'off' && document.querySelector('[data-usage-engine="claude"] .usage-level').textContent === 'Getting close'`, 'not held any more');
+  await js(`document.querySelector('[data-usage="close"]').click()`);
+  assert.deepEqual(errors, [], 'no errors on the page');
+});
+
 test('Plan: project dates with checklists, the decision log, the tech debt radar; Today shows the date and the day around a meeting', { skip }, async () => {
   // A project with an agent at work in its folder, and one that is a git repository.
   for (const n of ['p1', 'p3']) fs.mkdirSync(path.join(home, n));
@@ -597,6 +648,8 @@ test('Plan: project dates with checklists, the decision log, the tech debt radar
   await js(`document.querySelector('[data-plan-tab="dates"]').click()`);
   await until(`document.querySelector('[data-plan="add"]') && !document.querySelector('[data-plan="add"]').disabled`, 'projects to add dates for');
   await js(`document.querySelector('[data-plan="add"]').click()`);
+  // The window first shows the projects it knew before; the one just made arrives with its refresh.
+  await until(`document.querySelector('form[data-plan-dates=""] option[value=${JSON.stringify(w1.shortcut)}]')`, 'the new project in the form', 20_000);
   await js(`(() => { const f = document.querySelector('form[data-plan-dates=""]'); f.project.value = ${JSON.stringify(w1.shortcut)}; f.codeComplete.value = '${iso(3)}'; f.rc.value = '${iso(10)}'; f.ga.value = '${iso(30)}'; f.requestSubmit(); })()`);
   await until(`document.querySelectorAll('.plan-stage').length === 3`, 'the three dates');
   const stages = await js(`[...document.querySelectorAll('.plan-stage')].map((s) => [s.querySelector('b').textContent, s.querySelector('.tag').textContent, s.querySelector('.plan-left').textContent, s.querySelectorAll('.plan-reminder').length])`);

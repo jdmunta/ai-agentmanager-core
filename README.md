@@ -30,6 +30,7 @@ Run one background [Claude Code](https://claude.com/claude-code) agent per inten
 - **Plan.** A project's commitment dates (code complete, release candidate, GA) with a checklist of what is still open for each, reminders as they come near, and an at-risk or late flag. A **decision log** gathered from plan reviews, your answers and design docs. A **tech debt radar** from git history and the code. What is open can be handed to an agent.
 - **Your day.** Connect your calendar and Today lays the day out around your meetings: the free time between them with what needs you placed in it, and what each meeting is about.
 - **Debug.** Say what to debug (a failure, E2E instability at max scale, slowness under load) in the **Debug** tab beside an agent's session. The agent investigates there and writes a report next to it: animated diagrams of the code path and the data flow with where it breaks, findings with evidence, likely causes and recommended fixes. It changes no code until you press **Apply fixes**.
+- **Usage.** How much of each engine's plan limits is used and left (Claude Code's 5-hour session and week, Codex's), and when they reset: a chip by the connection light, an alert near a limit, an option to hold new work at a percent, and one click to start new agents on another engine.
 - **Reverse engineer.** Name a target (an app's folder, a binary, a website) and what you want to understand, in the **Reverse** tab beside an agent's session: the agent investigates with [REA](https://github.com/morluto/rea)'s tools and keeps a report with animated diagrams of how it works, the evidence, what could not be determined, and a plan to build your own version.
 - **Runbooks for support.** A runbook for the support team written from a release ticket, every ticket of an epic, or a project's code changes in a time frame: what changed, what customers may see, how to check it, troubleshooting, rollback, when to escalate, and what to confirm with engineering.
 - **Decide.** Help with the decisions, not only the tasks: a plan to review or an agent's question arrives with its options, the one recommended, why, and the risk; calls you keep making become standing decisions that are handled for you and reported; the backlog is ranked by impact; a date at risk is laid out as choices; and past decisions are looked back on.
@@ -194,6 +195,7 @@ agentmgr reverse <agent> -t /path/to/app "how does search work"  # reverse engin
 agentmgr dates <project> --cc 2026-12-01 --rc 2026-12-10 --ga 2026-12-20   # commitment dates; no dates: where each stands
 agentmgr decisions [project] [--md]           # the decision log; --add "<question>" --decision "<what>" adds one
 agentmgr debt <project> --scan                # the tech debt radar: files that change often and are hard to read
+agentmgr usage                                # each engine's plan limits: used, left, resets (--warn 80, --hold 95, --default codex)
 agentmgr runbook --ticket REL-42              # a support runbook from a release ticket (or --epic KEY, or --since 2026-10-01 -p <project>; -o file.md)
 agentmgr decide                               # what waits for your decision, with its recommendation (--do <n>, --handled, --standing, --autonomy p=level, --priority, --risk)
 agentmgr os                                   # this computer and its load: processor, memory, disks, what each open session takes (--json)
@@ -1220,6 +1222,19 @@ With it, Today opens with **Your day**:
 - **What a meeting is about:** the agents, pull requests and issues its title or description names (a Jira key, `#482`, an agent's or project's name), to open before you walk in.
 
 Repeating meetings, time zones, moved or cancelled occurrences and events marked *free* are understood. Several calendars can be added; **Disconnect** forgets them. In config.json: `"calendar": { "ics": ["https://…"], "workStart": "09:00", "workEnd": "18:00" }`.
+
+## Usage: what is left of each engine's plan
+
+A chip by the connection light shows the engine new agents start on with what is used of its limits (`Claude Code 5h 23% · wk 41%`), turning amber and red as a limit nears. Click it (or **Usage…** in the menu, `z`, or `agentmgr usage`) for every engine: each limit with the percent used, the percent left, and when it resets.
+
+- **Claude Code**: its 5-hour session and 7-day limits. Claude Code hands these to a session's status line command (for Pro, Max and Ultra plans, once the session has had a reply), so the sessions started here get a status line that records them. Your own status line, if you have one, still shows: it is run with the same input. Without one you get a short line with the model and the two percentages. Not for agents in a container.
+- **Codex**: the limits Codex writes in its session logs, when it reports them.
+- **Any engine**: a limit an agent actually hits is shown until it resets (and the agent carries on by itself when it does, as before).
+- **Alert me at** a percent used (80% by default): one alert per limit and reset, in Slack if alerts are on (the *usage* alert).
+- **Hold new work at** a percent (off by default): no new agent starts on an engine at or past it; the backlog waits and New agents says why. Agents already running carry on.
+- **Start new agents here** makes another installed engine the default for new agents; agents already running stay where they are (**Continue on** moves one).
+
+These are numbers the engines hand out on this computer: no service is asked and no model is called. Turn it off with `"usage": { "enabled": false }` in config.json.
 
 ## Reverse engineer
 

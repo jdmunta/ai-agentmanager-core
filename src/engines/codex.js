@@ -196,7 +196,7 @@ export default {
 
   /** Usage (one entry per model response), PR and bug links from messages and command output. */
   scan(file, cursor, bugPatterns = []) {
-    const result = { prs: [], bugs: [], title: null, lastPrompt: null, cost: null, lastActivity: null };
+    const result = { prs: [], bugs: [], title: null, lastPrompt: null, cost: null, lastActivity: null, rateLimits: null };
     cursor.usage ??= new Map();
     cursor.offset ??= 0;
     const recs = newRecords(file, cursor);
@@ -204,6 +204,8 @@ export default {
     if (!recs) return result;
     for (const { rec, at } of recs) {
       const p = rec.payload ?? {};
+      // The plan's limits as Codex last reported them (usage.js): { primary, secondary } with used_percent.
+      if (p.type === 'token_count' && p.rate_limits && typeof p.rate_limits === 'object') result.rateLimits = { limits: p.rate_limits, at: rec.timestamp ?? null };
       if (p.type === 'token_count' && p.info?.last_token_usage) {
         const u = p.info.last_token_usage;
         const cached = u.cached_input_tokens ?? 0;

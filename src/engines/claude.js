@@ -16,6 +16,11 @@ export default {
 
   bin: (config) => config.engines?.claude?.bin ?? config.claudeBin ?? 'claude',
   extraArgs: (config) => [...(config.engines?.claude?.args ?? config.claudeArgs ?? [])],
+  /**
+   * For the sessions started here (not one-off calls): a status line that records the plan's usage
+   * (usage.js). `script` is its path; your own status line still shows (see statusline.js).
+   */
+  usageArgs: (config, script) => (config.usage?.enabled === false ? [] : ['--settings', JSON.stringify({ statusLine: { type: 'command', command: `${JSON.stringify(process.execPath)} ${JSON.stringify(script)}` } })]),
 
   /** Options for every launch: permissions, model, a folder it may write to, extra instructions. */
   optionArgs({ permissionMode, model, writableDir, instructions, agents, allowedTools }) {

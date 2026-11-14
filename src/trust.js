@@ -41,3 +41,13 @@ export function trustFolder(dir, file = claudeConfigFile()) {
   fs.renameSync(tmp, file);
   return true;
 }
+
+/** Your own status line command in Claude Code's settings (~/.claude/settings.json), or ''. */
+export function ownStatusLine(dir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude')) {
+  try {
+    const sl = JSON.parse(fs.readFileSync(path.join(dir, 'settings.json'), 'utf8')).statusLine;
+    return sl?.type === 'command' && typeof sl.command === 'string' ? sl.command : '';
+  } catch {
+    return '';
+  }
+}

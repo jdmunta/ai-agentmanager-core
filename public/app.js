@@ -42,6 +42,7 @@ import { initNews } from '/news.js';
 import { initPlan } from '/plan.js';
 import { initSystem } from '/system.js';
 import { adviceHtml, initDecide } from '/decide.js';
+import { initUsage } from '/usage.js';
 import { initMcp } from '/mcp.js';
 import { initCodeMap } from '/codemap.js';
 import { initKeys } from '/keys.js';
@@ -350,6 +351,9 @@ decideUi = initDecide({
   onData: () => (renderInbox(), selectedId && renderDetail()),
 });
 $('#decide-btn').onclick = () => decideUi.open();
+// Usage: each engine's plan limits, used and left (the chip by the connection light opens it).
+const usageUi = initUsage({ api, $, esc, ago, toast: (m, ms) => toast(m, ms) });
+$('#usage-btn').onclick = () => usageUi.open();
 // MCP: the MCP servers and tools Claude Code has in a folder, and running one.
 const mcpUi = initMcp({ api, $, esc, ago, md: (t) => md(t), toast: (m, ms) => toast(m, ms), agents: () => [...agents.values()] });
 $('#mcp-btn').onclick = () => mcpUi.open(selectedId && agents.get(selectedId)?.workdir ? selectedId : null);
@@ -407,6 +411,7 @@ function shortcut(act) {
   if (act === 'plan') return planUi.open();
   if (act === 'os') return osUi.open();
   if (act === 'decide') return decideUi.open();
+  if (act === 'usage') return usageUi.open();
   if (act === 'today') return todayUi.open();
   if (act.startsWith('tab:')) return showTab(act.slice(4));
   return false;
@@ -4554,6 +4559,8 @@ function handleEvent(msg) {
     valueUi.changed();
   } else if (msg.t === 'news') {
     newsUi.changed();
+  } else if (msg.t === 'usage') {
+    usageUi.changed();
   } else if (msg.t === 'advisor') {
     decideUi.changed();
   } else if (msg.t === 'plan') {

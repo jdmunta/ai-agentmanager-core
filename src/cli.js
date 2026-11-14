@@ -824,6 +824,28 @@ export async function main(argv) {
     });
 
   program
+    .command('usage')
+    .description("Each engine's plan limits: how much is used and left, and when it resets")
+    .option('--warn <percent>', 'alert when a limit is this much used (or off)')
+    .option('--hold <percent>', 'start no new agents on an engine this much used (or off)')
+    .option('--default <engine>', 'the engine new agents start on')
+    .option('--json', 'print JSON')
+    .action(async (opts) => {
+      await daemon();
+      const patch = { ...(opts.warn !== undefined ? { warnAt: opts.warn } : {}), ...(opts.hold !== undefined ? { holdAt: opts.hold } : {}), ...(opts.default ? { engine: opts.default } : {}) };
+      const v = Object.keys(patch).length ? await api('PUT', '/usage', patch) : await api('GET', '/usage');
+      if (opts.json) return console.log(JSON.stringify(v, null, 2));
+      const tone = { ok: green, warn: yellow, high: red, held: red, limited: red };
+      for (const e of v.engines) {
+        console.log(`${bold(e.label)}${e.id === v.default ? dim(' (default)') : ''}${e.level === 'held' ? red(' held for new work') : ''}`);
+        if (e.limited) console.log(`  ${red('stopped at a limit')}${e.limited.resetsIn ? `, resets ${e.limited.resetsIn}` : ''} ${dim(e.limited.text)}`);
+        for (const w of e.windows) console.log(`  ${w.label.padEnd(16)} ${w.used === null ? dim('reset; no reading since') : (tone[e.level] ?? ((x) => x))(`${String(Math.round(w.used)).padStart(3)}% used  ${String(Math.round(w.left)).padStart(3)}% left`)}${w.resetsIn ? dim(`  resets ${w.resetsIn}`) : ''}${w.stale ? dim('  (an old reading)') : ''}`);
+        if (e.note) console.log(`  ${dim(e.note)}`);
+      }
+      console.log(dim(`Warn at ${v.settings.warnAt ?? 'off'}${v.settings.warnAt ? '%' : ''} · hold new work at ${v.settings.holdAt ?? 'off'}${v.settings.holdAt ? '%' : ''}`));
+    });
+
+  program
     .command('runbook [id]')
     .description('Runbooks for the support team, written from a release ticket, an epic, or the code changes of a time frame')
     .option('--ticket <key>', 'from a release ticket: it, what it links to, its sub-tasks and its fix versions')

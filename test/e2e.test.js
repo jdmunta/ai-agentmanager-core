@@ -1120,7 +1120,9 @@ test("Explain summarizes the agent's live session in a separate tool-less Claude
   await waitFor(async () => {
     const { transcriptPath } = await import('../src/tracker.js');
     const ag = await agentNow(a.id);
-    return ag.workdir && fs.existsSync(transcriptPath(ag.workdir, a.sessionId));
+    // The file is there before the agent's words are: wait for what the explainer is to see.
+    const file = ag.workdir && transcriptPath(ag.workdir, a.sessionId);
+    return file && fs.existsSync(file) && fs.readFileSync(file, 'utf8').includes('Looking at');
   }, 8000, 'transcript');
   await call('POST', `/agents/${a.id}/stop`);
   const res = await call('POST', `/agents/${a.id}/explain`);
