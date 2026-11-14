@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.51.0 (2026-11-14)
+
+- **Usage: what is left of each engine's plan.** A chip by the connection light shows the engine new agents start on with what is used of its limits (`Claude Code 5h 23% · wk 41%`), amber then red as a limit nears. Click it (or **Usage…** in the menu, `z`, `agentmgr usage`) for every engine: each limit's percent used, percent left, and when it resets.
+- **Where the numbers come from.** Claude Code's 5-hour session and 7-day limits, which it hands a session's status line (Pro, Max and Ultra plans, once a session has had a reply): sessions started here get a status line that records them, and your own status line still shows. Codex's limits from its session logs, when it reports them. For any engine, a limit an agent actually hit, until it resets. No service is asked and no model is called.
+- **Alert, hold, switch.** An alert once per limit at 80% used (adjustable; the new *usage* alert). **Hold new work at** a percent (off by default): no new agent starts on an engine at or past it, and agents already running carry on. **Start new agents here** makes another installed engine the default for new agents.
+- Turn it off with `"usage": { "enabled": false }` in config.json.
+
 ## 1.50.0 (2026-11-14)
 
 - **Reverse engineer.** **🔍 Reverse engineer** in an agent's detail (or the **Reverse** tab of the split, or `agentmgr reverse`) puts the agent's session on the left and a pane on the right. Name a target (an app's folder, a binary's path, a website's address) and what you want to understand; the agent investigates in its own session with the tools of [REA](https://github.com/morluto/rea), the "Reverse Engineer Anything" MCP server, and changes nothing.
