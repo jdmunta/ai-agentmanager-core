@@ -83,7 +83,7 @@ before(async () => {
   const http = await import('node:http');
   notes = http.createServer((req, res) => res.end(req.url.endsWith('.ics') ? calIcs() : notesMd));
   await new Promise((r) => notes.listen(0, '127.0.0.1', r));
-  fs.writeFileSync(path.join(home, 'config.json'), JSON.stringify({ claudeBin: process.execPath, claudeArgs: [path.join(here, 'fake-claude.js')], updates: { check: false }, judge: { enabled: false }, shell: '/bin/sh', gitRefreshSec: 1, conflictRefreshSec: 0, news: { sources: [], custom: [{ id: 'local', lab: 'Anthropic', label: 'Local notes', url: `http://127.0.0.1:${notes.address().port}/notes.md` }] } }));
+  fs.writeFileSync(path.join(home, 'config.json'), JSON.stringify({ claudeBin: process.execPath, claudeArgs: [path.join(here, 'fake-claude.js')], updates: { check: false }, judge: { enabled: false }, shell: '/bin/sh', gitRefreshSec: 1, conflictRefreshSec: 0, engines: { codex: { bin: path.join(here, 'fake-codex.js') } }, news: { sources: [], custom: [{ id: 'local', lab: 'Anthropic', label: 'Local notes', url: `http://127.0.0.1:${notes.address().port}/notes.md` }] } }));
   daemon = spawn(process.execPath, [path.join(here, '..', 'bin', 'agentmgr.js'), 'serve'], {
     env: { ...process.env, AGENTMGR_HOME: home, AGENTMGR_PORT: String(port), AGENTMGR_REMOTE: '0', AGENTMGR_PLUGINS: '', AGENTMGR_NO_GH: '1', CLAUDE_CONFIG_DIR: path.join(home, 'claude'), AGENTMGR_CLAUDE_DESKTOP_DIR: path.join(home, 'claude-desktop'), FAKE_CLAUDE_LOG: path.join(home, 'fake.log') },
     stdio: 'ignore',
@@ -603,19 +603,23 @@ test('Usage: the chip by the connection light, every engine with what is used an
   assert.deepEqual([r.level, r.bar, r.warn, r.hold], ['Getting close', '86%', '80', 'off']);
   assert.match(r.head, /new agents start here[\s\S]*from Claude Code 9\.9\.9/);
 
-  // Hold new work at 85%: no new agent on Claude Code, and the reason is said.
-  await js(`(() => { const s = document.querySelector('[data-usage-set="holdAt"]'); s.value = '85'; s.dispatchEvent(new Event('change', { bubbles: true })); })()`);
-  await until(`document.querySelector('[data-usage-engine="claude"] .usage-level')?.textContent === 'Held for new work'`, 'held');
-  const refused = await fetch(`${base}/api/agents`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-agentmgr': '1' }, body: JSON.stringify({ intents: ['Held back'], workdir: home }) });
-  assert.match((await refused.json()).error, /Claude Code is held for new work: 86% of its 5-hour session limit is used/);
-  assert.ok(refused.status >= 400);
-  // Another engine is one click away for new agents; then back.
-  const other = await js(`document.querySelector('[data-usage-default]')?.dataset.usageDefault ?? null`);
-  assert.ok(other && other !== 'claude', 'another installed engine is offered');
-  await js(`document.querySelector('[data-usage-default="${other}"]').click()`);
-  await until(`(await (await fetch('/api/usage')).json()).default === '${other}'`, 'new agents start there');
-  await until(`/new agents start here/.test(document.querySelector('[data-usage-engine="${other}"] .plan-project-head')?.textContent ?? '')`, 'marked in the window');
-  await api('PUT', '/usage', { engine: 'claude', holdAt: 'off' });
+  try {
+    // Hold new work at 85%: no new agent on Claude Code, and the reason is said.
+    await js(`(() => { const s = document.querySelector('[data-usage-set="holdAt"]'); s.value = '85'; s.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+    await until(`document.querySelector('[data-usage-engine="claude"] .usage-level')?.textContent === 'Held for new work'`, 'held');
+    const refused = await fetch(`${base}/api/agents`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-agentmgr': '1' }, body: JSON.stringify({ intents: ['Held back'], workdir: home }) });
+    assert.match((await refused.json()).error, /Claude Code is held for new work: 86% of its 5-hour session limit is used/);
+    assert.ok(refused.status >= 400);
+    // Another engine is one click away for new agents; then back.
+    const other = 'codex';
+    await until(`document.querySelector('[data-usage-default="codex"]')`, 'another installed engine is offered');
+    await js(`document.querySelector('[data-usage-default="${other}"]').click()`);
+    await until(`(await (await fetch('/api/usage')).json()).default === '${other}'`, 'new agents start there');
+    await until(`/new agents start here/.test(document.querySelector('[data-usage-engine="${other}"] .plan-project-head')?.textContent ?? '')`, 'marked in the window');
+  } finally {
+    // Whatever happened above, the tests after this one can start agents.
+    await api('PUT', '/usage', { engine: 'claude', holdAt: 'off' });
+  }
   await until(`document.querySelector('[data-usage-set="holdAt"]').value === 'off' && document.querySelector('[data-usage-engine="claude"] .usage-level').textContent === 'Getting close'`, 'not held any more');
   await js(`document.querySelector('[data-usage="close"]').click()`);
   assert.deepEqual(errors, [], 'no errors on the page');
