@@ -21,6 +21,7 @@ export const EVENT_DEFAULTS = {
   standup: true, // the daily standup is ready to play
   value: true, // a scheduled value report (week, month, quarter)
   milestone: true, // a project's date (code complete, RC, GA) is coming up, at risk or late
+  usage: true, // an engine's plan limit is nearly used up (Usage)
   decided: true, // something was decided for you (a standing decision, or within the autonomy you set)
 };
 

@@ -1295,7 +1295,7 @@ table.bench-cases tr.faster td:nth-child(5) { color: var(--green); font-weight: 
 .issues-dialog { width: min(1100px, calc(100% - 32px)); max-height: calc(100% - 32px); padding: 16px; }
 /* Only while open: a display on the dialog itself would keep a closed one on screen. */
 .issues-dialog[open] { display: flex; flex-direction: column; }
-#issues-body, #actions-body, #designs-body, #reviews-body, #bugs-body, #plan-body, #news-body, #os-body, #decide-body { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+#issues-body, #actions-body, #designs-body, #reviews-body, #bugs-body, #plan-body, #news-body, #os-body, #decide-body, #usage-body { display: flex; flex-direction: column; min-height: 0; flex: 1; }
 /* The lists: drag the corner to any size, or fill the window (⤢ or f). */
 .issues-dialog { resize: both; overflow: hidden; min-width: min(520px, calc(100% - 32px)); min-height: 240px; max-width: calc(100% - 16px); max-height: calc(100% - 16px); }
 .issues-dialog.expanded { width: calc(100% - 16px); height: calc(100% - 16px); }
@@ -1452,6 +1452,26 @@ table.plan-debt .plan-score b { position: relative; padding-left: 6px; }
 .plan-bar-fill { position: absolute; left: 0; top: 6px; bottom: 6px; background: color-mix(in srgb, var(--red) 22%, transparent); border-radius: 3px; }
 table.plan-debt code { overflow-wrap: anywhere; }
 /* AI News: a day heading, then each release with its lab, summary and links. */
+/* ---------- Usage: each engine's plan limits, used and left */
+.usage-chip { font-size: 12px; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border); background: var(--panel); color: var(--muted); white-space: nowrap; cursor: pointer; font-variant-numeric: tabular-nums; }
+.usage-chip.warn { color: var(--yellow); border-color: var(--yellow); }
+.usage-chip.high, .usage-chip.held, .usage-chip.limited { color: var(--red); border-color: var(--red); }
+.usage-dialog { width: min(760px, calc(100% - 32px)); }
+.usage-scroll { border: 0; }
+.usage-window { margin: 8px 0 2px; }
+.usage-window-head { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; font-size: 13px; }
+.usage-num { font-variant-numeric: tabular-nums; }
+.usage-left { font-weight: 600; font-variant-numeric: tabular-nums; color: var(--green); }
+.usage-left.busy { color: var(--yellow); }
+.usage-left.heavy { color: var(--red); }
+.usage-level.ok { color: var(--green); }
+.usage-level.warn { color: var(--yellow); border-color: var(--yellow); }
+.usage-level.high, .usage-level.held, .usage-level.limited { color: var(--red); border-color: var(--red); }
+.usage-settings { display: flex; gap: 18px; flex-wrap: wrap; margin: 6px 0 8px; font-size: 13px; }
+.usage-settings label { display: flex; flex-direction: row; align-items: center; gap: 6px; margin: 0; }
+.usage-settings select { width: auto; }
+@media (max-width: 760px) { .usage-chip { display: none; } }
+
 /* ---------- Runbooks for the support team (a tab of Plan) */
 .rb-form input[name="key"] { flex: 1 1 240px; min-width: 0; }
 .rb-form input[name="note"] { flex: 2 1 260px; min-width: 0; }

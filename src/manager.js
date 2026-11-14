@@ -1,5 +1,7 @@
 import crypto from 'node:crypto';
 import { EventEmitter } from 'node:events';
+import { ownStatusLine } from './trust.js';
+import { statusLineScript, usageFile } from './usage.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -1426,7 +1428,8 @@ export class AgentManager extends EventEmitter {
       const dir = fs.realpathSync(uploads);
       writableDir = writableDir ? [writableDir, dir].flat() : dir;
     }
-    return { extra: engine.extraArgs(this.config), permissionMode: agent.permissionMode, model: agent.model, writableDir, instructions: prompts.join('\n\n') || null, agents, allowedTools };
+    // A status line that records the plan's usage (not in a container: the script isn't there).
+    return { extra: [...engine.extraArgs(this.config), ...(agent.isolation === 'container' ? [] : engine.usageArgs?.(this.config, statusLineScript()) ?? [])], permissionMode: agent.permissionMode, model: agent.model, writableDir, instructions: prompts.join('\n\n') || null, agents, allowedTools };
   }
 
   /** Spawn the agent's engine in a PTY, reusing its terminal clients and scrollback. */
@@ -1716,7 +1719,7 @@ export class AgentManager extends EventEmitter {
   }
 
   childEnv(agent) {
-    const env = { ...process.env, ...(agent ? { AGENTMGR_AGENT_ID: agent.id } : {}), TERM: 'xterm-256color', COLORTERM: 'truecolor', AGENTMGR_TERMINAL: '1' };
+    const env = { ...process.env, ...(agent ? { AGENTMGR_AGENT_ID: agent.id } : {}), TERM: 'xterm-256color', COLORTERM: 'truecolor', AGENTMGR_TERMINAL: '1', AGENTMGR_USAGE_FILE: usageFile(), AGENTMGR_USER_STATUSLINE: ownStatusLine() };
     for (const key of STRIP_ENV) delete env[key];
     return env;
   }
@@ -2888,6 +2891,8 @@ export class AgentManager extends EventEmitter {
       const cursor = this.cursors.get(key) ?? { offset: 0 };
       this.cursors.set(key, cursor);
       const res = engine.scan(file, cursor, this.config.bugPatterns);
+      // The engine's plan limits, when its log has them (usage.js).
+      if (res.rateLimits) this.emit('usage', { engine: engine.id, ...res.rateLimits });
       const subMaps = engine.subagentFiles(sessionDir, session.id).map((sub) => {
         const c = this.cursors.get(sub) ?? { offset: 0 };
         this.cursors.set(sub, c);
@@ -3575,6 +3580,7 @@ export class AgentManager extends EventEmitter {
     if (prev && !prev.resumedAt && prev.text === found.text) return (rt.lastLimit = prev);
     const agent = this.store.get(id);
     if (agent) console.log(`[agentmgr] ${agent.name}: ${engineOf(agent).label} stopped at a limit (${found.text})${found.resetAt ? `; resets ${found.resetAt}` : ''}`);
+    if (agent && found.kind === 'limit') this.emit('limit', { engine: engineOf(agent).id, text: found.text, resetAt: found.resetAt ?? null });
     return (rt.lastLimit = { ...found, at: new Date(t).toISOString(), resumedAt: null });
   }
 
