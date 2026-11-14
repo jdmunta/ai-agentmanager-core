@@ -7,16 +7,18 @@
 // What is open can be handed to an agent from each (it goes to the backlog).
 
 import { expandButton, expandable } from './expand.js';
+import { initRunbooks } from './runbooks.js';
 
 const TABS = [
   ['dates', 'Dates'],
   ['decisions', 'Decisions'],
   ['debt', 'Debt'],
+  ['runbooks', 'Runbooks'],
 ];
 const SAVED = 'agentmgr.planTab';
 const STATUS = { 'on-track': 'On track', 'at-risk': 'At risk', late: 'Late', reached: 'Reached' };
 
-export function initPlan({ api, $, esc, ago, toast, projects = () => [], openTab = () => {} }) {
+export function initPlan({ api, $, esc, ago, toast, projects = () => [], openTab = () => {}, md = (t) => `<pre>${esc(t)}</pre>` }) {
   const dialog = $('#plan-dialog');
   const body = $('#plan-body');
   let tab = 'dates';
@@ -32,6 +34,7 @@ export function initPlan({ api, $, esc, ago, toast, projects = () => [], openTab
   const route = () => (tab === 'dates' ? '/milestones' : tab === 'debt' ? '/debt' : `/decisions?project=${encodeURIComponent(filter.project)}&q=${encodeURIComponent(filter.q)}`);
   async function load({ quiet = false } = {}) {
     const t = tab;
+    if (t === 'runbooks') return runbooks.load();
     try {
       data[t] = await api('GET', route());
     } catch (e) {
@@ -49,6 +52,17 @@ export function initPlan({ api, $, esc, ago, toast, projects = () => [], openTab
     el.textContent = n ? String(n) : '';
     el.title = n ? `${n} date${n === 1 ? '' : 's'} late or at risk` : '';
   }
+
+  // Runbooks for the support team: their own tab, drawn and driven by runbooks.js.
+  const runbooks = initRunbooks({ api, esc, ago, toast, projects, md, redraw: (force) => {
+      // News from the daemon doesn't take what you are typing; your own click always draws.
+      if (tab !== 'runbooks' || !dialog.open || (!force && typing())) return;
+      const top = body.querySelector('.plan-scroll')?.scrollTop ?? 0;
+      draw();
+      const sc = body.querySelector('.plan-scroll');
+      if (sc) sc.scrollTop = top;
+    },
+  });
 
   const day = (iso) => new Date(`${iso}T12:00:00`).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
   const typing = () => body.contains(document.activeElement) && /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName);
@@ -179,7 +193,7 @@ export function initPlan({ api, $, esc, ago, toast, projects = () => [], openTab
         ${expandButton(dialog)}
         <button class="small" data-plan="close" title="Close (Esc)">Close</button>
       </div>
-      <div class="issues-scroll plan-scroll">${tab === 'dates' ? datesHtml() : tab === 'decisions' ? decisionsHtml() : debtHtml()}</div>`;
+      <div class="issues-scroll plan-scroll">${tab === 'dates' ? datesHtml() : tab === 'decisions' ? decisionsHtml() : tab === 'runbooks' ? runbooks.html() : debtHtml()}</div>`;
   }
   // A change from the daemon doesn't take what you are typing: it is drawn when you are done.
   function render() {
@@ -213,6 +227,7 @@ export function initPlan({ api, $, esc, ago, toast, projects = () => [], openTab
   };
 
   body.addEventListener('submit', (e) => {
+    if (tab === 'runbooks' && runbooks.submit(e)) return;
     e.preventDefault();
     const f = Object.fromEntries(new FormData(e.target));
     if (e.target.matches('[data-plan-dates]')) {
@@ -251,6 +266,7 @@ export function initPlan({ api, $, esc, ago, toast, projects = () => [], openTab
   body.addEventListener('click', async (e) => {
     const t = e.target.closest('[data-plan-tab]');
     if (t) return show(t.dataset.planTab);
+    if (tab === 'runbooks' && runbooks.click(e)) return;
     const ds = (name) => e.target.closest(`[data-plan-${name}]`)?.dataset;
     const split = (v) => v.split('|');
     if (ds('task')) {

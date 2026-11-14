@@ -112,6 +112,17 @@ if (args.includes('--input-format') && args.includes('stream-json')) {
     }
     // The AI judge: JSON verdicts (see src/judge.js).
     const json = (o) => process.stdout.write(JSON.stringify(o), () => process.exit(0));
+    if (input.startsWith('Write a support runbook')) {
+      // Runbooks: Markdown, not JSON, naming what it was given; "#norunbook" in the facts gives no runbook.
+      if (input.includes('#norunbook')) return process.stdout.write('Sorry.', () => process.exit(0));
+      const keys = [...new Set([...input.matchAll(/^### ([A-Z]+-\d+): /gm)].map((m) => m[1]))];
+      const commits = Number(input.match(/<commits count="(\d+)">/)?.[1] ?? 0);
+      const title = input.match(/^Use this title: (.+)$/m)?.[1] ?? `Fake runbook for ${input.match(/^Write a support runbook from (.+?)\. It is for/)?.[1]}`;
+      const note = input.match(/^Asked for in particular: (.+)$/m)?.[1];
+      const text = `# ${title}\n\n## Summary\nWritten from ${keys.length} tickets and ${commits} commits.${input.includes('<previous>') ? ' Revised.' : ''}\n\n## What changed\n| Area | Change | Who notices | Source |\n|---|---|---|---|\n${keys.map((k) => `| app | change | users | ${k} |`).join('\n') || '| app | change | users | commits |'}\n\n## Troubleshooting\n1. Check the setting.\n${note ? `\n## Asked for\n${note}\n` : ''}\n## To confirm with engineering\n- [ ] How is it rolled back?\n\n## Sources\n${keys.join(', ') || 'commits'}${input.includes('retry_limit') ? '\nSaw the diff of retry_limit.' : ''}\n`;
+      // Chatter before the title, as models do: it is dropped.
+      return process.stdout.write(`Here you go:\n\n${text}`, () => process.exit(0));
+    }
     if (input.startsWith('You advise a senior engineer')) {
       // Decide: a recommendation on a plan or a question; a standing decision named in the prompt applies.
       const opts = input.match(/^Its options: (.+)$/m)?.[1].split(' | ');

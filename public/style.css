@@ -1448,6 +1448,23 @@ table.plan-debt .plan-score b { position: relative; padding-left: 6px; }
 .plan-bar-fill { position: absolute; left: 0; top: 6px; bottom: 6px; background: color-mix(in srgb, var(--red) 22%, transparent); border-radius: 3px; }
 table.plan-debt code { overflow-wrap: anywhere; }
 /* AI News: a day heading, then each release with its lab, summary and links. */
+/* ---------- Runbooks for the support team (a tab of Plan) */
+.rb-form input[name="key"] { flex: 1 1 240px; min-width: 0; }
+.rb-form input[name="note"] { flex: 2 1 260px; min-width: 0; }
+table.rb-list { width: 100%; margin-top: 6px; }
+.rb-title { font-weight: 600; text-align: left; padding: 0; color: var(--text); }
+.rb-status.ready { color: var(--green); }
+.rb-status.failed { color: var(--red); }
+.rb-status.writing { color: var(--yellow); }
+.rb-bar a.button { text-decoration: none; padding: 3px 8px; border: 1px solid var(--border); border-radius: 6px; font-size: 12px; color: var(--text); }
+.rb-doc { padding: 4px 4px 12px; overflow: visible; }
+.rb-doc table { border-collapse: collapse; margin: 8px 0; font-size: 13px; }
+.rb-doc th, .rb-doc td { border: 1px solid var(--border); padding: 4px 8px; text-align: left; vertical-align: top; }
+.rb-doc input[type="checkbox"] { width: auto; display: inline; margin: 0 6px 0 0; vertical-align: middle; }
+.rb-doc li:has(> input[type="checkbox"]) { list-style: none; margin-left: -18px; }
+.rb-form .chips .chip.active { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+.rb-edit { width: 100%; min-height: 52vh; font-family: var(--mono, ui-monospace, monospace); font-size: 13px; line-height: 1.45; }
+
 /* ---------- Decide: recommendations, standing decisions, impact, dates at risk, looking back */
 .decide-dialog { width: min(1080px, calc(100% - 32px)); }
 .decide-scroll { border: 0; }

@@ -39,7 +39,7 @@ import { Previews, parseUrl } from './preview.js';
 import { LiveBrowser } from './livebrowser.js';
 import * as remote from './remote.js';
 import * as service from './service.js';
-import { assignedIssues, jiraProblem, jiraView, saveJira } from './jira.js';
+import { assignedIssues, jiraProblem, jiraView, saveJira, searchIssues } from './jira.js';
 import { ProposedIssues, issuesMarkdown } from './issues.js';
 import { MyActions } from './actions.js';
 import { designsMarkdown } from './designs.js';
@@ -52,6 +52,7 @@ import { Value, valueSlack } from './value.js';
 import { News } from './news.js';
 import { System } from './system.js';
 import { Advisor } from './advisor.js';
+import { Runbooks } from './runbooks.js';
 import { Milestones } from './milestones.js';
 import { Decisions } from './decisions.js';
 import { Debt } from './debt.js';
@@ -320,6 +321,15 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
       if (!n.enabled || !n.events.decided) return;
       await sendSlack(text, n, plain);
     },
+  });
+  // Runbooks for the support team, from a release ticket, an epic, or the code changes of a time frame (runbooks.js).
+  const runbooks = new Runbooks({
+    store,
+    write: (prompt) => manager.oneShot(null, prompt, { ...manager.writerFor({}), timeoutMs: 600_000 }),
+    search: (jql, opts) => searchIssues(jql, opts),
+    projects: () => manager.listProjects(),
+    dirOf: (p) => p.dir ?? (p.repo && git.isRemoteUrl(p.repo) ? repoCacheDir(p.repo) : p.repo ?? null),
+    onChange: () => pushPlan(),
   });
   const debt = new Debt({
     store,
@@ -1100,6 +1110,20 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
   api.post('/milestones/:project/reach', wrap((req) => milestones.reach(req.params.project, req.body?.stage, req.body?.reached !== false)));
   api.post('/milestones/:project/task', wrap((req) => milestones.task(req.params.project, req.body?.stage, req.body?.item)));
   // Plan → Decisions: the log (?project=<key>&q=<words>; ?format=markdown), one of your own, and removal.
+  api.get('/runbooks', wrap(() => runbooks.list()));
+  api.post('/runbooks', wrap((req) => runbooks.create(req.body ?? {})));
+  api.get('/runbooks/:id', (req, res) => {
+    try {
+      const r = runbooks.get(req.params.id);
+      if (req.query.format === 'markdown') return res.type('text/markdown').attachment(`${r.title.replace(/[^\w.-]+/g, '-').slice(0, 80) || 'runbook'}.md`).send(r.markdown);
+      res.json(r);
+    } catch (e) {
+      res.status(e.status ?? 500).json({ error: e.message });
+    }
+  });
+  api.put('/runbooks/:id', wrap((req) => runbooks.update(req.params.id, req.body ?? {})));
+  api.post('/runbooks/:id/regenerate', wrap((req) => runbooks.regenerate(req.params.id, req.body ?? {})));
+  api.delete('/runbooks/:id', wrap((req) => runbooks.remove(req.params.id)));
   api.get('/advisor', wrap((req) => advisor.view({ think: req.query.think === '1' })));
   api.post('/advisor/briefs/apply', wrap((req) => advisor.apply(String(req.body?.key ?? ''), Number(req.body?.option), { text: typeof req.body?.text === 'string' ? req.body.text : null })));
   api.post('/advisor/briefs/race', wrap((req) => advisor.race(String(req.body?.key ?? ''))));

@@ -323,6 +323,7 @@ const planUi = initPlan({
   $,
   esc,
   ago,
+  md: (text) => md(text),
   toast: (m, ms) => toast(m, ms),
   projects: () => projectsState.map((p) => ({ key: p.shortcut, name: p.name })),
   openTab: (what, id) => {
