@@ -705,8 +705,8 @@ test('Board: agents as cards by where their work stands, resumed and closed from
   // Resume from the Closed column; close from Waiting. Each card moves by itself.
   await js(`document.querySelector('[data-board-card="${b.id}"] [data-board-act="start"]').click()`);
   await until(`${col(b.id)} === 'idle'`, 'the resumed one in Waiting', 15_000);
-  await js(`document.querySelector('[data-board-card="${a.id}"] [data-board-act="stop"]').click()`);
-  await until(`${col(a.id)} === 'closed'`, 'the closed one in Closed', 15_000);
+  // (The button is there while its card is in Waiting: a burst of output moves it to Working for a moment.)
+  await until(`(document.querySelector('[data-board-card="${a.id}"] [data-board-act="stop"]')?.click(), ${col(a.id)} === 'closed')`, 'the closed one in Closed', 20_000);
   // A drag: onto a column agents reach by themselves it says so; from Closed onto Waiting it resumes.
   const drag = (id, to) => js(`(() => {
     const dt = new DataTransfer();
@@ -723,7 +723,7 @@ test('Board: agents as cards by where their work stands, resumed and closed from
   await until(`[...document.querySelectorAll('.toast')].some((t) => /moves to In review by itself/.test(t.textContent))`, 'why nothing moved');
   assert.equal(await js(col(a.id)), 'closed');
   await drag(a.id, 'idle');
-  await until(`${col(a.id)} === 'idle'`, 'resumed by a drag', 15_000);
+  await until(`['idle', 'working'].includes(${col(a.id)})`, 'resumed by a drag', 15_000);
   // (A session that is producing output is not closed by a drag: wait for it to be quiet.)
   for (let i = 0; i < 20 && (await js(col(b.id))) !== 'closed'; i++) {
     await drag(b.id, 'closed');
