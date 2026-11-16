@@ -1932,9 +1932,10 @@ export async function main(argv) {
     .description("Run the race's test command in every attempt's worktree")
     .argument('<race>')
     .option('-t, --test <command>', 'set or change the test command')
+    .option('--runs <n>', 'run it this many times in each attempt (1 to 5), to tell a flaky test from a broken one; with 1, a failed run is run once more')
     .action(async (id, opts) => {
       await daemon();
-      await api('POST', `/races/${id}/tests`, opts.test ? { command: opts.test } : {});
+      await api('POST', `/races/${id}/tests`, { ...(opts.test ? { command: opts.test } : {}), ...(opts.runs !== undefined ? { runs: Number(opts.runs) } : {}) });
       console.log(`${green('…')} running; see agentmgr race show ${id}`);
     });
   raceCmd

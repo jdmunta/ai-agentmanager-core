@@ -1052,7 +1052,7 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
     evals.verify(a.id).catch((e) => console.log(`[agentmgr] eval: ${e.message}`));
     return { started: true };
   }));
-  api.put('/agents/:id/eval/command', wrap((req) => evals.setTestCommand(req.params.id, req.body?.command)));
+  api.put('/agents/:id/eval/command', wrap((req) => evals.setTestCommand(req.params.id, req.body?.command, req.body?.runs)));
   api.post('/agents/:id/eval/gaps', wrap((req) => evals.closeGaps(req.params.id)));
   api.post('/agents/:id/eval/seen', wrap((req) => evals.seen(req.params.id, req.body?.seen !== false)));
   api.post('/agents/:id/eval/post', wrap((req) => review.postEval(req.params.id, evals.view(manager.mustGet(req.params.id).id)?.markdown)));

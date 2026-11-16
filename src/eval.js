@@ -137,6 +137,29 @@ export function usualCommand(runs) {
   return best?.[0] ?? null;
 }
 
+/** How many times a test command is run: 1 to 5. */
+const MAX_REPEATS = 5;
+export const cleanRuns = (v) => (Number.isInteger(Number(v)) && Number(v) >= 1 && Number(v) <= MAX_REPEATS ? Number(v) : 1);
+
+/**
+ * Run a test command more than once, since one run can pass or fail by chance. `once()` →
+ * { passed, output, timedOut }. With `runs` of 1, a run that fails is run once more, which tells
+ * a flaky test from a broken one; a run that timed out is not repeated. Returns { passed (every
+ * run), runs, passes, flaky (some passed, some failed), shown (the last failed run, else the last) }.
+ */
+export async function repeatRuns(once, runs = 1) {
+  const results = [];
+  let want = cleanRuns(runs);
+  for (let i = 0; i < want; i++) {
+    const r = await once(i);
+    results.push(r);
+    if (r.timedOut) break;
+    if (want === 1 && !r.passed) want = 2;
+  }
+  const passes = results.filter((r) => r.passed).length;
+  return { passed: passes === results.length, runs: results.length, passes, flaky: passes > 0 && passes < results.length, shown: results.findLast((r) => !r.passed) ?? results.at(-1) };
+}
+
 // What each item weighs in the confidence; "na" items don't count either way.
 export const WEIGHTS = { rerun: 25, criteria: 25, agentTests: 10, coverage: 10, ci: 10, judge: 10, checks: 5, bench: 5 };
 export const LABELS = {
@@ -162,8 +185,10 @@ export function evaluate({ runs = [], rerun = null, state = null, scorecard = nu
   if (rerun?.running) add('rerun', 'pending', 0, `Running ${rerun.command}…`);
   else if (!rerun) add('rerun', 'pending', 0, testCommand ? `Not run yet (${testCommand})` : 'No test command found for this project: set one');
   else if (state && rerun.state !== state) add('rerun', 'pending', 0, `The code changed after the last run (${rerun.passed ? 'passed' : 'failed'} ${rerun.at}): run again`);
-  else if (rerun.passed) add('rerun', 'ok', 1, `${rerun.command} passed${rerun.counts ? `: ${rerun.counts.passed} passed` : ''}`);
-  else add('rerun', 'failed', 0, `${rerun.command} failed${rerun.counts ? `: ${rerun.counts.failed} failed, ${rerun.counts.passed} passed` : rerun.timedOut ? ' (timed out)' : ''}`);
+  else if (rerun.passed) add('rerun', 'ok', 1, `${rerun.command} passed${rerun.runs > 1 ? ` in all ${rerun.runs} runs` : ''}${rerun.counts ? `: ${rerun.counts.passed} passed` : ''}`);
+  // Passed in some runs and failed in others: not something to merge on, and not the same as broken.
+  else if (rerun.flaky) add('rerun', 'partial', rerun.passes / rerun.runs, `${rerun.command} is flaky: it passed ${rerun.passes} of ${rerun.runs} runs on the same code`);
+  else add('rerun', 'failed', 0, `${rerun.command} failed${rerun.runs > 1 ? ` in all ${rerun.runs} runs` : ''}${rerun.counts ? `: ${rerun.counts.failed} failed, ${rerun.counts.passed} passed` : rerun.timedOut ? ' (timed out)' : ''}`);
 
   // Acceptance criteria, as the scorecard found them.
   const crit = scorecard?.criteria ?? [];
@@ -241,7 +266,7 @@ export function evalMarkdown(ev, title = '') {
     ...ev.items.map((i) => `| ${MARK[i.state]} | ${i.label} | ${String(i.detail).replace(/\|/g, '/').replace(/\n/g, ' ')} |`),
     '',
     ...(ev.criteria.length ? ['**Acceptance criteria**', '', ...ev.criteria.map((c) => `- ${c.status === 'met' ? '✅' : c.status === 'not_met' ? '❌' : '⏳'} ${c.criterion}${c.evidence ? ` — ${c.evidence}` : ''}`), ''] : []),
-    ...(last.size ? ['**Tests run**', '', ...[...last.values()].map((r) => `- ${r.passed ? '✅' : '❌'} \`${r.command}\`${r.counts ? ` (${r.counts.passed} passed, ${r.counts.failed} failed)` : ''}`), ...(ev.rerun && !ev.rerun.running ? [`- ${ev.rerun.passed ? '✅' : '❌'} \`${ev.rerun.command}\` run again by AI Agent Manager on the final change${ev.rerun.counts ? ` (${ev.rerun.counts.passed} passed, ${ev.rerun.counts.failed} failed)` : ''}`] : []), ''] : []),
+    ...(last.size ? ['**Tests run**', '', ...[...last.values()].map((r) => `- ${r.passed ? '✅' : '❌'} \`${r.command}\`${r.counts ? ` (${r.counts.passed} passed, ${r.counts.failed} failed)` : ''}`), ...(ev.rerun && !ev.rerun.running ? [`- ${ev.rerun.passed ? '✅' : ev.rerun.flaky ? '🟡' : '❌'} \`${ev.rerun.command}\` run again by AI Agent Manager on the final change${ev.rerun.runs > 1 ? (ev.rerun.flaky ? `, flaky: passed ${ev.rerun.passes} of ${ev.rerun.runs} runs` : `, ${ev.rerun.runs} runs`) : ''}${ev.rerun.counts ? ` (${ev.rerun.counts.passed} passed, ${ev.rerun.counts.failed} failed)` : ''}`] : []), ''] : []),
     ...(ev.pending.length ? ['**Pending**', '', ...ev.pending.map((p) => `- ${p}`), ''] : ['Nothing pending.', '']),
   ].join('\n');
 }
@@ -309,8 +334,14 @@ export class Evals {
     return found ?? usualCommand(runs);
   }
 
-  /** Set the test command for an agent's project (empty: back to finding it). */
-  setTestCommand(ref, command) {
+  /** How many times the project's tests are run each time (1: once, and once more when that fails). */
+  testRuns(agent) {
+    const p = this.manager.projectInfo(agent);
+    return cleanRuns(Object.values(this.store.data.projects ?? {}).find((x) => x.key === p?.key)?.testRuns);
+  }
+
+  /** Set the test command for an agent's project (empty: back to finding it), and how many times it is run. */
+  setTestCommand(ref, command, runs) {
     const agent = this.manager.mustGet(ref);
     const p = this.manager.projectInfo(agent);
     const entry = Object.values(this.store.data.projects ?? {}).find((x) => x.key === p?.key);
@@ -318,8 +349,12 @@ export class Evals {
     const c = String(command ?? '').trim().slice(0, 300);
     if (c) entry.testCommand = c;
     else delete entry.testCommand;
+    if (runs !== undefined) {
+      if (cleanRuns(runs) > 1) entry.testRuns = cleanRuns(runs);
+      else delete entry.testRuns;
+    }
     this.store.save();
-    return { testCommand: this.testCommand(agent) };
+    return { testCommand: this.testCommand(agent), testRuns: this.testRuns(agent) };
   }
 
   /** Run the tests on the agent's change as it is now, then work the Eval out. */
@@ -337,8 +372,9 @@ export class Evals {
       const started = Date.now();
       const st = await this.state(agent).catch(() => null);
       const at = await this.commit(agent).catch(() => null);
-      const res = await this.run(agent, command);
-      rerun = { command, passed: Boolean(res.passed), counts: countsOf(res.output), tail: clip(String(res.output ?? '').split('\n').slice(-15).join('\n'), 2000), timedOut: Boolean(res.timedOut), state: st, head: at?.head ?? null, clean: at?.clean ?? null, at: now(), ms: Date.now() - started };
+      const all = await repeatRuns(() => this.run(agent, command), this.testRuns(agent));
+      const res = all.shown;
+      rerun = { command, passed: all.passed, runs: all.runs, passes: all.passes, flaky: all.flaky, counts: countsOf(res.output), tail: clip(String(res.output ?? '').split('\n').slice(-15).join('\n'), 2000), timedOut: Boolean(res.timedOut), state: st, head: at?.head ?? null, clean: at?.clean ?? null, at: now(), ms: Date.now() - started };
     } catch (e) {
       rerun = { command, passed: false, counts: null, tail: clip(String(e?.message ?? e), 2000), timedOut: false, state: null, at: now(), ms: 0 };
     } finally {
@@ -387,6 +423,7 @@ export class Evals {
     ev.sig = this.signature(agent);
     ev.markdown = evalMarkdown(ev, agent.name);
     ev.testCommand = this.testCommand(agent, runs ?? []);
+    ev.testRuns = this.testRuns(agent);
     const cur = this.store.get(id);
     if (!cur) return null;
     // A test run ended while this was worked out: the one it ended with has the newer answer.

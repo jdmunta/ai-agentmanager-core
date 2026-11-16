@@ -818,9 +818,9 @@ $('#doc-body').addEventListener('submit', (e) => {
   e.preventDefault();
   const id = docView.agentId;
   act(async () => {
-    const r = await api('PUT', `/agents/${id}/eval/command`, { command: f.command.value });
+    const r = await api('PUT', `/agents/${id}/eval/command`, { command: f.command.value, runs: Number(f.runs.value) || 1 });
     await api('POST', `/agents/${id}/eval/verify`);
-    toast(r.testCommand ? `Saved; running ${r.testCommand}` : 'Saved', 4000);
+    toast(r.testCommand ? `Saved; running ${r.testCommand}${r.testRuns > 1 ? ` ${r.testRuns} times` : ''}` : 'Saved', 4000);
   });
 });
 
@@ -2188,7 +2188,7 @@ function openRace(id) {
 
 const fmtCost = (c) => (c ? `$${c.toFixed(2)}` : '—');
 const testCell = (t) =>
-  !t ? '<span class="hint">—</span>' : `<span class="test ${t.status}" title="${esc(t.output ?? '')}">${{ passed: '✓ passed', failed: '✗ failed', running: '… running', queued: 'queued', error: '⚠ error' }[t.status] ?? t.status}${t.seconds != null ? ` <span class="hint">${t.seconds}s</span>` : ''}</span>`;
+  !t ? '<span class="hint">—</span>' : `<span class="test ${t.status}" title="${esc(t.output ?? '')}">${{ passed: t.runs > 1 ? `✓ passed ${t.runs}×` : '✓ passed', failed: t.runs > 1 ? `✗ failed ${t.runs}×` : '✗ failed', flaky: `≈ flaky ${t.passes}/${t.runs}`, running: '… running', queued: 'queued', error: '⚠ error' }[t.status] ?? t.status}${t.seconds != null ? ` <span class="hint">${t.seconds}s</span>` : ''}</span>`;
 
 function renderRace() {
   const dlg = $('#race-dialog');
@@ -2198,7 +2198,7 @@ function renderRace() {
     $('#race-body').innerHTML = '<p class="hint">Loading…</p>';
     return;
   }
-  if ($('#race-body').contains(document.activeElement) && document.activeElement.name === 'testCommand') return;
+  if ($('#race-body').contains(document.activeElement) && ['testCommand', 'testRuns'].includes(document.activeElement.name)) return;
   $('#race-title').textContent = `Race: ${r.intent.split('\n')[0].slice(0, 80)}`;
   // Tag a row only when it is strictly the best of several.
   const uniqueMin = (vals) => {
@@ -2211,6 +2211,7 @@ function renderRace() {
   $('#race-body').innerHTML = `
     <form class="race-tests" id="race-tests">
       <label>Test command <input name="testCommand" value="${esc(r.testCommand ?? '')}" placeholder="npm test" /></label>
+      <label title="How many times it is run in each attempt. More than one shows a flaky test: one that passes in some runs and fails in others. With 1, a run that fails is run once more">Runs <input name="testRuns" type="number" min="1" max="5" value="${r.testRuns ?? 1}" /></label>
       <button class="small primary">Run in every attempt</button>
     </form>
     <div class="race-table-wrap"><table class="race-table">
@@ -2269,8 +2270,8 @@ $('#race-delete').onclick = () => {
 };
 $('#race-body').addEventListener('submit', (e) => {
   e.preventDefault();
-  const command = new FormData(e.target).get('testCommand');
-  act(async () => races.set(openRaceId, await api('POST', `/races/${openRaceId}/tests`, { command })), 'Running tests');
+  const f = new FormData(e.target);
+  act(async () => races.set(openRaceId, await api('POST', `/races/${openRaceId}/tests`, { command: f.get('testCommand'), runs: Number(f.get('testRuns')) || 1 })), 'Running tests');
 });
 $('#race-body').addEventListener('click', (e) => {
   const t = e.target;
