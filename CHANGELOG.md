@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.55.0 (2026-11-16)
+
+- **Local models.** Agents can run on a model served from this computer: Ollama, LM Studio, llama.cpp or MLX. The app finds the servers on their usual ports and lists their models in **OS** and with `agentmgr models`, with a note on which an agent can use; a model that can't call tools is not offered. An agent's model names the server, say `ollama/qwen3-coder:30b`.
+- **Three harnesses to choose from**, each an engine: **Local · Codex** (`local-codex`), **Local · OpenCode** (`local-opencode`) and **Local · Claude Code** (`local-claude`; Anthropic doesn't support Claude Code on other models, and the server has to speak Anthropic's API, which Ollama does). Each needs its own CLI installed. Sessions, resume and the inbox work as with the harness's own engine; nothing is costed, and summaries and reviews stay with your usual engine.
+- **Room for an agent's context.** Ollama starts a model with a few thousand tokens of context, too little for an agent, so the app makes a copy of the model with more (32k by default; `agentmgr models --context`). Codex runs local models from a home of its own without your plugins and MCP servers, and Claude Code leaves MCP servers out, since those would fill a small context before the task starts. Your Codex sessions folder and AGENTS.md are still used.
+- **Settings:** `agentmgr models --add name=address`, `--remove`, `--default`, `--harness`, `--on`, `--off`. Tried so far with a small model on Ollama only: a capable model (20 GB or more of memory) is what a real task needs.
+- **Git:** the app's background `git status` no longer takes the index lock, which could make an agent's own `git add` or `git commit` fail with "index.lock: File exists" now and then.
+
 ## 1.54.0 (2026-11-15)
 
 - **Repeat runs: flaky or broken.** One test run can pass or fail by chance, so the app's own test runs (the Eval's, and a race's) can be repeated on the same code. By default a run that passes is believed and a run that fails is run once more, which tells a flaky test from a broken one. **Runs** (1 to 5) beside the test command, in the Eval (kept for the project) or in a race (`agentmgr race test <race> --runs 3`), makes that many runs every time. Passed in some runs and failed in others is **flaky**: in the Eval it counts for part of the tests' weight, is listed as pending and keeps confidence under 100%, so nothing merges on it automatically; in a race the attempt shows `≈ flaky 2/3`. A failing test command now takes twice as long, since it is run again.
