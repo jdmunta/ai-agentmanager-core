@@ -1242,10 +1242,11 @@ test('remote terminal input is retried in order, not dropped, when a request fai
 });
 
 test("the daemon's terminals are marked so a restart typed there outlives them", () => {
-  const env = AgentManager.prototype.childEnv.call({}, { id: 'a1' });
+  const me = { laneFor: () => null };
+  const env = AgentManager.prototype.childEnv.call(me, { id: 'a1' });
   assert.equal(env.AGENTMGR_TERMINAL, '1');
   assert.equal(env.AGENTMGR_AGENT_ID, 'a1');
-  assert.equal(AgentManager.prototype.childEnv.call({}, null).AGENTMGR_TERMINAL, '1', 'the machine terminal too');
+  assert.equal(AgentManager.prototype.childEnv.call(me, null).AGENTMGR_TERMINAL, '1', 'the machine terminal too');
 });
 
 test('diagramsOnly keeps the title, diagram headings and Mermaid blocks, nothing else', async () => {
@@ -4618,4 +4619,91 @@ test('skills: what is here, what a repository offers, adding, checking for a new
   assert.deepEqual(v.places[0].skills.map((x) => x.id), ['personal/pdf']);
   assert.equal(fs.existsSync(path.join(personal, 'notes')), false);
   assert.equal(data.skills.sources['personal/notes'], undefined);
+});
+
+test('lanes: a range of ports and a name ending for each agent, what it says to the agent, and what listens where', async () => {
+  const { LANE_DEFAULTS, laneEnv, laneOf, lanePrompt, laneSettings, nextLane, parseLsof, parseSs, portsBySession, treePids } = await import('../src/lanes.js');
+  assert.deepEqual(laneSettings({}), LANE_DEFAULTS);
+  assert.deepEqual(laneSettings({ lanes: { enabled: false, base: 80, size: 500, port: false } }), { enabled: false, base: 21000, size: 10, port: false }, 'out of bounds falls back');
+  assert.deepEqual(laneSettings({ lanes: { base: '5000', size: 3 } }), { enabled: true, base: 5000, size: 3, port: true });
+
+  assert.deepEqual(laneOf(1), { n: 1, first: 21000, last: 21009, suffix: '_a1' });
+  assert.deepEqual(laneOf(4, { base: 5000, size: 3 }), { n: 4, first: 5009, last: 5011, suffix: '_a4' });
+  for (const bad of [0, -1, 1.5, undefined, null, 'x', 5000]) assert.equal(laneOf(bad), null, String(bad));
+
+  // The lowest one free; a freed lane is used again; one holding this app's own port is passed over.
+  assert.equal(nextLane([]), 1);
+  assert.equal(nextLane([1, 2, 4]), 3);
+  assert.equal(nextLane([1, 2], LANE_DEFAULTS, [21025]), 4);
+  assert.equal(nextLane([], { base: 32700, size: 100 }), null, 'no room left');
+
+  const lane = laneOf(3);
+  assert.deepEqual(laneEnv(lane), { AGENT_LANE: '3', AGENT_PORT: '21020', AGENT_PORT_END: '21029', AGENT_PORTS: '21020-21029', AGENT_SUFFIX: '_a3', PORT: '21020' });
+  assert.equal('PORT' in laneEnv(lane, { ...LANE_DEFAULTS, port: false }), false);
+  assert.deepEqual(laneEnv(null), {});
+  const said = lanePrompt(lane);
+  assert.match(said, /a port from 21020 to 21029/);
+  assert.match(said, /PORT is already 21020/);
+  assert.match(said, /end its name with _a3/);
+  assert.doesNotMatch(lanePrompt(lane, { ...LANE_DEFAULTS, port: false }), /PORT is already/);
+  assert.match(lanePrompt(laneOf(2, { base: 5000, size: 1 })), /use port 5001: only you have it/);
+
+  // lsof's field output: a process once per port, however many sockets (IPv4 and IPv6) it has there.
+  const lsof = parseLsof(['p100', 'cnode', 'f20', 'n*:21020', 'f21', 'n[::1]:21020', 'f22', 'n127.0.0.1:9229', 'p300', 'cpostgres', 'f5', 'n127.0.0.1:21021', 'p400', 'cvite', 'f9', 'n*:5173', ''].join('\n'));
+  assert.deepEqual(lsof.map((l) => [l.pid, l.name, l.port, l.address]), [[100, 'node', 21020, '*'], [100, 'node', 9229, '127.0.0.1'], [300, 'postgres', 21021, '127.0.0.1'], [400, 'vite', 5173, '*']]);
+  assert.deepEqual(parseLsof(''), []);
+  const ss = parseSs(['LISTEN 0      511          0.0.0.0:3000       0.0.0.0:*    users:(("node",pid=100,fd=20))', 'LISTEN 0      128             [::]:22            [::]:*', 'LISTEN 0 4096 127.0.0.1:5432 0.0.0.0:* users:(("postgres",pid=7,fd=5),("postgres",pid=8,fd=5))'].join('\n'));
+  assert.deepEqual(ss.map((l) => [l.pid, l.name, l.port]), [[100, 'node', 3000], [7, 'postgres', 5432], [8, 'postgres', 5432]]);
+
+  // Two sessions: one inside its lane and on a port outside it; the other started something on the first one's lane.
+  const procs = [{ pid: 1, ppid: 0 }, { pid: 10, ppid: 1 }, { pid: 100, ppid: 10 }, { pid: 20, ppid: 1 }, { pid: 300, ppid: 20 }, { pid: 400, ppid: 1 }];
+  assert.deepEqual([...treePids(procs, 10)].sort(), [10, 100]);
+  const [a, b, c] = portsBySession([{ id: 'a', pid: 10, lane: laneOf(3) }, { id: 'b', pid: 20, lane: laneOf(4) }, { id: 'c', pid: 999, lane: null }], procs, lsof);
+  assert.deepEqual(a.ports, [{ port: 9229, pid: 100, name: 'node', inLane: false }, { port: 21020, pid: 100, name: 'node', inLane: true }]);
+  assert.deepEqual(a.taken, [{ port: 21021, pid: 300, name: 'postgres', by: 'b' }]);
+  assert.deepEqual(b.ports, [{ port: 21021, pid: 300, name: 'postgres', inLane: false }]);
+  assert.deepEqual([b.taken, c.ports, c.taken], [[], [], []]);
+});
+
+test('board: the column an agent is in, why it needs you, and what a drag does', async () => {
+  const { BOARD_COLUMNS, columnOf, dropAction, needOf } = await import('../public/boardcols.js');
+  assert.deepEqual(BOARD_COLUMNS.map((c) => c.id), ['starting', 'working', 'needs', 'idle', 'review', 'done', 'closed']);
+  const a = (f = {}, rt = {}) => ({ status: 'running', workdir: '/w', prs: [], questions: [], runtime: { running: true, busy: false, ...rt }, ...f });
+  assert.equal(columnOf(a({ status: 'preparing' }, { running: false })), 'starting');
+  assert.equal(columnOf(a({}, { planning: true, busy: true })), 'starting');
+  assert.equal(columnOf(a({}, { busy: true })), 'working');
+  assert.equal(columnOf(a()), 'idle');
+  assert.equal(columnOf(a({ status: 'stopped' }, { running: false })), 'closed');
+  // An open pull request is in review, working or not; a merged one is done.
+  assert.equal(columnOf(a({ prs: [{ number: 7, land: 'waiting' }] })), 'review');
+  assert.equal(columnOf(a({ status: 'stopped', prs: [{ number: 7, land: 'fix' }] }, { running: false })), 'review');
+  assert.equal(columnOf(a({ prs: [{ number: 7, land: 'ready' }] }, { busy: true })), 'working');
+  assert.equal(columnOf(a({ status: 'stopped', prs: [{ number: 7, land: 'merged' }] }, { running: false })), 'done');
+  assert.equal(columnOf(a({ prs: [{ number: 7, land: 'merged' }, { number: 8, land: 'draft' }] })), 'review');
+  assert.equal(columnOf(a({ status: 'exited', results: { outcome: 'done' } }, { running: false })), 'done');
+  // What needs you comes before everything else.
+  for (const [f, rt, why] of [
+    [{}, { attention: 'permission', busy: false }, 'a prompt to answer'],
+    [{ status: 'error' }, { running: false }, 'an error'],
+    [{}, { limited: { kind: 'limit' } }, 'stopped at a limit'],
+    [{ planReview: { status: 'review' } }, {}, 'a plan to approve'],
+    [{ questions: [{ id: 1 }, { id: 2, answer: 'yes' }] }, {}, 'a question'],
+    [{ questions: [{ id: 1 }, { id: 2 }] }, { busy: true }, '2 questions'],
+    [{}, { waiting: { kind: 'question' } }, 'a question on its screen'],
+    [{ stuck: [{ key: 'loop' }], prs: [{ land: 'ready' }] }, { busy: true }, 'may be stuck'],
+  ]) {
+    assert.equal(needOf(a(f, rt)), why);
+    assert.equal(columnOf(a(f, rt)), 'needs', why);
+  }
+  assert.equal(needOf(a({ planReview: { status: 'approved' }, questions: [{ id: 1, answer: 'x' }] })), null);
+
+  // A drag closes an idle session or resumes a closed one; anything else says why not.
+  assert.deepEqual(dropAction(a(), 'closed'), { act: 'stop' });
+  assert.match(dropAction(a({}, { busy: true }), 'closed').why, /It is working/);
+  assert.deepEqual(dropAction(a({ status: 'stopped' }, { running: false }), 'idle'), { act: 'start' });
+  assert.match(dropAction(a({ status: 'stopped', workdir: null }, { running: false }), 'idle').why, /by itself/);
+  assert.match(dropAction(a(), 'review').why, /moves to In review by itself/);
+  assert.deepEqual(dropAction(a(), 'idle'), { why: null }, 'dropped where it was');
+  assert.deepEqual(dropAction(a({ prs: [{ land: 'ready' }] }), 'closed'), { act: 'stop' }, 'in review with its session open');
+  assert.match(dropAction(a({ status: 'stopped', prs: [{ land: 'merged' }] }, { running: false }), 'closed').why, /already closed/);
 });

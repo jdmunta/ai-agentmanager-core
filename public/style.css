@@ -1747,3 +1747,38 @@ table.eval-items tr.eval-na td { color: var(--muted); }
 .eval-command { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; }
 .eval-command input { min-width: 220px; }
 @media (max-width: 600px) { table.eval-items td:nth-child(2) { white-space: normal; } .eval-acts { margin-left: 0; } }
+
+/* OS: an agent's lane of ports and what it listens on. */
+.os-ports { white-space: normal; font-variant-numeric: tabular-nums; }
+.os-port-out { color: var(--yellow); }
+.os-lanes { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; margin: 8px 0 14px; font-size: 13px; }
+.os-lanes label { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.os-lanes input { width: auto; flex: none; margin: 0; }
+
+/* Board: agents as cards in columns by where their work stands. */
+.board-dialog { width: min(1500px, calc(100% - 32px)); height: min(820px, calc(100% - 32px)); }
+#board-body { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+.board-cols { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(180px, 1fr); gap: 10px; flex: 1; min-height: 0; overflow-x: auto; padding-bottom: 6px; }
+.board-col { display: flex; flex-direction: column; min-height: 0; padding: 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel-2); }
+.board-col.drop { border-color: var(--accent); outline: 1px dashed var(--accent); }
+.board-col h3 { margin: 0 0 8px; font-size: 13px; display: flex; justify-content: space-between; align-items: baseline; }
+.board-col.col-needs h3 { color: var(--red); }
+.board-col.col-working h3 { color: var(--green); }
+.board-col ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; overflow-y: auto; min-height: 40px; flex: 1; }
+.board-card { padding: 8px; border: 1px solid var(--border); border-left: 3px solid var(--border); border-radius: 6px; background: var(--panel); cursor: pointer; font-size: 13px; }
+.board-card:hover, .board-card:focus-visible { border-color: var(--accent); outline: none; }
+.board-card.pr0 { border-left-color: var(--red); }
+.board-card.pr1 { border-left-color: var(--yellow); }
+.board-card.dragging { opacity: .5; }
+.board-card-head { display: flex; gap: 6px; align-items: center; min-width: 0; }
+.board-card-head b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.board-need { color: var(--red); margin-top: 2px; }
+.board-pr { margin-top: 2px; color: var(--muted); }
+.board-pr.ready, .board-pr.merged { color: var(--green); }
+.board-pr.fix { color: var(--red); }
+.board-pr.behind { color: var(--yellow); }
+.board-meta { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 6px; font-size: 12px; }
+.board-meta .fail { color: var(--red); }
+@media (max-width: 720px) {
+  .board-cols { grid-auto-columns: minmax(220px, 80%); }
+}

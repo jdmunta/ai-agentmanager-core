@@ -5302,3 +5302,55 @@ test('debug: the question goes into the agent\'s session, its report is read bac
   ws.close();
   await call('DELETE', `/agents/${a.id}`);
 });
+
+test('lanes: each agent has its own ports and name ending, in its environment and instructions; freed with the agent; PORT and lanes can be turned off', async () => {
+  const view = async (id) => (await call('GET', '/agents')).body.find((v) => v.id === id);
+  const launchOf = (a, n = 1) => waitFor(() => launches().filter((l) => l.args.includes(a.sessionId) && l.lane)[n - 1], 8000, `launch ${n} of ${a.name}`);
+  const [a] = (await call('POST', '/agents', { intent: 'Serve the app' })).body;
+  const [b] = (await call('POST', '/agents', { intent: 'Serve the API' })).body;
+  const [la, lb] = [await launchOf(a), await launchOf(b)];
+  const [va, vb] = [await view(a.id), await view(b.id)];
+  assert.ok(va.laneInfo && vb.laneInfo && va.laneInfo.n !== vb.laneInfo.n, 'a lane each');
+  assert.ok(va.laneInfo.last < vb.laneInfo.first || vb.laneInfo.last < va.laneInfo.first, 'no port in both');
+  for (const [l, v] of [[la, va], [lb, vb]]) {
+    assert.deepEqual(l.lane, { ports: `${v.laneInfo.first}-${v.laneInfo.last}`, port: String(v.laneInfo.first), suffix: v.laneInfo.suffix });
+    const sys = l.args[l.args.indexOf('--append-system-prompt') + 1];
+    assert.match(sys, new RegExp(`a port from ${v.laneInfo.first} to ${v.laneInfo.last}`));
+    assert.match(sys, new RegExp(`end its name with ${v.laneInfo.suffix} `));
+  }
+  let lanes = (await call('GET', '/lanes')).body;
+  assert.deepEqual([lanes.enabled, lanes.port, lanes.base, lanes.size], [true, true, 21000, 10]);
+  assert.deepEqual(lanes.agents.find((x) => x.id === a.id), { id: a.id, name: va.name, running: true, ...va.laneInfo });
+  assert.deepEqual(lanes.agents.map((x) => x.n), [...lanes.agents.map((x) => x.n)].sort((x, y) => x - y));
+
+  // The same lane after a restart of its session; PORT left alone once that is turned off.
+  assert.equal((await call('PUT', '/lanes', { port: false })).body.port, false);
+  await call('POST', `/agents/${a.id}/stop`);
+  await call('POST', `/agents/${a.id}/start`, {});
+  const again = await launchOf(a, 2);
+  assert.equal(again.lane.ports, la.lane.ports);
+  assert.notEqual(again.lane.port, la.lane.port, 'PORT is not the lane\'s');
+  assert.doesNotMatch(again.args[again.args.indexOf('--append-system-prompt') + 1], /PORT is already/);
+  await call('PUT', '/lanes', { port: true });
+
+  // A deleted agent's lane is free for the next one.
+  await call('DELETE', `/agents/${b.id}`);
+  const [c] = (await call('POST', '/agents', { intent: 'Take the free lane' })).body;
+  await launchOf(c);
+  const vc = await view(c.id);
+  assert.ok(vc.laneInfo.n <= vb.laneInfo.n && vc.laneInfo.n !== va.laneInfo.n, `lane ${vc.laneInfo.n}`);
+
+  // Off: no lane for a new agent, in its environment or its instructions. Bad numbers are refused.
+  assert.equal((await call('PUT', '/lanes', { enabled: false })).body.enabled, false);
+  const [d] = (await call('POST', '/agents', { intent: 'No lane' })).body;
+  const ld = await launchOf(d);
+  assert.deepEqual([ld.lane.ports, ld.lane.suffix, (await view(d.id)).laneInfo], [null, null, null]);
+  assert.doesNotMatch(ld.args[ld.args.indexOf('--append-system-prompt') + 1], /end its name with/);
+  assert.equal((await view(a.id)).laneInfo, null);
+  assert.equal((await call('PUT', '/lanes', { base: 80 })).status, 400);
+  assert.equal((await call('PUT', '/lanes', { size: 0 })).status, 400);
+  lanes = (await call('PUT', '/lanes', { enabled: true })).body;
+  assert.deepEqual([lanes.enabled, lanes.base, lanes.size], [true, 21000, 10]);
+  assert.deepEqual((await view(a.id)).laneInfo, va.laneInfo, 'kept while lanes were off');
+  for (const x of [a, c, d]) await call('DELETE', `/agents/${x.id}`);
+});

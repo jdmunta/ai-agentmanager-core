@@ -13,7 +13,7 @@ export const bytes = (n) => (n >= 1024 ** 3 ? `${(n / 1024 ** 3).toFixed(1)} GB`
 /** 3d 4h, 5h 12m, 9m. */
 export const span = (sec) => (sec >= 86400 ? `${Math.floor(sec / 86400)}d ${Math.floor((sec % 86400) / 3600)}h` : sec >= 3600 ? `${Math.floor(sec / 3600)}h ${Math.floor((sec % 3600) / 60)}m` : `${Math.floor(sec / 60)}m`);
 
-export function initSystem({ api, $, esc, toast, openAgent }) {
+export function initSystem({ api, $, esc, toast, openAgent, openPort }) {
   const dialog = $('#os-dialog');
   const body = $('#os-body');
   let data = null;
@@ -33,6 +33,14 @@ export function initSystem({ api, $, esc, toast, openAgent }) {
   const tone = (p) => (p >= 90 ? 'heavy' : p >= 70 ? 'busy' : 'light');
   const meter = (p) => `<div class="os-meter ${tone(p)}" role="img" aria-label="${p}%"><span style="width:${Math.min(100, Math.max(0, p))}%"></span></div>`;
 
+  /** An agent's lane, what it listens on (a port outside its lane marked), and who else holds a port of its lane. */
+  function portsCell(a) {
+    const open = (a.ports ?? []).map((p) => `<button class="link${a.lane && !p.inLane ? ' os-port-out' : ''}" data-os-port="${p.port}" data-os-port-agent="${esc(a.id)}" title="${esc(p.name)} (PID ${p.pid}) listens on ${p.port}${a.lane && !p.inLane ? ': outside its lane' : ''}. Open it">${p.port}</button>`).join(' ');
+    const taken = (a.taken ?? []).map((t) => `<span class="os-port-out" title="${esc(t.name)} (PID ${t.pid})${t.by ? ', started by another agent,' : ''} holds ${t.port}, a port of this agent's lane">${t.port} taken</span>`).join(' ');
+    const lane = a.lane ? `<span class="hint" title="Lane ${a.lane.n}: its own ports. Names it creates end with ${esc(a.lane.suffix)}">${a.lane.first}–${a.lane.last}</span>` : '';
+    return [lane, open, taken].filter(Boolean).join(' · ') || '<span class="hint">—</span>';
+  }
+
   /** The last ten minutes of one measure (0 to 100) as a small line. */
   function spark(points, label) {
     if (points.length < 2) return '<div class="os-spark hint">Its last ten minutes are drawn as they pass.</div>';
@@ -48,7 +56,7 @@ export function initSystem({ api, $, esc, toast, openAgent }) {
 
   function draw() {
     if (!data) return `<div class="issues-head"><h2>OS</h2><span class="spacer"></span><button class="small" data-os="close">Close</button></div><p class="hint">${problem ? esc(problem) : 'Loading…'}</p>`;
-    const { host, cpu, memory: mem, disks, agents, processes, app, history } = data;
+    const { host, cpu, memory: mem, disks, agents, processes, app, history, lanes } = data;
     const minutes = Math.max(1, Math.round((history.length * data.sampleSeconds) / 60));
     return `
       <div class="issues-head">
@@ -107,10 +115,11 @@ export function initSystem({ api, $, esc, toast, openAgent }) {
           <section>
             <h3>Agent sessions <span class="hint">${agents.open}</span></h3>
             ${agents.list.length
-              ? `<table class="issues os-table"><thead><tr><th>Agent</th><th class="num" title="Of one core: 200% is two cores busy">Processor</th><th class="num">Memory</th><th class="num" title="The session and everything it started">Processes</th></tr></thead><tbody>
-                  ${agents.list.map((a) => `<tr><td><button class="link" data-os-agent="${esc(a.id)}">${esc(a.name)}</button></td><td class="num">${a.cpu}%</td><td class="num">${bytes(a.mem)}</td><td class="num">${a.count}</td></tr>`).join('')}
+              ? `<table class="issues os-table"><thead><tr><th>Agent</th><th class="num" title="Of one core: 200% is two cores busy">Processor</th><th class="num">Memory</th><th class="num" title="The session and everything it started">Processes</th><th title="Its own range of ports, and what it listens on now">Ports</th></tr></thead><tbody>
+                  ${agents.list.map((a) => `<tr><td><button class="link" data-os-agent="${esc(a.id)}">${esc(a.name)}</button></td><td class="num">${a.cpu}%</td><td class="num">${bytes(a.mem)}</td><td class="num">${a.count}</td><td class="os-ports">${portsCell(a)}</td></tr>`).join('')}
                 </tbody></table>`
               : '<p class="hint">No agent session is open.</p>'}
+            ${lanes ? `<div class="os-lanes"><label title="Each agent gets a range of ports and a name ending no other agent has, in its environment (AGENT_PORTS, AGENT_SUFFIX) and its instructions, so dev servers and test databases of agents working side by side don't collide. For sessions started from now on"><input type="checkbox" data-os-lanes="enabled" ${lanes.enabled ? 'checked' : ''} /> A lane of ports for each agent</label>${lanes.enabled ? `<label title="Many dev servers listen on PORT when it is set. Turn off if your projects use PORT for something else"><input type="checkbox" data-os-lanes="port" ${lanes.port ? 'checked' : ''} /> Set PORT to its first port</label><span class="hint">${lanes.size} port${lanes.size === 1 ? '' : 's'} each, from ${lanes.base}</span>` : ''}</div>` : ''}
             <h3>Busiest processes <span class="hint">of ${processes.count}</span></h3>
             <table class="issues os-table"><thead><tr><th>Process</th><th class="num" title="Of one core: 200% is two cores busy">Processor</th><th class="num">Memory</th><th class="num">PID</th></tr></thead><tbody>
               ${processes.top.map((p) => `<tr><td title="${esc(p.command)}">${esc(p.name)}</td><td class="num">${p.cpu}%</td><td class="num">${bytes(p.mem)}</td><td class="num hint">${p.pid}</td></tr>`).join('')}
@@ -126,11 +135,29 @@ export function initSystem({ api, $, esc, toast, openAgent }) {
 
   body.addEventListener('click', (e) => {
     if (e.target.closest('[data-os="close"]')) return dialog.close();
+    const port = e.target.closest('[data-os-port]');
+    if (port) {
+      dialog.close();
+      return openPort?.(port.dataset.osPortAgent, Number(port.dataset.osPort));
+    }
     const a = e.target.closest('[data-os-agent]');
     if (a) {
       dialog.close();
       openAgent?.(a.dataset.osAgent);
     }
+  });
+  // Lanes on or off, and PORT with them: for the sessions started from now on.
+  body.addEventListener('change', async (e) => {
+    const key = e.target.dataset?.osLanes;
+    if (!key) return;
+    try {
+      const { enabled, base, size, port } = await api('PUT', '/lanes', { [key]: e.target.checked });
+      if (data) data.lanes = { enabled, base, size, port };
+      toast?.(key === 'port' ? (port ? 'PORT is set for sessions started from now on' : 'PORT is left alone in sessions started from now on') : enabled ? 'Each agent gets its own ports, in sessions started from now on' : 'No lanes for sessions started from now on', 4000);
+    } catch (err) {
+      toast?.(err.message, 5000);
+    }
+    render();
   });
 
   dialog.addEventListener('close', () => {

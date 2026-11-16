@@ -158,7 +158,7 @@ test('the top bar fits the window: the view buttons that do not fit go into More
       menuOk: document.querySelector('#menu-btn').getBoundingClientRect().right <= innerWidth,
     })`);
     assert.ok(r.page <= w, `${w}px: the page is ${r.page}px wide`);
-    assert.equal(r.inRow + r.inMore, 19, `${w}px: every view button is in the row or in More`);
+    assert.equal(r.inRow + r.inMore, 20, `${w}px: every view button is in the row or in More`);
     assert.ok(r.newOk && r.menuOk, `${w}px: New agents and the account menu are on screen`);
     if (w >= 1024) assert.ok(r.inRow >= 3, `${w}px: only ${r.inRow} buttons in the row`);
   }
@@ -685,6 +685,69 @@ test('Skills: the skills Claude Code has here with their scripts flagged, one re
   await until(`!document.querySelector('[data-skill="personal/pdf"]') && /No skills here/.test(document.querySelector('[data-skills-place="personal"]').textContent)`, 'the skill gone');
   assert.equal(fs.existsSync(dir), false);
   await js(`document.querySelector('[data-skills="close"]').click()`);
+  assert.deepEqual(errors, [], 'no errors on the page');
+});
+
+test('Board: agents as cards by where their work stands, resumed and closed from it; a lane of ports for each in its detail and in OS', { skip }, async () => {
+  const running = async (id) => {
+    for (let i = 0; i < 100 && (await api('GET', '/agents')).find((v) => v.id === id)?.status !== 'running'; i++) await sleep(100);
+  };
+  const [a] = await api('POST', '/agents', { intents: ['Board: stay open'], workdir: home });
+  const [b] = await api('POST', '/agents', { intents: ['Board: closed one'], workdir: home });
+  await running(a.id);
+  await running(b.id);
+  await api('POST', `/agents/${b.id}/stop`);
+  const col = (id) => `document.querySelector('[data-board-card="${id}"]')?.closest('[data-board-col]').dataset.boardCol`;
+  await js(`document.querySelector('#board-btn').click()`);
+  await until(`document.querySelector('#board-dialog').open && ${col(a.id)} === 'idle' && ${col(b.id)} === 'closed'`, 'the board with both cards');
+  assert.deepEqual(await js(`[...document.querySelectorAll('[data-board-col] h3')].map((h) => h.firstChild.textContent.trim())`), ['Starting', 'Working', 'Needs you', 'Waiting', 'In review', 'Done', 'Closed']);
+  assert.equal(await js(`Number(document.querySelector('[data-board-col="closed"] h3 .hint').textContent) === document.querySelectorAll('[data-board-col="closed"] [data-board-card]').length`), true, 'the count of a column');
+  // Resume from the Closed column; close from Waiting. Each card moves by itself.
+  await js(`document.querySelector('[data-board-card="${b.id}"] [data-board-act="start"]').click()`);
+  await until(`${col(b.id)} === 'idle'`, 'the resumed one in Waiting', 15_000);
+  // (The button is there while its card is in Waiting: a burst of output moves it to Working for a moment.)
+  await until(`(document.querySelector('[data-board-card="${a.id}"] [data-board-act="stop"]')?.click(), ${col(a.id)} === 'closed')`, 'the closed one in Closed', 20_000);
+  // A drag: onto a column agents reach by themselves it says so; from Closed onto Waiting it resumes.
+  const drag = (id, to) => js(`(() => {
+    const dt = new DataTransfer();
+    const card = document.querySelector('[data-board-card="${id}"]');
+    const target = document.querySelector('[data-board-col="${to}"]');
+    card.dispatchEvent(new DragEvent('dragstart', { bubbles: true, dataTransfer: dt }));
+    target.dispatchEvent(new DragEvent('dragover', { bubbles: true, cancelable: true, dataTransfer: dt }));
+    const lit = target.classList.contains('drop');
+    target.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt }));
+    card.dispatchEvent(new DragEvent('dragend', { bubbles: true, dataTransfer: dt }));
+    return lit;
+  })()`);
+  assert.equal(await drag(a.id, 'review'), true, 'the column lights up under the card');
+  await until(`[...document.querySelectorAll('.toast')].some((t) => /moves to In review by itself/.test(t.textContent))`, 'why nothing moved');
+  assert.equal(await js(col(a.id)), 'closed');
+  await drag(a.id, 'idle');
+  await until(`['idle', 'working'].includes(${col(a.id)})`, 'resumed by a drag', 15_000);
+  // (A session that is producing output is not closed by a drag: wait for it to be quiet.)
+  for (let i = 0; i < 20 && (await js(col(b.id))) !== 'closed'; i++) {
+    await drag(b.id, 'closed');
+    await sleep(750);
+  }
+  assert.equal(await js(col(b.id)), 'closed', 'closed by a drag');
+  // A card opens its agent, whose detail has its lane.
+  await js(`document.querySelector('[data-board-card="${a.id}"] b').click()`);
+  await until(`!document.querySelector('#board-dialog').open && location.hash === '#${a.id}'`, 'the agent opened');
+  const lane = (await api('GET', '/agents')).find((v) => v.id === a.id).laneInfo;
+  assert.ok(lane && lane.last - lane.first === 9, JSON.stringify(lane));
+  await until(`[...document.querySelectorAll('#detail dl.kv dt')].some((d) => d.textContent === 'Lane' && d.nextElementSibling.textContent.replace(/\\s+/g, ' ').trim() === 'ports ${lane.first}–${lane.last} · names end with ${lane.suffix}')`, 'the lane in its detail');
+  // OS: the lane beside the open session, and the switches for lanes.
+  await js(`document.querySelector('#os-btn').click()`);
+  await until(`document.querySelector('[data-os-agent="${a.id}"]')?.closest('tr').querySelector('.os-ports').textContent.includes('${lane.first}–${lane.last}')`, 'the lane in OS', 15_000);
+  assert.deepEqual(await js(`[...document.querySelectorAll('[data-os-lanes]')].map((c) => [c.dataset.osLanes, c.checked])`), [['enabled', true], ['port', true]]);
+  await js(`document.querySelector('[data-os-lanes="port"]').click()`);
+  await until(`document.querySelector('[data-os-lanes="port"]')?.checked === false && [...document.querySelectorAll('.toast')].some((t) => /PORT is left alone/.test(t.textContent))`, 'PORT off');
+  assert.equal((await api('GET', '/lanes')).port, false);
+  await js(`document.querySelector('[data-os-lanes="enabled"]').click()`);
+  await until(`!document.querySelector('[data-os-lanes="port"]') && document.querySelector('[data-os-lanes="enabled"]').checked === false`, 'lanes off');
+  await api('PUT', '/lanes', { enabled: true, port: true });
+  await js(`document.querySelector('[data-os="close"]').click()`);
+  for (const x of [a, b]) await api('DELETE', `/agents/${x.id}`);
   assert.deepEqual(errors, [], 'no errors on the page');
 });
 

@@ -870,6 +870,26 @@ export async function main(argv) {
     });
 
   program
+    .command('lanes')
+    .description("Every agent's own ports and name ending, so dev servers and test databases of agents working side by side don't collide")
+    .option('--on', 'give each agent a lane (sessions started from now on)')
+    .option('--off', 'stop giving agents lanes')
+    .option('--port <on|off>', "also set PORT to the lane's first port in the agent's environment")
+    .option('--base <port>', 'the first port of the first lane')
+    .option('--size <ports>', 'how many ports a lane has')
+    .option('--json', 'print JSON')
+    .action(async (opts) => {
+      await daemon();
+      const patch = { ...(opts.on ? { enabled: true } : opts.off ? { enabled: false } : {}), ...(opts.port !== undefined ? { port: /^(on|true|yes|1)$/i.test(opts.port) } : {}), ...(opts.base !== undefined ? { base: opts.base } : {}), ...(opts.size !== undefined ? { size: opts.size } : {}) };
+      const v = Object.keys(patch).length ? await api('PUT', '/lanes', patch) : await api('GET', '/lanes');
+      if (opts.json) return console.log(JSON.stringify(v, null, 2));
+      console.log(`Lanes ${v.enabled ? green('on') : dim('off')}${v.enabled ? dim(` · ${v.size} port${v.size === 1 ? '' : 's'} each from ${v.base} · PORT ${v.port ? 'set' : 'not set'}`) : ''}`);
+      if (!v.enabled) return;
+      for (const a of v.agents) console.log(`  ${String(a.n).padStart(3)}  ${`${a.first}-${a.last}`.padEnd(12)} ${a.suffix.padEnd(6)} ${a.name}${a.running ? '' : dim(' (closed)')}`);
+      if (!v.agents.length) console.log(dim('  No agent has a lane yet: one is given when a session starts.'));
+    });
+
+  program
     .command('usage')
     .description("Each engine's plan limits: how much is used and left, and when it resets")
     .option('--warn <percent>', 'alert when a limit is this much used (or off)')

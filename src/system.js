@@ -7,6 +7,7 @@ import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { listeners, portsBySession } from './lanes.js';
 
 const SAMPLE_MS = 5000;
 const KEEP = 120; // ten minutes of samples
@@ -157,9 +158,12 @@ async function disks(folders) {
 }
 
 export class System {
-  /** `agents()` lists the agent records (id, name, pid of its open session); `folders()` the [label, dir] pairs whose disks to show. */
-  constructor({ agents = () => [], folders = () => [['Home', os.homedir()]], version = null, timer = true } = {}) {
-    Object.assign(this, { agents, folders, version });
+  /**
+   * `agents()` lists the agent records (id, name, pid of its open session, its lane or null);
+   * `folders()` the [label, dir] pairs whose disks to show; `lanes()` the lane settings (lanes.js).
+   */
+  constructor({ agents = () => [], folders = () => [['Home', os.homedir()]], lanes = () => null, version = null, timer = true } = {}) {
+    Object.assign(this, { agents, folders, lanes, version });
     this.history = [];
     this.last = cpuTimes();
     this.cpuPercent = 0;
@@ -187,16 +191,20 @@ export class System {
   async view() {
     const cpus = os.cpus();
     const cores = cpus.length || 1;
-    const [name, mem, disk, ps] = await Promise.all([(this.osName ??= osName()), memory(), disks(this.folders()), run('ps', ['-Ao', 'pid=,ppid=,pcpu=,rss=,comm='])]);
+    const [name, mem, disk, ps, listening] = await Promise.all([(this.osName ??= osName()), memory(), disks(this.folders()), run('ps', ['-Ao', 'pid=,ppid=,pcpu=,rss=,comm=']), listeners()]);
     const procs = parsePs(ps);
     // The memory in the history is the same measure as the one shown (what can't be freed at once).
     if (this.history.length) this.history[this.history.length - 1].mem = mem.percent;
     const load = os.loadavg().map((n) => Math.round(n * 100) / 100);
-    const sessions = this.agents()
-      .filter((a) => a.pid)
-      .map((a) => ({ id: a.id, name: a.name, pid: a.pid, ...(treeUsage(procs, a.pid) ?? { cpu: 0, mem: 0, count: 0 }) }))
-      .filter((a) => a.count)
-      .sort((x, y) => y.cpu - x.cpu || y.mem - x.mem);
+    // With what each listens on, and whether that is inside its own lane of ports.
+    const sessions = portsBySession(
+      this.agents()
+        .filter((a) => a.pid)
+        .map((a) => ({ id: a.id, name: a.name, pid: a.pid, lane: a.lane ?? null, ...(treeUsage(procs, a.pid) ?? { cpu: 0, mem: 0, count: 0 }) }))
+        .filter((a) => a.count),
+      procs,
+      listening,
+    ).sort((x, y) => y.cpu - x.cpu || y.mem - x.mem);
     const self = treeUsage(procs, process.pid);
     const nets = Object.entries(os.networkInterfaces())
       .flatMap(([nic, list]) => (list ?? []).filter((n) => !n.internal && n.family === 'IPv4').map((n) => ({ nic, address: n.address })));
@@ -232,6 +240,7 @@ export class System {
         count: procs.length,
         top: [...procs].sort((x, y) => y.cpu - x.cpu || y.mem - x.mem).slice(0, 12).map(({ pid, cpu, mem: m, name: n, command }) => ({ pid, cpu, mem: m, name: n, command })),
       },
+      lanes: this.lanes(),
       history: this.history,
       sampleSeconds: SAMPLE_MS / 1000,
     };
