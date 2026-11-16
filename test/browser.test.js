@@ -580,7 +580,8 @@ test('Reverse engineer: a target and a question beside the session, whether REA 
   await js(`document.querySelector('[data-side="security"]').click()`);
   await until(`document.querySelector('[data-security-text]') && !document.querySelector('[data-reverse-target]')`, 'the Security tab');
   assert.equal(await js(`document.querySelector('[data-security-form] button.primary').textContent`), 'Audit');
-  assert.match(await js(`document.querySelector('.security-view').textContent`), /does not replace a penetration test/);
+  // The view says "Loading…" until the agent's audit state has been read.
+  await until(`/does not replace a penetration test/.test(document.querySelector('.security-view')?.textContent ?? '')`, 'what an audit is not');
   await js(`document.querySelector('[data-security-form]').requestSubmit()`);
   await until(`document.querySelector('.debug-asked summary')?.textContent === 'Asked (1)' && document.querySelector('.debug-asked li').textContent.trim() === 'The whole project'`, 'the audit asked for');
   fs.writeFileSync(path.join(dir, 'SECURITY-AUDIT.md'), '# Security audit: the whole project\n## Summary\nOne high finding. 0 critical, 1 high, 0 medium, 0 low.\n## Attack surface\n```mermaid\nflowchart LR\n  A["POST /import"] e1@--> B["readFile"]\n  e1@{ animate: true }\n  classDef fault stroke:#ef4444,stroke-width:3px\n  class B fault\n```\n## Findings\n| # | Severity | Title | Where | Status |\n|---|---|---|---|---|\n| 1 | high | Path traversal in import | src/import.js:12 | verified |\n');
@@ -816,14 +817,19 @@ test('Plan: project dates with checklists, the decision log, the tech debt radar
   await js(`document.querySelector('#today-btn').click()`);
   await until(`document.querySelector('#today-dialog').open && document.querySelector('tr.today-milestone')`, 'the date in Today', 20_000);
   assert.match(await js(`document.querySelector('tr.today-milestone').textContent`), /At risk[\s\S]*Code complete in 3 days[\s\S]*1 agent still working/);
-  await js(`document.querySelector('[data-day="settings"]').click()`);
-  await js(`(() => { const f = document.querySelector('[data-day-form]'); f.ics.value = 'http://127.0.0.1:${notes.address().port}/secret/cal.ics'; f.workStart.value = '00:00'; f.workEnd.value = '23:59'; f.requestSubmit(); })()`);
-  await until(`document.querySelector('.day-meeting b')?.textContent === 'Design sync'`, 'the meeting', 20_000);
-  const dayRows = await js(`({ free: document.querySelectorAll('.day-free').length, about: document.querySelector('.day-meeting [data-day-agent]')?.textContent, head: document.querySelector('.today-day-head').textContent, html: document.querySelector('#today-body').innerHTML.includes('secret') })`);
-  assert.ok(dayRows.free >= 1, 'free time before it');
-  assert.equal(dayRows.about, 'task-2', 'the agent the meeting names');
-  assert.match(dayRows.head, /1 meeting today \(5m\)[\s\S]*Next: Design sync/);
-  assert.equal(dayRows.html, false, "the calendar's address isn't shown");
+  // The meeting is at 23:50 today: in the day's last half hour there is no free time left before it
+  // (and at midnight it is no longer today's), so that part is left out of a run that late.
+  const now = new Date();
+  if (now.getHours() * 60 + now.getMinutes() < 23 * 60 + 30) {
+    await js(`document.querySelector('[data-day="settings"]').click()`);
+    await js(`(() => { const f = document.querySelector('[data-day-form]'); f.ics.value = 'http://127.0.0.1:${notes.address().port}/secret/cal.ics'; f.workStart.value = '00:00'; f.workEnd.value = '23:59'; f.requestSubmit(); })()`);
+    await until(`document.querySelector('.day-meeting b')?.textContent === 'Design sync'`, 'the meeting', 20_000);
+    const dayRows = await js(`({ free: document.querySelectorAll('.day-free').length, about: document.querySelector('.day-meeting [data-day-agent]')?.textContent, head: document.querySelector('.today-day-head').textContent, html: document.querySelector('#today-body').innerHTML.includes('secret') })`);
+    assert.ok(dayRows.free >= 1, 'free time before it');
+    assert.equal(dayRows.about, 'task-2', 'the agent the meeting names');
+    assert.match(dayRows.head, /1 meeting today \(5m\)[\s\S]*Next: Design sync/);
+    assert.equal(dayRows.html, false, "the calendar's address isn't shown");
+  }
   await js(`document.querySelector('[data-today="close"]').click()`);
   assert.deepEqual(errors, [], 'no errors on the page');
 });
