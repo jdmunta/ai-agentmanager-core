@@ -2203,6 +2203,8 @@ test('ACP engines: an ACP agent runs in the terminal client, adopted, tracked, r
   const asking = await waitFor(async () => ((await agentNow(a.id)).runtime.attention ? agentNow(a.id) : null), 15000, 'permission prompt');
   assert.equal(asking.runtime.attention, 'Permission prompt');
   assert.deepEqual(asking.runtime.prompt.choices.map((c) => c.label), ['Allow once', 'Always allow', 'Reject']);
+  // The agent named only a folder in its request: the menu says which tool wants it.
+  assert.match(JSON.stringify(asking.runtime.prompt), /Run npm test \/outside\/the\/project/);
   assert.equal((await call('POST', `/agents/${a.id}/prompt-key`, { key: '1' })).status, 200);
   // The session ACP picked is adopted; its log gives the PR link, the prompt and stuck-detection events.
   const done = await waitFor(async () => {
@@ -5427,7 +5429,10 @@ test('local models: servers found at their addresses, the models an agent can us
 
     // Codex is started on the server, with a copy of the model that has room (no more than the model takes).
     const first = await waitFor(() => codexLaunches()[before], 10000, 'codex launched on the local model');
-    assert.deepEqual(first.args.slice(0, 8), ['-c', `model_providers.agentmgr={name="Local",base_url="${url}/v1"}`, '-c', 'model_provider="agentmgr"', '-c', 'model_context_window=16384', '--model', 'coder-am16k:7b']);
+    assert.deepEqual(first.args.slice(0, 6), ['-c', `model_providers.agentmgr={name="Local",base_url="${url}/v1"}`, '-c', 'model_provider="agentmgr"', '-c', 'model_context_window=16384']);
+    // Told that its commands need no approval: open models otherwise ask to leave the sandbox at every step.
+    assert.match(first.args[7], /^developer_instructions=".*leave out `justification` and `sandbox_permissions`/);
+    assert.deepEqual(first.args.slice(8, 10), ['--model', 'coder-am16k:7b']);
     assert.ok(first.args.includes('--no-alt-screen') && first.args.includes('--sandbox'));
     assert.match(first.args.at(-1), /Fix the login/);
     assert.deepEqual(made, [{ model: 'coder-am16k:7b', from: 'coder:7b', parameters: { num_ctx: 16384 }, stream: false }]);
@@ -5445,7 +5450,7 @@ test('local models: servers found at their addresses, the models an agent can us
     await call('POST', `/agents/${a.id}/stop`);
     await call('POST', `/agents/${a.id}/start`, {});
     const again = await waitFor(() => codexLaunches()[before + 1], 10000, 'codex resumed');
-    assert.deepEqual([again.args[0], again.args[7], again.args[8]], ['resume', '--model', 'coder-am16k:7b']);
+    assert.deepEqual([again.args[0], again.args[9], again.args[10]], ['resume', '--model', 'coder-am16k:7b']);
     assert.ok(again.args.includes(seen.sessionId));
     assert.equal(made.length, 1);
 
@@ -5457,7 +5462,7 @@ test('local models: servers found at their addresses, the models an agent can us
     const g = (await call('POST', '/general', { question: 'What is a port?', engine: 'local' })).body;
     assert.equal(g.model, 'mine/coder:7b');
     const plain = await waitFor(() => codexLaunches()[before + 2], 10000, 'codex launched for the question');
-    assert.deepEqual(plain.args.slice(4, 6), ['--model', 'coder:7b'], "the server's own context");
+    assert.deepEqual(plain.args.slice(6, 8), ['--model', 'coder:7b'], "the server's own context");
 
     // Claude Code as the harness: pointed at the server's Anthropic-style API, with no MCP servers; nothing costed.
     assert.equal((await call('PUT', '/local-models/settings', { harness: 'vim' })).status, 400);

@@ -44,11 +44,14 @@ export function notInstalled(engine, config) {
 
 /**
  * The engine "local" stands for: the harness config.json names ("localModels": { "harness": … })
- * when it is installed, else the first installed of Codex, OpenCode and Claude Code.
+ * when it is installed, else the first installed of OpenCode, Codex and Claude Code. OpenCode
+ * first: open models finish a task on it more often than on Codex, whose edit command they get wrong.
  */
+const LOCAL_ORDER = ['opencode', 'codex', 'claude'];
 export function localEngineId(config = {}) {
-  const have = LOCAL_ENGINES.filter((e) => installed(e, config));
-  return (have.find((e) => e.harness === localSettings(config).harness) ?? have[0] ?? LOCAL_ENGINES[0]).id;
+  const all = LOCAL_ORDER.map((h) => LOCAL_ENGINES.find((e) => e.harness === h));
+  const have = all.filter((e) => installed(e, config));
+  return (have.find((e) => e.harness === localSettings(config).harness) ?? have[0] ?? all[0]).id;
 }
 
 /** Every engine, with whether it can run here, for pickers and the hub. */

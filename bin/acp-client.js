@@ -208,7 +208,10 @@ async function handle(method, p) {
 let answer = null; // resolves with the next line typed while a permission menu is open
 async function permission(p) {
   const options = p.options ?? [];
-  const title = p.toolCall?.title ?? 'a tool';
+  // Some agents name only what the tool wants (a folder outside the project, say): put the tool's own name first.
+  const tool = tools.get(p.toolCall?.toolCallId)?.title;
+  const what = p.toolCall?.title ?? tool ?? 'a tool';
+  const title = tool && tool !== 'tool' && !what.toLowerCase().includes(tool.toLowerCase()) ? `${tool} ${what}` : what;
   const pick = (kinds) => options.find((o) => kinds.includes(o.kind));
   if (yes || deny || once) {
     const o = deny || once ? pick(['reject_once', 'reject_always']) : pick(['allow_once', 'allow_always']);

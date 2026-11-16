@@ -4907,10 +4907,10 @@ test('local models: an engine for each harness, started through the starter on t
 
   // "local" is the harness the config names when it is installed, else the first installed.
   const here = (names) => ({ claudeBin: names.includes('claude') ? process.execPath : '/nope/claude', engines: { codex: { bin: names.includes('codex') ? process.execPath : '/nope/codex' } }, acp: { opencode: { command: [names.includes('opencode') ? process.execPath : '/nope/opencode'] } } });
-  assert.equal(localEngineId(here(['codex', 'opencode', 'claude'])), 'local-codex');
-  assert.equal(localEngineId(here(['opencode', 'claude'])), 'local-opencode');
+  assert.equal(localEngineId(here(['codex', 'opencode', 'claude'])), 'local-opencode');
+  assert.equal(localEngineId(here(['codex', 'claude'])), 'local-codex');
   assert.equal(localEngineId(here(['claude'])), 'local-claude');
-  assert.equal(localEngineId(here([])), 'local-codex');
+  assert.equal(localEngineId(here([])), 'local-opencode');
   assert.equal(localEngineId({ ...here(['codex', 'claude']), localModels: { harness: 'claude' } }), 'local-claude');
   assert.equal(localEngineId({ ...here(['codex']), localModels: { harness: 'claude' } }), 'local-codex', 'not installed: the next');
   assert.deepEqual(listEngines(here(['codex'])).filter((e) => e.local).map((e) => [e.id, e.harness]), [['local-codex', 'codex'], ['local-opencode', 'opencode'], ['local-claude', 'claude']]);

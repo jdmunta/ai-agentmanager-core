@@ -77,7 +77,11 @@ if (opt.harness === 'claude') {
   env.OPENCODE_CONFIG_CONTENT = JSON.stringify({ $schema: 'https://opencode.ai/config.json', provider: { agentmgr: { npm: '@ai-sdk/openai-compatible', name: 'Local', options: { baseURL: `${url}/v1` }, models: { [model]: { name: opt.model, ...limit } } } }, model: `agentmgr/${model}`, small_model: `agentmgr/${model}` });
 } else {
   // Codex, with the server as its model provider. It takes options after `resume`.
-  const flags = ['-c', `model_providers.agentmgr={name="Local",base_url="${url}/v1"}`, '-c', 'model_provider="agentmgr"', ...(window ? ['-c', `model_context_window=${window}`] : []), '--model', model];
+  // Open models tend to give every command a `justification`, Codex answers that one needs
+  // `sandbox_permissions`, and the model then asks to leave the sandbox for `ls` and `cat`: a
+  // prompt for you at every step. Told this, they mostly stop.
+  const quiet = 'Shell commands already run in a sandbox that can read every file and write in the project, so they need no approval. When you call exec_command, give `cmd` and leave out `justification` and `sandbox_permissions`. Only if a command has failed because the sandbox blocked it (network access, or writing outside the project), repeat it with `sandbox_permissions` set to "require_escalated" and a `justification`.';
+  const flags = ['-c', `model_providers.agentmgr={name="Local",base_url="${url}/v1"}`, '-c', 'model_provider="agentmgr"', ...(window ? ['-c', `model_context_window=${window}`] : []), '-c', `developer_instructions=${JSON.stringify(quiet)}`, '--model', model];
   args = rest[0] === 'resume' ? ['resume', ...flags, ...rest.slice(1)] : [...flags, ...rest];
 }
 const child = spawn(bin, args, { stdio: 'inherit', env });
