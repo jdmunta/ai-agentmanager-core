@@ -80,6 +80,8 @@ const DEFAULTS = {
   // Usage: each engine's plan limits, used and left; warn at a percent, hold new work at a percent (usage.js).
   usage: { enabled: true, warnAt: 80, holdAt: null },
   calendar: { ics: [], workStart: '09:00', workEnd: '18:00' },
+  // Lanes: every agent's own range of ports and name ending; `port` also sets PORT to its first port (lanes.js).
+  lanes: { enabled: true, base: 21000, size: 10, port: true },
   // AI News: the frontier labs' latest releases, summarized; see NEWS_DEFAULTS in news.js for every field.
   news: { enabled: true },
   demoPage: false,

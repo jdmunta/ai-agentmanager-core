@@ -56,6 +56,7 @@ import { Runbooks } from './runbooks.js';
 import { reaStatus } from './rea.js';
 import { EngineUsage, codexWindows } from './usage.js';
 import { leanSettings, leanStats, leanSweep } from './lean.js';
+import { laneOf, laneSettings } from './lanes.js';
 import { Skills } from './skills.js';
 import { Milestones } from './milestones.js';
 import { Decisions } from './decisions.js';
@@ -423,7 +424,8 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
   // "Open on this machine" links from the hub point at remote access, when it's on.
   // OS: this computer and its load right now, and what each open session takes (system.js).
   const system = new System({
-    agents: () => store.list().map((x) => ({ id: x.id, name: x.name, pid: x.pid })),
+    agents: () => store.list().map((x) => ({ id: x.id, name: x.name, pid: x.pid, lane: laneSettings(config).enabled ? laneOf(x.lane, laneSettings(config)) : null })),
+    lanes: () => laneSettings(config),
     folders: () => [['Home', os.homedir()], ['Agents and data', paths.home]],
     version: pkgVersion,
   });
@@ -1236,6 +1238,29 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
   api.put('/calendar', wrap((req) => calendar.set(req.body ?? {}, saveConfig)));
   // AI News: the entries, a refresh now (answers at once; the page hears when it's done), and "seen".
   api.get('/system', wrap(() => system.view()));
+  // Lanes: every agent's own ports and name ending (lanes.js), and the settings for them. A change
+  // reaches a session the next time it starts.
+  const lanesView = () => {
+    const settings = laneSettings(config);
+    return { ...settings, agents: store.list().filter((a) => laneOf(a.lane, settings)).map((a) => ({ id: a.id, name: a.name, running: Boolean(a.pid), ...laneOf(a.lane, settings) })).sort((x, y) => x.n - y.n) };
+  };
+  api.get('/lanes', wrap(() => lanesView()));
+  api.put('/lanes', wrap((req) => {
+    const b = req.body ?? {};
+    const on = (v) => v === true || v === 'on';
+    const next = { ...config.lanes };
+    if ('enabled' in b) next.enabled = on(b.enabled);
+    if ('port' in b) next.port = on(b.port);
+    for (const k of ['base', 'size']) {
+      if (!(k in b)) continue;
+      if (laneSettings({ lanes: { [k]: b[k] } })[k] !== Number(b[k])) throw fail(400, k === 'base' ? 'The first port is a number from 1024 to 32667' : 'A lane has 1 to 100 ports');
+      next[k] = Number(b[k]);
+    }
+    config.lanes = next;
+    saveConfig({ lanes: next });
+    for (const a of store.list()) manager.changed?.(a);
+    return lanesView();
+  }));
   api.get('/news', wrap(() => news.view()));
   api.post('/news/refresh', wrap((req) => {
     news.refresh({ search: req.body?.search === true ? true : null }).catch(() => {});

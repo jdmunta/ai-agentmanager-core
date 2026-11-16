@@ -44,6 +44,7 @@ import { initSystem } from '/system.js';
 import { adviceHtml, initDecide } from '/decide.js';
 import { initUsage } from '/usage.js';
 import { initSkills } from '/skills.js';
+import { initBoard } from '/board.js';
 import { initMcp } from '/mcp.js';
 import { initCodeMap } from '/codemap.js';
 import { initKeys } from '/keys.js';
@@ -76,19 +77,21 @@ const newsOnLoad = hashId === 'news';
 // "#plan" or "#plan/<dates|decisions|debt>".
 const planOnLoad = hashId === 'plan';
 const osOnLoad = hashId === 'os';
+const boardOnLoad = hashId === 'board';
 // "#decide" or "#decide/<waiting|handled|standing|priority|tradeoffs|lookback>".
 const decideOnLoad = hashId === 'decide';
 const reviewsOnLoad = hashId === 'reviews';
 // "#mcp" or "#mcp/<agent>": the MCP window on its own.
 const mcpOnLoad = hashId === 'mcp';
 let watchShown = false;
-let selectedId = (watchOnLoad || standupOnLoad || mapOnLoad || valueOnLoad || newsOnLoad || planOnLoad || osOnLoad || decideOnLoad || reviewsOnLoad || mcpOnLoad ? null : hashId) || null;
+let selectedId = (watchOnLoad || standupOnLoad || mapOnLoad || valueOnLoad || newsOnLoad || planOnLoad || osOnLoad || boardOnLoad || decideOnLoad || reviewsOnLoad || mcpOnLoad ? null : hashId) || null;
 let openTermOnLoad = hashView === 'term' || hashView === 'code' || isShell(hashView) || isBrowser(hashView);
 let filterText = '';
 // Only agents whose session is open (the "running" count above the list, clicked).
 let listRunning = false;
 // Decide: the recommendations shown on inbox cards come from it (set once the page is wired).
 let decideUi = null;
+let boardUi = null;
 // "Only agents created in the last N days": remembered in this browser.
 const recent = (() => {
   try {
@@ -336,8 +339,11 @@ const planUi = initPlan({
 });
 $('#plan-btn').onclick = () => planUi.open();
 // OS: this computer and its load right now.
-const osUi = initSystem({ api, $, esc, toast: (m, ms) => toast(m, ms), openAgent: (id) => (showTab('agents'), select(id)) });
+const osUi = initSystem({ api, $, esc, toast: (m, ms) => toast(m, ms), openAgent: (id) => (showTab('agents'), select(id)), openPort: (id, port) => openPort(id, port) });
 $('#os-btn').onclick = () => osUi.open();
+// Board: every agent as a card in the column for where its work stands.
+boardUi = initBoard({ api, $, esc, ago, toast: (m, ms) => toast(m, ms), agents: () => agents, openAgent: (id) => (showTab('agents'), select(id)), upsert: (a) => upsert(a) });
+$('#board-btn').onclick = () => boardUi.open();
 // Decide: recommendations on what waits for you, standing decisions, impact, trade-offs, looking back.
 decideUi = initDecide({
   api,
@@ -413,6 +419,7 @@ function shortcut(act) {
   if (act === 'news') return newsUi.open();
   if (act === 'plan') return planUi.open();
   if (act === 'os') return osUi.open();
+  if (act === 'board') return boardUi.open();
   if (act === 'decide') return decideUi.open();
   if (act === 'usage') return usageUi.open();
   if (act === 'skills') return skillsUi.open();
@@ -2455,6 +2462,7 @@ function renderDetail() {
           <dt>Head</dt><dd>${a.git?.head ? `<code>${esc(a.git.head.sha)}</code> ${esc(a.git.head.subject)}` : '—'}</dd>
           ${a.baseRef ? `<dt>Branched from</dt><dd><code>${esc(a.baseRef)}</code></dd>` : ''}
           ${a.worktree ? `<dt>Worktree of</dt><dd><code>${esc(a.sourceDir)}</code></dd>` : ''}
+          ${a.laneInfo ? `<dt title="Its own ports and name ending, in its environment and instructions, so what it starts doesn't collide with another agent's. What it listens on now is in OS">Lane</dt><dd>ports <code>${a.laneInfo.first}–${a.laneInfo.last}</code> · names end with <code>${esc(a.laneInfo.suffix)}</code></dd>` : ''}
           ${noRepo(a) ? '' : `<dt>Repo memory</dt><dd><button class="link" data-act="memory" title="What agents learned working in this repo; every agent here gets it">View and edit</button></dd>`}
         </dl>
       </div>
@@ -2566,6 +2574,7 @@ const perf = {
   on: new URLSearchParams(location.search).has('perf'),
   runs: [], // [at, ms, { view: ms }] over the last 5 seconds
   draw(views) {
+    boardUi?.refresh();
     if (!this.on) {
       for (const v of views) VIEWS[v]();
       return;
@@ -3118,6 +3127,16 @@ const browserLabel = (url) => {
   const u = new URL(url);
   return u.host + (u.pathname === '/' ? '' : u.pathname);
 };
+/** What an agent listens on, in a browser tab beside its session. */
+async function openPort(id, port) {
+  showTab('agents');
+  select(id);
+  await act(async () => {
+    const tab = await api('POST', `/agents/${id}/browsers`, { url: `localhost:${port}`, mode: liveAvailable ? 'live' : 'lite' });
+    upsertBrowsers(id, tab.n, tab.url, tab.mode);
+    term.open(id, `browser:${tab.n}`);
+  });
+}
 async function openAddress(url) {
   const id = term.agentId;
   if (!id || !url.trim()) return;
@@ -4510,6 +4529,11 @@ function handleEvent(msg) {
       watchShown = true;
       history.replaceState(null, '', '#');
       osUi.open();
+    }
+    if (boardOnLoad && !watchShown) {
+      watchShown = true;
+      history.replaceState(null, '', '#');
+      boardUi.open();
     }
     if (newsOnLoad && !watchShown) {
       watchShown = true;

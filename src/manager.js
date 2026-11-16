@@ -3,11 +3,12 @@ import { EventEmitter } from 'node:events';
 import { ownStatusLine } from './trust.js';
 import { statusLineScript, usageFile } from './usage.js';
 import { leanScript } from './lean.js';
+import { laneEnv, laneOf, lanePrompt, laneSettings, nextLane } from './lanes.js';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import pty from 'node-pty';
-import { expandHome, paths } from './config.js';
+import { PORT, expandHome, paths } from './config.js';
 import { DEFAULT_ENGINE, ENGINES, engineOf, installed, notInstalled } from './engines/index.js';
 import {
   DOC_KINDS,
@@ -389,6 +390,8 @@ export class AgentManager extends EventEmitter {
       priority: agent.priority ?? 2,
       activeAt: this.activeAt(agent, rt),
       projectInfo: this.projectInfo(agent),
+      // Its ports and name ending (lanes.js), once it has been started with lanes on.
+      laneInfo: laneSettings(this.config).enabled ? laneOf(agent.lane, laneSettings(this.config)) : null,
       usage,
       // Claude Code's own cost figure from the transcripts (absent until it records one).
       costUsd: costs.length ? costs.reduce((a, b) => a + b, 0) : null,
@@ -1450,6 +1453,9 @@ export class AgentManager extends EventEmitter {
         prompts.push(teamPrompt(agent.team.role, dir));
       }
     }
+    // Its own ports and name ending, so what it starts doesn't collide with another agent's.
+    const lane = this.laneFor(agent);
+    if (lane && task) prompts.push(lanePrompt(lane, laneSettings(this.config)));
     // Appended system prompts last only for the process they're passed to, so they go on every launch.
     // Files attached for it (at creation or in its terminal): readable without a permission prompt.
     const uploads = path.join(paths.uploads, agent.id);
@@ -1808,8 +1814,24 @@ export class AgentManager extends EventEmitter {
     });
   }
 
+  /**
+   * The agent's lane: ports and a name ending no other agent has (lanes.js). Given the first time
+   * it is asked for and kept until the agent is deleted. Null with lanes off, or in a container,
+   * which has its own ports.
+   */
+  laneFor(agent) {
+    const settings = laneSettings(this.config);
+    if (!agent || !settings.enabled || agent.isolation === 'container' || agent.machine) return null;
+    if (!laneOf(agent.lane, settings)) {
+      const n = nextLane(this.store.list().map((a) => a.lane).filter(Boolean), settings, [PORT]);
+      if (!n || !this.store.patch(agent.id, { lane: n })) return null;
+      agent.lane = n;
+    }
+    return laneOf(agent.lane, settings);
+  }
+
   childEnv(agent) {
-    const env = { ...process.env, ...(agent ? { AGENTMGR_AGENT_ID: agent.id, AGENTMGR_LEAN_DIR: leanDir(agent.id) } : {}), TERM: 'xterm-256color', COLORTERM: 'truecolor', AGENTMGR_TERMINAL: '1', AGENTMGR_USAGE_FILE: usageFile(), AGENTMGR_USER_STATUSLINE: ownStatusLine() };
+    const env = { ...process.env, ...(agent ? { AGENTMGR_AGENT_ID: agent.id, AGENTMGR_LEAN_DIR: leanDir(agent.id), ...laneEnv(this.laneFor(agent), laneSettings(this.config)) } : {}), TERM: 'xterm-256color', COLORTERM: 'truecolor', AGENTMGR_TERMINAL: '1', AGENTMGR_USAGE_FILE: usageFile(), AGENTMGR_USER_STATUSLINE: ownStatusLine() };
     for (const key of STRIP_ENV) delete env[key];
     return env;
   }

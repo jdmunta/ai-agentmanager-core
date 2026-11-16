@@ -34,6 +34,8 @@ Run one background [Claude Code](https://claude.com/claude-code) agent per inten
 - **Reverse engineer.** Name a target (an app's folder, a binary, a website) and what you want to understand, in the **Reverse** tab beside an agent's session: the agent investigates with [REA](https://github.com/morluto/rea)'s tools and keeps a report with animated diagrams of how it works, the evidence, what could not be determined, and a plan to build your own version.
 - **Security audit.** **🛡 Security audit** in an agent's detail (or the **Security** tab of the split, or `agentmgr audit`) has the agent audit the code in its session: it maps where untrusted input comes in, follows it through the code, runs the project's own dependency audit, and checks every finding a second time before listing it. The report beside the session has the attack surface as an animated diagram, findings by severity with evidence and a fix, what was checked and found sound, and what was not covered. It changes no code until you press **Fix findings**. It finds what a careful reader finds; it does not replace a penetration test.
 - **Skills.** **Skills…** in the menu (or `agentmgr skills`) lists the Agent Skills Claude Code has here, yours and each project's, with which agents used them. Add more from a git repository (`anthropics/skills`, or any https address): you see what it offers first, with each skill's scripts flagged, then pick. A skill added here remembers its repository and commit, so **Check** says when a newer version is there and **Update** brings it; one you edited says so.
+- **Board.** **Board** in the top bar (or `B`, `#board`): every agent as a card in the column for where its work stands: starting, working, needs you, waiting, in review, done, closed. Cards move by themselves; drag one onto **Closed** to close its session, or from Closed onto **Waiting** to resume it.
+- **Lanes.** Every agent gets a range of ports and a name ending no other agent has, in its environment and its instructions, so dev servers and test databases of agents working side by side don't collide. **OS** shows what each open session listens on (`agentmgr lanes`).
 - **Lean output.** A switch in **Usage** (off by default; `agentmgr usage --lean on`): long command output (test runs, installs, builds) is trimmed before the agent reads it, so a plan's limits last longer. Colours and progress redraws go, runs of near-identical lines are folded, and of a long middle only the lines that look like errors or warnings stay; the start and end are kept, and the whole output is saved to a file the agent can read. Claude Code only, for sessions started after you switch it on. Usage shows how much was trimmed.
 - **Runbooks for support.** A runbook for the support team written from a release ticket, every ticket of an epic, or a project's code changes in a time frame: what changed, what customers may see, how to check it, troubleshooting, rollback, when to escalate, and what to confirm with engineering.
 - **Decide.** Help with the decisions, not only the tasks: a plan to review or an agent's question arrives with its options, the one recommended, why, and the risk; calls you keep making become standing decisions that are handled for you and reported; the backlog is ranked by impact; a date at risk is laid out as choices; and past decisions are looked back on.
@@ -200,6 +202,7 @@ agentmgr decisions [project] [--md]           # the decision log; --add "<questi
 agentmgr debt <project> --scan                # the tech debt radar: files that change often and are hard to read
 agentmgr audit <agent> --start                # security audit in its session (a scope in words, --fix "1 and 3"; no arguments: the report)
 agentmgr skills                               # Claude Code's skills here (look <repo>, add <repo> <names...>, check|update|rm <id>)
+agentmgr lanes                                # every agent's own ports and name ending (--off, --port off, --base, --size)
 agentmgr usage                                # each engine's plan limits: used, left, resets (--now, --lean on, --warn 80, --hold 95, --default codex)
 agentmgr runbook --ticket REL-42              # a support runbook from a release ticket (or --epic KEY, or --since 2026-10-01 -p <project>; -o file.md)
 agentmgr decide                               # what waits for your decision, with its recommendation (--do <n>, --handled, --standing, --autonomy p=level, --priority, --risk)
@@ -1310,6 +1313,42 @@ Turn it all off with `"decide": { "enabled": false }` in config.json.
 - **This computer**: its name, system and kernel, processor and cores, memory, how long it has been up, its network addresses, and the app's version and uptime.
 - **Agent sessions**: each open session with the processor and memory it takes, counting everything it started (Claude Code, the tools and tests it runs). Click a name to open the agent.
 - **Busiest processes**: the top of everything running on the computer.
+
+### Lanes: each agent's own ports
+
+Worktrees keep agents' files apart, but two dev servers still want port 3000 and two test runs the same database. So every agent gets a **lane**: a range of ports (ten, from 21000: the first agent has 21000–21009, the next 21010–21019) and a name ending (`_a1`, `_a2`) that no other agent has. A lane is given when an agent's session first starts, stays with the agent across restarts, and is free for a new agent once the agent is deleted.
+
+- **In its environment**: `AGENT_PORTS` (`21010-21019`), `AGENT_PORT` and `AGENT_PORT_END` (first and last), `AGENT_LANE` (its number), `AGENT_SUFFIX` (`_a2`), and `PORT` set to its first port, which many dev servers listen on by themselves. The shells you open in its folder get the same.
+- **In its instructions**: to use its own ports for anything it starts that listens, to leave what holds a port outside them alone, and to end the names of things it creates outside its folder (a database, a container, a compose project) with its ending.
+- **In OS**: the **Ports** column of Agent sessions shows each open session's lane and what it listens on now, read from the system (`lsof`, or `ss` on Linux). Click a port to open it in a browser tab beside the session. A port outside the lane is marked, and so is a port of the lane that something else holds.
+- **In an agent's detail**: **Lane** under Workspace.
+
+The switches are under Agent sessions in OS: **A lane of ports for each agent**, and **Set PORT to its first port** (turn it off if your projects use `PORT` for something else). A change reaches a session the next time it starts. From the command line:
+
+```sh
+agentmgr lanes                      # the settings, and every agent's lane
+agentmgr lanes --off                # no lanes (--on brings them back)
+agentmgr lanes --port off           # keep the lanes, leave PORT alone
+agentmgr lanes --base 30000 --size 20
+```
+
+Lanes are a convention the agent is told and given, not a wall: nothing stops a tool that ignores `PORT` from taking 3000. That is what the Ports column is for. Agents in containers get no lane; a container has its own ports.
+
+## Board
+
+**Board** in the top bar (or `B`, or `#board`) shows every agent as a card, in the column for where its work stands:
+
+| Column | An agent is here when |
+| --- | --- |
+| Starting | its workspace is being prepared, or it is planning |
+| Working | it is producing output now |
+| Needs you | a prompt, an open question, a plan to approve, a usage limit, an error, or it may be stuck. This comes before every other column |
+| Waiting | its session is open and waits for its next instruction |
+| In review | it has an open pull request (the card says ready to merge, needs fixes, behind, checks running or draft) |
+| Done | its pull request merged, or it reported its work done |
+| Closed | its session is closed and can be resumed |
+
+Cards are ordered by priority, then the most recently active. A card moves by itself as its agent's work moves; the columns are not something you set. Two drags do something: a card onto **Closed** closes its session (not while it is working), and a card from Closed onto **Waiting** resumes it; the **Close** and **Resume** buttons on the cards do the same. Any other drop says why nothing moved. Click a card to open its agent. With more than one project, a list at the top narrows the board to one.
 
 It reads again every 3 seconds while open, with `ps` and the system's own counters; nothing leaves the computer.
 
