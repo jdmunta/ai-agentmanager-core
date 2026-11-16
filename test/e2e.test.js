@@ -1791,7 +1791,7 @@ test('eval: a Jira agent that says it is done gets its tests run again, an Eval 
   const [a] = (await call('POST', '/agents', { intent: 'https://jira.example.test/browse/QA-3 make uploads stop retrying', project: 'evaled', start: false })).body;
   await waitFor(async () => ((await agentNow(a.id)).status !== 'preparing' ? true : null), 20000, 'its folder');
   // The project's test command, run in the agent's folder.
-  assert.deepEqual((await call('PUT', `/agents/${a.id}/eval/command`, { command: 'test -f README.md && echo "# pass 3" && echo "# fail 0"' })).body, { testCommand: 'test -f README.md && echo "# pass 3" && echo "# fail 0"' });
+  assert.deepEqual((await call('PUT', `/agents/${a.id}/eval/command`, { command: 'test -f README.md && echo "# pass 3" && echo "# fail 0"' })).body, { testCommand: 'test -f README.md && echo "# pass 3" && echo "# fail 0"', testRuns: 1 });
   manager.patch(a.id, { brief: { status: 'done', checks: [{ state: 'passed', text: 'unit tests' }] } });
   manager.emit('finished', manager.store.get(a.id));
   const done = await waitFor(async () => {
@@ -2895,6 +2895,16 @@ test('races: variants, scoreboard, tests in each worktree, diff, pick a winner a
   }, 20000, 'tests finished');
   assert.equal(done.rows.find((r) => r.id === p.id).tests.status, 'passed');
   assert.equal(done.rows.find((r) => r.id === q.id).tests.status, 'failed');
+  // A pass is believed; a failure was run once more, to tell flaky from broken.
+  assert.deepEqual([done.rows.find((r) => r.id === p.id).tests.runs, done.rows.find((r) => r.id === q.id).tests.runs, done.rows.find((r) => r.id === q.id).tests.passes], [1, 2, 0]);
+  // Run twice in each attempt: a command that passes one time and fails the next is flaky.
+  const twice = (await call('POST', `/races/${race.id}/tests`, { command: 'if [ -f flaky.tmp ]; then rm flaky.tmp; false; else touch flaky.tmp; fi', runs: 2 })).body;
+  assert.equal(twice.testRuns, 2);
+  const flaky = await waitFor(async () => {
+    const v = (await call('GET', `/races/${race.id}`)).body;
+    return v.rows.every((r) => !['queued', 'running'].includes(r.tests?.status)) ? v : null;
+  }, 20000, 'the repeated tests finished');
+  assert.deepEqual(flaky.rows.map((r) => [r.tests.status, r.tests.passes, r.tests.runs]), [['flaky', 1, 2], ['flaky', 1, 2]]);
   assert.match((await call('GET', `/races/${race.id}/diff/${p.id}`)).body.diff, /\+yes/);
 
   const picked = (await call('POST', `/races/${race.id}/pick`, { agent: p.id, cleanup: true })).body;

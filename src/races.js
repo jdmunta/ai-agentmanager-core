@@ -5,6 +5,7 @@ import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import * as git from './git.js';
+import { cleanRuns, repeatRuns } from './eval.js';
 
 const err = (status, message) => Object.assign(new Error(message), { status });
 const now = () => new Date().toISOString();
@@ -112,9 +113,10 @@ export class Races extends EventEmitter {
   }
 
   /** Run the race's test command in every attempt's worktree (two at a time). */
-  async runTests(id, { command } = {}) {
+  async runTests(id, { command, runs } = {}) {
     const race = this.get(id);
     if (command !== undefined) race.testCommand = command.trim() || null;
+    if (runs !== undefined) race.testRuns = cleanRuns(runs);
     if (!race.testCommand) throw err(400, 'Set a test command first');
     const queue = race.members.map((m) => this.manager.store.get(m)).filter((a) => a?.workdir);
     for (const a of queue) race.tests[a.id] = { status: 'queued', at: now() };
@@ -126,9 +128,22 @@ export class Races extends EventEmitter {
     return this.view(id);
   }
 
-  runOne(race, agent) {
+  /**
+   * The test command in one attempt's folder, as many times as the race asks (eval.js: one run
+   * that fails is run once more). Passed in some runs and failed in others is "flaky".
+   */
+  async runOne(race, agent) {
     race.tests[agent.id] = { status: 'running', at: now() };
     this.save(race);
+    const started = Date.now();
+    const all = await repeatRuns(() => this.runOnce(race, agent), race.testRuns);
+    const { exitCode, output, at, status } = all.shown;
+    race.tests[agent.id] = { status: status === 'error' ? 'error' : all.passed ? 'passed' : all.flaky ? 'flaky' : 'failed', exitCode, runs: all.runs, passes: all.passes, seconds: Math.round((Date.now() - started) / 1000), output, at };
+    this.save(race);
+  }
+
+  /** One run: { status, exitCode, output, at, passed, timedOut }. */
+  runOnce(race, agent) {
     return new Promise((resolve) => {
       const child = spawn(process.env.SHELL || '/bin/sh', ['-lc', race.testCommand], { cwd: agent.workdir, env: this.manager.childEnv(agent), detached: true });
       this.running.set(`${race.id}:${agent.id}`, child);
@@ -136,8 +151,9 @@ export class Races extends EventEmitter {
       const keep = (d) => (out = (out + d).slice(-6000));
       child.stdout.on('data', keep);
       child.stderr.on('data', keep);
-      const started = Date.now();
+      let timedOut = false;
       const timer = setTimeout(() => {
+        timedOut = true;
         try {
           process.kill(-child.pid, 'SIGKILL');
         } catch {}
@@ -145,15 +161,8 @@ export class Races extends EventEmitter {
       const finish = (code, error) => {
         clearTimeout(timer);
         this.running.delete(`${race.id}:${agent.id}`);
-        race.tests[agent.id] = {
-          status: error ? 'error' : code === 0 ? 'passed' : 'failed',
-          exitCode: code,
-          seconds: Math.round((Date.now() - started) / 1000),
-          output: (error ? `${error}\n` : '') + out.slice(-4000),
-          at: now(),
-        };
-        this.save(race);
-        resolve();
+        // A command that could not be started is not run again.
+        resolve({ status: error ? 'error' : code === 0 ? 'passed' : 'failed', exitCode: code, output: (error ? `${error}\n` : '') + out.slice(-4000), at: now(), passed: !error && code === 0, timedOut: timedOut || Boolean(error) });
       };
       child.on('error', (e) => finish(null, e.message));
       child.on('close', (code) => finish(code));

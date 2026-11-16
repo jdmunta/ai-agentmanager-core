@@ -3364,7 +3364,7 @@ test('eval: test runs from the session, confidence by fixed rules (100 only when
   const after = await ev.compute('a1');
   assert.equal(after.eval.items.find((i) => i.key === 'rerun').state, 'pending');
   // Its test command, set for the project.
-  assert.deepEqual(ev.setTestCommand('a1', '  npm test  '), { testCommand: 'npm test' });
+  assert.deepEqual(ev.setTestCommand('a1', '  npm test  '), { testCommand: 'npm test', testRuns: 1 });
   ev.close();
 });
 
@@ -4706,4 +4706,72 @@ test('board: the column an agent is in, why it needs you, and what a drag does',
   assert.deepEqual(dropAction(a(), 'idle'), { why: null }, 'dropped where it was');
   assert.deepEqual(dropAction(a({ prs: [{ land: 'ready' }] }), 'closed'), { act: 'stop' }, 'in review with its session open');
   assert.match(dropAction(a({ status: 'stopped', prs: [{ land: 'merged' }] }, { running: false }), 'closed').why, /already closed/);
+});
+
+test('repeat runs: a test command run more than once tells flaky from broken; the Eval and a merge wait on a flaky one', async () => {
+  const { Evals, cleanRuns, evaluate, evalMarkdown, repeatRuns } = await import('../src/eval.js');
+  const { EventEmitter } = await import('node:events');
+  assert.deepEqual([1, '3', 5, 0, 6, 2.5, 'x', undefined, null].map(cleanRuns), [1, 3, 5, 1, 1, 1, 1, 1, 1]);
+  const seq = (...results) => {
+    let i = 0;
+    const once = async () => results[Math.min(i++, results.length - 1)];
+    once.calls = () => i;
+    return once;
+  };
+  const ok = { passed: true, output: 'ok' };
+  const bad = { passed: false, output: 'boom' };
+  // Once: a pass is believed; a failure is run once more.
+  let once = seq(ok);
+  assert.deepEqual(await repeatRuns(once), { passed: true, runs: 1, passes: 1, flaky: false, shown: ok });
+  assert.equal(once.calls(), 1);
+  once = seq(bad, ok);
+  assert.deepEqual(await repeatRuns(once, 1), { passed: false, runs: 2, passes: 1, flaky: true, shown: bad });
+  once = seq(bad, bad);
+  assert.deepEqual(await repeatRuns(once), { passed: false, runs: 2, passes: 0, flaky: false, shown: bad });
+  assert.equal(once.calls(), 2);
+  // Asked for three: all three, whatever the first says; the failed one is the one shown.
+  once = seq(ok, bad, ok);
+  assert.deepEqual(await repeatRuns(once, 3), { passed: false, runs: 3, passes: 2, flaky: true, shown: bad });
+  once = seq(ok, ok, ok);
+  assert.deepEqual(await repeatRuns(once, 3), { passed: true, runs: 3, passes: 3, flaky: false, shown: ok });
+  assert.equal(once.calls(), 3);
+  // A run that timed out is not repeated.
+  const slow = { passed: false, output: '', timedOut: true };
+  once = seq(slow, ok);
+  assert.deepEqual(await repeatRuns(once, 3), { passed: false, runs: 1, passes: 0, flaky: false, shown: slow });
+  assert.equal(once.calls(), 1);
+
+  // In the Eval: every run passing is the only "ok"; flaky is partial, said as such, and keeps it under 100.
+  const base = { state: 's', scorecard: { criteria: [{ criterion: 'c', status: 'met' }] }, hasSpec: true, judgeOn: false, readable: false };
+  const item = (rerun) => evaluate({ ...base, rerun: { command: 'npm test', state: 's', at: 'now', ...rerun } });
+  let ev = item({ passed: true, runs: 3, passes: 3 });
+  assert.deepEqual([ev.items[0].state, ev.items[0].detail, ev.confidence], ['ok', 'npm test passed in all 3 runs', 100]);
+  ev = item({ passed: false, flaky: true, runs: 3, passes: 2 });
+  assert.deepEqual([ev.items[0].state, ev.items[0].detail], ['partial', 'npm test is flaky: it passed 2 of 3 runs on the same code']);
+  assert.ok(ev.confidence < 100 && ev.confidence > 50, String(ev.confidence));
+  assert.match(ev.pending[0], /is flaky/);
+  assert.match(evalMarkdown({ ...ev, runs: [{ command: 'npm test', passed: true }] }), /🟡 `npm test` run again by AI Agent Manager on the final change, flaky: passed 2 of 3 runs/);
+  ev = item({ passed: false, runs: 2, passes: 0, counts: { passed: 4, failed: 1 } });
+  assert.deepEqual([ev.items[0].state, ev.items[0].detail], ['failed', 'npm test failed in all 2 runs: 1 failed, 4 passed']);
+  // A run kept from before this (no count of runs) reads as it did.
+  assert.equal(item({ passed: true }).items[0].detail, 'npm test passed');
+  assert.equal(item({ passed: false }).items[0].detail, 'npm test failed');
+
+  // The project's number of runs is kept with its test command, and the verify uses it.
+  const projects = { p1: { key: 'k', testCommand: 'npm test' } };
+  const agent = { id: 'a1', name: 'A', kind: 'task', workdir: os.tmpdir(), prs: {} };
+  const manager = Object.assign(new EventEmitter(), { mustGet: () => agent, projectInfo: () => ({ key: 'k' }), issueKey: () => 'AB-1', patch: (id, f) => Object.assign(agent, f), judge: { enabled: false } });
+  const results = [ok, bad, ok];
+  let n = 0;
+  const evals = new Evals({ manager, store: { data: { projects }, get: () => agent, save() {} }, run: async () => results[n++], state: async () => 's', transcript: () => null });
+  assert.equal(evals.testRuns(agent), 1);
+  assert.deepEqual(evals.setTestCommand('a1', 'npm test', 3), { testCommand: 'npm test', testRuns: 3 });
+  assert.equal(projects.p1.testRuns, 3);
+  const v = (await evals.verify('a1')).eval;
+  assert.equal(n, 3);
+  assert.deepEqual([v.rerun.passed, v.rerun.flaky, v.rerun.runs, v.rerun.passes, v.rerun.tail, v.testRuns], [false, true, 3, 2, 'boom', 3]);
+  assert.deepEqual(evals.setTestCommand('a1', 'npm test', 1), { testCommand: 'npm test', testRuns: 1 });
+  assert.equal('testRuns' in projects.p1, false);
+  assert.equal(evals.setTestCommand('a1', 'npm test').testRuns, 1, 'left as it was when not given');
+  evals.close();
 });

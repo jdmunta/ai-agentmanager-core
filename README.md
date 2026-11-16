@@ -755,11 +755,21 @@ Either way, the roles hand off through Markdown files in the team's folder (`~/.
 
 - **Status and outcome**, from each agent's brief, plus its checks
 - **Change**: files and lines added and removed, with the smallest marked
-- **Tests**: the race's test command, run in every attempt's worktree two at a time (15-minute limit each)
+- **Tests**: the race's test command, run in every attempt's worktree two at a time (15-minute limit each). **Runs** beside the command (or `agentmgr race test <race> --runs 3`) runs it up to five times in each attempt; an attempt that passes some runs and fails others shows as **flaky**
 - **Cost and time**
 - **Diff**: each attempt's full changes against where it started
 
 **Pick** marks the winner and can close and delete the other attempts, worktrees included.
+
+### Repeat runs: flaky or broken
+
+One test run can pass or fail by chance, so the app's own test runs can be repeated on the same code. This holds for a race's tests and for the **Eval** of an agent on a Jira issue (the tests the app runs again itself when the agent says it is done).
+
+- **Once (the default)**: a run that passes is believed. A run that fails is run once more, which tells a flaky test (failed, then passed) from a broken one (failed twice). A run that timed out is not repeated.
+- **More than once**: set **Runs** (2 to 5) beside the test command, in the race or in the Eval; for the Eval it is kept for the project. Every run is made, whatever the first says.
+- **Flaky** means it passed some runs and failed others. In the Eval that counts for part of the tests' weight, is listed as pending, and keeps the confidence under 100%, so nothing is merged on it automatically. The output shown is a failed run's.
+
+Repeating costs test time, not AI usage.
 
 ## Slack alerts
 

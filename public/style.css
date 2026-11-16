@@ -621,6 +621,7 @@ dialog::backdrop { background: rgba(0, 0, 0, .45); }
 .del { color: var(--red); }
 .test.passed { color: var(--green); }
 .test.failed, .test.error { color: var(--red); }
+.test.flaky { color: var(--yellow); }
 .test.running, .test.queued { color: var(--yellow); }
 .race-diff { border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; }
 pre.diff { margin: 6px 0 0; max-height: 50vh; overflow: auto; font: 12px/1.45 var(--mono); background: var(--panel-2); padding: 8px 10px; border-radius: 6px; }
@@ -1746,6 +1747,7 @@ table.eval-items tr.eval-na td { color: var(--muted); }
 .eval-tail { margin: 4px 0 0 1.2em; text-indent: 0; max-height: 160px; overflow: auto; font-size: 11.5px; white-space: pre-wrap; }
 .eval-command { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; }
 .eval-command input { min-width: 220px; }
+.eval-command input[type='number'], .race-tests input[type='number'] { min-width: 0; width: 56px; }
 @media (max-width: 600px) { table.eval-items td:nth-child(2) { white-space: normal; } .eval-acts { margin-left: 0; } }
 
 /* OS: an agent's lane of ports and what it listens on. */
