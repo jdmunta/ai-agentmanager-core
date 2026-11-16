@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.53.0 (2026-11-15)
+
+- **Lanes: each agent's own ports.** Worktrees keep agents' files apart, but two dev servers still want the same port. Every agent now gets a range of ten ports (from 21000) and a name ending (`_a1`, `_a2`) no other agent has, in its environment (`AGENT_PORTS`, `AGENT_SUFFIX`, and `PORT` set to its first port) and in its instructions. A lane is given when a session next starts, stays across restarts, and is free again when the agent is deleted. **OS** has a **Ports** column with each open session's lane and what it listens on now; a port outside the lane is marked, and a click opens it in a browser tab. On by default; switches in OS, or `agentmgr lanes` (`--off`, `--port off` if your projects use `PORT` for something else, `--base`, `--size`). Not for agents in containers.
+- **Board.** **Board** in the top bar (or `B`, `#board`): every agent as a card in the column for where its work stands: Starting, Working, Needs you, Waiting, In review, Done, Closed. Cards move by themselves. Drag one onto Closed to close its session, or from Closed onto Waiting to resume it; the Close and Resume buttons on the cards do the same.
+
 ## 1.52.0 (2026-11-14)
 
 - **Lean output.** A switch in **Usage** (off by default; `agentmgr usage --lean on`): long command output (test runs, installs, builds) is trimmed before the agent reads it, so a plan's limits last longer. Colour codes and progress redraws go, runs of near-identical lines are folded, and of a long middle only the lines that look like errors or warnings stay. The start and end are kept, and the whole output is saved to a file the agent is told about and can read. Usage shows how many outputs were trimmed and about how many tokens were not read. Claude Code only, for sessions started after you switch it on.
