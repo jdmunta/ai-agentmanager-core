@@ -1784,3 +1784,5 @@ table.eval-items tr.eval-na td { color: var(--muted); }
 @media (max-width: 720px) {
   .board-cols { grid-auto-columns: minmax(220px, 80%); }
 }
+.os-local td:first-child { white-space: normal; overflow-wrap: anywhere; }
+.os-local-no code { opacity: 0.6; }

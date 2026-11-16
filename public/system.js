@@ -18,12 +18,15 @@ export function initSystem({ api, $, esc, toast, openAgent, openPort }) {
   const body = $('#os-body');
   let data = null;
   let problem = null;
+  let local = null;
   let timer = null;
 
   async function load() {
     try {
       data = await api('GET', '/system');
       problem = null;
+      // The model servers running here (asked again by the daemon every few seconds at most).
+      local = await api('GET', '/local-models').catch(() => local);
     } catch (e) {
       problem = e.message;
     }
@@ -50,6 +53,23 @@ export function initSystem({ api, $, esc, toast, openAgent, openPort }) {
     const xy = points.map((v, i) => `${((i / (points.length - 1)) * w).toFixed(1)},${(h - 2 - (v / top) * (h - 4)).toFixed(1)}`);
     return `<svg class="os-spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" role="img" aria-label="${esc(label)}">
       <polygon points="0,${h} ${xy.join(' ')} ${w},${h}"></polygon><polyline points="${xy.join(' ')}"></polyline></svg>`;
+  }
+
+  // A model named by its file (llama.cpp) is shown by the file's name; the whole of it is in the title.
+  const short = (id) => (id.length > 60 && id.includes('//') ? `${id.slice(0, id.indexOf('/'))}/…${id.slice(id.lastIndexOf('/'))}`.replace(/(.{28}).+(.{12})$/, '$1…$2') : id);
+
+  /** Models served on this computer, for agents on the "Local model" engine. */
+  function localHtml() {
+    const servers = (local?.servers ?? []).filter((s) => s.running);
+    if (!local?.enabled || !servers.length) return '';
+    const models = servers.flatMap((s) => s.models.map((m) => ({ ...m, server: s })));
+    const harnesses = (local.harnesses ?? []).filter((h) => h.installed);
+    return `<h3 title="Models served on this computer. Start an agent on one with a Local engine: the harness (Codex, OpenCode or Claude Code) is pointed at the server">Local models <span class="hint">${servers.map((s) => `${esc(s.label)}${s.version ? ` ${esc(s.version)}` : ''}`).join(', ')}${harnesses.length ? ` · run by ${harnesses.map((h) => esc(h.label)).join(', ')}` : ''}</span></h3>
+      ${models.length
+        ? `<table class="issues os-table os-local"><thead><tr><th>Model</th><th class="num">Size</th><th title="Whether an agent can work with it: it has to call tools to read and change files">For agents</th></tr></thead><tbody>
+            ${models.map((m) => `<tr class="${m.usable ? '' : 'os-local-no'}"><td><code title="${esc(m.id)}">${esc(short(m.id))}</code>${m.loaded ? ' <span class="tag" title="In memory now">loaded</span>' : ''}${m.notes.length ? `<div class="hint">${esc(m.notes.join('. '))}</div>` : ''}</td><td class="num">${[m.sizeBytes ? bytes(m.sizeBytes) : '', esc(m.params ?? '')].filter(Boolean).join(' · ')}</td><td>${m.usable ? 'Yes' : '<span class="os-port-out">No</span>'}</td></tr>`).join('')}
+          </tbody></table>`
+        : '<p class="hint">No model yet.</p>'}`;
   }
 
   const row = (k, v) => (v ? `<tr><th>${esc(k)}</th><td>${v}</td></tr>` : '');
@@ -120,6 +140,7 @@ export function initSystem({ api, $, esc, toast, openAgent, openPort }) {
                 </tbody></table>`
               : '<p class="hint">No agent session is open.</p>'}
             ${lanes ? `<div class="os-lanes"><label title="Each agent gets a range of ports and a name ending no other agent has, in its environment (AGENT_PORTS, AGENT_SUFFIX) and its instructions, so dev servers and test databases of agents working side by side don't collide. For sessions started from now on"><input type="checkbox" data-os-lanes="enabled" ${lanes.enabled ? 'checked' : ''} /> A lane of ports for each agent</label>${lanes.enabled ? `<label title="Many dev servers listen on PORT when it is set. Turn off if your projects use PORT for something else"><input type="checkbox" data-os-lanes="port" ${lanes.port ? 'checked' : ''} /> Set PORT to its first port</label><span class="hint">${lanes.size} port${lanes.size === 1 ? '' : 's'} each, from ${lanes.base}</span>` : ''}</div>` : ''}
+            ${localHtml()}
             <h3>Busiest processes <span class="hint">of ${processes.count}</span></h3>
             <table class="issues os-table"><thead><tr><th>Process</th><th class="num" title="Of one core: 200% is two cores busy">Processor</th><th class="num">Memory</th><th class="num">PID</th></tr></thead><tbody>
               ${processes.top.map((p) => `<tr><td title="${esc(p.command)}">${esc(p.name)}</td><td class="num">${p.cpu}%</td><td class="num">${bytes(p.mem)}</td><td class="num hint">${p.pid}</td></tr>`).join('')}

@@ -4450,6 +4450,7 @@ $('#ask-form').addEventListener('submit', async (e) => {
       question: String(f.get('question') || '').trim() || undefined,
       name: String(f.get('name') || '').trim() || undefined,
       engine: f.get('engine') || undefined,
+      model: (String(f.get('engine') || '').startsWith('local-') && String(f.get('model') || '').trim()) || undefined,
       attachments: askFiles.paths().length ? askFiles.paths() : undefined,
     });
     agents.set(a.id, a);
@@ -5190,8 +5191,35 @@ async function loadEngines() {
       };
       sel.addEventListener('change', show);
       show();
+      sel.addEventListener('change', () => syncLocalModel(sel.form));
     }
   } catch {}
+}
+
+/**
+ * A local engine (Codex, OpenCode or Claude Code as the harness) takes a model served on this computer ("ollama/qwen3-coder:30b"): the
+ * form's model field then offers the ones found, and starts on the default or the first.
+ */
+async function syncLocalModel(form) {
+  const input = form.model;
+  if (!input) return;
+  const local = form.engine.value.startsWith('local-');
+  const field = form.id === 'ask-form' ? $('#ask-model-field') : null;
+  if (field) field.hidden = !local;
+  if (!local) {
+    if (input.dataset.placeholder !== undefined) input.placeholder = input.dataset.placeholder;
+    input.removeAttribute('list');
+    if (input.dataset.local === input.value) input.value = '';
+    return;
+  }
+  input.dataset.placeholder ??= input.placeholder;
+  input.setAttribute('list', 'local-models-list');
+  input.placeholder = '<server>/<model>';
+  const v = await api('GET', '/local-models').catch(() => null);
+  const models = (v?.servers ?? []).flatMap((s) => s.models.filter((m) => m.usable).map((m) => ({ ...m, server: s.label })));
+  $('#local-models-list').replaceChildren(...models.map((m) => Object.assign(document.createElement('option'), { value: m.id, label: [m.server, m.sizeBytes ? `${(m.sizeBytes / 1024 ** 3).toFixed(1)} GB` : '', m.params, ...m.notes].filter(Boolean).join(' · ') })));
+  if (!form.engine.value.startsWith('local-')) return;
+  if (!input.value.includes('/')) input.value = input.dataset.local = (v?.default && models.some((m) => m.id === v.default) ? v.default : models[0]?.id) ?? '';
 }
 
 async function boot() {

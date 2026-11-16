@@ -5,10 +5,12 @@ import path from 'node:path';
 import antigravity from './antigravity.js';
 import claude from './claude.js';
 import codex from './codex.js';
+import { LOCAL_ENGINES } from './local.js';
+import { localSettings } from '../localmodels.js';
 import muse from './muse.js';
 import { acpEngines } from './acp.js';
 
-export const ENGINES = { claude, codex, antigravity, muse };
+export const ENGINES = { claude, codex, antigravity, muse, ...Object.fromEntries(LOCAL_ENGINES.map((e) => [e.id, e])) };
 export const DEFAULT_ENGINE = 'claude';
 
 /** Adds an engine from a plugin. Built-in engines can't be replaced. */
@@ -40,15 +42,25 @@ export function notInstalled(engine, config) {
   return `${engine.label} not found: ${where}. ${how}, then run \`agentmgr restart\`. If it's installed somewhere else, set its path in config.json${engine.id === 'claude' ? ' ("claudeBin") or AGENTMGR_CLAUDE_BIN' : ` ("engines": {"${engine.id}": {"bin": "…"}})`}.`;
 }
 
+/**
+ * The engine "local" stands for: the harness config.json names ("localModels": { "harness": … })
+ * when it is installed, else the first installed of Codex, OpenCode and Claude Code.
+ */
+export function localEngineId(config = {}) {
+  const have = LOCAL_ENGINES.filter((e) => installed(e, config));
+  return (have.find((e) => e.harness === localSettings(config).harness) ?? have[0] ?? LOCAL_ENGINES[0]).id;
+}
+
 /** Every engine, with whether it can run here, for pickers and the hub. */
 export function listEngines(config) {
   return Object.values(ENGINES).map((e) => {
-    const ok = installed(e, config);
+    // Some engines also need something running (a local model server).
+    const ok = installed(e, config) && (e.available?.(config) ?? true);
     let notice = null;
     try {
       notice = ok ? (e.notice?.(config) ?? null) : null;
     } catch {}
-    return { id: e.id, label: e.label, installed: ok, permissionModes: e.permissionModes, supports: e.supports, notice };
+    return { id: e.id, label: e.label, installed: ok, ...(e.local ? { local: true, harness: e.harness } : {}), permissionModes: e.permissionModes, supports: e.supports, notice };
   });
 }
 

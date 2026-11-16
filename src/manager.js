@@ -9,7 +9,7 @@ import os from 'node:os';
 import path from 'node:path';
 import pty from 'node-pty';
 import { PORT, expandHome, paths } from './config.js';
-import { DEFAULT_ENGINE, ENGINES, engineOf, installed, notInstalled } from './engines/index.js';
+import { DEFAULT_ENGINE, ENGINES, engineOf, installed, localEngineId, notInstalled } from './engines/index.js';
 import {
   DOC_KINDS,
   diagramsOnly,
@@ -653,8 +653,12 @@ export class AgentManager extends EventEmitter {
   }) {
     intent = (intent ?? '').trim();
     const staged = stagedFiles(attachments);
+    // "local": a model served on this computer, in the harness chosen for those.
+    if (engine === 'local') engine = localEngineId(this.config);
     const engineDef = engineOf(engine || this.config.engine || DEFAULT_ENGINE);
     const engineId = engineDef.id;
+    // Some engines need a model, or take only the ones they know (a local model's server and name).
+    if (engineDef.checkModel) model = engineDef.checkModel(model, this.config);
     this.plugins.check('agent.create', {
       input: { kind, intent, name, repo, dir, worktree, base, permissionMode: permissionMode || this.config.permissionMode || null, model, project, priority, engine: engineId, imported: Boolean(imported) },
     });
@@ -1831,7 +1835,9 @@ export class AgentManager extends EventEmitter {
   }
 
   childEnv(agent) {
-    const env = { ...process.env, ...(agent ? { AGENTMGR_AGENT_ID: agent.id, AGENTMGR_LEAN_DIR: leanDir(agent.id), ...laneEnv(this.laneFor(agent), laneSettings(this.config)) } : {}), TERM: 'xterm-256color', COLORTERM: 'truecolor', AGENTMGR_TERMINAL: '1', AGENTMGR_USAGE_FILE: usageFile(), AGENTMGR_USER_STATUSLINE: ownStatusLine() };
+    // An engine's own variables (a local model's Codex home, say).
+    const own = agent && Object.hasOwn(ENGINES, agent.engine ?? '') ? ENGINES[agent.engine].env?.(this.config) : null;
+    const env = { ...process.env, ...own, ...(agent ? { AGENTMGR_AGENT_ID: agent.id, AGENTMGR_LEAN_DIR: leanDir(agent.id), ...laneEnv(this.laneFor(agent), laneSettings(this.config)) } : {}), TERM: 'xterm-256color', COLORTERM: 'truecolor', AGENTMGR_TERMINAL: '1', AGENTMGR_USAGE_FILE: usageFile(), AGENTMGR_USER_STATUSLINE: ownStatusLine() };
     for (const key of STRIP_ENV) delete env[key];
     return env;
   }
@@ -1911,7 +1917,10 @@ export class AgentManager extends EventEmitter {
       if (mode && !modes.includes(mode)) throw bad(`${engineOf(agent).label} has no "${mode}" mode (use ${modes.join(', ')})`);
       allowed.permissionMode = mode;
     }
-    if ('model' in fields) allowed.model = String(fields.model ?? '').trim() || null;
+    if ('model' in fields) {
+      allowed.model = String(fields.model ?? '').trim() || null;
+      if (engineOf(agent).checkModel) allowed.model = engineOf(agent).checkModel(allowed.model, this.config);
+    }
     // Keep: clean up never closes or deletes it.
     if ('keep' in fields) allowed.keep = Boolean(fields.keep);
     if ('budgetUsd' in fields) {

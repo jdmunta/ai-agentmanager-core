@@ -321,8 +321,8 @@ export default {
    * Mark the folder trusted in $CODEX_HOME/config.toml, the record Codex writes for
    * "Trust and continue". Appends a table only when the folder isn't listed yet.
    */
-  trust(dir) {
-    const file = path.join(home(), 'config.toml');
+  trust(dir, codexHome = home()) {
+    const file = path.join(codexHome, 'config.toml');
     const key = real(dir).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
     let raw = '';
     try {
@@ -333,7 +333,7 @@ export default {
     if (raw.includes(`[projects."${key}"]`)) return false;
     const backup = `${file}.agentmgr-backup`;
     if (raw && !fs.existsSync(backup)) fs.writeFileSync(backup, raw, { mode: 0o600 });
-    fs.mkdirSync(home(), { recursive: true });
+    fs.mkdirSync(codexHome, { recursive: true });
     fs.appendFileSync(file, `${raw && !raw.endsWith('\n') ? '\n' : ''}\n[projects."${key}"]\ntrust_level = "trusted"\n`);
     return true;
   },

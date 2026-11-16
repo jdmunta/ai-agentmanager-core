@@ -4775,3 +4775,143 @@ test('repeat runs: a test command run more than once tells flaky from broken; th
   assert.equal(evals.setTestCommand('a1', 'npm test').testRuns, 1, 'left as it was when not given');
   evals.close();
 });
+
+test('local models: settings, model names, what each kind of server lists, and what an agent can use', async () => {
+  const { LocalModels, cleanUrl, judgeModel, lmstudioModels, localSettings, ollamaModels, openaiModels, parseModel, probeServer, variantName } = await import('../src/localmodels.js');
+  assert.equal(cleanUrl('http://127.0.0.1:11434/v1/'), 'http://127.0.0.1:11434');
+  assert.equal(cleanUrl('https://box.local:8443/llm/'), 'https://box.local:8443/llm');
+  for (const bad of ['', 'ollama', 'file:///etc/passwd', 'ftp://x']) assert.equal(cleanUrl(bad), null, bad);
+
+  let s = localSettings({});
+  assert.deepEqual([s.enabled, s.context, s.default, s.harness, Object.keys(s.servers)], [true, 32768, null, null, ['ollama', 'lmstudio', 'llamacpp']]);
+  assert.deepEqual([localSettings({ localModels: { harness: 'opencode' } }).harness, localSettings({ localModels: { harness: 'vim' } }).harness], ['opencode', null]);
+  s = localSettings({ localModels: { enabled: false, context: 100, default: 'x', servers: { ollama: 'http://10.0.0.5:11434', lmstudio: false, mlx: { url: 'http://127.0.0.1:8081/v1', label: 'MLX' }, 'Bad Name': 'http://x', odd: 'nope' } } });
+  assert.deepEqual([s.enabled, s.context, s.default], [false, 32768, null], 'out of bounds falls back');
+  assert.deepEqual(Object.fromEntries(Object.entries(s.servers).map(([k, v]) => [k, [v.label, v.url, v.preset]])), { ollama: ['Ollama', 'http://10.0.0.5:11434', false], llamacpp: ['llama.cpp or MLX', 'http://127.0.0.1:8080', true], mlx: ['MLX', 'http://127.0.0.1:8081', false] });
+  assert.equal(localSettings({ localModels: { context: 0 } }).context, 0, "0 leaves the server's own");
+
+  assert.deepEqual(parseModel('ollama/hf.co/user/repo:Q4'), { server: 'ollama', name: 'hf.co/user/repo:Q4' });
+  for (const bad of ['', 'opus', '/x', 'ollama/']) assert.equal(parseModel(bad), null, bad);
+  assert.equal(variantName('gpt-oss:20b', 32768), 'gpt-oss-am32k:20b');
+  assert.equal(variantName('llama3.2', 16384), 'llama3.2-am16k:latest');
+  assert.equal(variantName('hf.co/user/repo.v1:Q4', 8192), 'hf.co/user/repo.v1-am8k:Q4');
+  assert.equal(variantName('localhost:5000/team/model', 8192), 'localhost:5000/team/model-am8k:latest', 'a port is not a tag');
+
+  const tags = {
+    models: [
+      { name: 'gpt-oss:20b', size: 13.7e9, details: { parameter_size: '20.9B', quantization_level: 'MXFP4', context_length: 131072 }, capabilities: ['completion', 'tools', 'thinking'] },
+      { name: 'gpt-oss-am32k:20b', size: 13.7e9, details: {}, capabilities: ['completion', 'tools'] },
+      { name: 'gemma3:latest', size: 8e9, details: { parameter_size: '12.2B' }, capabilities: ['completion', 'vision'] },
+      { name: 'nomic-embed-text:latest', size: 3e8, details: { parameter_size: '137M' }, capabilities: ['embedding'] },
+      { name: 'old:latest', size: 4e9, details: { parameter_size: '8B' } },
+    ],
+  };
+  const om = ollamaModels(tags, { models: [{ name: 'gpt-oss-am32k:20b' }] });
+  assert.deepEqual(om.map((m) => [m.name, m.tools, m.loaded]), [['gpt-oss:20b', true, true], ['gemma3', false, false], ['old', null, false]], 'no copies of ours, no embedding models');
+  assert.deepEqual([om[0].sizeBytes, om[0].params, om[0].quant, om[0].maxContext], [13.7e9, '20.9B', 'MXFP4', 131072]);
+  assert.deepEqual(
+    lmstudioModels({ data: [{ id: 'qwen/qwen3-coder-30b', type: 'llm', quantization: '4bit', state: 'loaded', max_context_length: 262144, loaded_context_length: 32768, capabilities: ['tool_use'] }, { id: 'text-embedding-nomic', type: 'embeddings' }, { id: 'phi', type: 'vlm', state: 'not-loaded' }] }).map((m) => [m.name, m.tools, m.loaded, m.context ?? null]),
+    [['qwen/qwen3-coder-30b', true, true, 32768], ['phi', null, false, null]],
+  );
+  assert.deepEqual(openaiModels({ data: [{ id: 'model.gguf', owned_by: 'llamacpp', meta: { size: 2e9, n_params: 3.2e9, n_ctx_train: 131072 } }, { id: 'mlx-community/x' }] }).map((m) => [m.name, m.sizeBytes, m.params, m.loaded]), [['model.gguf', 2e9, '3.2B', true], ['mlx-community/x', null, null, null]]);
+
+  const GB = 1024 ** 3;
+  assert.deepEqual(judgeModel({ tools: false }), { usable: false, notes: ["Can't call tools, which an agent needs to read and change files"] });
+  assert.deepEqual(judgeModel({ tools: true, sizeBytes: 13 * GB, params: '20.9B' }, { memory: 24 * GB }), { usable: true, notes: [] });
+  const big = judgeModel({ tools: null, sizeBytes: 20 * GB, params: '568M' }, { memory: 24 * GB });
+  assert.equal(big.usable, true);
+  assert.deepEqual(big.notes.map((n) => n.split(':')[0].split(' ')[0]), ['Large', 'Small', 'The']);
+
+  // One address: Ollama's own list first, then LM Studio's, then any OpenAI API; nothing when none answers.
+  const answers = (map) => async (url) => map[new URL(url).pathname] ?? null;
+  const at = { label: 'llama.cpp or MLX', url: 'http://h:1', preset: true };
+  let p = await probeServer('llamacpp', at, { get: answers({ '/api/tags': tags, '/api/version': { version: '0.40' } }), memory: 24 * GB });
+  assert.deepEqual([p.kind, p.running, p.version, p.label], ['ollama', true, '0.40', 'Ollama']);
+  assert.deepEqual(p.models.map((m) => [m.id, m.usable]), [['llamacpp/gemma3', false], ['llamacpp/gpt-oss:20b', true], ['llamacpp/old', true]], 'by name');
+  p = await probeServer('lmstudio', { label: 'LM Studio', url: 'http://h:2', preset: true }, { get: answers({ '/api/v0/models': { data: [{ id: 'a', type: 'llm' }] }, '/v1/models': { data: [{ id: 'a' }] } }) });
+  assert.deepEqual([p.kind, p.models.map((m) => m.id)], ['lmstudio', ['lmstudio/a']]);
+  assert.deepEqual([(await probeServer('llamacpp', at, { get: answers({ '/v1/models': { data: [{ id: 'm.gguf', owned_by: 'llamacpp' }] } }) })).label, (await probeServer('llamacpp', at, { get: answers({ '/v1/models': { data: [{ id: 'mlx-community/q' }] } }) })).label, (await probeServer('x', { label: 'Mine', url: 'http://h:3' }, { get: answers({ '/v1/models': { data: [{ id: 'q' }] } }) })).kind], ['llama.cpp', 'MLX', 'openai']);
+  assert.deepEqual(await probeServer('ollama', { label: 'Ollama', url: 'http://h:4', preset: true }, { get: answers({ '/v1/models': { error: 'no' } }) }), { id: 'ollama', label: 'Ollama', url: 'http://h:4', preset: true, kind: null, running: false, models: [] });
+
+  // Looked up again only when the last look is old; a usual address that isn't running has no row.
+  const config = {};
+  const saved = [];
+  let looks = 0;
+  let t = 1_000_000;
+  const lm = new LocalModels({ config, save: (x) => saved.push(x), now: () => t, probe: async (id, server) => (looks++, id === 'ollama' ? { id, ...server, kind: 'ollama', running: true, models: [{ id: 'ollama/a', usable: true, notes: [] }, { id: 'ollama/b', usable: false, notes: ['no'] }] } : { id, ...server, kind: null, running: false, models: [] }) });
+  let v = await lm.view();
+  assert.deepEqual([v.servers.map((x) => x.id), v.models, looks], [['ollama'], ['ollama/a'], 3]);
+  await lm.view();
+  assert.equal(looks, 3);
+  t += 11_000;
+  await Promise.all([lm.view(), lm.view()]);
+  assert.equal(looks, 6, 'one look for both');
+  lm.change({ add: { name: 'box', url: 'http://10.0.0.9:8000/v1' }, remove: 'lmstudio', context: 65536, default: 'ollama/a' });
+  assert.deepEqual(config.localModels, { servers: { box: 'http://10.0.0.9:8000', lmstudio: false }, context: 65536, default: 'ollama/a' });
+  assert.deepEqual(saved.at(-1), { localModels: config.localModels });
+  v = await lm.view();
+  assert.deepEqual([v.servers.map((x) => [x.id, x.running]), v.context, v.default], [[['ollama', true], ['box', false]], 65536, 'ollama/a'], 'one you added is listed while it is down');
+  lm.change({ remove: 'box', enabled: false });
+  assert.deepEqual(config.localModels.servers, { lmstudio: false });
+  assert.deepEqual((await lm.view()).servers, []);
+  lm.change({ harness: 'Claude' });
+  assert.equal(config.localModels.harness, 'claude');
+  for (const bad of [{ context: 100 }, { default: 'opus' }, { harness: 'vim' }, { add: { name: '9x', url: 'http://x' } }, { add: { name: 'ok', url: 'x' } }, { remove: 'nope' }]) assert.throws(() => lm.change(bad), (e) => e.status === 400, JSON.stringify(bad));
+});
+
+test('local models: an engine for each harness, started through the starter on the server the model names', async () => {
+  const { LOCAL_ENGINES } = await import('../src/engines/local.js');
+  const { ENGINES, localEngineId, listEngines } = await import('../src/engines/index.js');
+  const { default: codex } = await import('../src/engines/codex.js');
+  const { default: claude } = await import('../src/engines/claude.js');
+  const [lc, lo, lcl] = LOCAL_ENGINES;
+  assert.deepEqual(LOCAL_ENGINES.map((e) => [e.id, e.harness, e.label, e.local, e.supports.oneShot, e.supports.cost, ENGINES[e.id] === e]), [['local-codex', 'codex', 'Local · Codex', true, false, false, true], ['local-opencode', 'opencode', 'Local · OpenCode', true, false, false, true], ['local-claude', 'claude', 'Local · Claude Code', true, false, false, true]]);
+  const config = { claudeBin: '/opt/claude', claudeArgs: ['--bar'], engines: { codex: { bin: '/opt/codex', args: ['--foo'] } }, acp: { opencode: { command: ['/opt/opencode', 'acp'] } }, localModels: { context: 16384, default: 'ollama/qwen3', servers: { box: 'http://10.0.0.9:8000' } } };
+  assert.deepEqual(LOCAL_ENGINES.map((e) => [e.installedBin(config), e.bin(config)]), [['/opt/codex', process.execPath], ['/opt/opencode', process.execPath], ['/opt/claude', process.execPath]]);
+  assert.equal(lo.installedBin({}), 'opencode');
+  assert.deepEqual(lc.permissionModes, codex.permissionModes);
+  const head = (h) => ['--harness', h, '--url', 'http://10.0.0.9:8000', '--model', 'org/model:Q4', '--context', '16384', '--'];
+
+  let args = lc.launchArgs({ extra: lc.extraArgs(config), model: 'box/org/model:Q4', permissionMode: 'plan', prompt: 'Fix it' });
+  assert.match(args[0], /bin[\\/]local-run\.js$/);
+  assert.deepEqual(args.slice(1), [...head('codex'), '/opt/codex', ...codex.launchArgs({ extra: ['--foo'], permissionMode: 'plan', prompt: 'Fix it' })]);
+  assert.ok(!args.includes('--agentmgr-local'));
+  const resumed = lc.launchArgs({ extra: lc.extraArgs(config), model: 'ollama/qwen3', sessionId: 's1', resume: true });
+  assert.deepEqual(resumed.slice(resumed.indexOf('--') + 1, resumed.indexOf('--') + 3), ['/opt/codex', 'resume']);
+
+  // Claude Code: its own arguments (the status line among them) without a model; the starter names it.
+  const mine = { extra: [...lcl.extraArgs(config), '--settings', '{}'], model: 'box/org/model:Q4', permissionMode: 'acceptEdits', instructions: 'Be brief', sessionId: 's2', name: 'n', prompt: 'Fix it' };
+  args = lcl.launchArgs(mine);
+  assert.deepEqual(args.slice(1), [...head('claude'), '/opt/claude', ...claude.launchArgs({ ...mine, extra: ['--bar', '--settings', '{}', '--strict-mcp-config'], model: null })]);
+  assert.ok(!args.slice(args.indexOf('--') + 1).includes('--model'));
+  assert.match(lcl.notice(config), /Anthropic doesn't support/);
+
+  // OpenCode: our ACP client, then OpenCode's command from the config.
+  args = lo.launchArgs({ extra: lo.extraArgs(config), model: 'box/org/model:Q4', permissionMode: 'bypassPermissions', prompt: 'Fix it' });
+  const rest = args.slice(1 + head('opencode').length);
+  assert.deepEqual(args.slice(1, 1 + head('opencode').length), head('opencode'));
+  assert.equal(rest[0], process.execPath);
+  assert.match(rest[1], /bin[\\/]acp-client\.js$/);
+  assert.ok(rest.includes('--yes') && rest[rest.indexOf('--prompt') + 1] === 'Fix it');
+  assert.deepEqual(rest.slice(rest.lastIndexOf('--')), ['--', '/opt/opencode', 'acp']);
+  assert.match(lo.sessionFile('/x', 's1'), /acp[\\/]local-opencode[\\/]s1\.jsonl$/);
+
+  for (const e of LOCAL_ENGINES) {
+    for (const model of [null, 'qwen3', 'nope/qwen3']) assert.throws(() => e.launchArgs({ extra: e.extraArgs(config), model }), (x) => x.status === 400);
+    assert.equal(e.checkModel('', config), 'ollama/qwen3', 'the default');
+    assert.equal(e.checkModel(' box/m ', config), 'box/m');
+  }
+  assert.throws(() => lc.checkModel('', {}), /Choose a model/);
+  assert.throws(() => lc.checkModel('qwen3', config), /write "<server>\/<model>", say "ollama\/qwen3"/);
+  assert.throws(() => lc.checkModel('nope/qwen3', config), /No local server named "nope" \(known: ollama, lmstudio, llamacpp, box\)/);
+
+  // "local" is the harness the config names when it is installed, else the first installed.
+  const here = (names) => ({ claudeBin: names.includes('claude') ? process.execPath : '/nope/claude', engines: { codex: { bin: names.includes('codex') ? process.execPath : '/nope/codex' } }, acp: { opencode: { command: [names.includes('opencode') ? process.execPath : '/nope/opencode'] } } });
+  assert.equal(localEngineId(here(['codex', 'opencode', 'claude'])), 'local-codex');
+  assert.equal(localEngineId(here(['opencode', 'claude'])), 'local-opencode');
+  assert.equal(localEngineId(here(['claude'])), 'local-claude');
+  assert.equal(localEngineId(here([])), 'local-codex');
+  assert.equal(localEngineId({ ...here(['codex', 'claude']), localModels: { harness: 'claude' } }), 'local-claude');
+  assert.equal(localEngineId({ ...here(['codex']), localModels: { harness: 'claude' } }), 'local-codex', 'not installed: the next');
+  assert.deepEqual(listEngines(here(['codex'])).filter((e) => e.local).map((e) => [e.id, e.harness]), [['local-codex', 'codex'], ['local-opencode', 'opencode'], ['local-claude', 'claude']]);
+});

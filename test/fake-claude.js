@@ -300,7 +300,7 @@ if (args.includes('--input-format') && args.includes('stream-json')) {
 const flag = (name) => (args.includes(name) ? args[args.indexOf(name) + 1] : undefined);
 const sid = flag('--session-id') ?? flag('--resume');
 // With the lane it was given (lanes.js): its ports, PORT and name ending.
-fs.appendFileSync(process.env.FAKE_CLAUDE_LOG, JSON.stringify({ cwd: process.cwd(), args, lane: { ports: process.env.AGENT_PORTS ?? null, port: process.env.PORT ?? null, suffix: process.env.AGENT_SUFFIX ?? null } }) + '\n');
+fs.appendFileSync(process.env.FAKE_CLAUDE_LOG, JSON.stringify({ cwd: process.cwd(), args, lane: { ports: process.env.AGENT_PORTS ?? null, port: process.env.PORT ?? null, suffix: process.env.AGENT_SUFFIX ?? null }, ...(process.env.ANTHROPIC_BASE_URL ? { api: { url: process.env.ANTHROPIC_BASE_URL, token: process.env.ANTHROPIC_AUTH_TOKEN ?? null, model: process.env.ANTHROPIC_MODEL ?? null, small: process.env.ANTHROPIC_DEFAULT_HAIKU_MODEL ?? null } } : {}) }) + '\n');
 
 const file = transcriptPath(process.cwd(), sid);
 fs.mkdirSync(path.dirname(file), { recursive: true });

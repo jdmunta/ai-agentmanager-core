@@ -450,6 +450,7 @@
     <dialog id="standup-dialog" class="standup-dialog" aria-label="Standup">
       <div id="standup-body"></div>
     </dialog>
+    <datalist id="local-models-list"></datalist>
     <dialog id="ask-dialog">
       <form id="ask-form" method="dialog">
         <h2>Ask an agent</h2>
@@ -468,6 +469,10 @@
             Engine
             <select name="engine"><option value="">Claude Code</option></select>
             <span class="hint warn" id="ask-engine-notice" hidden></span>
+          </label>
+          <label id="ask-model-field" hidden>
+            Model
+            <input name="model" list="local-models-list" />
           </label>
         </div>
         <p id="ask-error" class="error" hidden></p>

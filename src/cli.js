@@ -344,7 +344,7 @@ export async function main(argv) {
       ]),
     )
     .option('-m, --model <model>', 'model (for the chosen engine)')
-    .option('-e, --engine <engine>', 'agent engine: claude (default), codex, antigravity or muse')
+    .option('-e, --engine <engine>', 'agent engine: claude (default), codex, antigravity, muse, or local (local-codex, local-opencode, local-claude) with --model <server>/<model>: see agentmgr models')
     .option('--file-attach <path>', 'attach a file to the request (a screenshot, a log); repeat for more', collect)
     .option('--container', 'run each agent in its own Docker container (see agentmgr sandbox)')
     .option('--no-container', 'run on this computer even if containers are the default')
@@ -434,7 +434,7 @@ export async function main(argv) {
     .argument('[question...]', 'optional first question')
     .option('-n, --name <name>', 'display name')
     .option('-m, --model <model>', 'model (for the chosen engine)')
-    .option('-e, --engine <engine>', 'agent engine: claude (default), codex, antigravity or muse')
+    .option('-e, --engine <engine>', 'agent engine: claude (default), codex, antigravity, muse, or local (local-codex, local-opencode, local-claude) with --model <server>/<model>: see agentmgr models')
     .option('--file-attach <path>', 'attach a file to the question (a screenshot, a log); repeat for more', collect)
     .option('--no-attach', 'start it in the background only')
     .action(async (words, opts) => {
@@ -867,6 +867,39 @@ export async function main(argv) {
       if (action === 'update') return print(await api('POST', '/skills/update', { id: arg }));
       if (action === 'rm') return print(await api('DELETE', `/skills?id=${encodeURIComponent(arg)}`));
       throw new Error(`Unknown action ${action} (ls, show, look, add, check, update, rm)`);
+    });
+
+  program
+    .command('models')
+    .description('Models running on this computer (Ollama, LM Studio, llama.cpp, MLX), for agents on a local engine (Codex, OpenCode or Claude Code as the harness): --engine local --model <server>/<model>')
+    .option('--add <name=address>', 'also ask a server at this address, say mlx=http://127.0.0.1:8081')
+    .option('--remove <name>', 'stop asking a server')
+    .option('--context <tokens>', "the room Ollama gives a model for an agent (0: leave Ollama's own)")
+    .option('--default <model>', 'the model of a local agent started without one')
+    .option('--harness <name>', 'what runs the model when the engine is just "local": codex, opencode or claude')
+    .option('--on', 'look for local models')
+    .option('--off', 'stop looking')
+    .option('--json', 'print JSON')
+    .action(async (opts) => {
+      await daemon();
+      const patch = { ...(opts.on ? { enabled: true } : opts.off ? { enabled: false } : {}), ...(opts.context !== undefined ? { context: opts.context } : {}), ...(opts.default !== undefined ? { default: opts.default } : {}), ...(opts.harness !== undefined ? { harness: opts.harness } : {}), ...(opts.remove ? { remove: opts.remove } : {}) };
+      if (opts.add) {
+        const at = opts.add.indexOf('=');
+        if (at < 1) throw new Error('--add takes <name>=<address>, say mlx=http://127.0.0.1:8081');
+        patch.add = { name: opts.add.slice(0, at), url: opts.add.slice(at + 1) };
+      }
+      const v = Object.keys(patch).length ? await api('PUT', '/local-models/settings', patch) : await api('GET', '/local-models?fresh=1');
+      if (opts.json) return console.log(JSON.stringify(v, null, 2));
+      if (!v.enabled) return console.log(`Local models ${dim('off')} ${dim('(agentmgr models --on)')}`);
+      const gb = (n) => (n ? `${(n / 1024 ** 3).toFixed(1)} GB` : '');
+      if (!v.servers.some((s) => s.running)) console.log(dim('No local model server is running here (Ollama, LM Studio, llama.cpp or MLX at their usual addresses).'));
+      for (const s of v.servers) {
+        console.log(`${s.label}${s.version ? dim(` ${s.version}`) : ''} ${dim(s.url)}${s.running ? '' : dim(' · not running')}`);
+        for (const m of s.models) console.log(`  ${m.usable ? green('✓') : dim('✗')} ${m.id.padEnd(36)} ${[gb(m.sizeBytes), m.params, m.loaded ? 'in memory' : ''].filter(Boolean).join(' · ')}${m.notes.length ? dim(`  ${m.notes.join('; ')}`) : ''}`);
+        if (s.running && !s.models.length) console.log(dim('  No model yet.'));
+      }
+      console.log(`Harnesses: ${v.harnesses.map((h) => (h.installed ? `${h.id === v.harness ? green(`${h.label} (--engine local)`) : h.label} ${dim(`--engine ${h.engine}`)}` : dim(`${h.label} not installed`))).join(' · ')}`);
+      console.log(dim(`Start an agent on one: agentmgr add "<task>" --engine local --model <server>/<model>${v.context ? ` · Ollama models get ${v.context} tokens of context` : ''}${v.default ? ` · default ${v.default}` : ''}`));
     });
 
   program

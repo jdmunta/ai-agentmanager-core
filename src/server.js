@@ -31,7 +31,8 @@ import { Studio } from './studio.js';
 import { Memory } from './memory.js';
 import { doctor } from './doctor.js';
 import { Triggers, tokenMatches } from './triggers.js';
-import { listEngines, registerAcpEngines, registerEngine } from './engines/index.js';
+import { installed, listEngines, localEngineId, registerAcpEngines, registerEngine } from './engines/index.js';
+import { LOCAL_ENGINES } from './engines/local.js';
 import { Plugins, pluginSpecs } from './plugins.js';
 import { HubLink, linkUrls } from './hublink.js';
 import { Notifier, isWorkflowUrl, loadNotify, publicNotify, saveNotify, sendSlack } from './notify.js';
@@ -57,6 +58,7 @@ import { reaStatus } from './rea.js';
 import { EngineUsage, codexWindows } from './usage.js';
 import { leanSettings, leanStats, leanSweep } from './lean.js';
 import { laneOf, laneSettings } from './lanes.js';
+import { LocalModels } from './localmodels.js';
 import { Skills } from './skills.js';
 import { Milestones } from './milestones.js';
 import { Decisions } from './decisions.js';
@@ -101,7 +103,7 @@ function isAllowedOrigin(origin, port) {
 const PUBLIC_REMOTE_API = new Set(['POST /api/login', 'GET /api/session']);
 // Updates are not here: a signed-in device (a phone) can install the newest release too. It only
 // ever installs an official release from where this copy came from (git tag or npm) and restarts.
-const LOCAL_ONLY_API = /^\/api\/(remote(\/|$)|notify(\/|$)|hub(\/|$)|triggers(\/|$)|service$|jira(\/check)?$|isolation\/|editors$|agentkit\/connect$|agents\/[\w-]+\/open-in$|shutdown$)/;
+const LOCAL_ONLY_API = /^\/api\/(remote(\/|$)|notify(\/|$)|hub(\/|$)|triggers(\/|$)|service$|jira(\/check)?$|isolation\/|editors$|agentkit\/connect$|agents\/[\w-]+\/open-in$|local-models\/settings$|shutdown$)/;
 const HOOK_PATH = '/api/hooks/agents';
 const REPORT_PATH = '/api/agentkit/report';
 const NO_REPO_KINDS = new Set(['general', 'assistant']);
@@ -115,6 +117,8 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
   // ACP agents (Gemini CLI, OpenCode, Goose, … and config's "acp") become engines.
   registerAcpEngines(config);
   const manager = new AgentManager({ store, config, plugins });
+  const localModels = new LocalModels({ config, save: saveConfig });
+  localModels.view().catch(() => {});
   const backlog = new Backlog({ manager, store, config });
   const proposed = new ProposedIssues({ store, manager });
   const myActions = new MyActions({ store, manager });
@@ -332,7 +336,8 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
   const usage = new EngineUsage({
     store,
     config,
-    engines: () => listEngines(config),
+    // Models served on this computer have no plan and no limits to show.
+    engines: () => listEngines(config).filter((e) => !e.local),
     probe: () => manager.readUsage(),
     onChange: () => pushUsage(),
     notify: async (text, plain) => {
@@ -505,7 +510,10 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
   // `closing` while shutting down: it still answers until every agent is closed, then exits.
   api.get('/health', wrap(() => ({ ok: true, pid: process.pid, home: paths.home, claudeBin: config.claudeBin, closing })));
   api.get('/agents', wrap(() => manager.list()));
-  api.get('/engines', wrap(() => listEngines(config)));
+  api.get('/engines', wrap(async () => {
+    await localModels.view(); // the "Local model" engine is offered while a server runs here
+    return listEngines(config);
+  }));
   api.post(
     '/agents',
     wrap((req) => {
@@ -1260,6 +1268,19 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
     saveConfig({ lanes: next });
     for (const a of store.list()) manager.changed?.(a);
     return lanesView();
+  }));
+  // Local models: the servers running on this computer and their models (localmodels.js). The
+  // settings are changed from this computer only: an address added here is one the daemon asks.
+  // The harnesses that can drive a local model, with the one "local" stands for.
+  const localView = async (opts) => {
+    const v = await localModels.view(opts);
+    const engines = listEngines(config);
+    return { ...v, harness: LOCAL_ENGINES.find((e) => e.id === localEngineId(config)).harness, harnesses: LOCAL_ENGINES.map((e) => ({ id: e.harness, engine: e.id, label: e.label.replace(/^Local · /, ''), installed: installed(e, config), offered: Boolean(engines.find((x) => x.id === e.id)?.installed) })) };
+  };
+  api.get('/local-models', wrap((req) => localView({ fresh: req.query.fresh === '1' })));
+  api.put('/local-models/settings', wrap((req) => {
+    localModels.change(req.body ?? {});
+    return localView({ fresh: true });
   }));
   api.get('/news', wrap(() => news.view()));
   api.post('/news/refresh', wrap((req) => {
