@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.54.0 (2026-11-15)
+
+- **Repeat runs: flaky or broken.** One test run can pass or fail by chance, so the app's own test runs (the Eval's, and a race's) can be repeated on the same code. By default a run that passes is believed and a run that fails is run once more, which tells a flaky test from a broken one. **Runs** (1 to 5) beside the test command, in the Eval (kept for the project) or in a race (`agentmgr race test <race> --runs 3`), makes that many runs every time. Passed in some runs and failed in others is **flaky**: in the Eval it counts for part of the tests' weight, is listed as pending and keeps confidence under 100%, so nothing merges on it automatically; in a race the attempt shows `≈ flaky 2/3`. A failing test command now takes twice as long, since it is run again.
+
 ## 1.53.0 (2026-11-15)
 
 - **Lanes: each agent's own ports.** Worktrees keep agents' files apart, but two dev servers still want the same port. Every agent now gets a range of ten ports (from 21000) and a name ending (`_a1`, `_a2`) no other agent has, in its environment (`AGENT_PORTS`, `AGENT_SUFFIX`, and `PORT` set to its first port) and in its instructions. A lane is given when a session next starts, stays across restarts, and is free again when the agent is deleted. **OS** has a **Ports** column with each open session's lane and what it listens on now; a port outside the lane is marked, and a click opens it in a browser tab. On by default; switches in OS, or `agentmgr lanes` (`--off`, `--port off` if your projects use `PORT` for something else, `--base`, `--size`). Not for agents in containers.
