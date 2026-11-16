@@ -53,7 +53,7 @@ readline.createInterface({ input: process.stdin }).on('line', async (line) => {
     update(sid, { sessionUpdate: 'tool_call', toolCallId: 't1', title: 'Run npm test', kind: 'execute', status: 'pending', rawInput: { command: 'npm test' } });
     let allowed = true;
     if (text.includes('#perm')) {
-      const r = await ask('session/request_permission', { sessionId: sid, toolCall: { toolCallId: 't1', title: 'Run npm test' }, options: [{ optionId: 'yes', name: 'Allow once', kind: 'allow_once' }, { optionId: 'always', name: 'Always allow', kind: 'allow_always' }, { optionId: 'no', name: 'Reject', kind: 'reject_once' }] });
+      const r = await ask('session/request_permission', { sessionId: sid, toolCall: { toolCallId: 't1', title: '/outside/the/project' }, options: [{ optionId: 'yes', name: 'Allow once', kind: 'allow_once' }, { optionId: 'always', name: 'Always allow', kind: 'allow_always' }, { optionId: 'no', name: 'Reject', kind: 'reject_once' }] });
       allowed = r?.outcome?.outcome === 'selected' && r.outcome.optionId !== 'no';
     }
     update(sid, { sessionUpdate: 'tool_call_update', toolCallId: 't1', status: allowed ? 'completed' : 'failed', content: [{ type: 'content', content: { type: 'text', text: allowed ? 'PASS 3 tests' : 'not allowed' } }] });

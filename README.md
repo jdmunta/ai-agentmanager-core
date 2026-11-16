@@ -860,11 +860,11 @@ An agent can run on a model served on this computer instead of a provider's: no 
 
 | Harness | Engine | Notes |
 |---|---|---|
-| **Codex CLI** (open source; `npm i -g @openai/codex`, no sign-in needed for this) | `local-codex` | The default. A small first message, so it suits small contexts. |
-| **OpenCode** (open source; `npm i -g opencode-ai`) | `local-opencode` | Made for many providers. Runs over ACP, so the app reads less from it (no token counts). |
+| **Codex CLI** (open source; `npm i -g @openai/codex`, no sign-in needed for this) | `local-codex` | A small first message, so it suits small contexts. It is told that its commands need no approval, since open models otherwise ask at every step. With `gpt-oss:20b` on Ollama its file edits often fail (the model writes a tool call Ollama can't read, and the turn stops): use OpenCode or Claude Code for that model. |
+| **OpenCode** (open source; `npm i -g opencode-ai`) | `local-opencode` | The default: in our trials an open model finished a task on it more often than on Codex. Made for many providers. Runs over ACP, so the app reads less from it (no token counts). |
 | **Claude Code** | `local-claude` | Everything the app does for Claude Code agents, but Anthropic doesn't support Claude Code on other models: expect rough edges. The server has to speak Anthropic's API, which Ollama does. |
 
-`--engine local` is the harness set with `agentmgr models --harness codex|opencode|claude`, or else the first of those three that is installed.
+`--engine local` is the harness set with `agentmgr models --harness codex|opencode|claude`, or else the first installed of OpenCode, Codex and Claude Code.
 
 - **What is found.** Ollama (port 11434), LM Studio (1234), and llama.cpp's `llama-server` or MLX's `mlx_lm.server` (8080), plus any server that speaks the OpenAI API at an address you add: `agentmgr models --add mlx=http://127.0.0.1:8081`. **OS** lists each server's models with their size and whether an agent can use them, as does `agentmgr models`. A model that can't call tools is listed but can't be chosen: an agent needs tools to read and change files. Embedding models are left out.
 - **Starting an agent on one.** Choose **Local · Codex**, **Local · OpenCode** or **Local · Claude Code** as the engine in New agent or Ask Agent (each offered while its harness is installed and a server with a usable model is running) and pick the model, or `agentmgr add --engine local --model ollama/qwen3-coder:30b "…"`. A model is written `<server>/<model>`. `agentmgr models --default <model>` sets the one used when none is given.
