@@ -2,8 +2,10 @@ import { execFile, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 
-// Never wait on a username/password prompt nobody can see; fail instead.
-const baseEnv = () => ({ ...process.env, GIT_TERMINAL_PROMPT: '0' });
+// Never wait on a username/password prompt nobody can see; fail instead. And no optional locks:
+// a `git status` here in the background would otherwise hold the index lock for a moment, and an
+// agent's own `git add` or `git commit` at that moment fails with "index.lock: File exists".
+const baseEnv = () => ({ ...process.env, GIT_TERMINAL_PROMPT: '0', GIT_OPTIONAL_LOCKS: '0' });
 
 const cancelled = () => Object.assign(new Error('Cancelled'), { cancelled: true });
 
