@@ -2,6 +2,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import nodeTest from 'node:test';
@@ -66,6 +67,8 @@ fs.writeFileSync(
     // Containers and Linux CI can't start Chrome's sandbox.
     ...(process.env.AGENTMGR_TEST_NO_SANDBOX === '1' ? { browserNoSandbox: true } : {}),
     engines: { codex: { bin: path.join(here, 'fake-codex.js') }, antigravity: { bin: path.join(here, 'fake-agy.js') } },
+    // Never this computer's own model servers: the local models test adds its own.
+    localModels: { servers: { ollama: false, lmstudio: false, llamacpp: false } },
   }),
 );
 
@@ -5363,4 +5366,125 @@ test('lanes: each agent has its own ports and name ending, in its environment an
   assert.deepEqual([lanes.enabled, lanes.base, lanes.size], [true, 21000, 10]);
   assert.deepEqual((await view(a.id)).laneInfo, va.laneInfo, 'kept while lanes were off');
   for (const x of [a, c, d]) await call('DELETE', `/agents/${x.id}`);
+});
+
+test('local models: servers found at their addresses, the models an agent can use, and an agent on one through Codex', async () => {
+  // A server in Ollama's shapes: a model that can call tools, one that can't, and an embedding model.
+  const tags = {
+    models: [
+      { name: 'coder:7b', size: 5e9, details: { parameter_size: '7.6B', quantization_level: 'Q4_K_M', context_length: 16384 }, capabilities: ['completion', 'tools'] },
+      { name: 'chat:latest', size: 2e9, details: { parameter_size: '3B' }, capabilities: ['completion'] },
+      { name: 'embed:latest', size: 1e8, details: {}, capabilities: ['embedding'] },
+    ],
+  };
+  const made = [];
+  const srv = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', (d) => (body += d));
+    req.on('end', () => {
+      const send = (v, code = 200) => res.writeHead(code, { 'content-type': 'application/json' }).end(JSON.stringify(v));
+      if (req.url === '/api/tags') return send(tags);
+      if (req.url === '/api/ps') return send({ models: [{ name: 'coder:7b' }] });
+      if (req.url === '/api/version') return send({ version: '9.9.9' });
+      if (req.url === '/api/create' && req.method === 'POST') {
+        const b = JSON.parse(body);
+        made.push(b);
+        tags.models.push({ ...tags.models[0], name: b.model });
+        return send({ status: 'success' });
+      }
+      send({ error: 'not found' }, 404);
+    });
+  });
+  await new Promise((r) => srv.listen(0, '127.0.0.1', r));
+  const url = `http://127.0.0.1:${srv.address().port}`;
+  const codexLaunches = () => (fs.existsSync(process.env.FAKE_CODEX_LOG) ? fs.readFileSync(process.env.FAKE_CODEX_LOG, 'utf8').trim().split('\n').map((l) => JSON.parse(l)) : []);
+  const engines = async () => (await call('GET', '/engines')).body.filter((e) => e.local).map((e) => [e.id, e.harness, e.installed]);
+  try {
+    let v = (await call('GET', '/local-models')).body;
+    assert.deepEqual([v.enabled, v.context, v.servers, v.models], [true, 32768, [], []], 'nothing runs here');
+    assert.deepEqual(await engines(), [['local-codex', 'codex', false], ['local-opencode', 'opencode', false], ['local-claude', 'claude', false]], 'not offered with no server');
+
+    for (const add of [{ name: 'Bad Name', url }, { name: 'mine', url: 'ftp://x' }]) assert.equal((await call('PUT', '/local-models/settings', { add })).status, 400);
+    v = (await call('PUT', '/local-models/settings', { add: { name: 'mine', url: `${url}/v1/` } })).body;
+    assert.deepEqual(v.servers.map((s) => [s.id, s.url, s.kind, s.running, s.version]), [['mine', url, 'ollama', true, '9.9.9']]);
+    assert.deepEqual(v.servers[0].models.map((m) => [m.id, m.usable, m.loaded]), [['mine/chat', false, false], ['mine/coder:7b', true, true]], 'no embedding model');
+    assert.match(v.servers[0].models[0].notes[0], /call tools/);
+    assert.deepEqual(v.models, ['mine/coder:7b']);
+    assert.deepEqual(await engines(), [['local-codex', 'codex', true], ['local-opencode', 'opencode', false], ['local-claude', 'claude', true]], 'the harnesses installed here');
+    assert.deepEqual([v.harness, v.harnesses.map((h) => [h.id, h.engine, h.label, h.installed])], ['codex', [['codex', 'local-codex', 'Codex', true], ['opencode', 'local-opencode', 'OpenCode', false], ['claude', 'local-claude', 'Claude Code', true]]]);
+    assert.ok(!(await call('GET', '/usage')).body.engines.some((e) => e.id.startsWith('local')), 'no plan to show');
+
+    // An agent needs a model of a known server that can call tools.
+    const dir = fs.mkdtempSync(path.join(home, 'local-proj-'));
+    for (const [model, why] of [[undefined, /Choose a model/], ['coder:7b', /<server>\/<model>/], ['nope/coder:7b', /No local server named "nope"/], ['mine/chat', /call tools/]]) {
+      const r = await call('POST', '/agents', { intent: 'x', dir, engine: 'local', model });
+      assert.equal(r.status, 400, String(model));
+      assert.match(r.body.error, why);
+    }
+    const before = codexLaunches().length;
+    const [a] = (await call('POST', '/agents', { intent: 'Fix the login', dir, engine: 'local', model: 'mine/coder:7b' })).body;
+    assert.deepEqual([a.engine, a.model], ['local-codex', 'mine/coder:7b'], '"local" is the first harness installed');
+
+    // Codex is started on the server, with a copy of the model that has room (no more than the model takes).
+    const first = await waitFor(() => codexLaunches()[before], 10000, 'codex launched on the local model');
+    assert.deepEqual(first.args.slice(0, 8), ['-c', `model_providers.agentmgr={name="Local",base_url="${url}/v1"}`, '-c', 'model_provider="agentmgr"', '-c', 'model_context_window=16384', '--model', 'coder-am16k:7b']);
+    assert.ok(first.args.includes('--no-alt-screen') && first.args.includes('--sandbox'));
+    assert.match(first.args.at(-1), /Fix the login/);
+    assert.deepEqual(made, [{ model: 'coder-am16k:7b', from: 'coder:7b', parameters: { num_ctx: 16384 }, stream: false }]);
+    assert.deepEqual((await call('GET', '/local-models?fresh=1')).body.models, ['mine/coder:7b'], 'the copy is not listed');
+
+    // It runs from a Codex home of its own, whose sessions are kept with the others: the agent adopts its session.
+    assert.equal(fs.readlinkSync(path.join(home, 'codex-local', 'sessions')), path.join(process.env.CODEX_HOME, 'sessions'));
+    const seen = await waitFor(async () => {
+      const x = await agentNow(a.id);
+      return x.usage.io > 0 ? x : null;
+    }, 15000, 'session adopted and scanned');
+    assert.ok(fs.readdirSync(path.join(process.env.CODEX_HOME, 'sessions'), { recursive: true }).some((f) => String(f).endsWith(`-${seen.sessionId}.jsonl`)));
+
+    // Started again: the same session, the same copy (made once).
+    await call('POST', `/agents/${a.id}/stop`);
+    await call('POST', `/agents/${a.id}/start`, {});
+    const again = await waitFor(() => codexLaunches()[before + 1], 10000, 'codex resumed');
+    assert.deepEqual([again.args[0], again.args[7], again.args[8]], ['resume', '--model', 'coder-am16k:7b']);
+    assert.ok(again.args.includes(seen.sessionId));
+    assert.equal(made.length, 1);
+
+    // A default model for sessions started without one; the context left to the server; a model can't be taken away.
+    assert.equal((await call('PATCH', `/agents/${a.id}`, { model: '' })).status, 400);
+    assert.equal((await call('PUT', '/local-models/settings', { context: 5 })).status, 400);
+    v = (await call('PUT', '/local-models/settings', { context: 0, default: 'mine/coder:7b' })).body;
+    assert.deepEqual([v.context, v.default], [0, 'mine/coder:7b']);
+    const g = (await call('POST', '/general', { question: 'What is a port?', engine: 'local' })).body;
+    assert.equal(g.model, 'mine/coder:7b');
+    const plain = await waitFor(() => codexLaunches()[before + 2], 10000, 'codex launched for the question');
+    assert.deepEqual(plain.args.slice(4, 6), ['--model', 'coder:7b'], "the server's own context");
+
+    // Claude Code as the harness: pointed at the server's Anthropic-style API, with no MCP servers; nothing costed.
+    assert.equal((await call('PUT', '/local-models/settings', { harness: 'vim' })).status, 400);
+    assert.equal((await call('PUT', '/local-models/settings', { harness: 'claude' })).body.harness, 'claude');
+    const [c] = (await call('POST', '/agents', { intent: 'Fix the logout', dir, engine: 'local', model: 'mine/coder:7b' })).body;
+    assert.equal(c.engine, 'local-claude');
+    const cl = await waitFor(() => launches().find((l) => l.args.includes(c.sessionId)), 10000, 'claude launched on the local model');
+    assert.ok(cl.args.includes('--strict-mcp-config') && !cl.args.includes('--model'));
+    assert.deepEqual(cl.api, { url, token: 'local', model: 'coder:7b', small: 'coder:7b' });
+    assert.match(cl.args.at(-1), /Fix the logout/);
+    assert.equal((await call('PUT', '/local-models/settings', { harness: '' })).body.harness, 'codex');
+    await call('DELETE', `/agents/${c.id}`);
+
+    // A server that stops answering: its agents say so in their terminal instead of starting Codex.
+    await call('POST', `/agents/${g.id}/stop`);
+    await new Promise((r) => srv.close(r));
+    srv.closeAllConnections?.();
+    await call('POST', `/agents/${g.id}/start`, {});
+    await waitFor(async () => !(await agentNow(g.id)).runtime.running, 10000, 'the session ended');
+    assert.equal(codexLaunches().length, before + 3, 'Codex was not started');
+    v = (await call('GET', '/local-models?fresh=1')).body;
+    assert.deepEqual(v.servers.map((s) => [s.id, s.running]), [['mine', false]], 'one you added is listed while it is down');
+    assert.equal((await call('PUT', '/local-models/settings', { remove: 'nope' })).status, 400);
+    v = (await call('PUT', '/local-models/settings', { remove: 'mine', context: 32768, default: '' })).body;
+    assert.deepEqual([v.servers, v.default], [[], null]);
+    for (const x of [a, g]) await call('DELETE', `/agents/${x.id}`);
+  } finally {
+    srv.close();
+  }
 });

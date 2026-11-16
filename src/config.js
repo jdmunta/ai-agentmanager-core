@@ -82,6 +82,9 @@ const DEFAULTS = {
   calendar: { ics: [], workStart: '09:00', workEnd: '18:00' },
   // Lanes: every agent's own range of ports and name ending; `port` also sets PORT to its first port (lanes.js).
   lanes: { enabled: true, base: 21000, size: 10, port: true },
+  // Local models: servers on this computer (Ollama, LM Studio, llama.cpp, MLX) and their models, for the
+  // "Local model" engine; `context` is the room Ollama gives a model for an agent (localmodels.js).
+  localModels: { enabled: true, context: 32768 },
   // AI News: the frontier labs' latest releases, summarized; see NEWS_DEFAULTS in news.js for every field.
   news: { enabled: true },
   demoPage: false,
