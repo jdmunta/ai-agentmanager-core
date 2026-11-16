@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.55.1 (2026-11-16)
+
+From running a real task on `gpt-oss:20b` (Ollama) through each harness.
+
+- **Local models: OpenCode is now the default harness.** `--engine local` picks OpenCode when it is installed, then Codex, then Claude Code. This changes what you get if you have OpenCode installed and relied on the default: it was Codex in 1.55.0. To keep Codex, run `agentmgr models --harness codex`. The reason: the model finished the same task on OpenCode in 5 of 6 runs and on Codex in about 5 of 14.
+- **Local · Codex no longer asks before every command.** Open models asked to leave the sandbox even for `ls` and `cat`, nine prompts for a four-line fix. The model is now told its commands need no approval.
+- **Known, not fixed:** with `gpt-oss:20b` on Ollama, Codex's file edits often fail (the model writes a tool call Ollama can't read, and the turn stops). Use OpenCode or Claude Code for that model.
+- **ACP agents (OpenCode and others):** a permission menu that named only a folder ("Permission needed: /etc") now names the tool first ("read /etc").
+
 ## 1.55.0 (2026-11-16)
 
 - **Local models.** Agents can run on a model served from this computer: Ollama, LM Studio, llama.cpp or MLX. The app finds the servers on their usual ports and lists their models in **OS** and with `agentmgr models`, with a note on which an agent can use; a model that can't call tools is not offered. An agent's model names the server, say `ollama/qwen3-coder:30b`.
