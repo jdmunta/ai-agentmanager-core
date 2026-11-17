@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.57.0 (2026-11-17)
+
+- **Screen: this computer's desktop in the page, from the phone too.** A pop-up that waits for an answer, another program you want to watch: **Screen** in the top bar shows the computer's whole screen, and your clicks, taps and typing go back to it. It works on the computer itself and on any device signed in through remote access. On a phone the bar has a **Type here** field for the keyboard, and **Esc**, **Tab** and **⏎**.
+- **How.** It does not capture the screen: the computer's own screen sharing does (macOS: System Settings → General → Sharing → Screen Sharing; elsewhere a VNC server on port 5900 of `127.0.0.1`), and asks for its own sign-in every time (on a Mac, your Mac user name and password, which are not kept). AI Agent Manager relays that connection to signed-in pages and draws it with noVNC.
+- **Off until you turn it on, on the computer itself.** Whoever uses it controls the whole computer, not only the agents. **Screen → Turn on** works only on the computer; a signed-in device cannot turn it on from the page. From a remote device, the **Terminal** button runs on the computer: `agentmgr screen --on` there turns it on.
+- **Who is looking.** While another device views the screen, the Screen button shows a dot and names the device and its address, as does `agentmgr screen`. **Turn off** ends every view at once. The relay connects to this computer only.
+- **Tried so far** against a stand-in screen sharing service in the tests, and against real macOS Screen Sharing up to its sign-in. Not yet tried: past a real Mac sign-in, on a real phone, and how fast it feels over remote access.
+- **Tests:** the fakes' logs are read without parsing a line still being written, which failed a run now and then.
+
 ## 1.56.2 (2026-11-17)
 
 - **Terminal text size.** ☰ → **Terminal text** has A− / 13 / A+ (10 to 22 px, kept per browser). It applies to an agent's session, split-screen groups and Open Terminal; the Watch tiles keep their own size.
