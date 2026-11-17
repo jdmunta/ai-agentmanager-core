@@ -388,6 +388,27 @@ test('OS: this computer and its load, what an open session takes; the running co
   assert.deepEqual(errors, [], 'no errors on the page');
 });
 
+test('review rounds and the AI judge: switches at the top of the inbox, and their numbers in Settings', { skip }, async () => {
+  await js(`document.querySelector('[data-tab="inbox"]').click()`);
+  const bar = `document.querySelector('#inbox-view .inbox-switches')?.textContent.replace(/\\s+/g, ' ')`;
+  await until(`/Review rounds off/.test(${bar}) && /AI judge off/.test(${bar})`, 'the switches');
+  assert.equal(await js(`document.querySelector('#inbox-view').firstElementChild.className`), 'inbox-switches hint', 'above the cards');
+  await js(`document.querySelector('#inbox-view [data-rounds="on"]').click()`);
+  await until(`/Review rounds on · 2 critics, up to 4 rounds/.test(${bar})`, 'rounds on');
+  // Settings: the same switch, with the numbers.
+  await js(`document.querySelector('#inbox-view [data-inbox-settings]').click()`);
+  await until(`document.querySelector('#settings-dialog').open`, 'Settings');
+  assert.equal(await js(`(() => { const f = document.querySelector('#settings-form'); return [f.roundsOn.checked, f.roundsMax.value, f.roundsCritics.value, f.roundsPr.checked, f.judgeOn.checked].join() })()`), 'true,4,2,true,false');
+  await js(`(() => { const f = document.querySelector('#settings-form'); f.roundsMax.value = '3'; f.roundsCritics.value = '1'; f.roundsPr.checked = false; f.requestSubmit(); })()`);
+  await until(`!document.querySelector('#settings-dialog').open && /Review rounds on · 1 critic, up to 3 rounds/.test(${bar})`, 'saved, and shown in the inbox');
+  const saved = await api('GET', '/prereview');
+  assert.deepEqual([saved.enabled, saved.rounds, saved.critics, saved.openPr], [true, 3, 1, false]);
+  assert.equal((await api('GET', '/judge')).enabled, false, 'the judge was left alone');
+  await api('PUT', '/prereview', { enabled: false, rounds: 4, critics: 2, openPr: true });
+  await js(`document.querySelector('[data-tab="agents"]').click()`);
+  assert.deepEqual(errors, [], 'no errors on the page');
+});
+
 test('Decide: a question arrives with a recommendation, on its inbox card too; doing it; a standing decision then answers the next one', { skip }, async () => {
   await api('PUT', '/judge', { enabled: true });
   const mk = async (intent) => {

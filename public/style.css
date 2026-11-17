@@ -714,7 +714,9 @@ pre.diff .meta { color: var(--muted); font-weight: 600; }
 #import-dialog .import-main .tag { align-self: flex-start; }
 #import-dialog .import-foot label { display: flex; flex-direction: row; align-items: center; gap: 6px; }
 #import-dialog .import-foot input { width: auto; }
-.judge-line { margin: 14px 12px; line-height: 1.5; }
+.inbox-switches { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; padding: 8px 14px; border-bottom: 1px solid var(--border); }
+.inbox-switch.off { opacity: 0.75; }
+.inbox-switches > .link { margin-left: auto; }
 
 .agent-list li.agent.idle { opacity: .62; }
 .agent-list li.agent.idle:hover, .agent-list li.agent.idle.selected { opacity: 1; }

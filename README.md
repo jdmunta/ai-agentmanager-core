@@ -464,7 +464,7 @@ Minor findings and nits are passed to the agent but do not hold the pull request
 
 The agent's detail shows the rounds as they go: the round, each critic's verdict, and every finding with whether it is dealt with. **Review rounds** there starts them by hand, also with the switch off. From the command line: `agentmgr rounds <agent>` (`--start`, `--again`, `--open`, `--stop`).
 
-- **The switch** is the line under the inbox, or `agentmgr rounds --on|--off`. It is on by default.
+- **The switch** is at the top of the inbox, and in ☰ → Settings → Review and judging with the number of rounds and critics; or `agentmgr rounds --on|--off`. It is on by default.
 - **Rounds and critics:** `agentmgr rounds --rounds 5 --critics 3`. A critic that fails in a round is replaced by the next model.
 - **Other providers, if you have them.** A different provider catches different mistakes. To use one, name the critics yourself in config.json: `"preReview": { "models": [{ "engine": "codex" }, { "engine": "claude", "model": "opus" }] }`. They come first, and an engine that isn't installed is left out.
 - **Engines other than Claude Code.** The app knows Claude Code's model names. For another engine, say which of its models review: `"engines": { "codex": { "reviewModels": ["…", "…"] } }`. Without that, one critic reads each round, on the model the engine is set up with. An agent on a local model or an ACP agent is read by the engine that writes its summaries (Claude Code); with none installed, it has no review rounds.

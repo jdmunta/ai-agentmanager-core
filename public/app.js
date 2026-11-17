@@ -1749,7 +1749,7 @@ document.addEventListener('input', (e) => {
   if (e.target.dataset?.draft) needDrafts.set(e.target.dataset.draft, e.target.value);
 });
 
-/** The AI judge's state for the line under the inbox: it spends calls on the user's own plan. */
+/** The AI judge's state for the switch at the top of the inbox: it spends calls on the user's own plan. */
 let judgeStatus = null;
 async function loadJudge() {
   try {
@@ -1763,22 +1763,28 @@ async function loadJudge() {
 
 /** Review rounds before a pull request (prereview.js): the switch, with what a round costs. */
 let roundsStatus = null;
-function roundsLine() {
+// Settings saved them: the switches show the new state.
+document.addEventListener('agentmgr:review-settings', () => loadJudge());
+/**
+ * The switches at the top of the inbox: review rounds and the AI judge, each with what it costs
+ * (the whole of it in the tooltip). The numbers are in Settings.
+ */
+function inboxSwitches() {
   const r = roundsStatus;
-  if (!r) return '';
-  const text = r.enabled
-    ? `🔎 Review rounds on: when an agent says it is done, ${r.critics} ${r.critics === 1 ? 'critic' : 'critics'} on other models read its changes, it fixes what they find, and they look again (up to ${r.rounds} rounds). ${r.openPr ? 'The pull request is opened when they approve.' : ''} Each round is ${r.critics === 1 ? 'a call' : `${r.critics} calls`} on your own plan.`
-    : '🔎 Review rounds off: changes are not reviewed by other models before a pull request.';
-  return `<p class="judge-line hint">${esc(text)} <button class="small ghost" data-rounds="${r.enabled ? 'off' : 'on'}">${r.enabled ? 'Turn off' : 'Turn on'}</button></p>`;
-}
-
-function judgeLine() {
   const j = judgeStatus;
-  if (!j) return '';
-  const text = j.enabled
-    ? `🤖 AI judge on: ${j.calls} of ${j.cap} calls today, on your own Claude or Codex plan. It checks stuck agents, idle screens, finished work, overlaps, backlog order and alerts.`
-    : '🤖 AI judge off: stuck agents, idle screens and alerts use fixed rules only.';
-  return `<p class="judge-line hint">${esc(text)} <button class="small ghost" data-judge="${j.enabled ? 'off' : 'on'}">${j.enabled ? 'Turn off' : 'Turn on'}</button></p>`;
+  if (!r && !j) return '';
+  const one = (key, on, text, title) => `<span class="inbox-switch ${on ? '' : 'off'}" title="${esc(title)}">${esc(text)} <button class="small ghost" data-${key}="${on ? 'off' : 'on'}">${on ? 'Turn off' : 'Turn on'}</button></span>`;
+  const rounds = !r
+    ? ''
+    : r.enabled
+      ? one('rounds', true, `🔎 Review rounds on · ${r.critics} ${r.critics === 1 ? 'critic' : 'critics'}, up to ${r.rounds} ${r.rounds === 1 ? 'round' : 'rounds'}`, `When an agent says it is done, ${r.critics} ${r.critics === 1 ? 'critic' : 'critics'} on other models read its changes, it fixes what they find, and they look again (up to ${r.rounds} rounds). ${r.openPr ? 'The pull request is opened when they approve. ' : ''}Each round is ${r.critics === 1 ? 'a call' : `${r.critics} calls`} on your own plan.`)
+      : one('rounds', false, '🔎 Review rounds off', 'Changes are not reviewed by other models before a pull request.');
+  const judge = !j
+    ? ''
+    : j.enabled
+      ? one('judge', true, `🤖 AI judge on · ${j.calls} of ${j.cap} calls today`, 'On your own Claude or Codex plan. It checks stuck agents, idle screens, finished work, overlaps, backlog order and alerts.')
+      : one('judge', false, '🤖 AI judge off', 'Stuck agents, idle screens and alerts use fixed rules only.');
+  return `<div class="inbox-switches hint">${rounds}${judge}<button class="link" data-inbox-settings title="Rounds, critics and the pull request: in Settings">Settings…</button></div>`;
 }
 
 function renderInbox() {
@@ -1791,15 +1797,17 @@ function renderInbox() {
   if (view.contains(document.activeElement) && document.activeElement.dataset.draft) return; // don't yank the field being typed in
   morph(
     view,
-    (items.length
-      ? `<div class="counts"><span>${items.length} waiting on you</span></div><div class="needs inbox">${promptGroups(items).map(groupCard).join('')}${items.map((it) => needCard(it)).join('')}</div>`
-      : `<div class="empty"><p>Nothing needs you right now.</p><p>Prompts waiting for an answer, questions agents ask, agents that seem stuck and agents editing the same files show up here.</p></div>`) + judgeLine() + roundsLine(),
+    inboxSwitches() +
+      (items.length
+        ? `<div class="counts"><span>${items.length} waiting on you</span></div><div class="needs inbox">${promptGroups(items).map(groupCard).join('')}${items.map((it) => needCard(it)).join('')}</div>`
+        : `<div class="empty"><p>Nothing needs you right now.</p><p>Prompts waiting for an answer, questions agents ask, agents that seem stuck and agents editing the same files show up here.</p></div>`),
   );
 }
 
 async function onNeed(e) {
   // A recommendation's own buttons (Decide draws them on plan and question cards).
   if (decideUi?.handle(e)) return e.preventDefault();
+  if (e.target.closest('[data-inbox-settings]')) return $('#settings-btn').click();
   const judge = e.target.closest('[data-judge]');
   if (judge) {
     e.preventDefault();
