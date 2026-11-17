@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.56.2 (2026-11-17)
+
+- **Terminal text size.** ☰ → **Terminal text** has A− / 13 / A+ (10 to 22 px, kept per browser). It applies to an agent's session, split-screen groups and Open Terminal; the Watch tiles keep their own size.
+- **Why a terminal is sometimes very small, said on the terminal.** A session open in two places (a split-screen group, another window, another device) is shown at the size of the one last typed or clicked in, and the other scales its text to fit, down to 6 px. A view shrunk this way now carries a note: "Small to match another window or group showing this session · click here to fit it". A click fits it again, as before.
+
 ## 1.56.1 (2026-11-17)
 
 - **Review rounds and the AI judge are easier to find.** Their switches were two lines under the inbox cards. They are now one short row at the top of the inbox, each with its Turn on / Turn off button and the explanation in its tooltip, and a link to Settings.
