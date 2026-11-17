@@ -57,6 +57,8 @@ export function initMenu({ api, esc, toast, $ }) {
   let jira = null; // the Jira settings as the dialog opened
   let containers = null; // Docker and the agent image as the dialog opened
   let features = null; // what you use, and who you are, as the dialog opened
+  let rounds = null; // review rounds as the dialog opened
+  let judge = null; // the AI judge as the dialog opened
   const FEATURE_KEYS = ['jira', 'slack', 'gemini'];
   function showContainers() {
     const c = containers;
@@ -100,6 +102,20 @@ export function initMenu({ api, esc, toast, $ }) {
       $('#settings-features').hidden = !features;
       for (const k of FEATURE_KEYS) form[`feat_${k}`].checked = features?.features?.[k] !== false;
       form.me.value = features?.me ?? '';
+      rounds = await api('GET', '/prereview').catch(() => null);
+      judge = await api('GET', '/judge').catch(() => null);
+      $('#settings-review').hidden = !rounds && !judge;
+      for (const k of ['roundsOn', 'roundsMax', 'roundsCritics', 'roundsPr']) form[k].closest('label').hidden = !rounds;
+      form.roundsOn.checked = Boolean(rounds?.enabled);
+      form.roundsMax.value = rounds?.rounds ?? '';
+      form.roundsMax.max = rounds?.maxRounds ?? 5;
+      form.roundsCritics.value = rounds?.critics ?? '';
+      form.roundsCritics.max = rounds?.maxCritics ?? 3;
+      form.roundsPr.checked = Boolean(rounds?.openPr);
+      $('#settings-review-state').textContent = rounds ? `Can review here: ${rounds.engines.map((e) => e.label).join(', ') || 'no engine (install Claude Code or Codex)'}.` : '';
+      form.judgeOn.closest('label').hidden = !judge;
+      form.judgeOn.checked = Boolean(judge?.enabled);
+      $('#settings-judge-state').textContent = judge?.enabled ? `${judge.calls} of ${judge.cap} calls today.` : '';
       const u = await api('GET', '/update').catch(() => null);
       form.updateCheck.checked = u?.check !== false;
       if (!remote()) {
@@ -184,6 +200,14 @@ export function initMenu({ api, esc, toast, $ }) {
           document.dispatchEvent(new CustomEvent('agentmgr:features', { detail: r.features }));
         }
       }
+      // Only what changed: each is kept in config.json.
+      if (rounds) {
+        const want = { enabled: form.roundsOn.checked, rounds: Number(form.roundsMax.value), critics: Number(form.roundsCritics.value), openPr: form.roundsPr.checked };
+        const changed = Object.fromEntries(Object.entries(want).filter(([k, v]) => v !== rounds[k]));
+        if (Object.keys(changed).length) rounds = await api('PUT', '/prereview', changed);
+      }
+      if (judge && form.judgeOn.checked !== Boolean(judge.enabled)) judge = await api('PUT', '/judge', { enabled: form.judgeOn.checked });
+      document.dispatchEvent(new CustomEvent('agentmgr:review-settings'));
       if (!remote() && jira && (form.jiraSite.value.trim() !== (jira.site ?? '') || form.jiraEmail.value.trim() !== (jira.email ?? '') || form.jiraToken.value.trim())) {
         const j = await api('PUT', '/jira', { site: form.jiraSite.value.trim(), email: form.jiraEmail.value.trim(), token: form.jiraToken.value.trim() || undefined });
         toast(j.problem ? `Jira saved, but it doesn't work yet: ${j.problem}` : j.assigned !== null && j.assigned !== undefined ? `Jira works: ${j.assigned} open issue${j.assigned === 1 ? '' : 's'} assigned to you` : 'Jira saved', j.problem ? 10_000 : 4000);
