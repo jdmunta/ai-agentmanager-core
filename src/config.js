@@ -87,6 +87,8 @@ const DEFAULTS = {
   localModels: { enabled: true, context: 32768 },
   // Review rounds before a pull request (prereview.js): critics on other models, until they approve.
   preReview: { enabled: true, rounds: 4, critics: 2, openPr: true },
+  // Screen (screen.js): this computer's screen in the page, through its own screen sharing on this port.
+  screen: { enabled: false, port: 5900 },
   // AI News: the frontier labs' latest releases, summarized; see NEWS_DEFAULTS in news.js for every field.
   news: { enabled: true },
   demoPage: false,

@@ -22,6 +22,7 @@ import { initPlaybooks } from '/playbooks.js';
 import { initSetup } from '/setup.js';
 import { initUpdate } from '/update.js';
 import { initMenu } from '/menu.js';
+import { initScreen } from '/screen.js';
 import { initSupport } from '/support.js';
 import { initCode } from '/code.js';
 import { initMachine } from '/machine.js';
@@ -192,6 +193,7 @@ initMenu({ api, esc, toast, $ });
 const supportUi = initSupport({ api, $, esc, toast });
 $('#support-btn').onclick = () => supportUi.open();
 initMachine({ api, esc, toast, $, Terminal, FitAddon });
+const screenUi = initScreen({ api, esc, toast, $ });
 let sidePane = null; // the split view's right pane (set up once the terminal is)
 const codeUi = initCode({ api, esc, toast, $, agents, isOpen: () => term.kind === 'code' || Boolean(sidePane?.showing('code')) });
 const playbooksUi = initPlaybooks({ api, esc, toast, $, select: (id) => (showTab('agents'), select(id)) });
@@ -4693,6 +4695,8 @@ function handleEvent(msg) {
   } else if (msg.t === 'plan') {
     planUi.changed();
     todayUi.changed();
+  } else if (msg.t === 'screen') {
+    screenUi.viewers(msg.viewers);
   } else if (msg.t === 'standup') {
     standupUi.set(msg.latest);
     if (msg.latest?.reason === 'scheduled' && msg.latest.items.length) toast('Standup ready: press Standup (or p) to play it', 8000);
