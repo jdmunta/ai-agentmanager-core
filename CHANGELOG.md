@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.56.0 (2026-11-17)
+
+- **Review rounds before a pull request.** A pull request's reviewers, people or GitHub Copilot, should not be the ones who find the bugs. When an agent says it is done, critics on other models read its changes in the background and report what is wrong or missing: wrong results and missed cases, error handling, behavior callers relied on, security, missing tests, and what the task asked for that isn't there. The findings go to the agent's session as one message, it fixes them and says done again, and the critics look again, until no blocker or major finding is open or the rounds run out (4 by default, 5 at most).
+- **Approved:** the changes are committed, pushed and opened as a pull request whose description starts with *Reviewed before opening*: the round, the critics, and what was found and dealt with. **Not approved in time:** nothing is opened; it waits in your inbox with what is still open (**Another round**, **Open the pull request anyway**, or leave it).
+- **The critics** are other models of the engine the agent runs on, without the model it runs on when that is known: a Claude Code agent on opus is read by sonnet and haiku. No other provider is needed. To use one, name it in config.json (`"preReview": { "models": [{ "engine": "codex" }] }`). A critic that fails is replaced by the next model. For an engine other than Claude Code, list its review models (`"engines": { "codex": { "reviewModels": [...] } }`); without that one critic reads each round.
+- **This is on by default, and changes two things.** Each round is one call per critic on your own plan: two calls for a change approved at once, eight for one that needs four rounds. And agents are now told to leave the pull request to the review, so it opens after approval, not when the agent decides. Turn it off with the line under the inbox or `agentmgr rounds --off`; keep the rounds but open pull requests yourself with `agentmgr rounds --pr off`.
+- **Where to see it.** The agent's page shows each round, each critic's verdict and every finding. `agentmgr rounds` shows the settings (`--rounds`, `--critics`), and `agentmgr rounds <agent>` an agent's rounds (`--start`, `--again`, `--open`, `--stop`). The AI review and the scorecard are made once, after the rounds. Backlog work on autopilot is reviewed first, and held when the rounds don't approve it.
+- **Not for** reviewers of others' pull requests, bug hunts and their fixes, teams and races. An agent on a local model or an ACP agent is read by Claude Code when it is installed, and has no rounds without it.
+- **Tried so far** on small changes, in up to two rounds; opening the pull request on GitHub is covered by tests against a stand-in for `gh`. A very large diff is cut to fit, and the critics say so.
+- **Fixed:** when opening a pull request or posting a scorecard failed, the message was the whole `gh` command with its description. It is now what `gh` said.
+
 ## 1.55.1 (2026-11-16)
 
 From running a real task on `gpt-oss:20b` (Ollama) through each harness.
