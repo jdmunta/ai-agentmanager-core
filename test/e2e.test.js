@@ -8,6 +8,7 @@ import path from 'node:path';
 import nodeTest from 'node:test';
 import { fileURLToPath } from 'node:url';
 import WebSocket from 'ws';
+import { readLog } from './readlog.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 // E2E_PART=i/n (set by test/run.js): this process runs every n-th test from the i-th, in order,
@@ -106,7 +107,7 @@ const freePort = async () => {
   await new Promise((r) => srv.close(r));
   return port;
 };
-const launches = () => (fs.existsSync(claudeLog) ? fs.readFileSync(claudeLog, 'utf8') : '').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l));
+const launches = () => readLog(claudeLog);
 
 test.after(async () => {
   live.stop();
@@ -1216,7 +1217,7 @@ test('autopilot: a finished backlog item the scorecard calls ready is committed,
   Object.assign(process.env, { AGENTMGR_GH_BIN: path.join(here, 'fake-gh.js'), FAKE_GH_STATE: ghState, FAKE_GH_LOG: ghLog });
   delete process.env.AGENTMGR_NO_GH;
   fs.writeFileSync(ghState, JSON.stringify({ prs: [] }));
-  const gh = () => fs.readFileSync(ghLog, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  const gh = () => readLog(ghLog);
   try {
     const [it] = (await call('POST', '/backlog', { items: ['Write the notes #done #green'], repo: `file://${origin}`, project: 'AP' })).body;
     await waitFor(async () => (await item(it.id)).status === 'review', 15000, 'in review');
@@ -1388,7 +1389,7 @@ test('MCP: a folder\'s own MCP session lists servers, signs in to one, reconnect
   }, 8000, 'ready');
   const dir = fs.realpathSync(ag.workdir);
   fs.writeFileSync(path.join(ag.workdir, '.mcp.json'), JSON.stringify({ mcpServers: { fake: { command: 'node', args: ['s.js', '--api-key', 'k123'], env: { TOKEN: 'shh' } }, tracker: { type: 'http', url: 'https://mcp.tracker.example/mcp?k=zz' } } }));
-  const sessions = () => fs.readFileSync(claudeLog, 'utf8').trim().split('\n').map((l) => JSON.parse(l)).filter((l) => l.mcp && l.cwd === dir).length;
+  const sessions = () => readLog(claudeLog).filter((l) => l.mcp && l.cwd === dir).length;
   const res = await call('GET', `/mcp?agent=${a.id}`);
   assert.equal(res.status, 200, JSON.stringify(res.body));
   assert.equal(res.body.dir, ag.workdir);
@@ -1673,7 +1674,7 @@ test('bughunt: a hunt runs a read-only agent, its checked findings are listed, a
   assert.deepEqual(got.findings.map((f) => [f.title, f.status]), [['Upload retries forever on a dead server', 'open'], ['Maybe a race in the cache', 'dropped']]);
   assert.equal(got.hunts[0].lastSha, 'feed1234beef');
   assert.equal(got.running, null);
-  const log = fs.readFileSync(process.env.FAKE_CLAUDE_LOG, 'utf8').trim().split('\n').map((l) => JSON.parse(l)).filter((l) => l.args.join(' ').includes('You are hunting for bugs'));
+  const log = readLog(process.env.FAKE_CLAUDE_LOG).filter((l) => l.args.join(' ').includes('You are hunting for bugs'));
   assert.ok(log.length, 'the hunter got its instructions');
   // On the map's Bugs view: src is hot with the one kept bug, and covered by the hunt that ran.
   const map = (await call('GET', `/codemap?project=${encodeURIComponent(proj.body.key)}&layer=bugs`)).body;
@@ -1726,7 +1727,7 @@ test('bughunt: fix automatically: the high finding gets its own fix agent, prove
     assert.equal(fixer.fixing.testCommand, 'test -f fix.txt');
     assert.equal(fixer.planReview, null, 'no plan review: nobody is there to approve it');
     assert.ok(fixer.budgetUsd > 0 && fixer.budgetUsd <= 4);
-    const told = () => fs.readFileSync(process.env.FAKE_CLAUDE_LOG, 'utf8').trim().split('\n').map((l) => JSON.parse(l)).some((l) => l.args.join(' ').includes('This fix runs without the user'));
+    const told = () => readLog(process.env.FAKE_CLAUDE_LOG).some((l) => l.args.join(' ').includes('This fix runs without the user'));
     await waitFor(async () => told(), 20000, 'the fixer got its instructions');
     // Its report holds up and the test command passes in its folder (the judge is off here); the
     // repository isn't on GitHub, so the pull request can't be opened: the finding stays, with why.
@@ -2120,7 +2121,7 @@ test('scorecard: the changes scored, capped by what was measured, kept with the 
     assert.equal((await call('POST', `/agents/${a.id}/scorecard/post`)).status, 409, 'no pull request yet');
     const opened = await call('POST', `/agents/${a.id}/changes/pr`, {});
     assert.equal(opened.status, 200, JSON.stringify(opened.body));
-    const calls = () => fs.readFileSync(ghLog, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+    const calls = () => readLog(ghLog);
     const create = calls().find((c) => c[1] === 'create');
     const body = create[create.indexOf('--body') + 1];
     assert.match(body, /### Review scorecard: [\s\S]*<sub>Scored before the latest changes\.<\/sub>[\s\S]*## Intent/, 'scored before the commit: marked as such');
@@ -3872,7 +3873,7 @@ test('hub Google sign-in: PKCE, state and nonce, allowed accounts only; the toke
 });
 
 test('limits: an agent stopped at a usage limit shows it, and continues on another engine in the same folder', async () => {
-  const codexLaunches = () => (fs.existsSync(process.env.FAKE_CODEX_LOG) ? fs.readFileSync(process.env.FAKE_CODEX_LOG, 'utf8').trim().split('\n').map((l) => JSON.parse(l)) : []);
+  const codexLaunches = () => readLog(process.env.FAKE_CODEX_LOG);
   const dir = path.join(home, 'limit-repo');
   fs.mkdirSync(dir, { recursive: true });
   execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: dir });
@@ -3919,7 +3920,7 @@ test('limits: an agent stopped at a usage limit shows it, and continues on anoth
 });
 
 test('Codex agents: launch with instructions, adopt the session Codex picks, usage, prompts, trust, resume, Explain', async () => {
-  const codexLaunches = () => (fs.existsSync(process.env.FAKE_CODEX_LOG) ? fs.readFileSync(process.env.FAKE_CODEX_LOG, 'utf8').trim().split('\n').map((l) => JSON.parse(l)) : []);
+  const codexLaunches = () => readLog(process.env.FAKE_CODEX_LOG);
   const dir = fs.mkdtempSync(path.join(home, 'codex-proj-'));
   assert.equal((await call('POST', '/agents', { intent: 'x', engine: 'codex', permissionMode: 'bogus' })).status, 400);
   const [a] = (await call('POST', '/agents', { intent: 'Fix the login #ask #stuck', dir, engine: 'codex', plan: true })).body;
@@ -3977,7 +3978,7 @@ test('Codex agents: launch with instructions, adopt the session Codex picks, usa
 });
 
 test('Antigravity agents: instructions in the first message, adopt the conversation agy picks, prompts, trust, resume, Explain', async () => {
-  const agyLaunches = () => (fs.existsSync(process.env.FAKE_AGY_LOG) ? fs.readFileSync(process.env.FAKE_AGY_LOG, 'utf8').trim().split('\n').map((l) => JSON.parse(l)) : []);
+  const agyLaunches = () => readLog(process.env.FAKE_AGY_LOG);
   const dir = fs.mkdtempSync(path.join(home, 'agy-proj-'));
   const [a] = (await call('POST', '/agents', { intent: 'Fix the login #ask #stuck', dir, engine: 'antigravity', permissionMode: 'acceptEdits' })).body;
   assert.equal(a.engine, 'antigravity');
@@ -4315,7 +4316,7 @@ test('landing: open a PR, failing checks and requested changes go back to the ag
     Object.assign(st.prs[0], patch);
     fs.writeFileSync(ghState, JSON.stringify(st));
   };
-  const ghCalls = () => fs.readFileSync(ghLog, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+  const ghCalls = () => readLog(ghLog);
   try {
     fs.writeFileSync(ghState, JSON.stringify({ prs: [] }));
     const opened = await call('POST', `/agents/${a.id}/changes/pr`, { title: 'Add b', draft: false });
@@ -4495,7 +4496,7 @@ test('landing: failed GitHub Actions checks are run once more before the agent h
     Object.assign(pr, patch);
     fs.writeFileSync(ghState, JSON.stringify({ prs: [pr] }));
   };
-  const reruns = () => fs.readFileSync(ghLog, 'utf8').trim().split('\n').map((l) => JSON.parse(l)).filter((c) => c[0] === 'run');
+  const reruns = () => readLog(ghLog).filter((c) => c[0] === 'run');
   const landing = async () => (await agentNow(a.id)).landing ?? {};
   const refresh = () => call('POST', `/agents/${a.id}/refresh`, { withPrs: true });
   write({ statusCheckRollup: checks('FAILURE') });
@@ -5232,7 +5233,7 @@ test("reviews: a reviewer agent on someone else's PR finds blockers and question
     assert.equal(got.review.openBlockers, 1);
     assert.deepEqual(got.draft.picked, ['b1', 'q1'], 'open blockers and questions are picked by default');
     assert.match(got.markdown, /\*\*Blocked\*\*[\s\S]*Unbounded retry[\s\S]*Questions for the author[\s\S]*Why retry on 400s/);
-    const log = fs.readFileSync(process.env.FAKE_CLAUDE_LOG, 'utf8').trim().split('\n').map((l) => JSON.parse(l)).filter((l) => l.args.includes('--append-system-prompt') && l.args.join(' ').includes(`pull/5/head:review/pr-5`));
+    const log = readLog(process.env.FAKE_CLAUDE_LOG).filter((l) => l.args.includes('--append-system-prompt') && l.args.join(' ').includes(`pull/5/head:review/pr-5`));
     assert.ok(log.length, 'the reviewer was told how to check out the PR, read-only');
 
     // The reviewed PR isn't the reviewer's own: landing, Value and the Jira summary leave it alone.
@@ -5401,7 +5402,7 @@ test('local models: servers found at their addresses, the models an agent can us
   });
   await new Promise((r) => srv.listen(0, '127.0.0.1', r));
   const url = `http://127.0.0.1:${srv.address().port}`;
-  const codexLaunches = () => (fs.existsSync(process.env.FAKE_CODEX_LOG) ? fs.readFileSync(process.env.FAKE_CODEX_LOG, 'utf8').trim().split('\n').map((l) => JSON.parse(l)) : []);
+  const codexLaunches = () => readLog(process.env.FAKE_CODEX_LOG);
   const engines = async () => (await call('GET', '/engines')).body.filter((e) => e.local).map((e) => [e.id, e.harness, e.installed]);
   try {
     let v = (await call('GET', '/local-models')).body;
@@ -5504,7 +5505,7 @@ test('review rounds: critics on two models read finished changes, the agent fixe
   Object.assign(process.env, { AGENTMGR_GH_BIN: path.join(here, 'fake-gh.js'), FAKE_GH_STATE: ghState, FAKE_GH_LOG: ghLog });
   delete process.env.AGENTMGR_NO_GH;
   fs.writeFileSync(ghState, JSON.stringify({ prs: [] }));
-  const creates = () => (fs.existsSync(ghLog) ? fs.readFileSync(ghLog, 'utf8').trim().split('\n').map((l) => JSON.parse(l)) : []).filter((c) => c[0] === 'pr' && c[1] === 'create');
+  const creates = () => readLog(ghLog).filter((c) => c[0] === 'pr' && c[1] === 'create');
   const state = async (id, status, label) => waitFor(async () => ((await agentNow(id)).preReview?.status === status ? agentNow(id) : null), 30000, label);
   const ids = [];
   try {
@@ -5537,7 +5538,7 @@ test('review rounds: critics on two models read finished changes, the agent fixe
     assert.equal(one.docs?.scorecard?.data ?? null, null, 'the score waits for the rounds');
     assert.equal(creates().length, 0, 'no pull request yet');
     // It was told at launch to leave the pull request to the review.
-    const launches = fs.readFileSync(process.env.FAKE_CLAUDE_LOG, 'utf8').trim().split('\n').map((l) => JSON.parse(l)).filter((l) => l.cwd === fs.realpathSync(ready.workdir) && l.args);
+    const launches = readLog(process.env.FAKE_CLAUDE_LOG).filter((l) => l.cwd === fs.realpathSync(ready.workdir) && l.args);
     assert.ok(launches.some((l) => JSON.stringify(l.args).includes('do not open a pull request yourself')));
     // Asking again while it fixes is refused; the list of what needs you doesn't have it.
     assert.equal((await call('POST', `/agents/${a.id}/prereview/open`)).status, 409, 'still under way');
