@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.56.1 (2026-11-17)
+
+- **Review rounds and the AI judge are easier to find.** Their switches were two lines under the inbox cards. They are now one short row at the top of the inbox, each with its Turn on / Turn off button and the explanation in its tooltip, and a link to Settings.
+- **☰ → Settings → Review and judging** is new: the review rounds switch, the number of rounds (1 to 5) and critics (1 to 3), whether the pull request opens when the critics approve, and the AI judge switch. The numbers could only be changed with `agentmgr rounds` or in config.json before.
+
 ## 1.56.0 (2026-11-17)
 
 - **Review rounds before a pull request.** A pull request's reviewers, people or GitHub Copilot, should not be the ones who find the bugs. When an agent says it is done, critics on other models read its changes in the background and report what is wrong or missing: wrong results and missed cases, error handling, behavior callers relied on, security, missing tests, and what the task asked for that isn't there. The findings go to the agent's session as one message, it fixes them and says done again, and the critics look again, until no blocker or major finding is open or the rounds run out (4 by default, 5 at most).
