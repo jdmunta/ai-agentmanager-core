@@ -213,9 +213,21 @@ test('split screen: split, load, type, follow sizes, keys, reload, close', { ski
   await js(`document.querySelector('.gpane .gterm textarea').focus()`);
   await send('Input.insertText', { text: 'x' });
   await until(`${rows('#terminal')} === ${rows('.gpane')} && ${font('.gpane')} === 13`, 'the main terminal following the group');
+  // Made much smaller for it, the view says why and how to end it.
+  await until(`${font('#terminal')} < 10 && document.querySelector('#terminal').classList.contains('shrunk')`, 'the note on the shrunk view');
   await key('Digit1', '!', 49, 2 | 8);
   await until(`document.querySelector('#detail').classList.contains('gactive')`, 'the main group active');
   await until(`${rows('#terminal')} === ${rows('.gpane')} && ${font('#terminal')} === 13`, 'the group following the main terminal');
+  await until(`!document.querySelector('#terminal').classList.contains('shrunk') && document.querySelector('.gpane .gterm').classList.contains('shrunk')`, 'the note moves to the view that follows now');
+
+  // Terminal text size, in the menu: every terminal takes it, and it is kept.
+  await js(`document.querySelector('#menu-btn').click()`);
+  await js(`document.querySelector('[data-term-font="1"]').click()`);
+  await until(`${font('#terminal')} === 14 && ${font('.gpane')} < 10 && document.querySelector('#term-font-now').textContent === '14'`, 'the larger text; the following view still fits');
+  assert.equal(await js(`!document.querySelector('#menu').hidden && localStorage.getItem('agentmgr.termFont')`), '14', 'kept, and the menu stays open');
+  await js(`document.querySelector('#term-font-now').click()`);
+  await until(`${font('#terminal')} === 13 && localStorage.getItem('agentmgr.termFont') === null`, 'back to 13');
+  await js(`document.querySelector('#menu-btn').click()`);
 
   // Ctrl+Shift+2 goes to the split group (Ctrl+Shift+1 went to the main one above).
   await key('Digit2', '@', 50, 2 | 8);

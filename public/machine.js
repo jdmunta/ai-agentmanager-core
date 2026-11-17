@@ -3,6 +3,7 @@
 // running when the window is hidden; × ends one.
 import { openStream } from '/transport.js';
 import { openCopy, pasteInto } from '/termclip.js';
+import { termFont } from '/termfont.js';
 
 const MACHINE = '__machine__';
 
@@ -17,7 +18,7 @@ export function initMachine({ api, esc, toast, $, Terminal, FitAddon }) {
 
   function ensure() {
     if (xterm) return;
-    xterm = new Terminal({ cursorBlink: true, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: 13, scrollback: 10000, theme: { background: '#0f1117' } });
+    xterm = new Terminal({ cursorBlink: true, fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', fontSize: termFont(), scrollback: 10000, theme: { background: '#0f1117' } });
     fit = new FitAddon();
     xterm.loadAddon(fit);
     xterm.open($('#machine-term'));
@@ -25,6 +26,10 @@ export function initMachine({ api, esc, toast, $, Terminal, FitAddon }) {
     xterm.onData((d) => !replaying && conn?.send({ t: 'i', d }));
     xterm.onResize(({ cols, rows }) => conn?.send({ t: 'r', cols, rows }));
     new ResizeObserver(() => dialog.open && fit.fit()).observe($('#machine-term'));
+    window.addEventListener('agentmgr-termfont', () => {
+      xterm.options.fontSize = termFont();
+      if (dialog.open) fit.fit();
+    });
   }
 
   function renderTabs() {
