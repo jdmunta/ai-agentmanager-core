@@ -1691,7 +1691,7 @@ export async function main(argv) {
       await daemon();
       const items = await api('GET', '/inbox');
       if (!items.length) return console.log(dim('Nothing needs you right now.'));
-      const label = { prompt: red('needs input'), waiting: red('waiting'), question: cyan('question'), review: cyan('AI review'), stuck: yellow('stuck?'), conflict: yellow('overlap'), reminder: cyan('follow up') };
+      const label = { prompt: red('needs input'), waiting: red('waiting'), question: cyan('question'), review: cyan('AI review'), prereview: yellow('not approved'), stuck: yellow('stuck?'), conflict: yellow('overlap'), reminder: cyan('follow up') };
       for (const it of items) {
         if (it.kind === 'repeat') {
           console.log(`${cyan('make it a playbook?')}  asked ${it.count} times: ${it.intent}`);
@@ -1716,6 +1716,7 @@ export async function main(argv) {
         }
         if (it.kind === 'waiting') console.log(dim(`    ${it.waiting.choices?.length ? `choices: ${it.waiting.choices.join(' | ')}\n    ` : ''}answer: agentmgr tell ${it.agentId} "…"`));
         if (it.kind === 'review') console.log(dim(`    ${it.review.verdict.replace('_', ' ')}${it.review.missing.length ? `; missing: ${it.review.missing.join('; ')}` : ''}`));
+        if (it.kind === 'prereview') console.log(dim(`${it.open.map((o) => `    ${o}\n`).join('')}    agentmgr rounds ${it.agentId}  ·  another round: --again  ·  open the pull request anyway: --open`));
         if (it.kind === 'stuck') console.log(dim(`    ${it.finding.detail}\n    nudge: agentmgr tell ${it.agentId} "…"`));
         if (it.kind === 'conflict') console.log(dim(`    ${it.conflict.files.map((f) => f.file).join(', ')}`));
         if (it.kind === 'reminder') {
@@ -1764,6 +1765,45 @@ export async function main(argv) {
       const a = await resolveAgent(ref);
       await api('POST', `/agents/${a.id}/answer`, { question: qid, text: text.join(' ') });
       console.log(`${green('✓')} answer queued for ${a.name}; it is typed into the session when the agent is idle`);
+    });
+
+  program
+    .command('rounds')
+    .description("Review rounds before a pull request: critics on other models read an agent's changes when it says it is done, the agent fixes what they find, and the pull request is opened when they approve")
+    .argument('[agent]', "an agent, for its rounds; without one, the settings")
+    .option('--start', "review this agent's changes now, from round one")
+    .option('--again', 'not approved, or it failed: one more round')
+    .option('--open', 'not approved: open the pull request anyway, with what is still open in its description')
+    .option('--stop', 'no more rounds for this agent')
+    .option('--on', 'review every agent that says it is done')
+    .option('--off', 'no review rounds')
+    .option('--rounds <n>', 'at most this many rounds (1 to 5)')
+    .option('--critics <n>', 'how many critics read each round, each on another model (1 to 3)')
+    .option('--pr <on|off>', 'open the pull request when the critics approve')
+    .option('--json', 'print JSON')
+    .action(async (ref, opts) => {
+      await daemon();
+      if (!ref) {
+        const patch = { ...(opts.on ? { enabled: true } : opts.off ? { enabled: false } : {}), ...(opts.rounds !== undefined ? { rounds: Number(opts.rounds) } : {}), ...(opts.critics !== undefined ? { critics: Number(opts.critics) } : {}), ...(opts.pr !== undefined ? { openPr: opts.pr === 'on' } : {}) };
+        const v = Object.keys(patch).length ? await api('PUT', '/prereview', patch) : await api('GET', '/prereview');
+        if (opts.json) return console.log(JSON.stringify(v, null, 2));
+        if (!v.enabled) return console.log(`Review rounds ${dim('off')} ${dim('(agentmgr rounds --on)')}`);
+        console.log(`Review rounds ${green('on')}: up to ${v.rounds} rounds, ${v.critics} ${v.critics === 1 ? 'critic' : 'critics'} a round${v.models.length ? ` (${v.models.map((m) => `${m.engine}${m.model ? ` ${m.model}` : ''}`).join(', ')})` : ''}; the pull request ${v.openPr ? 'is opened on approval' : 'is left to you'}`);
+        console.log(dim(`Can review here: ${v.engines.map((e) => e.label).join(', ') || 'no engine (install Claude Code or Codex)'}`));
+        return;
+      }
+      let a = await resolveAgent(ref);
+      if (opts.start) a = await api('POST', `/agents/${a.id}/prereview`);
+      else if (opts.again) a = await api('POST', `/agents/${a.id}/prereview/again`);
+      else if (opts.open) a = await api('POST', `/agents/${a.id}/prereview/open`);
+      else if (opts.stop) a = await api('DELETE', `/agents/${a.id}/prereview`);
+      const r = a.preReview;
+      if (opts.json) return console.log(JSON.stringify(r ?? null, null, 2));
+      if (!r) return console.log(dim(`${a.name} has had no review rounds (agentmgr rounds ${a.id} --start)`));
+      const state = { reviewing: yellow(`round ${r.round} of ${r.max}: being reviewed`), fixing: yellow(`round ${r.round} of ${r.max}: the agent is fixing what was found`), approved: green(`approved in round ${r.round}`), stalled: red(`not approved after ${r.round} rounds`), opened: yellow(`not approved after ${r.round} rounds; opened anyway`), stopped: dim('stopped'), error: red(`failed: ${r.error}`) };
+      console.log(`${bold(a.name)}  ${state[r.status] ?? r.status}${r.pr ? `  ${r.pr}` : ''}${r.prError ? `  ${red(`the pull request was not opened: ${r.prError}`)}` : ''}`);
+      for (const rd of r.rounds ?? []) console.log(dim(`  round ${rd.n}: ${rd.critics.map((c) => `${c.by} ${c.error ? `failed (${c.error})` : c.verdict === 'approve' ? 'approves' : 'asks for changes'}`).join(' · ')} · ${rd.raised} new, ${rd.open} open`));
+      for (const f of r.findings ?? []) console.log(`  ${f.status === 'open' ? (['blocker', 'major'].includes(f.severity) ? red('open') : yellow('open')) : green('done')}  ${f.id.padEnd(6)} ${f.severity.padEnd(7)} ${f.file ? `${f.file}: ` : ''}${f.title}`);
     });
 
   program

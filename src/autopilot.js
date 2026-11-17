@@ -94,6 +94,9 @@ export class Autopilot {
     if (level === 'off' && !ap.ship) return;
     if (ap.state === 'held' && ap.round === it.reviewAt) return;
     if (this.manager.view(agent).runtime.busy) return;
+    // Its changes are being reviewed in rounds (prereview.js): what comes out of that is scored and shipped.
+    if (['reviewing', 'fixing'].includes(agent.preReview?.status)) return;
+    if (agent.preReview?.status === 'stalled') return this.hold(it, `The review rounds did not approve its changes (${agent.preReview.round} ${agent.preReview.round === 1 ? 'round' : 'rounds'}): see what is still open on the agent.`);
     if (pr?.state === 'CLOSED') return this.hold(it, 'Its pull request was closed without merging.');
     // Shipped in this round of review: see it through. Reopened since: the new work is scored and pushed to it.
     if (pr && ap.shipped === it.reviewAt) return level === 'merge' ? this.land(it, agent, pr) : undefined;

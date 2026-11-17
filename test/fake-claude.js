@@ -247,6 +247,23 @@ if (args.includes('--input-format') && args.includes('stream-json')) {
       return;
     }
     if (input.startsWith('You check one test of an autonomous agent')) return json({ pass: !section('input').includes('Invoice'), why: 'checked' });
+    if (input.startsWith("You review an AI coding agent's changes before they become a pull request.")) {
+      // Review rounds (prereview.js): a line "BUG: x" in the diff is a major finding, "NIT: x" a nit, and
+      // "SONNETBUG: x" one only the sonnet critic sees. Earlier findings are resolved once no BUG is left.
+      const model = args.includes('--model') ? args[args.indexOf('--model') + 1] : '';
+      if (input.includes('CRITICDOWN')) return process.stderr.write('critic down', () => process.exit(1));
+      const findings = [];
+      for (const m of input.matchAll(/<hunk id="(H\d+)" file="[^"]+">\n([\s\S]*?)\n<\/hunk>/g)) {
+        for (const line of m[2].split('\n')) {
+          const f = /^\+.*?\b(SONNETBUG|BUG|NIT): (.+)$/.exec(line);
+          if (!f || (f[1] === 'SONNETBUG' && model !== 'sonnet')) continue;
+          findings.push({ severity: f[1] === 'NIT' ? 'nit' : 'major', hunk: m[1], line: line.slice(1).trim(), title: f[2], why: `With ${f[2]} it goes wrong`, fix: 'Handle it' });
+        }
+      }
+      const left = /^\+.*\bBUG: /m.test(section('hunks'));
+      const earlier = [...section('earlier_findings').matchAll(/^(R\d+-\d+) \[/gm)].map((m) => ({ id: m[1], status: left ? 'open' : 'resolved', note: left ? 'Still there' : '' }));
+      return json({ verdict: findings.some((f) => f.severity === 'major') || left ? 'changes' : 'approve', summary: `Read by ${model}`, findings, missing: [], earlier });
+    }
     if (input.startsWith("You score an AI coding agent's changes")) {
       const ids = [...input.matchAll(/<hunk id="(H\d+)"/g)].map((m) => m[1]);
       return json({

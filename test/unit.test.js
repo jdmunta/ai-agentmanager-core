@@ -4915,3 +4915,195 @@ test('local models: an engine for each harness, started through the starter on t
   assert.equal(localEngineId({ ...here(['codex']), localModels: { harness: 'claude' } }), 'local-codex', 'not installed: the next');
   assert.deepEqual(listEngines(here(['codex'])).filter((e) => e.local).map((e) => [e.id, e.harness]), [['local-codex', 'codex'], ['local-opencode', 'opencode'], ['local-claude', 'claude']]);
 });
+
+test('review rounds: settings, a critic\'s reply made safe, findings merged across critics and rounds, the messages', async () => {
+  const { preReviewSettings, normalizeCritique, mergeRound, blocking, fixMessage, prNote, criticPrompt, PreReview } = await import('../src/prereview.js');
+  // Settings: on by default, numbers kept in range, critics you name.
+  assert.deepEqual(preReviewSettings({}), { enabled: true, rounds: 4, critics: 2, models: [], openPr: true });
+  assert.deepEqual(preReviewSettings({ preReview: { enabled: false, rounds: 9, critics: 0, openPr: false, models: [{ engine: 'codex' }, { model: 'x' }, null, { engine: 'claude', model: 'opus' }] } }), {
+    enabled: false,
+    rounds: 5,
+    critics: 1,
+    models: [{ engine: 'codex', model: null }, { engine: 'claude', model: 'opus' }],
+    openPr: false,
+  });
+  assert.equal(preReviewSettings({ preReview: { rounds: 'many', critics: null } }).rounds, 4);
+
+  // A reply: unknown severities and hunks, an empty title, too many findings, what is missing.
+  const hunks = [{ id: 'H1', file: 'a.js', head: '@@ -1 +1 @@', text: '+x' }, { id: 'H2', file: 'b.js', head: '@@ -2 +2 @@', text: '+y' }];
+  assert.throws(() => normalizeCritique(null, hunks), /not a JSON object/);
+  const n = normalizeCritique(
+    {
+      verdict: 'approve',
+      summary: 's',
+      findings: [{ severity: 'major', hunk: 'H2', line: ' y ', title: 'Wrong sum', why: 'w', fix: 'f' }, { severity: 'huge', hunk: 'H9', file: 'c.js', title: 'Odd' }, { title: ' ' }, ...Array.from({ length: 20 }, (_, i) => ({ severity: 'nit', hunk: 'H1', title: `n${i}` }))],
+      missing: ['the --json flag', ''],
+      earlier: [{ id: 'R1-1', status: 'open', note: 'still' }, { id: 'R1-2', status: 'whatever' }, {}],
+    },
+    hunks,
+  );
+  assert.equal(n.verdict, 'changes', 'a major finding is not an approval, whatever the critic says');
+  assert.equal(n.findings.length, 13, '12 findings at most, and what is missing');
+  assert.deepEqual(n.findings[0], { severity: 'major', file: 'b.js', head: '@@ -2 +2 @@', line: 'y', title: 'Wrong sum', why: 'w', fix: 'f' });
+  assert.deepEqual([n.findings[1].severity, n.findings[1].file], ['minor', 'c.js']);
+  assert.deepEqual([n.findings.at(-1).severity, n.findings.at(-1).title], ['major', 'Missing: the --json flag']);
+  assert.deepEqual(n.earlier, { 'R1-1': { status: 'open', note: 'still' }, 'R1-2': { status: 'resolved', note: '' } });
+  assert.equal(normalizeCritique({ verdict: 'approve', findings: [{ severity: 'nit', title: 'name' }] }).verdict, 'approve');
+
+  // Round one: two critics on the same defect are one finding; a critic that failed is left out.
+  const f = (severity, file, title, line = '') => ({ severity, file, head: null, line, title, why: `why ${title}`, fix: '' });
+  const r1 = mergeRound(
+    [
+      { by: 'A', verdict: 'changes', findings: [f('minor', 'a.js', 'Divides by zero when b is 0', 'a / b'), f('nit', 'a.js', 'Short name')], earlier: {} },
+      { by: 'B', verdict: 'changes', findings: [f('major', 'a.js', 'No check for a zero divisor', 'a / b'), f('minor', 'a.js', 'Result is a float for whole numbers', 'a / b'), f('major', 'b.js', 'Token logged in plain text')], earlier: {} },
+      { by: 'C', error: 'timed out' },
+    ],
+    [],
+    1,
+  );
+  assert.deepEqual(r1.map((x) => [x.id, x.severity, x.file, x.by.join('+'), x.status, x.round]), [
+    ['R1-1', 'major', 'a.js', 'A+B', 'open', 1],
+    ['R1-2', 'major', 'b.js', 'B', 'open', 1],
+    ['R1-3', 'minor', 'a.js', 'B', 'open', 1],
+    ['R1-4', 'nit', 'a.js', 'A', 'open', 1],
+  ]);
+  assert.equal(r1[2].title, 'Result is a float for whole numbers', 'another defect on the same line stays a finding of its own');
+  assert.deepEqual(blocking(r1).map((x) => x.id), ['R1-1', 'R1-2']);
+  // Round two: open while any critic says so; raised again under another name, it is the same finding; new ones are numbered by round.
+  const r2 = mergeRound(
+    [
+      { by: 'A', verdict: 'changes', findings: [f('major', 'b.js', 'The token is still logged in plain text'), f('major', 'c.js', 'Retries forever')], earlier: { 'R1-1': { status: 'resolved', note: '' }, 'R1-2': { status: 'resolved', note: '' }, 'R1-3': { status: 'resolved', note: '' }, 'R1-4': { status: 'open', note: 'same name' } } },
+      { by: 'B', verdict: 'approve', findings: [], earlier: { 'R1-1': { status: 'resolved', note: '' }, 'R1-4': { status: 'resolved', note: '' } } },
+    ],
+    r1,
+    2,
+  );
+  assert.deepEqual(r2.map((x) => [x.id, x.status, x.resolvedIn ?? null]), [['R1-1', 'resolved', 2], ['R1-2', 'open', null], ['R1-3', 'resolved', 2], ['R1-4', 'open', null], ['R2-1', 'open', null]]);
+  assert.equal(r2[3].note, 'same name');
+  assert.equal(r1[0].status, 'open', 'the earlier round is not changed');
+  assert.deepEqual(blocking(r2).map((x) => x.id), ['R1-2', 'R2-1']);
+  // Round three: nothing said about an open finding by critics who answered means it is resolved.
+  const r3 = mergeRound([{ by: 'A', verdict: 'approve', findings: [], earlier: {} }], r2, 3);
+  assert.deepEqual(blocking(r3), []);
+
+  // The message to the agent: what holds the pull request first, the rest apart, and what to do after.
+  const msg = fixMessage({ round: 2, max: 4, by: ['A', 'B'], findings: r2 });
+  assert.match(msg, /^Before a pull request is opened, your changes were reviewed by A and B \(round 2 of 4\)\. 2 findings have to be dealt with:\n\n1\. \[R1-2\] major · b\.js: Token logged in plain text/);
+  assert.match(msg, /2\. \[R2-1\] major · c\.js: Retries forever\n   Why: why Retries forever/);
+  assert.match(msg, /Smaller things, to fix where you agree:\n\n1\. \[R1-4\] nit · a\.js: Short name\n   Why: same name/);
+  assert.match(msg, /add a "## Review round 2" section to your brief[^\n]*and mark the brief as done again/);
+  assert.match(msg, /Do not open a pull request yourself/);
+  assert.ok(!msg.includes('R1-1'), 'not what is resolved');
+  const pushed = fixMessage({ round: 1, max: 4, findings: r1, pushed: true });
+  assert.match(pushed, /commit and push, and mark the brief as done again/);
+  assert.ok(!pushed.includes('Do not open a pull request'));
+
+  // The pull request's description, approved and not.
+  const rounds = [{ n: 1, critics: [{ by: 'A' }, { by: 'B' }, { by: 'C', error: 'x' }] }, { n: 2, critics: [{ by: 'A' }] }];
+  assert.equal(prNote({ status: 'approved', round: 1, max: 4, findings: [], rounds }), '### Reviewed before opening\n\nApproved in round 1 of 4 by A and B. Nothing was found.');
+  const note = prNote({ status: 'stalled', round: 2, max: 2, findings: r2, rounds });
+  assert.match(note, /Not approved after 2 rounds \(A, B\): opened anyway\.\n\n\*\*Still open:\*\*\n\n- major · `b\.js`: Token logged in plain text\n- major · `c\.js`: Retries forever\n\nSmaller things left as they are:\n\n- nit · `a\.js`: Short name\n\n<details><summary>Found and dealt with \(2\)<\/summary>/);
+
+  // The prompt names the round, the earlier findings and the hunks.
+  const prompt = criticPrompt({ intent: 'Add divide', briefMarkdown: 'b', specDoc: '', hunks, cut: true, round: 2, max: 4, earlier: [r2[1]] });
+  assert.ok(prompt.startsWith("You review an AI coding agent's changes before they become a pull request."));
+  assert.match(prompt, /This is round 2 of at most 4\./);
+  assert.match(prompt, /<earlier_findings>\nR1-2 \[major\] b\.js: Token logged in plain text\n {2}why: why Token logged in plain text\n {2}still open last round because: why The token is still logged in plain text\n<\/earlier_findings>/);
+  assert.match(prompt, /<hunk id="H2" file="b\.js">\n@@ -2 \+2 @@\n\+y\n<\/hunk>/);
+  assert.match(prompt, /too long to send whole/);
+  assert.match(criticPrompt({ hunks, round: 1, max: 4 }), /\(none: this is the first round\)/);
+
+  // Which agents, and which critics: other engines first, then the agent's engine on other models.
+  const store = { list: () => [{ id: 'x', preReview: { status: 'reviewing', round: 2 } }] };
+  const patched = [];
+  const { ENGINES } = await import('../src/engines/index.js');
+  // Only Claude Code and Codex are installed, whatever this computer has.
+  const config = { claudeBin: process.execPath, engines: { ...Object.fromEntries(Object.keys(ENGINES).filter((id) => id !== 'claude').map((id) => [id, { bin: '/nope/engine' }])), codex: { bin: process.execPath } } };
+  const manager = { store, patch: (id, p) => patched.push([id, p]), writerFor: () => ({ engine: ENGINES.claude, model: undefined }) };
+  const pre = new PreReview({ manager, config, ship: async () => ({}), managed: (id) => id === 'ap' });
+  assert.deepEqual([patched[0][0], patched[0][1].preReview.status, patched[0][1].preReview.round], ['x', 'error', 1], 'a round cut short by a restart can be run again');
+  const task = { id: 't', kind: 'task', workdir: '/w' };
+  assert.equal(pre.applies(task), true);
+  for (const not of [{ kind: 'general' }, { workdir: null }, { hunting: {} }, { fixing: {} }, { reviewing: {} }, { team: {} }, { builds: {} }, { raceId: 'r' }]) assert.equal(pre.applies({ ...task, ...not }), false, JSON.stringify(not));
+  assert.deepEqual([pre.instructs(task), pre.instructs({ ...task, id: 'ap' })], [true, false], 'autopilot opens its own');
+  // Critics: other models of the engine the agent runs on (no other provider is asked), its own model left out.
+  assert.deepEqual(pre.critics(task).map((c) => [c.engine.id, c.model]), [['claude', 'opus'], ['claude', 'sonnet']]);
+  assert.deepEqual(pre.critics({ ...task, model: 'claude-opus-4' }).map((c) => c.model), ['sonnet', 'haiku'], 'not the model it runs on');
+  assert.deepEqual(pre.critics({ ...task, engine: 'claude', model: 'Sonnet' }).map((c) => c.model), ['opus', 'haiku']);
+  config.preReview = { critics: 3 };
+  assert.deepEqual(pre.candidates(task).map((c) => [c.engine.id, c.model]), [['claude', 'opus'], ['claude', 'sonnet'], ['claude', 'haiku']]);
+  // The critics you name come first, on any engine installed; one that is not installed is left out.
+  config.preReview = { models: [{ engine: 'codex' }, { engine: 'muse' }, { engine: 'claude', model: 'sonnet' }] };
+  assert.deepEqual(pre.candidates(task).map((c) => [c.engine.id, c.model]), [['codex', null], ['claude', 'sonnet'], ['claude', 'opus'], ['claude', 'haiku']]);
+  // A Codex agent: Codex on the model it is set up with, or the models config.json names for reviews.
+  config.preReview = {};
+  manager.writerFor = () => ({ engine: ENGINES.codex, model: 'gpt-x' });
+  const cx = { ...task, engine: 'codex', model: 'gpt-x' };
+  assert.deepEqual(pre.critics(cx).map((c) => [c.engine.id, c.model]), [['codex', 'gpt-x']]);
+  config.engines.codex.reviewModels = ['gpt-x', 'gpt-y', 'gpt-z'];
+  assert.deepEqual(pre.critics(cx).map((c) => [c.engine.id, c.model]), [['codex', 'gpt-y'], ['codex', 'gpt-z']]);
+  delete config.engines.codex.reviewModels;
+  // Nothing here can review (its engine is not installed): the rounds are not for it.
+  manager.writerFor = () => ({ engine: ENGINES.antigravity, model: undefined });
+  assert.deepEqual([pre.candidates(task).length, pre.applies(task)], [0, false]);
+  manager.writerFor = () => ({ engine: ENGINES.claude, model: undefined });
+  // A round: a critic that fails is replaced by the next who can review; the findings go to the agent.
+  config.preReview = {};
+  const agent = { ...task, id: 'no-such-agent', intent: 'Add divide', brief: { status: 'done', updatedAt: 't1' }, preReview: { status: 'reviewing', round: 0, max: 4, findings: [], rounds: [] } };
+  const asked = [];
+  const told = [];
+  const live = {
+    store: { list: () => [], get: () => agent },
+    mustGet: () => agent,
+    patch: (id, p) => Object.assign(agent, p),
+    view: (x) => x,
+    writerFor: () => ({ engine: ENGINES.claude, model: undefined }),
+    changesSource: async () => ({ diff: 'diff --git a/d.js b/d.js\n--- a/d.js\n+++ b/d.js\n@@ -1 +1 @@\n-old\n+export const divide = (a, b) => a / b;\n' }),
+    explainContext: async () => ({ briefMarkdown: 'Status: done' }),
+    oneShot: async (_a, text, { engine, model }) => {
+      asked.push(`${engine.id}:${model}`);
+      if (model === 'opus') throw new Error('Claude Code one-shot call failed (exit 1): no answer');
+      if (model === 'sonnet') return 'Here it is:\n{"verdict":"changes","findings":[{"severity":"major","hunk":"H1","line":"a / b","title":"Divides by zero","why":"b = 0","fix":"check b"}]}';
+      return '{"verdict":"approve","findings":[]}';
+    },
+    tell: (id, text, o) => told.push([id, text, o.source]),
+    judge: { enabled: false },
+    summarize: async () => {},
+  };
+  const pre2 = new PreReview({ manager: live, config: { ...config, scorecard: { auto: false } }, ship: async () => ({ url: 'https://example.com/pull/1' }) });
+  await pre2.round(agent.id);
+  assert.deepEqual(asked.sort(), ['claude:haiku', 'claude:opus', 'claude:sonnet'], 'the next model was asked when the first failed');
+  assert.deepEqual(agent.preReview.rounds[0].critics.map((c) => [c.by, c.verdict, Boolean(c.error)]), [['Claude Code (opus)', null, true], ['Claude Code (haiku)', 'approve', false], ['Claude Code (sonnet)', 'changes', false]]);
+  assert.deepEqual([agent.preReview.status, agent.preReview.round, agent.preReview.briefAt, agent.preReview.findings.map((x) => [x.id, x.file, x.title, x.by.join()])], ['fixing', 1, 't1', [['R1-1', 'd.js', 'Divides by zero', 'Claude Code (sonnet)']]]);
+  assert.deepEqual([told.length, told[0][0], told[0][2]], [1, agent.id, 'prereview']);
+  assert.match(told[0][1], /\(round 1 of 4\)\. 1 finding has to be dealt with:\n\n1\. \[R1-1\] major · d\.js: Divides by zero/);
+  // The brief unchanged: no round. Changed and done: the next round, which approves and opens the pull request.
+  assert.equal(pre2.brief(agent), true);
+  assert.equal(pre2.running.size, 0);
+  live.oneShot = async () => '{"verdict":"approve","findings":[],"earlier":[{"id":"R1-1","status":"resolved"}]}';
+  agent.brief = { status: 'done', updatedAt: 't2' };
+  assert.equal(pre2.brief(agent), true);
+  for (let i = 0; i < 200 && pre2.running.size; i++) await new Promise((r) => setTimeout(r, 5));
+  assert.deepEqual([agent.preReview.status, agent.preReview.round, agent.preReview.pr, agent.preReview.findings[0].status], ['approved', 2, 'https://example.com/pull/1', 'resolved']);
+  // Every critic failing is an error that can be run again, from the same round.
+  live.oneShot = async () => 'no JSON here';
+  agent.preReview = { status: 'reviewing', round: 0, max: 1, findings: [], rounds: [] };
+  pre2.run(agent.id);
+  for (let i = 0; i < 200 && pre2.running.size; i++) await new Promise((r) => setTimeout(r, 5));
+  assert.deepEqual([agent.preReview.status, agent.preReview.round], ['error', 0]);
+  assert.match(agent.preReview.error, /^The review failed: The reply had no JSON in it/);
+  // Out of rounds with a finding open: it waits for you.
+  live.oneShot = async () => '{"verdict":"changes","findings":[{"severity":"blocker","hunk":"H1","title":"Loses data"}]}';
+  pre2.again(agent.id);
+  for (let i = 0; i < 200 && pre2.running.size; i++) await new Promise((r) => setTimeout(r, 5));
+  assert.deepEqual([agent.preReview.status, agent.preReview.round, agent.preReview.max, told.length], ['stalled', 1, 1, 1]);
+  // Another round: what is open goes to the agent, and there is one more round to pass.
+  pre2.again(agent.id);
+  assert.deepEqual([agent.preReview.status, agent.preReview.max, told.length], ['fixing', 2, 2]);
+  assert.equal(pre2.stop(agent.id).preReview.status, 'stopped');
+
+  config.preReview = { enabled: false };
+  assert.equal(pre.applies(task), false);
+  assert.throws(() => pre.change({ rounds: 6 }), /rounds is a number from 1 to 5/);
+  assert.deepEqual(pre.change({ enabled: 'on', rounds: 5, critics: 1, openPr: false }), { enabled: true, rounds: 5, critics: 1, openPr: false });
+});

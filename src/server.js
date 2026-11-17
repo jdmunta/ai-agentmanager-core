@@ -17,6 +17,7 @@ import { Teams } from './teams.js';
 import { Assistant, FEATURES, featuresOf } from './assistant.js';
 import { Cleanup } from './cleanup.js';
 import { Landing } from './landing.js';
+import { PreReview } from './prereview.js';
 import { Autopilot } from './autopilot.js';
 import { Goals, goalMarkdown } from './goals.js';
 import { Budgets } from './budgets.js';
@@ -206,6 +207,30 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
   const teams = new Teams({ manager, store, config });
   const cleanup = new Cleanup({ manager, store, config, teams });
   const landing = new Landing({ manager, store, config });
+  /** Commit what's left, push and open the agent's pull request, titled after the issue or request. */
+  const shipAgent = async (ref, { title = '', body = '' } = {}) => {
+    const a = manager.mustGet(ref);
+    const key = leadingJiraKey(a.intent);
+    const words = a.synopsis?.text ?? a.brief?.title ?? String(a.intent ?? '').replace(/^<?https?:\/\/\S+>?\s*/, '').split('\n')[0];
+    title = String(title ?? '').trim() || `${key ? `${key}: ` : ''}${words || a.name}`.slice(0, 100);
+    try {
+      await review.commit(a.id, { message: title });
+    } catch (e) {
+      if (e.status !== 409 || !/nothing to commit/i.test(e.message)) throw e;
+    }
+    const r = await review.pr(a.id, { title, body });
+    await manager.refresh(a.id, { withPrs: true }).catch(() => {});
+    return { url: r.url ?? null, title };
+  };
+  // An agent's changes are reviewed in rounds, by other models, before they become a pull request.
+  // Backlog work on autopilot is opened by autopilot, once the rounds are over.
+  const preReview = new PreReview({
+    manager,
+    config,
+    ship: shipAgent,
+    managed: (id) => backlog.items().some((it) => it.agentId === id && ['active', 'review'].includes(it.status) && backlog.autopilotFor(it.projectKey) !== 'off'),
+    log: (m) => console.log(`[agentmgr] ${m}`),
+  });
   // Backlog work the scorecard calls ready goes on to a pull request (and merged) by itself.
   const autopilot = new Autopilot({ manager, store, backlog, review, landing, config });
   manager.inboxSources.push(() => autopilot.inbox());
@@ -833,20 +858,17 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
   api.post('/agents/:id/changes/commit', wrap((req) => review.commit(req.params.id, req.body ?? {})));
   api.post('/agents/:id/changes/pr', wrap((req) => review.pr(req.params.id, req.body ?? {})));
   // Done but no pull request: commit what's left, push and open one, titled after the issue or request.
-  api.post('/agents/:id/ship', wrap(async (req) => {
-    const a = manager.mustGet(req.params.id);
-    const key = leadingJiraKey(a.intent);
-    const words = a.synopsis?.text ?? a.brief?.title ?? String(a.intent ?? '').replace(/^<?https?:\/\/\S+>?\s*/, '').split('\n')[0];
-    const title = String(req.body?.title ?? '').trim() || `${key ? `${key}: ` : ''}${words || a.name}`.slice(0, 100);
-    try {
-      await review.commit(a.id, { message: title });
-    } catch (e) {
-      if (e.status !== 409 || !/nothing to commit/i.test(e.message)) throw e;
-    }
-    const r = await review.pr(a.id, { title });
-    await manager.refresh(a.id, { withPrs: true }).catch(() => {});
-    return { url: r.url ?? null, title };
+  api.post('/agents/:id/ship', wrap((req) => shipAgent(req.params.id, { title: req.body?.title })));
+  // Review rounds before a pull request (prereview.js).
+  api.get('/prereview', wrap(() => preReview.view()));
+  api.put('/prereview', wrap((req) => {
+    saveConfig({ preReview: preReview.change(req.body ?? {}) });
+    return preReview.view();
   }));
+  api.post('/agents/:id/prereview', wrap((req) => preReview.start(req.params.id)));
+  api.post('/agents/:id/prereview/again', wrap((req) => preReview.again(req.params.id)));
+  api.post('/agents/:id/prereview/open', wrap((req) => preReview.open(req.params.id)));
+  api.delete('/agents/:id/prereview', wrap((req) => preReview.stop(req.params.id)));
   api.post('/agents/:id/fork', wrap((req) => manager.fork(req.params.id, req.body ?? {})));
   api.post('/agents/:id/continue-on', wrap((req) => manager.continueOn(req.params.id, { engine: req.body?.engine })));
 
