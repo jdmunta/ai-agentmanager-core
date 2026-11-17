@@ -852,6 +852,98 @@ test('remote access: HTTPS, token sign-in, local-only management, SSE terminal, 
   await assert.rejects(httpsReq(rport, 'GET', '/'), /ECONNREFUSED/);
 });
 
+test("screen: this computer's screen sharing relayed to signed-in pages; off until turned on here; a stream and POSTs for the phone", async () => {
+  const net = await import('node:net');
+  // A stand-in for the screen sharing service: greets like one, then answers in upper case.
+  const vnc = net.createServer((sock) => {
+    sock.write('RFB 003.008\n');
+    sock.on('data', (d) => sock.write(d.toString().toUpperCase()));
+    sock.on('error', () => {});
+  });
+  await new Promise((r) => vnc.listen(0, '127.0.0.1', r));
+  const vport = vnc.address().port;
+  const wsText = (url) =>
+    new Promise((resolve) => {
+      const ws = new WebSocket(url);
+      const got = { ws, text: '', closed: null };
+      ws.on('message', (d) => (got.text += d.toString()));
+      ws.on('close', (code, reason) => (got.closed = { code, reason: reason.toString() }));
+      ws.on('open', () => resolve(got));
+      ws.on('error', () => resolve(got));
+    });
+
+  // Off until turned on: nothing is relayed.
+  let st = (await call('GET', '/screen')).body;
+  assert.deepEqual([st.enabled, st.port, st.viewers], [false, 5900, []]);
+  const refused = await wsText(`ws://127.0.0.1:${port}/ws/screen`);
+  await waitFor(() => refused.closed, 4000, 'the relay refusing');
+  assert.equal(refused.closed.code, 1008);
+  assert.match(refused.closed.reason, /Screen access is off/);
+  assert.equal((await call('PUT', '/screen/settings', { port: 70000 })).status, 400);
+
+  st = (await call('PUT', '/screen/settings', { enabled: true, port: vport })).body;
+  assert.deepEqual([st.enabled, st.port, st.listening], [true, vport, true]);
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(home, 'config.json'), 'utf8')).screen, { enabled: true, port: vport }, 'kept');
+
+  // This computer's page: a WebSocket, bytes both ways, and everyone is told who is viewing.
+  const events = new WebSocket(`ws://127.0.0.1:${port}/ws/events`);
+  const told = [];
+  events.on('message', (raw) => {
+    const m = JSON.parse(raw.toString());
+    if (m.t === 'screen') told.push(m.viewers.map((v) => v.who));
+  });
+  await new Promise((r) => events.on('open', r));
+  const local = await wsText(`ws://127.0.0.1:${port}/ws/screen`);
+  await waitFor(() => local.text.includes('RFB 003.008'), 4000, 'the greeting');
+  local.ws.send(Buffer.from('hello'));
+  await waitFor(() => local.text.includes('HELLO'), 4000, 'the answer');
+  await waitFor(() => told.some((w) => w.join() === 'this computer'), 4000, 'the viewers event');
+  assert.deepEqual((await call('GET', '/screen')).body.viewers.map((v) => v.who), ['this computer']);
+
+  // A signed-in phone: a stream out and POSTs in. It cannot turn it on or off.
+  const remote = await import('../src/remote.js');
+  const rport = await freePort();
+  remote.saveSettings({ extraHosts: ['127.0.0.1'] });
+  await call('POST', '/remote/enable', { port: rport });
+  const json = { 'content-type': 'application/json', 'x-agentmgr': '1' };
+  assert.equal((await httpsReq(rport, 'GET', '/api/screen/stream')).status, 401, 'not without signing in');
+  const cookie = (await httpsReq(rport, 'POST', '/api/login', { headers: json, body: { token: remote.accessToken() } })).headers['set-cookie'][0].split(';')[0];
+  assert.equal((await httpsReq(rport, 'PUT', '/api/screen/settings', { headers: { ...json, cookie }, body: { enabled: false } })).status, 403);
+  assert.equal((await httpsReq(rport, 'GET', '/api/screen', { headers: { cookie } })).json.enabled, true);
+  const text = (m) => Buffer.concat(m.filter((x) => x.t === 'd').map((x) => Buffer.from(x.d, 'base64'))).toString();
+  let sent = false;
+  const msgs = await sseUntil(rport, '/api/screen/stream', cookie, (m) => {
+    if (!sent && m[0]?.t === 'open' && text(m).includes('RFB 003.008')) {
+      sent = true;
+      httpsReq(rport, 'POST', '/api/screen/input', { headers: { ...json, cookie }, body: { id: m[0].id, d: Buffer.from('from-phone').toString('base64') } });
+    }
+    return text(m).includes('FROM-PHONE');
+  });
+  assert.equal(msgs[0].t, 'open');
+  assert.ok(told.some((w) => w.length === 2 && w[1] !== 'this computer'), `the phone is named among the viewers: ${JSON.stringify(told)}`);
+  // Its stream closed: it is gone from the viewers, and what it would still send is refused.
+  await waitFor(async () => (await call('GET', '/screen')).body.viewers.length === 1, 4000, 'the phone leaving');
+  assert.equal((await httpsReq(rport, 'POST', '/api/screen/input', { headers: { ...json, cookie }, body: { id: msgs[0].id, d: 'eA==' } })).status, 410);
+
+  // Turned off here: whoever is viewing is ended, and nothing connects.
+  st = (await call('PUT', '/screen/settings', { enabled: false })).body;
+  assert.deepEqual([st.enabled, st.viewers], [false, []]);
+  await waitFor(() => local.closed, 4000, 'the viewer ended');
+  assert.match(local.closed.reason, /turned off/);
+  assert.equal((await httpsReq(rport, 'GET', '/api/screen/stream', { headers: { cookie } })).status, 403);
+
+  // Screen sharing not running: said, not a hang.
+  await new Promise((r) => vnc.close(r));
+  st = (await call('PUT', '/screen/settings', { enabled: true })).body;
+  assert.equal(st.listening, false);
+  const none = await wsText(`ws://127.0.0.1:${port}/ws/screen`);
+  await waitFor(() => none.closed, 4000, 'no service');
+  assert.match(none.closed.reason, /Screen sharing is not on/);
+  await call('PUT', '/screen/settings', { enabled: false, port: 5900 });
+  events.close();
+  await call('POST', '/remote/disable');
+});
+
 test('browser tabs: any address, saved per agent, suggested from terminal output, relayed to signed-in devices only', async () => {
   const http = await import('node:http');
   const { WebSocketServer } = await import('ws');

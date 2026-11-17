@@ -206,6 +206,7 @@ agentmgr audit <agent> --start                # security audit in its session (a
 agentmgr skills                               # Claude Code's skills here (look <repo>, add <repo> <names...>, check|update|rm <id>)
 agentmgr lanes                                # every agent's own ports and name ending (--off, --port off, --base, --size)
 agentmgr rounds [agent]                       # review rounds before a pull request: the settings, or an agent's rounds (--start, --again, --open, --stop)
+agentmgr screen                               # this computer's screen in the page, from the phone too: on or off (--on, --off), who is viewing
 agentmgr models                               # models served on this computer (Ollama, LM Studio, llama.cpp, MLX), for --engine local
 agentmgr usage                                # each engine's plan limits: used, left, resets (--now, --lean on, --warn 80, --hold 95, --default codex)
 agentmgr runbook --ticket REL-42              # a support runbook from a release ticket (or --epic KEY, or --since 2026-10-01 -p <project>; -o file.md)
@@ -874,6 +875,23 @@ Or use **Remote access** in the header of the UI on this computer.
 - **Firewall.** If the macOS firewall is off, the port is open to your whole network while remote access is on. Turn it off when you don't need it.
 - **Streaming.** The phone UI streams with Server-Sent Events plus plain HTTPS requests. iOS Safari doesn't apply an accepted self-signed certificate to WebSockets.
 
+## Screen: this computer's desktop, from the phone too
+
+A pop-up that waits for an answer, another program you want to watch: **Screen** in the top bar shows this computer's whole screen in the page, and your clicks, taps and typing go back to it. It works on the computer itself and on any device signed in through remote access.
+
+It does not capture the screen itself. The computer's own screen sharing does, and AI Agent Manager relays that connection to signed-in pages and draws it with [noVNC](https://novnc.com):
+
+1. On the Mac: **System Settings → General → Sharing → Screen Sharing**, on. (On Linux: any VNC server listening on port 5900 of `127.0.0.1`.)
+2. On the computer itself: **Screen → Turn on** (or `agentmgr screen --on`).
+3. From any signed-in device: **Screen → Connect**, and sign in with your Mac user name and password when the Mac asks. They go to the Mac's screen sharing and are not kept.
+
+On a phone, the bar has a **Type here** field for the keyboard, and **Esc**, **Tab** and **⏎**.
+
+- **Whoever uses it controls the whole computer,** not only the agents. So it is off until you turn it on, it can be turned on only on the computer itself (not from a signed-in device), and the computer's screen sharing still asks for its own sign-in every time.
+- **Who is looking:** while another device views the screen, the **Screen** button shows a dot, and its tooltip and `agentmgr screen` name the device and its address. **Turn off** ends every view at once.
+- **Only this computer.** The relay connects to `127.0.0.1` and nothing else; `agentmgr screen --port <n>` picks another port there.
+- **Limits:** a locked screen shows the lock screen, a sleeping computer shows nothing, and a company-managed Mac may have Screen Sharing disabled by policy. Up to 4 views at a time.
+
 ## Engines: Claude Code, Codex, Antigravity and Muse Code
 
 Agents run Claude Code by default. With OpenAI's Codex CLI installed (`npm i -g @openai/codex`, signed in), an agent can run Codex instead: `agentmgr add --engine codex …`, or the **Engine** picker in New agent (shown once a second engine is installed). Everything else works the same way: worktrees, the brief and questions, the inbox (Codex's approval menus included), token usage, stuck detection, PR tracking, Explain, the backlog and the hub. Codex records no cost, and planning while a repo clones and forks are Claude-only for now. Set `"engine": "codex"` in config.json to make it the default; `engines.codex.bin` points at another binary. On the hub, each machine reports the engines it has (`engine:codex`), so shared backlog work can ask for one. See [docs/engines.md](docs/engines.md).
@@ -1469,6 +1487,7 @@ State lives in `~/.agentmanager/` (`state.json`, `daemon.log`, `repos/` for shar
   "stuck": { "repeatFailures": 3, "thrashReverts": 2, "thrashEdits": 10, "driftMinutes": 20, "driftActions": 25 },
   "judge": { "enabled": true, "model": "haiku", "dailyCalls": 300 },
   "preReview": { "enabled": true, "rounds": 4, "critics": 2, "openPr": true },
+  "screen": { "enabled": false, "port": 5900 },
   "cleanup": { "strategy": "close", "closeAfterDays": 14, "deleteAfterDays": 14 },
   "hub": { "allow": ["view"], "projects": ["*"] }
 }

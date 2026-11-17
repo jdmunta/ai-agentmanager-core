@@ -158,7 +158,7 @@ test('the top bar fits the window: the view buttons that do not fit go into More
       menuOk: document.querySelector('#menu-btn').getBoundingClientRect().right <= innerWidth,
     })`);
     assert.ok(r.page <= w, `${w}px: the page is ${r.page}px wide`);
-    assert.equal(r.inRow + r.inMore, 20, `${w}px: every view button is in the row or in More`);
+    assert.equal(r.inRow + r.inMore, 21, `${w}px: every view button is in the row or in More`);
     assert.ok(r.newOk && r.menuOk, `${w}px: New agents and the account menu are on screen`);
     if (w >= 1024) assert.ok(r.inRow >= 3, `${w}px: only ${r.inRow} buttons in the row`);
   }
@@ -418,6 +418,120 @@ test('review rounds and the AI judge: switches at the top of the inbox, and thei
   assert.equal((await api('GET', '/judge')).enabled, false, 'the judge was left alone');
   await api('PUT', '/prereview', { enabled: false, rounds: 4, critics: 2, openPr: true });
   await js(`document.querySelector('[data-tab="agents"]').click()`);
+  assert.deepEqual(errors, [], 'no errors on the page');
+});
+
+test("Screen: off until turned on here, the screen sharing sign-in, the screen drawn, typing sent, and Turn off", { skip }, async () => {
+  const net = await import('node:net');
+  // A stand-in screen sharing service (RFB 3.8, password sign-in): a 64x48 screen named Test Mac.
+  const keys = [];
+  let conns = 0;
+  const vnc = net.createServer((sock) => {
+    conns++;
+    let buf = Buffer.alloc(0);
+    let step = 'version';
+    sock.on('error', () => {});
+    sock.on('close', () => conns--);
+    sock.write('RFB 003.008\n');
+    const need = (n) => {
+      if (buf.length < n) return null;
+      const out = buf.subarray(0, n);
+      buf = buf.subarray(n);
+      return out;
+    };
+    sock.on('data', (d) => {
+      buf = Buffer.concat([buf, d]);
+      for (;;) {
+        if (step === 'version') {
+          if (!need(12)) return;
+          sock.write(Buffer.from([1, 2])); // one way to sign in: a password
+          step = 'security';
+        } else if (step === 'security') {
+          if (!need(1)) return;
+          sock.write(Buffer.alloc(16, 7)); // the challenge
+          step = 'response';
+        } else if (step === 'response') {
+          if (!need(16)) return;
+          sock.write(Buffer.from([0, 0, 0, 0])); // accepted
+          step = 'init';
+        } else if (step === 'init') {
+          if (!need(1)) return;
+          const name = Buffer.from('Test Mac');
+          const head = Buffer.alloc(24);
+          head.writeUInt16BE(64, 0);
+          head.writeUInt16BE(48, 2);
+          Buffer.from([32, 24, 0, 1, 0, 255, 0, 255, 0, 255, 16, 8, 0, 0, 0, 0]).copy(head, 4);
+          head.writeUInt32BE(name.length, 20);
+          sock.write(Buffer.concat([head, name]));
+          step = 'run';
+        } else {
+          if (!buf.length) return;
+          const t = buf[0];
+          const size = t === 0 ? 20 : t === 2 ? (buf.length >= 4 ? 4 + 4 * buf.readUInt16BE(2) : Infinity) : t === 3 ? 10 : t === 4 ? 8 : t === 5 ? 6 : t === 6 ? (buf.length >= 8 ? 8 + buf.readUInt32BE(4) : Infinity) : 1;
+          const m = need(size);
+          if (!m) return;
+          if (t === 4 && m[1] === 1) keys.push(m.readUInt32BE(4));
+        }
+      }
+    });
+  });
+  await new Promise((r) => vnc.listen(0, '127.0.0.1', r));
+  await api('PUT', '/screen/settings', { enabled: false, port: vnc.address().port });
+
+  const body = `document.querySelector('#screen-body').textContent.replace(/\\s+/g, ' ')`;
+  await js(`document.querySelector('#screen-btn').click()`);
+  await until(`document.querySelector('#screen-dialog').open && /controls the whole computer/.test(${body})`, 'the dialog, off, saying what it gives');
+  assert.equal(await js(`document.querySelector('#screen-off').hidden && document.querySelector('#screen-keys').hidden`), true);
+  await js(`document.querySelector('[data-screen="on"]').click()`);
+  await until(`/Ready/.test(${body}) && !document.querySelector('#screen-off').hidden`, 'on, and ready');
+  assert.equal((await api('GET', '/screen')).enabled, true);
+
+  await js(`document.querySelector('[data-screen="connect"]').click()`);
+  await until(`document.querySelector('#screen-login input[name="password"]')`, 'the sign-in the service asks for');
+  assert.equal(await js(`document.querySelector('#screen-login input[name="username"]')`), null, 'only what it asked for');
+  await js(`(() => { const f = document.querySelector('#screen-login'); f.password.value = 'secret'; f.requestSubmit(); })()`);
+  await until(`document.querySelector('#screen-state').textContent === 'Connected' && document.querySelector('#screen-view canvas') && !document.querySelector('#screen-view').hidden`, 'the screen');
+  await until(`document.querySelector('#screen-name').textContent === 'Test Mac'`, "the computer's name");
+  assert.equal(await js(`document.querySelector('#screen-view canvas').width + 'x' + document.querySelector('#screen-view canvas').height`), '64x48');
+  assert.deepEqual((await api('GET', '/screen')).viewers.map((v) => v.who), ['this computer']);
+  assert.equal(await js(`document.querySelector('#screen-dot').hidden`), true, 'no note for your own view');
+
+  // The field for a phone's keyboard, and the keys it lacks.
+  await js(`(() => { const t = document.querySelector('#screen-type'); t.value = 'hi'; t.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+  await js(`document.querySelector('[data-screen-key="esc"]').click()`);
+  for (let i = 0; i < 50 && keys.length < 3; i++) await sleep(100);
+  assert.deepEqual(keys, [0x68, 0x69, 0xff1b]);
+
+  // The phone's way in (a stream out, POSTs in; no WebSocket there): the same viewer over it.
+  assert.equal(
+    await js(`await (async () => {
+      const { StreamChannel } = await import('/screen.js');
+      const { default: RFB } = await import('/vendor/novnc/core/rfb.js');
+      const el = document.body.appendChild(document.createElement('div'));
+      const r = new RFB(el, new StreamChannel(), { credentials: { password: 'secret' } });
+      const how = await new Promise((res) => { r.addEventListener('connect', () => res('connected')); r.addEventListener('disconnect', () => res('disconnected')); });
+      r.sendKey(0x7a, null);
+      await new Promise((res) => setTimeout(res, 300));
+      const size = el.querySelector('canvas').width;
+      r.disconnect();
+      el.remove();
+      return how + ' ' + size;
+    })()`),
+    'connected 64',
+  );
+  for (let i = 0; i < 50 && keys.length < 4; i++) await sleep(100);
+  assert.equal(keys[3], 0x7a, 'what it sends arrives');
+  await until(`(await (await fetch('/api/screen')).json()).viewers.length === 1`, 'that view gone again');
+
+  // Turn off ends the view; closing the dialog leaves nothing connected.
+  await js(`document.querySelector('#screen-off').click()`);
+  await until(`/controls the whole computer/.test(${body}) && document.querySelector('#screen-view').hidden`, 'off again');
+  for (let i = 0; i < 50 && conns; i++) await sleep(100);
+  assert.equal(conns, 0, 'the connection to the service is closed');
+  await js(`document.querySelector('#screen-dialog [data-screen="close"]').click()`);
+  await until(`!document.querySelector('#screen-dialog').open`, 'closed');
+  await api('PUT', '/screen/settings', { enabled: false, port: 5900 });
+  await new Promise((r) => vnc.close(r));
   assert.deepEqual(errors, [], 'no errors on the page');
 });
 

@@ -18,6 +18,7 @@ import { Assistant, FEATURES, featuresOf } from './assistant.js';
 import { Cleanup } from './cleanup.js';
 import { Landing } from './landing.js';
 import { PreReview } from './prereview.js';
+import { Screen } from './screen.js';
 import { Autopilot } from './autopilot.js';
 import { Goals, goalMarkdown } from './goals.js';
 import { Budgets } from './budgets.js';
@@ -104,7 +105,7 @@ function isAllowedOrigin(origin, port) {
 const PUBLIC_REMOTE_API = new Set(['POST /api/login', 'GET /api/session']);
 // Updates are not here: a signed-in device (a phone) can install the newest release too. It only
 // ever installs an official release from where this copy came from (git tag or npm) and restarts.
-const LOCAL_ONLY_API = /^\/api\/(remote(\/|$)|notify(\/|$)|hub(\/|$)|triggers(\/|$)|service$|jira(\/check)?$|isolation\/|editors$|agentkit\/connect$|agents\/[\w-]+\/open-in$|local-models\/settings$|shutdown$)/;
+const LOCAL_ONLY_API = /^\/api\/(remote(\/|$)|notify(\/|$)|hub(\/|$)|triggers(\/|$)|service$|jira(\/check)?$|isolation\/|screen\/settings$|editors$|agentkit\/connect$|agents\/[\w-]+\/open-in$|local-models\/settings$|shutdown$)/;
 const HOOK_PATH = '/api/hooks/agents';
 const REPORT_PATH = '/api/agentkit/report';
 const NO_REPO_KINDS = new Set(['general', 'assistant']);
@@ -252,6 +253,15 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
   });
   // A daily standup: each agent's news, worded for listening; the page plays it (standup.js).
   let pushStandup = () => {};
+  // This computer's screen, relayed to signed-in pages (screen.js); off until turned on here.
+  let pushScreen = () => {};
+  /** Who looks at the screen, for the note on the computer: the kind of device and its address. */
+  const viewer = (req) => {
+    if (!req.remote) return 'this computer';
+    const kind = /iPhone|iPad|Android|Macintosh|Windows|Linux/.exec(req.device?.ua ?? '')?.[0].replace('Macintosh', 'Mac');
+    return `${kind ? (/^[AEIOU]/i.test(kind) ? `an ${kind}` : `a ${kind}`) : 'a signed-in device'}${req.device?.ip ? ` (${String(req.device.ip).replace(/^::ffff:/, '')})` : ''}`;
+  };
+  const screen = new Screen({ config, onChange: (viewers) => pushScreen(viewers), log: (m) => console.log(`[agentmgr] ${m}`) });
   const standup = new Standup({
     manager,
     store,
@@ -520,6 +530,7 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
   app.use('/vendor/marked', express.static(path.join(pkgDir('marked'), 'lib')));
   app.use('/vendor/dompurify', express.static(path.join(pkgDir('dompurify'), 'dist')));
   app.use('/vendor/mermaid', express.static(path.join(pkgDir('mermaid'), 'dist')));
+  app.use('/vendor/novnc', express.static(pkgDir('@novnc/novnc')));
   app.use(express.static(path.join(__dirname, '..', 'public')));
 
   const api = express.Router();
@@ -1637,6 +1648,44 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
       return { ok: true };
     }),
   );
+  // Screen (screen.js): this computer's screen through its own screen sharing, relayed to
+  // signed-in pages. The phone has no WebSocket here (see above): a stream out, POSTs in.
+  api.get('/screen', wrap(() => screen.status()));
+  api.put('/screen/settings', wrap((req) => {
+    saveConfig({ screen: screen.change(req.body ?? {}) });
+    return screen.status();
+  }));
+  api.get('/screen/stream', (req, res) => {
+    let send = null;
+    let id;
+    try {
+      id = screen.open(
+        {
+          data: (buf) => send?.({ t: 'd', d: buf.toString('base64') }),
+          end: (reason) => {
+            send?.({ t: 'end', reason });
+            res.end();
+          },
+        },
+        viewer(req),
+      );
+    } catch (err) {
+      return res.status(err.status || 500).json({ error: err.message });
+    }
+    send = sse(req, res);
+    send({ t: 'open', id });
+    let open = true;
+    screen.watch(id, () => open);
+    req.on('close', () => {
+      open = false;
+      screen.close(id, 'The page closed it');
+    });
+  });
+  api.post('/screen/input', wrap((req) => {
+    if (typeof req.body?.id !== 'string' || typeof req.body?.d !== 'string') throw fail(400, 'id and d (base64) are required');
+    screen.write(req.body.id, Buffer.from(req.body.d, 'base64'));
+    return { ok: true };
+  }));
   plugins.mount(api, express); // /api/ext/<plugin>, behind the same checks
   app.use('/api', api);
 
@@ -1659,6 +1708,7 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
     for (const send of eventSinks) send(msg);
   };
   manager.on('change', (agent) => broadcast({ t: 'agent', agent }));
+  pushScreen = (viewers) => broadcast({ t: 'screen', viewers });
   pushStandup = (latest) => broadcast({ t: 'standup', latest });
   pushValue = () => broadcast({ t: 'value' });
   pushNews = () => broadcast({ t: 'news' });
@@ -1719,6 +1769,28 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
       eventClients.add(ws);
       ws.send(JSON.stringify({ t: 'snapshot', agents: manager.list(), backlog: backlog.view(), goals: goals.list(), projects: manager.listProjects(), races: races.list(), teams: teams.list(), built: reports.list(), rules: manager.rules.view(), repeats: repeats.view() }));
       ws.on('close', () => eventClients.delete(ws));
+      return;
+    }
+
+    if (url.pathname === '/ws/screen') {
+      let id;
+      try {
+        id = screen.open(
+          {
+            data: (buf) => ws.readyState === ws.OPEN && ws.send(buf),
+            end: (reason) => ws.close(1000, reason.slice(0, 120)),
+          },
+          viewer(req),
+        );
+      } catch (err) {
+        return ws.close(1008, err.message.slice(0, 120));
+      }
+      ws.on('message', (raw) => {
+        try {
+          screen.write(id, raw);
+        } catch {}
+      });
+      ws.on('close', () => screen.close(id, 'The page closed it'));
       return;
     }
 
@@ -1822,6 +1894,7 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
     updates.close();
     mcp.close();
     assistant.close();
+    screen.closeAll('AI Agent Manager is shutting down');
     console.log(`[agentmgr] shutting down (${reason}); closing agents so their sessions are saved`);
     builder.stopAll();
     await manager.stopAll({ final: true });

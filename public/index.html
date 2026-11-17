@@ -50,6 +50,7 @@
         <button id="mcp-btn" title="MCP: the MCP servers Claude Code has (yours, projects', claude.ai connectors and plugins), their tools, and running one in an agent's session or workspace">MCP</button>
         <button id="os-btn" title="OS: this computer and how loaded it is right now: processor, memory, disks, what each open agent session takes, and the busiest processes">OS</button>
         <button id="machine-btn" title="A terminal on this computer (your home folder), from any device you're signed in on">Terminal</button>
+        <button id="screen-btn" title="This computer's screen, to answer a pop-up or watch another program, from any device you're signed in on">Screen <span id="screen-dot" class="assistant-dot" hidden></span></button>
         <button id="ask-btn" title="A general session with no repo or folder, on Claude Code or another engine you have (Codex, Muse Code, …)">Ask Agent</button>
         <div class="menu-wrap top-more" id="top-more" hidden>
           <button id="top-more-btn" type="button" aria-haspopup="menu" aria-expanded="false">More ▾</button>
@@ -1013,6 +1014,24 @@
       </form>
     </dialog>
 
+    <dialog id="screen-dialog" class="machine-dialog screen-dialog">
+      <div class="term-bar">
+        <b class="screen-title">Screen</b>
+        <span id="screen-state" class="hint"></span>
+        <span id="screen-name" class="hint"></span>
+        <span class="spacer"></span>
+        <span id="screen-keys" class="screen-keys" hidden>
+          <input id="screen-type" class="screen-type" placeholder="Type here" aria-label="Type into the screen" autocapitalize="none" autocorrect="off" autocomplete="off" spellcheck="false" />
+          <button class="ghost small" data-screen-key="esc" title="Escape">Esc</button>
+          <button class="ghost small" data-screen-key="tab" title="Tab">Tab</button>
+          <button class="ghost small" data-screen-key="enter" title="Return">⏎</button>
+        </span>
+        <button id="screen-off" class="ghost small" data-screen="off" title="No device can reach this computer's screen until you turn it on again here" hidden>Turn off</button>
+        <button class="ghost small" data-screen="close" title="Close (ends your connection to the screen)">Close</button>
+      </div>
+      <div id="screen-body" class="screen-body"></div>
+      <div id="screen-view" class="screen-view" hidden></div>
+    </dialog>
     <dialog id="machine-dialog" class="machine-dialog">
       <div class="term-bar">
         <div class="term-tabs" id="machine-tabs" role="tablist"></div>

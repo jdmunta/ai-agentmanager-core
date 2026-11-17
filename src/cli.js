@@ -1768,6 +1768,22 @@ export async function main(argv) {
     });
 
   program
+    .command('screen')
+    .description("Screen: this computer's screen in the page, from your phone too, through the computer's own screen sharing. Whoever uses it controls the whole computer; off until turned on here")
+    .option('--on', 'let signed-in devices reach this computer\'s screen')
+    .option('--off', 'no device can; ends whoever is viewing now')
+    .option('--port <n>', "the screen sharing service's port on this computer (5900)")
+    .option('--json', 'print JSON')
+    .action(async (opts) => {
+      const patch = { ...(opts.on ? { enabled: true } : opts.off ? { enabled: false } : {}), ...(opts.port !== undefined ? { port: Number(opts.port) } : {}) };
+      const v = Object.keys(patch).length ? await api('PUT', '/screen/settings', patch) : await api('GET', '/screen');
+      if (opts.json) return console.log(JSON.stringify(v, null, 2));
+      console.log(`Screen access ${v.enabled ? green('on') : `${dim('off')} ${dim('(agentmgr screen --on)')}`}`);
+      console.log(v.listening ? dim(`Screen sharing answers on port ${v.port}`) : yellow(`Nothing answers on port ${v.port}: turn on screen sharing on this computer${v.platform === 'darwin' ? ' (System Settings → General → Sharing → Screen Sharing)' : ''}`));
+      for (const w of v.viewers) console.log(`  viewed from ${w.who} since ${new Date(w.since).toLocaleTimeString()}`);
+    });
+
+  program
     .command('rounds')
     .description("Review rounds before a pull request: critics on other models read an agent's changes when it says it is done, the agent fixes what they find, and the pull request is opened when they approve")
     .argument('[agent]', "an agent, for its rounds; without one, the settings")
