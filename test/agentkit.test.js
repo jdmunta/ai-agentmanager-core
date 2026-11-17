@@ -13,11 +13,12 @@ import { checkAgent, loadAgent } from '../src/agentkit/spec.js';
 import { cronMatches } from '../src/agentkit/triggers.js';
 import { claudeRules } from '../src/agentkit/engines.js';
 import { Builder, filesWritten, judgePrompt, snapshot, testCopy } from '../src/builder.js';
+import { readLog } from './readlog.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'agentkit-'));
 const env = { ...process.env, AGENTKIT_CLAUDE_BIN: `${process.execPath} ${path.join(here, 'fake-agentkit-claude.js')}`, FAKE_AGENTKIT_LOG: path.join(tmp, 'engine.log'), FAKE_AGENTKIT_STATE: path.join(tmp, 'engine-state.json') };
-const calls = () => fs.readFileSync(env.FAKE_AGENTKIT_LOG, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+const calls = () => readLog(env.FAKE_AGENTKIT_LOG);
 
 function makeAgent(name, extra = '') {
   const dir = path.join(tmp, name);
