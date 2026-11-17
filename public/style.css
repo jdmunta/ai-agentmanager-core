@@ -417,7 +417,9 @@ body.term-max .term-agent, .term-wrap:fullscreen .term-agent { display: inline-b
 .term-drop { position: absolute; inset: 40px 8px 8px; display: flex; align-items: center; justify-content: center; border: 2px dashed #58a6ff; border-radius: 8px; background: rgba(15, 17, 23, .82); color: #c9d1d9; font-size: 15px; pointer-events: none; z-index: 5; }
 #term-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1 1 0; color: #8b93a7; }
 .term-bar > .term-tabs { flex-shrink: 0; max-width: 70%; }
-.terminal { flex: 1; padding: 6px 8px; min-height: 0; }
+.terminal { flex: 1; padding: 6px 8px; min-height: 0; position: relative; }
+/* Shown at another view's size, the font much smaller for it (groups.js): say so, and how to end it. */
+.terminal.shrunk::after, .gterm.shrunk::after { content: 'Small to match another window or group showing this session · click here to fit it'; position: absolute; top: 6px; right: 14px; z-index: 5; padding: 3px 9px; border-radius: 6px; font-size: 12px; background: var(--accent); color: var(--accent-text); pointer-events: none; opacity: 0.92; }
 /* Browser tabs replace the terminal in the panel. */
 .browser { display: none; flex: 1; flex-direction: column; min-height: 0; background: var(--bg); }
 .term-wrap.browsing .browser { display: flex; }

@@ -1,6 +1,8 @@
 // The menu at the right of the top bar: who this runs as (Claude account, git identity, computer)
 // and the settings and preferences: Settings…, Clean up, Alerts, Remote access, About.
 
+import { TERM_FONT, termFont, setTermFont } from '/termfont.js';
+
 export function initMenu({ api, esc, toast, $ }) {
   const btn = $('#menu-btn');
   const menu = $('#menu');
@@ -23,7 +25,7 @@ export function initMenu({ api, esc, toast, $ }) {
   // Any item closes the menu; its own handler does the rest.
   menu.addEventListener('click', (e) => {
     // The theme buttons keep it open, to compare.
-    if (e.target.closest('button') && !e.target.closest('[data-theme-set]')) open(false);
+    if (e.target.closest('button') && !e.target.closest('[data-theme-set], [data-term-font]')) open(false);
   });
   $('#menu-about').onclick = () => $('#about-btn').click();
 
@@ -254,6 +256,20 @@ export function initMenu({ api, esc, toast, $ }) {
     applyTheme(b.dataset.themeSet);
   });
   applyTheme(theme());
+
+  // ------------------------------------------------------------ Terminal text size
+  const showFont = (n) => {
+    $('#term-font-now').textContent = String(n);
+    menu.querySelector('[data-term-font="-1"]').disabled = n <= TERM_FONT.min;
+    menu.querySelector('[data-term-font="1"]').disabled = n >= TERM_FONT.max;
+  };
+  menu.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-term-font]');
+    if (!b) return;
+    const step = Number(b.dataset.termFont);
+    showFont(setTermFont(step ? termFont() + step : TERM_FONT.base));
+  });
+  showFont(termFont());
 
   loadMe();
   return { loadMe };

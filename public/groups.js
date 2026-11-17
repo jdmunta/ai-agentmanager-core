@@ -6,17 +6,18 @@
 // there), with the group's picker, or by clicking an agent in the list while that group is active.
 // The layout and what each group shows are kept per browser.
 
+import { termFont } from '/termfont.js';
+
 const SAVED = 'agentmgr.groups';
 const MAX_GROUPS = 6;
 // What a terminal answers to the program's queries (cursor position, colors, focus): never typing.
 const REPLY = /^(\x1b\[[\d;?>]*[IOcRnt]|\x1b\][\d;]*[^\x07\x1b]*(\x07|\x1b\\))+$/;
 const EDGE = 0.25; // a drop this close to a group's right or bottom edge splits it
 const isShell = (k) => /^shell(:\d+)?$/.test(k ?? '');
-const FONT = 13;
 
 // One session, several views (the main panel, groups, another window): the view you type in or
 // click sets the session's size; the others show it at that size, the font scaled to fit, until
-// you type in or click one of them. `v` is { xterm, follow }.
+// you type in or click one of them (a view made much smaller says so). `v` is { xterm, follow }.
 
 /** Another view resized the session: show it at that size. */
 export function followSize(v, cols, rows, box) {
@@ -32,15 +33,29 @@ export function scaleToFit(v, box) {
   if (!v.follow || !screen?.offsetWidth || !box.clientWidth) return;
   const f = v.xterm.options.fontSize;
   const ratio = Math.min(box.clientWidth / screen.offsetWidth, box.clientHeight / screen.offsetHeight);
-  const next = Math.max(6, Math.min(FONT, Math.floor(f * ratio * 10) / 10));
+  const next = Math.max(6, Math.min(termFont(), Math.floor(f * ratio * 10) / 10));
   if (Math.abs(next - f) > 0.05) v.xterm.options.fontSize = next;
+  box.classList.toggle('shrunk', next < termFont() * 0.8);
+}
+
+/** A view on its own size again (it leads, or shows another session): its own font, no note. */
+export function ownFont(v) {
+  v.follow = false;
+  v.xterm.options.fontSize = termFont();
+  v.xterm.element?.parentElement?.classList.remove('shrunk');
+}
+
+/** The text size was changed in the menu. */
+export function newFont(v, fit, box) {
+  v.xterm.options.fontSize = termFont();
+  if (v.follow) requestAnimationFrame(() => scaleToFit(v, box));
+  else fit();
 }
 
 /** This view sets the size again: its own font, fitted to its panel, sent to the session. */
 export function leadSize(v, fit, send) {
   if (!v.follow) return;
-  v.follow = false;
-  v.xterm.options.fontSize = FONT;
+  ownFont(v);
   try {
     fit();
   } catch {}
@@ -90,7 +105,7 @@ export function initGroups({ $, esc, agents, Terminal, FitAddon, openStream, api
     const xterm = new Terminal({
       cursorBlink: true,
       fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-      fontSize: FONT,
+      fontSize: termFont(),
       scrollback: 10000,
       theme: { background: '#0f1117' },
       allowProposedApi: true,
@@ -111,6 +126,9 @@ export function initGroups({ $, esc, agents, Terminal, FitAddon, openStream, api
   }
 
   const lead = (p) => leadSize(p, () => p.fit.fit(), (m) => p.conn?.send(m));
+  window.addEventListener('agentmgr-termfont', () => {
+    for (const p of panes.values()) if (p.opened) newFont(p, () => refit(p), p.el.querySelector('.gterm'));
+  });
 
   function refit(p) {
     if (!p.opened || !p.agentId || !p.el.isConnected || p.follow) return;
@@ -142,8 +160,7 @@ export function initGroups({ $, esc, agents, Terminal, FitAddon, openStream, api
       p.opened = true;
     }
     p.failed = false;
-    p.follow = false;
-    p.xterm.options.fontSize = FONT;
+    ownFont(p);
     p.xterm.reset();
     const conn = openStream(
       { agentId: p.agentId, kind: p.kind },

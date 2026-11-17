@@ -26,7 +26,8 @@ import { initSupport } from '/support.js';
 import { initCode } from '/code.js';
 import { initMachine } from '/machine.js';
 import { initWatch } from '/watch.js';
-import { initGroups, followSize, scaleToFit, leadSize } from '/groups.js';
+import { initGroups, followSize, scaleToFit, leadSize, ownFont, newFont } from '/groups.js';
+import { termFont } from '/termfont.js';
 import { initTopNav } from '/topnav.js';
 import { initStandup } from '/standup.js';
 import { initIssues } from '/issues.js';
@@ -2699,7 +2700,7 @@ const term = {
     this.xterm = new Terminal({
       cursorBlink: true,
       fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-      fontSize: 13,
+      fontSize: termFont(),
       scrollback: 10000,
       theme: { background: '#0f1117' },
       allowProposedApi: true,
@@ -2718,6 +2719,7 @@ const term = {
     // Shown in a split-screen group too (or another window): the view typed in sets the size.
     this.xterm.onResize(({ cols, rows }) => !this.follow && this.send({ t: 'r', cols, rows }));
     new ResizeObserver(() => (this.follow ? scaleToFit(this, $('#terminal')) : this.refit())).observe($('#terminal'));
+    window.addEventListener('agentmgr-termfont', () => newFont(this, () => this.refit(), $('#terminal')));
     touchScroll($('#terminal'), this.xterm);
   },
 
@@ -2759,8 +2761,7 @@ const term = {
     this.agentId = id;
     this.kind = kind;
     this.shellExited = false;
-    this.follow = false;
-    this.xterm.options.fontSize = 13;
+    ownFont(this);
     this.xterm.reset();
     this.syncOverlay();
     requestAnimationFrame(() => this.refit());
