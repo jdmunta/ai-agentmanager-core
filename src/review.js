@@ -27,6 +27,12 @@ export function parseBaseRef(baseRef) {
   return m ? { ref: m[1], sha: m[2] } : null;
 }
 
+/** What gh itself said when a call failed: the error has the whole command before it, and a description can be many lines. */
+const ghSaid = (e, args) => {
+  const head = `${ghBin()} ${args.join(' ')} failed: `;
+  return e.message.startsWith(head) ? e.message.slice(head.length) : e.message.replace(/^\S+ [\s\S]*? failed: /, '');
+};
+
 /** The branch a pull request should target, from the ref the agent branched from. */
 export function prBase(ref) {
   if (!ref || ref === 'HEAD' || /^[0-9a-f]{7,40}$/.test(ref)) return null;
@@ -173,7 +179,7 @@ export class Review {
       await git.run(ghBin(), again ? [...args, '--edit-last'] : args, opts);
     } catch (e) {
       // The comment we edited may be gone; add a new one.
-      if (!again) throw err(502, `Posting the scorecard failed: ${e.message.replace(/^gh .*? failed: /, '')}`);
+      if (!again) throw err(502, `Posting the scorecard failed: ${ghSaid(e, args)}`);
       await git.run(ghBin(), args, opts);
     }
     const cur = this.manager.store.get(agent.id);
@@ -194,7 +200,7 @@ export class Review {
     try {
       await git.run(ghBin(), again ? [...args, '--edit-last'] : args, opts);
     } catch (e) {
-      if (!again) throw err(502, `Posting the Eval failed: ${e.message.replace(/^gh .*? failed: /, '')}`);
+      if (!again) throw err(502, `Posting the Eval failed: ${ghSaid(e, args)}`);
       await git.run(ghBin(), args, opts);
     }
     const cur = this.manager.store.get(agent.id);
@@ -275,7 +281,7 @@ export class Review {
     } catch (e) {
       const m = /https:\/\/\S+\/pull\/\d+/.exec(e.message);
       if (m && /already exists/i.test(e.message)) out = m[0];
-      else throw err(502, `Pushed, but opening the pull request failed: ${e.message.replace(/^gh .*? failed: /, '')}`);
+      else throw err(502, `Pushed, but opening the pull request failed: ${ghSaid(e, args)}`);
     }
     const url = /https:\/\/\S+\/pull\/\d+/.exec(out)?.[0];
     if (url) this.manager.addLink(agent.id, { type: 'pr', value: url });

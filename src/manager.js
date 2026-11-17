@@ -124,6 +124,7 @@ import { assignedIssues, issueFields, jiraProblem, leadingIssue, loadJira, words
 import { issueOf, issueRows } from './issues.js';
 import { askMessage, moduleBenchPrompt, resultsPath } from './benchmarks.js';
 import { designRows } from './designs.js';
+import { preReviewPrompt } from './prereview.js';
 import { reviewPath, reviewerPrompt } from './reviews.js';
 import { findingsPath, fixPath, fixerPrompt, hunterPrompt } from './bughunt.js';
 import { reminderFor, reminderSettings } from './reminders.js';
@@ -1376,6 +1377,8 @@ export class AgentManager extends EventEmitter {
       writableDir ??= dir;
       prompts.push(specPrompt(path.join(dir, path.basename(specPath(agent.id))), path.join(dir, path.basename(planPath(agent.id))), { withPlan: !agent.planReview }));
     }
+    // Its changes are reviewed in rounds before a pull request (prereview.js): it leaves opening one to that.
+    if (withBrief && !planning && this.preReview?.instructs(agent)) prompts.push(preReviewPrompt());
     if (agent.planReview && task) {
       fs.mkdirSync(briefDir(agent.id), { recursive: true });
       const file = path.join(fs.realpathSync(briefDir(agent.id)), path.basename(planPath(agent.id)));
@@ -2492,9 +2495,11 @@ export class AgentManager extends EventEmitter {
       if (finished) this.emit('finished', this.store.get(id));
       // A bug hunt's findings are checked one by one instead (bughunt.js).
       if (agent.hunting) return;
-      if (finished && this.judge.enabled) this.requestReview(id, { trigger: 'brief' }).catch(() => {});
+      // Reviewed in rounds before a pull request (prereview.js): the review and the score wait for their end.
+      const rounds = !NO_REPO.has(agent.kind) && this.changesSource && this.preReview?.brief(agent, { finished });
+      if (finished && this.judge.enabled && !rounds) this.requestReview(id, { trigger: 'brief' }).catch(() => {});
       // ...and score it for the reviewer ("scorecard": { "auto": false } in config.json turns this off).
-      if ((improved || (finished && this.config.scorecard?.auto !== false)) && !NO_REPO.has(agent.kind) && this.changesSource) this.summarize(id, 'scorecard').catch(() => {});
+      if ((improved || (finished && this.config.scorecard?.auto !== false && !rounds)) && !NO_REPO.has(agent.kind) && this.changesSource) this.summarize(id, 'scorecard').catch(() => {});
     }
     if (agent.planReview) {
       const file = loadPlanFile(id, agent.planReview);
@@ -3524,6 +3529,13 @@ export class AgentManager extends EventEmitter {
       if (agent.aiReview?.verdict && !agent.aiReview.seen) {
         items.push({ ...base, kind: 'review', key: `review:${agent.id}`, title: agent.aiReview.summary, review: agent.aiReview, at: agent.aiReview.at });
       }
+      // Review rounds that ended without approval, or failed (prereview.js).
+      if (['stalled', 'error'].includes(agent.preReview?.status)) {
+        const r = agent.preReview;
+        const open = (r.findings ?? []).filter((f) => f.status === 'open' && ['blocker', 'major'].includes(f.severity));
+        const title = r.status === 'error' ? `The review before its pull request failed: ${r.error}` : `Not approved after ${r.round} review ${r.round === 1 ? 'round' : 'rounds'}: ${open.length} ${open.length === 1 ? 'finding' : 'findings'} still open`;
+        items.push({ ...base, kind: 'prereview', key: `prereview:${agent.id}`, title, open: open.map((f) => `${f.file ? `${f.file}: ` : ''}${f.title}`), at: r.endedAt ?? r.startedAt });
+      }
       if (v.followUp) items.push({ ...base, kind: 'reminder', key: `reminder:${agent.id}`, title: v.followUp.title, reminder: v.followUp, at: v.followUp.since });
       for (const f of v.stuck) items.push({ ...base, kind: 'stuck', key: `stuck:${agent.id}:${f.key}`, title: f.title, finding: f, at: f.since });
       for (const g of v.conflicts) {
@@ -3536,7 +3548,7 @@ export class AgentManager extends EventEmitter {
     for (const r of this.rules.view().suggestions) items.push({ kind: 'rule', key: `rule:${r.repo}:${r.rule}`, title: `Always allow ${r.label}${r.everywhere ? ' in every repo' : ''}?`, priority: 2, ...r });
     // Others' items (autopilot's held backlog work).
     for (const source of this.inboxSources) items.push(...source());
-    const order = { prompt: 0, limit: 1, waiting: 1, question: 1, rule: 2, review: 2, autopilot: 2, stuck: 3, conflict: 4, reminder: 5, repeat: 5 };
+    const order = { prompt: 0, limit: 1, waiting: 1, question: 1, rule: 2, review: 2, prereview: 2, autopilot: 2, stuck: 3, conflict: 4, reminder: 5, repeat: 5 };
     return items.sort((a, b) => order[a.kind] - order[b.kind] || a.priority - b.priority);
   }
 

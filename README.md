@@ -36,6 +36,7 @@ Run one background [Claude Code](https://claude.com/claude-code) agent per inten
 - **Skills.** **Skills…** in the menu (or `agentmgr skills`) lists the Agent Skills Claude Code has here, yours and each project's, with which agents used them. Add more from a git repository (`anthropics/skills`, or any https address): you see what it offers first, with each skill's scripts flagged, then pick. A skill added here remembers its repository and commit, so **Check** says when a newer version is there and **Update** brings it; one you edited says so.
 - **Board.** **Board** in the top bar (or `B`, `#board`): every agent as a card in the column for where its work stands: starting, working, needs you, waiting, in review, done, closed. Cards move by themselves; drag one onto **Closed** to close its session, or from Closed onto **Waiting** to resume it.
 - **Lanes.** Every agent gets a range of ports and a name ending no other agent has, in its environment and its instructions, so dev servers and test databases of agents working side by side don't collide. **OS** shows what each open session listens on (`agentmgr lanes`).
+- **Review rounds before a pull request.** When an agent says it is done, critics on other models of the engine it runs on read its changes in the background and report what is wrong or missing. Their findings go to the agent's session, it fixes them, and they look again: until they approve or the rounds run out. Approved changes are committed, pushed and opened as a pull request that says what was found and fixed, so the bugs are met here and not by the pull request's reviewers. See [Review rounds](#review-rounds-before-a-pull-request).
 - **Local models.** Models served on this computer by Ollama, LM Studio, llama.cpp or MLX are found by themselves, and an agent can run on one, with the Codex CLI, OpenCode or Claude Code as the harness: no plan, no limits, nothing leaves the machine (`agentmgr models`).
 - **Lean output.** A switch in **Usage** (off by default; `agentmgr usage --lean on`): long command output (test runs, installs, builds) is trimmed before the agent reads it, so a plan's limits last longer. Colours and progress redraws go, runs of near-identical lines are folded, and of a long middle only the lines that look like errors or warnings stay; the start and end are kept, and the whole output is saved to a file the agent can read. Claude Code only, for sessions started after you switch it on. Usage shows how much was trimmed.
 - **Runbooks for support.** A runbook for the support team written from a release ticket, every ticket of an epic, or a project's code changes in a time frame: what changed, what customers may see, how to check it, troubleshooting, rollback, when to escalate, and what to confirm with engineering.
@@ -204,6 +205,7 @@ agentmgr debt <project> --scan                # the tech debt radar: files that 
 agentmgr audit <agent> --start                # security audit in its session (a scope in words, --fix "1 and 3"; no arguments: the report)
 agentmgr skills                               # Claude Code's skills here (look <repo>, add <repo> <names...>, check|update|rm <id>)
 agentmgr lanes                                # every agent's own ports and name ending (--off, --port off, --base, --size)
+agentmgr rounds [agent]                       # review rounds before a pull request: the settings, or an agent's rounds (--start, --again, --open, --stop)
 agentmgr models                               # models served on this computer (Ollama, LM Studio, llama.cpp, MLX), for --engine local
 agentmgr usage                                # each engine's plan limits: used, left, resets (--now, --lean on, --warn 80, --hold 95, --default codex)
 agentmgr runbook --ticket REL-42              # a support runbook from a release ticket (or --epic KEY, or --since 2026-10-01 -p <project>; -o file.md)
@@ -446,6 +448,32 @@ Each card has at most **three points of about 12 words each**, so they're easy t
 - **Push & open PR** pushes the branch and opens a pull request with `gh`, against the branch the agent started from (title from your text, or from the commits; **Draft** if you like). Its description carries the intent, and the spec and plan in folded sections. With a pull request already open, it pushes to it. The pull request is linked to the agent.
 
 The same from the API: `GET /api/agents/:id/changes`, `POST …/changes/comments`, `…/changes/commit`, `…/changes/pr`. Plugins can refuse a commit or a pull request (`agent.commit`, `agent.pr`).
+
+## Review rounds: before a pull request
+
+A pull request's reviewers, people or GitHub Copilot, should not be the ones who find the bugs. So an agent's changes are reviewed before there is a pull request, by models other than the one that wrote them, as many times as it takes.
+
+1. **The agent says it is done** (its brief turns to done). Review rounds start by themselves, in the background.
+2. **Critics read the diff.** Two by default, each on a different model of the engine the agent runs on, and not the model it runs on when that is known: a Claude Code agent on opus is read by sonnet and haiku, one on its default model by opus and sonnet. No other provider is needed. Each gets the diff, the task, the spec and the brief, and reports defects in the changed code: wrong results and missed cases, error handling, behavior that callers relied on, security, tests that are missing, and what the task asked for that isn't there. Every finding has a severity, the line, and the input that goes wrong. Two critics on one defect make one finding.
+3. **The findings go to the agent's session** as one message. It fixes each one, or says in its brief why a finding is wrong, runs the tests and says done again.
+4. **The critics look again**: at what they raised, and at the new diff. This repeats until no blocker or major finding is open, or the rounds run out (4 by default, 5 at most).
+5. **Approved:** the changes are committed, pushed and opened as a pull request. Its description starts with *Reviewed before opening*: the round it was approved in, by whom, and what was found and dealt with. The AI review and the scorecard are made once, of the changes that go out.
+6. **Not approved in time:** nothing is opened. It waits in your inbox with what is still open, and you choose: **Another round**, **Open the pull request anyway** (its description lists what is open), or leave it.
+
+Minor findings and nits are passed to the agent but do not hold the pull request; what is left of them is listed in its description.
+
+The agent's detail shows the rounds as they go: the round, each critic's verdict, and every finding with whether it is dealt with. **Review rounds** there starts them by hand, also with the switch off. From the command line: `agentmgr rounds <agent>` (`--start`, `--again`, `--open`, `--stop`).
+
+- **The switch** is the line under the inbox, or `agentmgr rounds --on|--off`. It is on by default.
+- **Rounds and critics:** `agentmgr rounds --rounds 5 --critics 3`. A critic that fails in a round is replaced by the next model.
+- **Other providers, if you have them.** A different provider catches different mistakes. To use one, name the critics yourself in config.json: `"preReview": { "models": [{ "engine": "codex" }, { "engine": "claude", "model": "opus" }] }`. They come first, and an engine that isn't installed is left out.
+- **Engines other than Claude Code.** The app knows Claude Code's model names. For another engine, say which of its models review: `"engines": { "codex": { "reviewModels": ["…", "…"] } }`. Without that, one critic reads each round, on the model the engine is set up with. An agent on a local model or an ACP agent is read by the engine that writes its summaries (Claude Code); with none installed, it has no review rounds.
+- **Leave the pull request to you:** `agentmgr rounds --pr off`. The rounds still run; you open it from the agent.
+- **What it costs.** Each round is one call per critic, on your own plans, and takes about a minute. A change the critics pass at once costs two calls; one that needs every round costs eight.
+- **Who it is for.** Task agents with changes of their own. Not reviewers of others' pull requests, bug hunts and their fixes, teams (they have a reviewer) or races. Backlog work on autopilot is reviewed in rounds first; autopilot opens its pull request after they approve, and holds the item when they don't.
+- Agents are told at launch to leave the pull request to the review. One that opens it anyway is still reviewed, and pushes its fixes to it.
+
+Critics judge the diff they are sent: a very large change is cut to fit and they say so. They can be wrong both ways. A finding the agent shows to be mistaken is closed by the critics in the next round; a bug no critic sees still reaches the pull request.
 
 ## Landing pull requests
 
@@ -1440,6 +1468,7 @@ State lives in `~/.agentmanager/` (`state.json`, `daemon.log`, `repos/` for shar
   "conflictRefreshSec": 60,
   "stuck": { "repeatFailures": 3, "thrashReverts": 2, "thrashEdits": 10, "driftMinutes": 20, "driftActions": 25 },
   "judge": { "enabled": true, "model": "haiku", "dailyCalls": 300 },
+  "preReview": { "enabled": true, "rounds": 4, "critics": 2, "openPr": true },
   "cleanup": { "strategy": "close", "closeAfterDays": 14, "deleteAfterDays": 14 },
   "hub": { "allow": ["view"], "projects": ["*"] }
 }

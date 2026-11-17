@@ -69,6 +69,8 @@ fs.writeFileSync(
     engines: { codex: { bin: path.join(here, 'fake-codex.js') }, antigravity: { bin: path.join(here, 'fake-agy.js') } },
     // Never this computer's own model servers: the local models test adds its own.
     localModels: { servers: { ollama: false, lmstudio: false, llamacpp: false } },
+    // Review rounds before a pull request have a test of their own, which turns them on.
+    preReview: { enabled: false },
   }),
 );
 
@@ -5491,5 +5493,100 @@ test('local models: servers found at their addresses, the models an agent can us
     for (const x of [a, g]) await call('DELETE', `/agents/${x.id}`);
   } finally {
     srv.close();
+  }
+});
+
+test('review rounds: critics on two models read finished changes, the agent fixes what they find, and the pull request opens on approval', async () => {
+  const origin = makeOrigin('rounds');
+  const ghState = path.join(home, 'fake-gh-rounds.json');
+  const ghLog = path.join(home, 'fake-gh-rounds.log');
+  const saved = { bin: process.env.AGENTMGR_GH_BIN, noGh: process.env.AGENTMGR_NO_GH, st: process.env.FAKE_GH_STATE, log: process.env.FAKE_GH_LOG, done: process.env.FAKE_DONE };
+  Object.assign(process.env, { AGENTMGR_GH_BIN: path.join(here, 'fake-gh.js'), FAKE_GH_STATE: ghState, FAKE_GH_LOG: ghLog });
+  delete process.env.AGENTMGR_NO_GH;
+  fs.writeFileSync(ghState, JSON.stringify({ prs: [] }));
+  const creates = () => (fs.existsSync(ghLog) ? fs.readFileSync(ghLog, 'utf8').trim().split('\n').map((l) => JSON.parse(l)) : []).filter((c) => c[0] === 'pr' && c[1] === 'create');
+  const state = async (id, status, label) => waitFor(async () => ((await agentNow(id)).preReview?.status === status ? agentNow(id) : null), 30000, label);
+  const ids = [];
+  try {
+    // Off in these tests until now; the settings are checked.
+    assert.equal((await call('GET', '/prereview')).body.enabled, false);
+    for (const bad of [{ rounds: 9 }, { rounds: 0 }, { critics: 4 }, { models: [{ engine: 'nope' }] }, { models: 'opus' }]) assert.equal((await call('PUT', '/prereview', bad)).status, 400, JSON.stringify(bad));
+    const set = (await call('PUT', '/prereview', { enabled: true, rounds: 3, critics: 2, models: [{ engine: 'claude', model: 'opus' }, { engine: 'claude', model: 'sonnet' }] })).body;
+    assert.deepEqual([set.enabled, set.rounds, set.critics, set.openPr, set.maxRounds], [true, 3, 2, true, 5]);
+    assert.ok(set.engines.some((e) => e.id === 'claude'));
+
+    // An agent with a bug both critics see, one only one of them sees, and a nit.
+    const [a] = (await call('POST', '/agents', { intent: 'Add a divider #done', repo: `file://${origin}`, start: false })).body;
+    ids.push(a.id);
+    const ready = await waitFor(async () => ((await agentNow(a.id)).status === 'stopped' ? agentNow(a.id) : null), 20000, 'ready');
+    assert.equal((await call('POST', `/agents/${a.id}/prereview/again`)).status, 409, 'no review to carry on with');
+    assert.equal((await call('DELETE', `/agents/${a.id}/prereview`)).status, 404);
+    const file = path.join(ready.workdir, 'divide.js');
+    fs.writeFileSync(file, 'export const divide = (a, b) => a / b; // BUG: b is zero\n// SONNETBUG: no test for negative numbers\n// NIT: the name d is short\n');
+    await call('POST', `/agents/${a.id}/start`);
+    // It says done: round one runs in the background, and what was found goes to its session.
+    const one = await state(a.id, 'fixing', 'round one sent to the agent');
+    assert.deepEqual([one.preReview.round, one.preReview.max, one.preReview.rounds.length], [1, 3, 1]);
+    assert.deepEqual(one.preReview.rounds[0].critics.map((c) => [c.by, c.verdict]), [['Claude Code (opus)', 'changes'], ['Claude Code (sonnet)', 'changes']]);
+    assert.deepEqual(one.preReview.findings.map((f) => [f.id, f.severity, f.file, f.title, f.by.length, f.status]), [
+      ['R1-1', 'major', 'divide.js', 'b is zero', 2, 'open'],
+      ['R1-2', 'major', 'divide.js', 'no test for negative numbers', 1, 'open'],
+      ['R1-3', 'nit', 'divide.js', 'the name d is short', 2, 'open'],
+    ]);
+    assert.ok(one.outbox >= 1, 'the findings are queued for its session');
+    assert.equal(one.docs?.scorecard?.data ?? null, null, 'the score waits for the rounds');
+    assert.equal(creates().length, 0, 'no pull request yet');
+    // It was told at launch to leave the pull request to the review.
+    const launches = fs.readFileSync(process.env.FAKE_CLAUDE_LOG, 'utf8').trim().split('\n').map((l) => JSON.parse(l)).filter((l) => l.cwd === fs.realpathSync(ready.workdir) && l.args);
+    assert.ok(launches.some((l) => JSON.stringify(l.args).includes('do not open a pull request yourself')));
+    // Asking again while it fixes is refused; the list of what needs you doesn't have it.
+    assert.equal((await call('POST', `/agents/${a.id}/prereview/open`)).status, 409, 'still under way');
+    assert.ok(!(await call('GET', '/inbox')).body.some((i) => i.kind === 'prereview'));
+
+    // It fixes the bugs (the nit stays) and says done again: round two approves, and the pull request is opened.
+    await call('POST', `/agents/${a.id}/stop`);
+    await waitFor(async () => !(await agentNow(a.id)).runtime.running, 8000, 'stopped');
+    fs.writeFileSync(file, 'export const divide = (a, b) => (b === 0 ? null : a / b);\n// NIT: the name d is short\n');
+    process.env.FAKE_DONE = '1';
+    await call('POST', `/agents/${a.id}/start`);
+    const two = await waitFor(async () => ((await agentNow(a.id)).preReview?.pr ? agentNow(a.id) : null), 60000, 'approved and opened');
+    assert.deepEqual([two.preReview.status, two.preReview.round, two.preReview.rounds.map((r) => [r.raised, r.open])], ['approved', 2, [[3, 2], [0, 0]]]);
+    assert.deepEqual(two.preReview.findings.map((f) => [f.id, f.status, f.resolvedIn ?? null]), [['R1-1', 'resolved', 2], ['R1-2', 'resolved', 2], ['R1-3', 'open', null]]);
+    const [create] = creates();
+    const body = create[create.indexOf('--body') + 1];
+    assert.match(body, /^### Reviewed before opening\n\nApproved in round 2 of 3 by Claude Code \(opus\) and Claude Code \(sonnet\)\. 2 of 3 findings were dealt with before this was opened\./);
+    assert.match(body, /Smaller things left as they are:\n\n- nit · `divide\.js`: the name d is short/);
+    assert.match(body, /<summary>Found and dealt with \(2\)<\/summary>\n\n- major · `divide\.js`: b is zero/);
+    assert.match(body, /### Review scorecard: /, 'scored once, after approval');
+    assert.ok(execFileSync('git', ['log', '--format=%s', '-1', 'HEAD'], { cwd: ready.workdir, encoding: 'utf8' }).trim(), 'committed');
+
+    // Out of rounds: it waits for you, with what is still open; you can open the pull request anyway.
+    await call('PUT', '/prereview', { rounds: 1 });
+    const [b] = (await call('POST', '/agents', { intent: 'Add a multiplier #done', repo: `file://${origin}`, start: false })).body;
+    ids.push(b.id);
+    const readyB = await waitFor(async () => ((await agentNow(b.id)).status === 'stopped' ? agentNow(b.id) : null), 20000, 'ready');
+    fs.writeFileSync(path.join(readyB.workdir, 'times.js'), 'export const times = (a, b) => a + b; // BUG: adds\n');
+    await call('POST', `/agents/${b.id}/start`);
+    const stalled = await state(b.id, 'stalled', 'not approved in one round');
+    assert.deepEqual([stalled.preReview.round, stalled.preReview.max, stalled.preReview.pr], [1, 1, null]);
+    const need = (await call('GET', '/inbox')).body.find((i) => i.kind === 'prereview' && i.agentId === b.id);
+    assert.equal(need.title, 'Not approved after 1 review round: 1 finding still open');
+    assert.deepEqual(need.open, ['times.js: adds']);
+    const opened = (await call('POST', `/agents/${b.id}/prereview/open`)).body;
+    assert.equal(opened.preReview.status, 'opened');
+    assert.match(opened.preReview.pr, /\/pull\/\d+$/);
+    const bodyB = creates()[1][creates()[1].indexOf('--body') + 1];
+    assert.match(bodyB, /Not approved after 1 round \(Claude Code \(opus\), Claude Code \(sonnet\)\): opened anyway\.\n\n\*\*Still open:\*\*\n\n- major · `times\.js`: adds/);
+    assert.ok(!(await call('GET', '/inbox')).body.some((i) => i.kind === 'prereview' && i.agentId === b.id));
+    // On request: from round one again; stopped, it stays stopped.
+    assert.equal((await call('POST', `/agents/${b.id}/prereview`)).body.preReview.status, 'reviewing');
+    assert.equal((await call('DELETE', `/agents/${b.id}/prereview`)).body.preReview.status, 'stopped');
+  } finally {
+    await call('PUT', '/prereview', { enabled: false, rounds: 4, models: [] });
+    for (const id of ids) await call('DELETE', `/agents/${id}`);
+    for (const [k, val] of [['AGENTMGR_GH_BIN', saved.bin], ['AGENTMGR_NO_GH', saved.noGh], ['FAKE_GH_STATE', saved.st], ['FAKE_GH_LOG', saved.log], ['FAKE_DONE', saved.done]]) {
+      if (val === undefined) delete process.env[k];
+      else process.env[k] = val;
+    }
   }
 });

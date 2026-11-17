@@ -583,6 +583,10 @@ dialog::backdrop { background: rgba(0, 0, 0, .45); }
 .need.conflict .need-kind { color: #8e59ff; }
 .need.waiting .need-kind { color: var(--red); }
 .need.review .need-kind { color: var(--green); }
+.need.prereview .need-kind { color: var(--yellow); }
+/* Review rounds before a pull request */
+.explain.rounds .checks { margin: 4px 0; }
+.explain.rounds .checks code { font-size: 11.5px; }
 /* The AI judge */
 .tag.ai { font-size: 10.5px; font-weight: 600; color: var(--accent); background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px; padding: 0 6px; white-space: nowrap; }
 .verdict.complete { color: var(--green); font-weight: 600; }

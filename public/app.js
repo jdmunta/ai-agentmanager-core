@@ -553,6 +553,36 @@ function explainBox(a) {
   return { button, box };
 }
 
+/** Review rounds before a pull request (prereview.js): where they stand, each round, and what was found. */
+const ROUNDS_HOLD = new Set(['blocker', 'major']);
+function roundsBox(a) {
+  const r = a.preReview;
+  if (noRepo(a) || !r) return '';
+  const open = (r.findings ?? []).filter((f) => f.status === 'open');
+  const hold = open.filter((f) => ROUNDS_HOLD.has(f.severity));
+  const state = {
+    reviewing: `<span class="verdict partial">Round ${r.round} of ${r.max}</span> Critics are reading the changes…`,
+    fixing: `<span class="verdict partial">Round ${r.round} of ${r.max}</span> The agent is fixing ${hold.length} ${hold.length === 1 ? 'finding' : 'findings'}; the critics look again when it says done.`,
+    approved: `<span class="verdict complete">✓ Approved in round ${r.round}</span> ${r.pr ? `<a href="${esc(r.pr)}" target="_blank" rel="noopener">Pull request opened</a>` : r.prError ? `The pull request was not opened: ${esc(r.prError)}` : ''}`,
+    stalled: `<span class="verdict not_done">✗ Not approved after ${r.round} ${r.round === 1 ? 'round' : 'rounds'}</span> ${hold.length} still open.`,
+    opened: `<span class="verdict partial">Not approved after ${r.round} rounds</span> ${r.pr ? `<a href="${esc(r.pr)}" target="_blank" rel="noopener">Opened anyway</a>` : 'Opened anyway.'}`,
+    stopped: '<span class="verdict">Review rounds stopped</span>',
+    error: `<span class="verdict not_done">The review failed</span> ${esc(r.error ?? '')}`,
+  }[r.status] ?? esc(r.status);
+  const finding = (f) => `<li class="${f.status === 'open' ? (ROUNDS_HOLD.has(f.severity) ? 'failed' : 'pending') : 'passed'}" title="${esc([f.why, f.fix && `Fix: ${f.fix}`, f.by?.length && `Raised by ${f.by.join(', ')}`].filter(Boolean).join('\n'))}">
+    <span class="icon">${f.status === 'open' ? (ROUNDS_HOLD.has(f.severity) ? '✗' : '○') : '✓'}</span><span><b>${esc(f.severity)}</b>${f.file ? ` <code>${esc(f.file)}</code>` : ''} ${esc(f.title)}</span></li>`;
+  const rounds = (r.rounds ?? []).map((rd) => `Round ${rd.n}: ${rd.critics.map((c) => `${esc(c.by)} ${c.error ? 'failed' : c.verdict === 'approve' ? 'approves' : 'asks for changes'}`).join(', ')}`).join(' · ');
+  const actions = [
+    ['stalled', 'error'].includes(r.status) ? '<button class="small primary" data-act="rounds-again" title="One more round: what is open goes to the agent first">Another round</button>' : '',
+    r.status === 'stalled' || (r.status === 'approved' && !r.pr) ? `<button class="small" data-act="rounds-open" title="Commit, push and open the pull request${r.status === 'stalled' ? ', with what is still open in its description' : ''}">Open the pull request${r.status === 'stalled' ? ' anyway' : ''}</button>` : '',
+    ['reviewing', 'fixing'].includes(r.status) ? '<button class="small ghost" data-act="rounds-stop" title="No more rounds for this work">Stop</button>' : '<button class="small ghost" data-act="rounds-start" title="Review the changes again, from round one">Review again</button>',
+  ].join('');
+  return `<div class="explain rounds"><p>${state}</p>
+    ${r.findings?.length ? `<ul class="checks">${r.findings.map(finding).join('')}</ul>` : ''}
+    ${rounds ? `<p class="hint">Reviewed before a pull request. ${rounds}.</p>` : '<p class="hint">Reviewed before a pull request, by other models.</p>'}
+    <div class="need-actions">${actions}</div></div>`;
+}
+
 const REVIEW_VERDICT = { complete: '✓ Complete', partial: '≈ Partly done', not_done: '✗ Not done' };
 /** The AI judge's review of the work against the intent and brief: button, and the last result once handled. */
 function reviewBox(a) {
@@ -560,6 +590,8 @@ function reviewBox(a) {
   const r = a.aiReview;
   const button = `<button class="small" data-act="review" ${r?.pending ? 'disabled' : ''}
     title="Check the work against the intent and brief: what is met, missing or risky. A separate one-off model call; runs by itself when the agent says it is done">${r?.pending ? 'Reviewing…' : 'Review with AI'}</button>${
+    a.preReview || !a.workdir ? '' : '<button class="small" data-act="rounds-start" title="Before a pull request: critics on other models read the changes, the agent fixes what they find, and they look again until they approve. Runs by itself when the agent says it is done, if review rounds are on">Review rounds</button>'
+  }${
     r?.verdict || a.prs?.some((p) => p.source !== 'mentioned' && p.state)
       ? listenHtml(`prvoice:${a.id}`, { title: 'Explain the review aloud: the PR, its checks, the AI review, the riskiest changes and what is left', label: 'Explain review' })
       : ''
@@ -1018,6 +1050,7 @@ function briefPanel(a) {
       ${resultsCard(a)}
       ${ins.box}
       ${ex.box}
+      ${roundsBox(a)}
       ${rv.box}
       <p class="hint">Problem, solution, diagram and checks appear here once the agent writes its brief.
       ${a.lastStartedAt && !a.runtime.running ? ' Agents started before this feature write one after their next resume.' : ''}</p>
@@ -1035,7 +1068,8 @@ function briefPanel(a) {
     ${resultsCard(a)}
     ${ins.box}
     ${ex.box}
-    ${rv.box}
+    ${roundsBox(a)}
+      ${rv.box}
     <div class="brief-grid">
       <section><h4>Problem</h4>${b.problem ? clamp(a, 'problem', md(b.problem)) : '<p class="hint">—</p>'}</section>
       <section><h4>Solution</h4>${b.solution ? clamp(a, 'solution', md(b.solution)) : '<p class="hint">—</p>'}</section>
@@ -1490,7 +1524,7 @@ function loadLimitEngines() {
     })
     .catch(() => (limitEngines = null));
 }
-const NEED_ORDER = { approval: 0, prompt: 0, limit: 1, waiting: 1, plan: 1, question: 1, team: 1, rule: 2, review: 2, autopilot: 2, stuck: 3, conflict: 4, reminder: 5, close: 5, repeat: 5 };
+const NEED_ORDER = { approval: 0, prompt: 0, limit: 1, waiting: 1, plan: 1, question: 1, team: 1, rule: 2, review: 2, prereview: 2, autopilot: 2, stuck: 3, conflict: 4, reminder: 5, close: 5, repeat: 5 };
 /** What an agent needs from the user. `both`: overlaps on both agents (detail), else only the one that should rebase (inbox). */
 function needsFor(a, { both = false } = {}) {
   const items = [];
@@ -1499,6 +1533,7 @@ function needsFor(a, { both = false } = {}) {
   if (a.runtime.waiting) items.push({ a, kind: 'waiting', key: `waiting:${a.id}` });
   if (a.planReview?.status === 'review') items.push({ a, kind: 'plan', key: `plan:${a.id}` });
   if (a.aiReview?.verdict && !a.aiReview.seen) items.push({ a, kind: 'review', key: `review:${a.id}` });
+  if (['stalled', 'error'].includes(a.preReview?.status)) items.push({ a, kind: 'prereview', key: `prereview:${a.id}` });
   for (const q of a.questions ?? []) if (!q.answer) items.push({ a, kind: 'question', key: `q:${a.id}:${q.id}`, q });
   for (const f of a.stuck ?? []) items.push({ a, kind: 'stuck', key: `stuck:${a.id}:${f.key}`, f });
   if (a.followUp) items.push({ a, kind: a.followUp.kind === 'close' ? 'close' : 'reminder', key: `reminder:${a.id}`, r: a.followUp });
@@ -1537,7 +1572,7 @@ function inboxItems() {
     .sort((x, y) => NEED_ORDER[x.kind] - NEED_ORDER[y.kind] || (x.a.priority ?? 2) - (y.a.priority ?? 2));
 }
 
-const NEED_LABEL = { limit: 'Limit', reminder: 'Follow up', close: 'Close session?', repeat: 'Make it a playbook?', autopilot: 'Autopilot held', rule: 'Always allow?', approval: 'Approval', team: 'Team', prompt: 'Needs input', waiting: 'Waiting on you', plan: 'Plan review', question: 'Question', review: 'AI review', stuck: 'Stuck?', conflict: 'Overlap' };
+const NEED_LABEL = { limit: 'Limit', reminder: 'Follow up', close: 'Close session?', repeat: 'Make it a playbook?', autopilot: 'Autopilot held', rule: 'Always allow?', approval: 'Approval', team: 'Team', prompt: 'Needs input', waiting: 'Waiting on you', plan: 'Plan review', question: 'Question', review: 'AI review', prereview: 'Not approved', stuck: 'Stuck?', conflict: 'Overlap' };
 /** Why the AI judge thinks so, as a small tag. */
 const aiTag = (confidence, what = 'AI') => `<span class="tag ai" title="Judged by a model from the agent's activity; your reactions tune later calls">🤖 ${what}${confidence != null ? ` ${Math.round(confidence * 100)}%` : ''}</span>`;
 /** What a permission prompt asks about: the command, file or tool. */
@@ -1635,6 +1670,16 @@ function needCard(it, { inDetail = false } = {}) {
         <button class="small ${r.missing.length ? '' : 'primary'}" data-ib="review-accept">Looks good</button>
         ${improveHtml(a).replace('small primary', 'small')}
       </div>`;
+  } else if (it.kind === 'prereview') {
+    const r = a.preReview;
+    const hold = (r.findings ?? []).filter((f) => f.status === 'open' && ROUNDS_HOLD.has(f.severity));
+    body = `<p class="need-title">${r.status === 'error' ? `The review before its pull request failed: ${esc(r.error ?? '')}` : `Its changes were not approved after ${r.round} review ${r.round === 1 ? 'round' : 'rounds'}: ${hold.length} ${hold.length === 1 ? 'finding' : 'findings'} still open`}</p>
+      ${hold.length ? `<ul class="need-files">${hold.slice(0, 6).map((f) => `<li>${f.file ? `<code>${esc(f.file)}</code> ` : ''}${esc(f.title)}</li>`).join('')}</ul>` : ''}
+      <div class="need-actions">
+        <button class="small primary" data-ib="rounds-again" title="One more round: what is open goes to the agent first">Another round</button>
+        ${r.status === 'stalled' ? '<button class="small" data-ib="rounds-open" title="Commit, push and open the pull request, with what is still open in its description">Open the pull request anyway</button>' : ''}
+        <button class="small ghost" data-ib="rounds-stop">Leave it</button>
+      </div>`;
   } else if (it.kind === 'team') {
     const t = it.t;
     body = `<p class="need-title">${t.stage === 'ready' ? `✓ The reviewer approved <b>${esc(t.name)}</b>${t.gaps ? ', with parts still missing: run a gap round?' : ''}` : `<b>${esc(t.name)}</b> needs a decision: ${esc(t.blocked?.reason ?? '')}`}</p>
@@ -1712,7 +1757,19 @@ async function loadJudge() {
   } catch {
     judgeStatus = null;
   }
+  roundsStatus = await api('GET', '/prereview').catch(() => null);
   renderInbox();
+}
+
+/** Review rounds before a pull request (prereview.js): the switch, with what a round costs. */
+let roundsStatus = null;
+function roundsLine() {
+  const r = roundsStatus;
+  if (!r) return '';
+  const text = r.enabled
+    ? `🔎 Review rounds on: when an agent says it is done, ${r.critics} ${r.critics === 1 ? 'critic' : 'critics'} on other models read its changes, it fixes what they find, and they look again (up to ${r.rounds} rounds). ${r.openPr ? 'The pull request is opened when they approve.' : ''} Each round is ${r.critics === 1 ? 'a call' : `${r.critics} calls`} on your own plan.`
+    : '🔎 Review rounds off: changes are not reviewed by other models before a pull request.';
+  return `<p class="judge-line hint">${esc(text)} <button class="small ghost" data-rounds="${r.enabled ? 'off' : 'on'}">${r.enabled ? 'Turn off' : 'Turn on'}</button></p>`;
 }
 
 function judgeLine() {
@@ -1736,7 +1793,7 @@ function renderInbox() {
     view,
     (items.length
       ? `<div class="counts"><span>${items.length} waiting on you</span></div><div class="needs inbox">${promptGroups(items).map(groupCard).join('')}${items.map((it) => needCard(it)).join('')}</div>`
-      : `<div class="empty"><p>Nothing needs you right now.</p><p>Prompts waiting for an answer, questions agents ask, agents that seem stuck and agents editing the same files show up here.</p></div>`) + judgeLine(),
+      : `<div class="empty"><p>Nothing needs you right now.</p><p>Prompts waiting for an answer, questions agents ask, agents that seem stuck and agents editing the same files show up here.</p></div>`) + judgeLine() + roundsLine(),
   );
 }
 
@@ -1750,6 +1807,14 @@ async function onNeed(e) {
       judgeStatus = await api('PUT', '/judge', { enabled: judge.dataset.judge === 'on' });
       renderInbox();
     }, judge.dataset.judge === 'on' ? 'AI judge on' : 'AI judge off');
+  }
+  const rounds = e.target.closest('[data-rounds]');
+  if (rounds) {
+    e.preventDefault();
+    return act(async () => {
+      roundsStatus = await api('PUT', '/prereview', { enabled: rounds.dataset.rounds === 'on' });
+      renderInbox();
+    }, rounds.dataset.rounds === 'on' ? 'Review rounds on' : 'Review rounds off');
   }
   const goto = e.target.closest('[data-goto]');
   if (goto) {
@@ -1846,6 +1911,12 @@ async function onNeed(e) {
       return act(async () => upsert(await api('POST', `/agents/${id}/reminder`, { action: 'dismiss' })));
     case 'waiting-dismiss':
       return act(async () => upsert(await api('POST', `/agents/${id}/waiting/dismiss`)));
+    case 'rounds-again':
+      return act(async () => upsert(await api('POST', `/agents/${id}/prereview/again`)), 'Another review round');
+    case 'rounds-open':
+      return act(async () => upsert(await api('POST', `/agents/${id}/prereview/open`)), 'Pull request opened');
+    case 'rounds-stop':
+      return act(async () => upsert(await api('DELETE', `/agents/${id}/prereview`)));
     case 'review-finish':
       return act(async () => upsert(await api('POST', `/agents/${id}/review/ack`, { action: 'finish' })), 'Sent back with the missing items');
     case 'review-accept':
@@ -3967,6 +4038,19 @@ $('#detail-body').addEventListener('click', async (e) => {
       btn.disabled = true;
       btn.textContent = 'Thinking…';
       act(async () => upsert(await api('POST', `/agents/${a.id}/insights`)));
+      break;
+    case 'rounds-start':
+      act(async () => upsert(await api('POST', `/agents/${a.id}/prereview`)), 'Critics are reading the changes');
+      break;
+    case 'rounds-again':
+      act(async () => upsert(await api('POST', `/agents/${a.id}/prereview/again`)), 'Another review round');
+      break;
+    case 'rounds-open':
+      btn.disabled = true;
+      act(async () => upsert(await api('POST', `/agents/${a.id}/prereview/open`)), 'Pull request opened');
+      break;
+    case 'rounds-stop':
+      act(async () => upsert(await api('DELETE', `/agents/${a.id}/prereview`)));
       break;
     case 'review':
       btn.disabled = true;

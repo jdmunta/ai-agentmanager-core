@@ -85,6 +85,8 @@ const DEFAULTS = {
   // Local models: servers on this computer (Ollama, LM Studio, llama.cpp, MLX) and their models, for the
   // "Local model" engine; `context` is the room Ollama gives a model for an agent (localmodels.js).
   localModels: { enabled: true, context: 32768 },
+  // Review rounds before a pull request (prereview.js): critics on other models, until they approve.
+  preReview: { enabled: true, rounds: 4, critics: 2, openPr: true },
   // AI News: the frontier labs' latest releases, summarized; see NEWS_DEFAULTS in news.js for every field.
   news: { enabled: true },
   demoPage: false,
