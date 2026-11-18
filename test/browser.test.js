@@ -510,7 +510,14 @@ test("Screen: off until turned on here, the screen sharing sign-in, the screen d
 
   // Zoom draws the screen larger and scrolls it; Move is for getting around without clicking in it.
   const drawn = () => js(`Math.round(document.querySelector('#screen-view canvas').getBoundingClientRect().width)`);
-  const fit = await drawn();
+  // The screen is scaled to the dialog a moment after it connects: wait for a size that holds.
+  let fit = 0;
+  for (let i = 0, last = -1; i < 50 && (fit === 0 || fit !== last); i++) {
+    last = fit;
+    await sleep(150);
+    fit = await drawn();
+  }
+  assert.ok(fit > 0, 'the screen is drawn');
   assert.equal(await js(`document.querySelector('#screen-move').hidden`), true, 'nothing to move around at Fit');
   await js(`document.querySelector('[data-screen-zoom="1"]').click(); document.querySelector('[data-screen-zoom="1"]').click()`);
   await until(`document.querySelector('#screen-zoom-now').textContent === '200%'`, 'zoomed');
