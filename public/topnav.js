@@ -59,6 +59,8 @@ export function initTopNav({ $ }) {
     e.stopPropagation();
     menu.hidden = !menu.hidden;
     btn.setAttribute('aria-expanded', String(!menu.hidden));
+    // On a phone the menu is longer than the screen: it ends at the bottom and scrolls.
+    if (!menu.hidden) menu.style.maxHeight = `${Math.max(120, (window.visualViewport?.height ?? innerHeight) - menu.getBoundingClientRect().top - 8)}px`;
   });
   // A button in the menu does its own thing (its handler is unchanged); then the menu closes.
   menu.addEventListener('click', () => setTimeout(close));

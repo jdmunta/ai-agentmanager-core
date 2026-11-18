@@ -427,6 +427,8 @@ function shortcut(act) {
   if (act === 'usage') return usageUi.open();
   if (act === 'skills') return skillsUi.open();
   if (act === 'today') return todayUi.open();
+  if (act === 'screen') return $('#screen-btn').click();
+  if (act === 'machine') return $('#machine-btn').click();
   if (act.startsWith('tab:')) return showTab(act.slice(4));
   return false;
 }

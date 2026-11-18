@@ -162,6 +162,15 @@ test('the top bar fits the window: the view buttons that do not fit go into More
     assert.ok(r.newOk && r.menuOk, `${w}px: New agents and the account menu are on screen`);
     if (w >= 1024) assert.ok(r.inRow >= 3, `${w}px: only ${r.inRow} buttons in the row`);
   }
+  // On a phone the menu is longer than the screen: it ends at the bottom and scrolls to its last item.
+  await width(420, 700);
+  await sleep(300);
+  await js(`document.querySelector('#top-more-btn').click()`);
+  const long = await js(`(() => { const m = document.querySelector('#top-more-menu'); const last = m.querySelector(':scope > button:last-of-type');
+    const fits = m.getBoundingClientRect().bottom <= innerHeight; const scrolls = m.scrollHeight > m.clientHeight; last.scrollIntoView({ block: 'nearest' });
+    return { fits, scrolls, lastSeen: last.getBoundingClientRect().bottom <= innerHeight }; })()`);
+  assert.deepEqual(long, { fits: true, scrolls: true, lastSeen: true });
+  await js(`document.querySelector('#top-more-btn').click()`);
   await width(1024);
   await sleep(300);
   await js(`document.querySelector('#top-more-btn').click()`);
@@ -538,6 +547,25 @@ test("Screen: off until turned on here, the screen sharing sign-in, the screen d
   await js(`document.querySelector('[data-screen-key="esc"]').click()`);
   for (let i = 0; i < 50 && keys.length < 3; i++) await sleep(100);
   assert.deepEqual(keys, [0x68, 0x69, 0xff1b]);
+  // Shortcuts from the Keys list: the modifier held, the key, then released.
+  assert.match(await js(`document.querySelector('#screen-combo').textContent`), /copy.*paste.*force quit|copy.*paste.*Alt\+F4/s);
+  await js(`(() => { const c = document.querySelector('#screen-combo'); c.value = [...c.options].find((o) => o.textContent.includes('copy')).value; c.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+  for (let i = 0; i < 50 && keys.length < 5; i++) await sleep(100);
+  const [mod, c] = keys.splice(3);
+  assert.ok([0xffeb, 0xffe3].includes(mod) && c === 0x63, `a modifier, then c: ${mod} ${c}`);
+  assert.equal(await js(`document.querySelector('#screen-combo').value`), '', 'ready for the next one');
+  // Return on a phone's keyboard, however it is reported: as a key, as a line break, or as both (sent once).
+  const ret = (how) => js(`(() => { const t = document.querySelector('#screen-type');
+    if (${JSON.stringify(how)}.includes('key')) t.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+    if (${JSON.stringify(how)}.includes('input')) t.dispatchEvent(new InputEvent('beforeinput', { inputType: 'insertLineBreak', bubbles: true, cancelable: true })); })()`);
+  await ret('key');
+  await sleep(150);
+  await ret('input');
+  await sleep(150);
+  await ret('key input');
+  for (let i = 0; i < 50 && keys.length < 6; i++) await sleep(100);
+  await sleep(300);
+  assert.deepEqual(keys.splice(3), [0xff0d, 0xff0d, 0xff0d]);
 
   // The phone's way in (a stream out, POSTs in; no WebSocket there): the same viewer over it.
   assert.equal(
