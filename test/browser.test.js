@@ -519,22 +519,6 @@ test("Screen: off until turned on here, the screen sharing sign-in, the screen d
   assert.deepEqual((await api('GET', '/screen')).viewers.map((v) => v.who), ['this computer']);
   assert.equal(await js(`document.querySelector('#screen-dot').hidden`), true, 'no note for your own view');
 
-  // A click, and a finger's tap, land where they point on the computer's screen.
-  const at = await js(`(() => { const r = document.querySelector('#screen-view canvas').getBoundingClientRect(); return { x: r.left + r.width / 4, y: r.top + r.height / 2 }; })()`);
-  for (const type of ['mousePressed', 'mouseReleased']) await send('Input.dispatchMouseEvent', { type, x: at.x, y: at.y, button: 'left', clickCount: 1 });
-  for (let i = 0; i < 30 && clicks.length < 1; i++) await sleep(100);
-  assert.deepEqual(clicks.splice(0).map(([b, x, y]) => [b, Math.round(x / 4), Math.round(y / 4)])[0], [1, 4, 6], 'a click');
-  await js(`(() => { window.__rings = 0; new MutationObserver((ms) => { for (const m of ms) for (const n of m.addedNodes) if (n.className === 'screen-tap') window.__rings++; }).observe(document.querySelector('#screen-dialog'), { childList: true }); document.querySelector('#screen-type').focus(); })()`);
-  await send('Emulation.setTouchEmulationEnabled', { enabled: true });
-  await send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: at.x, y: at.y }] });
-  await sleep(60);
-  await send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
-  assert.equal(await js(`window.__rings`), 1, 'a ring where the tap landed');
-  for (let i = 0; i < 30 && clicks.length < 1; i++) await sleep(100);
-  await send('Emulation.setTouchEmulationEnabled', { enabled: false });
-  assert.deepEqual(clicks.splice(0).map(([b, x, y]) => [b, Math.round(x / 4), Math.round(y / 4)])[0], [1, 4, 6], 'a tap');
-  assert.equal(await js(`document.activeElement.id`), 'screen-type', "the tap left the phone's keyboard open");
-
   // Zoom draws the screen larger and scrolls it; Move is for getting around without clicking in it.
   const drawn = () => js(`Math.round(document.querySelector('#screen-view canvas').getBoundingClientRect().width)`);
   // The screen is scaled to the dialog a moment after it connects: wait for a size that holds.
@@ -559,6 +543,22 @@ test("Screen: off until turned on here, the screen sharing sign-in, the screen d
   for (let i = 0; i < 30 && Math.abs((await drawn()) - fit) > 3; i++) await sleep(100);
   assert.equal(await js(`document.querySelector('#screen-zoom-now').textContent + document.querySelector('.screen-pan').hidden + document.querySelector('#screen-move').hidden`), 'Fittruetrue');
   assert.ok(Math.abs((await drawn()) - fit) <= 3, 'back to the whole screen');
+
+  // A click, and a finger's tap, land where they point on the computer's screen.
+  const at = await js(`(() => { const r = document.querySelector('#screen-view canvas').getBoundingClientRect(); return { x: r.left + r.width / 4, y: r.top + r.height / 2 }; })()`);
+  for (const type of ['mousePressed', 'mouseReleased']) await send('Input.dispatchMouseEvent', { type, x: at.x, y: at.y, button: 'left', clickCount: 1 });
+  for (let i = 0; i < 30 && clicks.length < 1; i++) await sleep(100);
+  assert.deepEqual(clicks.splice(0).map(([b, x, y]) => [b, Math.round(x / 4), Math.round(y / 4)])[0], [1, 4, 6], 'a click');
+  await js(`(() => { window.__rings = 0; new MutationObserver((ms) => { for (const m of ms) for (const n of m.addedNodes) if (n.className === 'screen-tap') window.__rings++; }).observe(document.querySelector('#screen-dialog'), { childList: true }); document.querySelector('#screen-type').focus(); })()`);
+  await send('Emulation.setTouchEmulationEnabled', { enabled: true });
+  await send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: at.x, y: at.y }] });
+  await sleep(60);
+  await send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  assert.equal(await js(`window.__rings`), 1, 'a ring where the tap landed');
+  for (let i = 0; i < 30 && clicks.length < 1; i++) await sleep(100);
+  await send('Emulation.setTouchEmulationEnabled', { enabled: false });
+  assert.deepEqual(clicks.splice(0).map(([b, x, y]) => [b, Math.round(x / 4), Math.round(y / 4)])[0], [1, 4, 6], 'a tap');
+  assert.equal(await js(`document.activeElement.id`), 'screen-type', "the tap left the phone's keyboard open");
 
   // The field for a phone's keyboard, and the keys it lacks.
   await js(`(() => { const t = document.querySelector('#screen-type'); t.value = 'hi'; t.dispatchEvent(new Event('input', { bubbles: true })); })()`);
