@@ -106,7 +106,8 @@ a:hover { text-decoration: underline; }
 .top-more { position: static; }
 #top-more-btn.has-news::after { content: ''; display: inline-block; width: 7px; height: 7px; margin-left: 6px; border-radius: 50%; background: var(--accent); vertical-align: middle; }
 #top-more-menu { position: fixed; top: auto; right: 16px; margin-top: 6px; min-width: 200px; }
-#top-more-menu > button { display: flex; align-items: center; gap: 8px; }
+#top-more-menu { overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
+#top-more-menu > button { display: flex; align-items: center; gap: 8px; flex: none; }
 
 /* ---------- controls */
 button {
@@ -1818,3 +1819,4 @@ table.eval-items tr.eval-na td { color: var(--muted); }
 .screen-note { border-left: 3px solid var(--warn, #d9a441); padding: 2px 10px; margin: 10px 0; }
 .screen-note code { display: block; overflow-wrap: anywhere; user-select: all; }
 .screen-login .screen-show input { display: inline; width: auto; margin: 0 4px 0 0; }
+.screen-combo { width: 74px; padding: 2px 4px; font-size: 13px; background: #161a22; color: #c9d1d9; border: 1px solid #30363d; border-radius: 6px; }

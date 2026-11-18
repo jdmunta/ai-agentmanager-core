@@ -885,7 +885,7 @@ It does not capture the screen itself. The computer's own screen sharing does, a
 2. On the computer itself: **Screen → Turn on** (or `agentmgr screen --on`).
 3. From any signed-in device: **Screen → Connect**, and sign in with your Mac user name and password when the Mac asks. They go to the Mac's screen sharing and are not kept.
 
-On a phone, the bar has a **Type here** field for the keyboard, and **Esc**, **Tab** and **⏎**. **−** and **+** zoom in up to 400% (the button between them goes back to **Fit**); zoomed in, **Move** lets a drag move around the screen instead of clicking in it. The sign-in has **Show the password**, for a password typed on a phone.
+On a phone, the bar has a **Type here** field for the keyboard, and **Esc**, **Tab** and **⏎**. **−** and **+** zoom in up to 400% (the button between them goes back to **Fit**); zoomed in, **Move** lets a drag move around the screen instead of clicking in it. The sign-in has **Show the password**, for a password typed on a phone. **Keys…** sends shortcuts and keys a phone's keyboard does not have: ⌘Space, ⌘Tab, copy, paste, undo, close, quit, force quit, the arrows and delete. With a keyboard, `Shift+S` opens Screen and `Shift+T` the Terminal on this computer.
 
 A Mac with **Remote Management** on (instead of plain Screen Sharing) lets in only the users listed under **Sharing → Remote Management → ⓘ**, and refuses anyone else as if the password were wrong. The Screen dialog says so when this computer's user is not listed, with the command that adds it.
 

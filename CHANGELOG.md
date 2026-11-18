@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.57.2 (2026-11-18)
+
+- **The More menu scrolls on a phone.** It was longer than the screen and cut off, so its last items (Terminal, Screen) could not be reached. It now ends at the bottom of the screen and scrolls.
+- **Screen: Return from a phone's keyboard.** Letters typed in **Type here** arrived but Return did not: it was sent only when the phone reported it as a key press. It is now sent however the phone reports it, once; delete the same.
+- **Screen: Keys….** A list in the bar sends shortcuts and keys a phone's keyboard does not have: ⌘Space, ⌘Tab, ⌘`, copy, paste, cut, select all, undo, save, close window, quit, force quit, the arrows, delete and Space (Ctrl and Alt ones where the computer is not a Mac). Not yet tried against a real Mac: Command is sent as the Super key.
+- **Shortcuts:** `Shift+S` opens Screen and `Shift+T` the Terminal on this computer; both are in the **?** list.
+
 ## 1.57.1 (2026-11-18)
 
 - **Screen: zoom.** **−** and **+** in the bar draw the screen at 150% to 400%, and the button between them goes back to **Fit**. Zoomed in, **Move** lets a drag move around the screen; with it off, a tap clicks in the computer as before.

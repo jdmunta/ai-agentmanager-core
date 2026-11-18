@@ -90,6 +90,32 @@ const keysymOf = (ch) => {
   return cp < 0x100 ? cp : 0x01000000 + cp;
 };
 
+// Shortcuts for the bar's Keys list. On a Mac the screen sharing service takes Super as Command
+// and Alt as Option.
+const MOD = { cmd: 0xffeb, ctrl: 0xffe3, alt: 0xffe9, shift: 0xffe1 };
+const key = (ch) => ch.codePointAt(0);
+const COMBOS = (mac) => {
+  const m = mac ? 'cmd' : 'ctrl';
+  const sign = mac ? '⌘' : 'Ctrl+';
+  return [
+    ...(mac ? [['⌘Space · Spotlight', ['cmd'], 0x20], ['⌘Tab · switch app', ['cmd'], KEYS.tab], ['⌘` · next window', ['cmd'], key('`')]] : [['Alt+Tab · switch window', ['alt'], KEYS.tab]]),
+    [`${sign}C · copy`, [m], key('c')],
+    [`${sign}V · paste`, [m], key('v')],
+    [`${sign}X · cut`, [m], key('x')],
+    [`${sign}A · select all`, [m], key('a')],
+    [`${sign}Z · undo`, [m], key('z')],
+    [`${sign}S · save`, [m], key('s')],
+    [`${sign}W · close window`, [m], key('w')],
+    ...(mac ? [['⌘Q · quit app', ['cmd'], key('q')], ['⌥⌘Esc · force quit', ['alt', 'cmd'], KEYS.esc]] : [['Alt+F4 · close', ['alt'], 0xffc1]]),
+    ['↑', [], KEYS.up],
+    ['↓', [], KEYS.down],
+    ['←', [], KEYS.left],
+    ['→', [], KEYS.right],
+    ['⌫ · delete', [], KEYS.back],
+    ['Space', [], 0x20],
+  ];
+};
+
 export function initScreen({ api, esc, toast, $ }) {
   const dialog = $('#screen-dialog');
   const body = $('#screen-body');
@@ -248,6 +274,8 @@ export function initScreen({ api, esc, toast, $ }) {
     mine.addEventListener('connect', () => {
       if (rfb !== mine) return;
       state.textContent = 'Connected';
+      combos = COMBOS(status?.platform === 'darwin');
+      combo.innerHTML = '<option value="">Keys…</option>' + combos.map(([label], i) => `<option value="${i}">${esc(label)}</option>`).join('');
       render();
       layout(false);
       mine.focus();
@@ -304,18 +332,41 @@ export function initScreen({ api, esc, toast, $ }) {
     }
   });
 
+  // Shortcuts and keys a phone's keyboard does not have: held in order, released in reverse.
+  let combos = [];
+  const combo = $('#screen-combo');
+  combo.addEventListener('change', () => {
+    const picked = combos[combo.value];
+    combo.value = '';
+    if (!picked || !rfb) return;
+    const [, mods, sym] = picked;
+    for (const m of mods) rfb.sendKey(MOD[m], null, true);
+    rfb.sendKey(sym, null);
+    for (const m of [...mods].reverse()) rfb.sendKey(MOD[m], null, false);
+  });
+
   // A phone has no keyboard until a field is focused: what is typed here is sent key by key.
   const typed = $('#screen-type');
   typed.addEventListener('input', () => {
     if (rfb) for (const ch of typed.value) rfb.sendKey(keysymOf(ch), null);
     typed.value = '';
   });
+  let keyAt = 0; // when a key below was last sent, so it is not sent twice
   typed.addEventListener('keydown', (e) => {
     const k = { Enter: 'enter', Backspace: 'back', Tab: 'tab', Escape: 'esc' }[e.key];
     if (!k || !rfb) return;
     e.preventDefault();
     e.stopPropagation();
+    keyAt = Date.now();
     rfb.sendKey(KEYS[k], null);
+  });
+  // A phone's keyboard does not always say which key it was in keydown: Return and delete also
+  // arrive as what they would do to the field.
+  typed.addEventListener('beforeinput', (e) => {
+    const k = { insertLineBreak: 'enter', insertParagraph: 'enter', deleteContentBackward: 'back' }[e.inputType];
+    if (!k || !rfb) return;
+    e.preventDefault();
+    if (Date.now() - keyAt > 80) rfb.sendKey(KEYS[k], null);
   });
 
   // Esc belongs to the screen while it is shown, not to the dialog.
