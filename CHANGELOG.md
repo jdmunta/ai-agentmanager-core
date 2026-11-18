@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.57.3 (2026-11-18)
+
+- **Screen: taps from a phone.** A tap did nothing on a Mac. It was sent as move, press and release in the same instant; it is now spaced out as a hand on a mouse would, and a ring shows where the tap landed, so you can see the page took it. Not yet confirmed against a real Mac from a phone.
+- **Screen: the phone's keyboard stays open.** A tap in the screen closed it, so every word meant going back to **Type here**. Now tap **Type here** once, then tap a field on the computer and type. A mouse click still gives the screen the focus, for the computer's own keyboard.
+- **Screen: above the keyboard.** While the phone's keyboard is up, the dialog is the part of the page above it, so the screen is not hidden behind it. Not tried on a phone yet.
+
 ## 1.57.2 (2026-11-18)
 
 - **The More menu scrolls on a phone.** It was longer than the screen and cut off, so its last items (Terminal, Screen) could not be reached. It now ends at the bottom of the screen and scrolls.

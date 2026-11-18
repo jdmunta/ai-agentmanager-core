@@ -268,6 +268,40 @@ export function initScreen({ api, esc, toast, $ }) {
     const mine = new RFB(stage, REMOTE ? new StreamChannel() : `ws://${location.host}/ws/screen`);
     rfb = mine;
     mine.scaleViewport = true;
+    // A finger: the screen must not take the focus from Type here, or the phone's keyboard closes
+    // at every tap. With it open you tap a field on the computer and type, as in a terminal here.
+    // A tap is sent by noVNC as move, press and release in the same instant, which a Mac does not
+    // take as a click. Spaced out as a hand on a mouse would, with a ring where the tap landed so
+    // you can see the page took it.
+    const tap = mine._handleTapEvent?.bind(mine);
+    const button = mine._handleMouseButton;
+    if (tap && button) {
+      mine._handleTapEvent = (ev, bmask) => {
+        const calls = [];
+        mine._handleMouseButton = (...args) => calls.push(args);
+        try {
+          tap(ev, bmask);
+        } finally {
+          mine._handleMouseButton = button;
+        }
+        calls.forEach((args, i) => setTimeout(() => rfb === mine && button.apply(mine, args), 50 + i * 100));
+        const ring = document.createElement('div');
+        ring.className = 'screen-tap';
+        ring.style.left = `${ev.detail.clientX}px`;
+        ring.style.top = `${ev.detail.clientY}px`;
+        dialog.append(ring);
+        setTimeout(() => ring.remove(), 450);
+      };
+    }
+    // A mouse still gives the screen the focus, for the computer's own keyboard.
+    let touched = 0;
+    stage.addEventListener('touchstart', () => {
+      touched = Date.now();
+      mine.focusOnClick = false;
+    }, { capture: true, passive: true });
+    stage.addEventListener('mousedown', () => {
+      if (Date.now() - touched > 1000) mine.focusOnClick = true;
+    }, { capture: true });
     mine.background = '#0f1117';
     mine.addEventListener('credentialsrequired', (e) => rfb === mine && askCredentials(e.detail?.types ?? ['password']));
     mine.addEventListener('securityfailure', (e) => rfb === mine && drop(e.detail?.reason ? `Sign-in refused: ${e.detail.reason}` : 'Sign-in refused: check the user name and password'));
@@ -368,6 +402,18 @@ export function initScreen({ api, esc, toast, $ }) {
     e.preventDefault();
     if (Date.now() - keyAt > 80) rfb.sendKey(KEYS[k], null);
   });
+
+  // The phone's keyboard covers the lower half of the page: while it is up, the dialog is the part
+  // above it, so the whole screen stays in view.
+  const vv = window.visualViewport;
+  function aboveKeyboard() {
+    const up = dialog.open && vv && innerHeight - vv.height > 120;
+    dialog.style.height = up ? `${Math.round(vv.height)}px` : '';
+    dialog.style.top = up ? `${Math.round(vv.offsetTop)}px` : '';
+    dialog.style.bottom = up ? 'auto' : '';
+  }
+  vv?.addEventListener('resize', aboveKeyboard);
+  vv?.addEventListener('scroll', aboveKeyboard);
 
   // Esc belongs to the screen while it is shown, not to the dialog.
   dialog.addEventListener('cancel', (e) => rfb && e.preventDefault());
