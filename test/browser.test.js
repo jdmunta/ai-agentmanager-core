@@ -421,13 +421,20 @@ test('review rounds and the AI judge: switches at the top of the inbox, and thei
   assert.deepEqual(errors, [], 'no errors on the page');
 });
 
-test("Screen: off until turned on here, the screen sharing sign-in, the screen drawn, typing sent, and Turn off", { skip }, async () => {
+test("Screen: off until turned on here, the screen sharing sign-in, the screen drawn, typing sent, and Turn off", { skip }, async (t) => {
   const net = await import('node:net');
+  const socks = new Set();
+  // A failed check must not leave the stand-in listening: the run would never end.
+  t.after(() => {
+    for (const s of socks) s.destroy();
+    vnc.close();
+  });
   // A stand-in screen sharing service (RFB 3.8, password sign-in): a 64x48 screen named Test Mac.
   const keys = [];
   let conns = 0;
   const vnc = net.createServer((sock) => {
     conns++;
+    socks.add(sock);
     let buf = Buffer.alloc(0);
     let step = 'version';
     sock.on('error', () => {});
@@ -489,12 +496,42 @@ test("Screen: off until turned on here, the screen sharing sign-in, the screen d
   await js(`document.querySelector('[data-screen="connect"]').click()`);
   await until(`document.querySelector('#screen-login input[name="password"]')`, 'the sign-in the service asks for');
   assert.equal(await js(`document.querySelector('#screen-login input[name="username"]')`), null, 'only what it asked for');
+  // Typed blind on a phone a password goes wrong easily: it can be shown.
+  await js(`document.querySelector('#screen-login [data-screen-show]').click()`);
+  assert.equal(await js(`document.querySelector('#screen-login input[name="password"]').type`), 'text');
+  await js(`document.querySelector('#screen-login [data-screen-show]').click()`);
+  assert.equal(await js(`document.querySelector('#screen-login input[name="password"]').type`), 'password');
   await js(`(() => { const f = document.querySelector('#screen-login'); f.password.value = 'secret'; f.requestSubmit(); })()`);
   await until(`document.querySelector('#screen-state').textContent === 'Connected' && document.querySelector('#screen-view canvas') && !document.querySelector('#screen-view').hidden`, 'the screen');
   await until(`document.querySelector('#screen-name').textContent === 'Test Mac'`, "the computer's name");
   assert.equal(await js(`document.querySelector('#screen-view canvas').width + 'x' + document.querySelector('#screen-view canvas').height`), '64x48');
   assert.deepEqual((await api('GET', '/screen')).viewers.map((v) => v.who), ['this computer']);
   assert.equal(await js(`document.querySelector('#screen-dot').hidden`), true, 'no note for your own view');
+
+  // Zoom draws the screen larger and scrolls it; Move is for getting around without clicking in it.
+  const drawn = () => js(`Math.round(document.querySelector('#screen-view canvas').getBoundingClientRect().width)`);
+  // The screen is scaled to the dialog a moment after it connects: wait for a size that holds.
+  let fit = 0;
+  for (let i = 0, last = -1; i < 50 && (fit === 0 || fit !== last); i++) {
+    last = fit;
+    await sleep(150);
+    fit = await drawn();
+  }
+  assert.ok(fit > 0, 'the screen is drawn');
+  assert.equal(await js(`document.querySelector('#screen-move').hidden`), true, 'nothing to move around at Fit');
+  await js(`document.querySelector('[data-screen-zoom="1"]').click(); document.querySelector('[data-screen-zoom="1"]').click()`);
+  await until(`document.querySelector('#screen-zoom-now').textContent === '200%'`, 'zoomed');
+  for (let i = 0; i < 30 && Math.abs((await drawn()) - fit * 2) > 3; i++) await sleep(100);
+  await sleep(300); // scrollbars that take room must not change the size afterwards
+  assert.ok(Math.abs((await drawn()) - fit * 2) <= 3, `twice as large: ${await drawn()} for ${fit}`);
+  assert.equal(await js(`(() => { const v = document.querySelector('#screen-view'); return v.scrollWidth > v.clientWidth && v.scrollLeft > 0; })()`), true, 'scrolls, around the middle');
+  assert.equal(await js(`document.querySelector('.screen-pan').hidden`), true, 'a click still goes to the computer');
+  await js(`document.querySelector('#screen-move').click()`);
+  assert.equal(await js(`!document.querySelector('.screen-pan').hidden && document.querySelector('#screen-move').getAttribute('aria-pressed')`), 'true');
+  await js(`document.querySelector('#screen-zoom-now').click()`);
+  for (let i = 0; i < 30 && Math.abs((await drawn()) - fit) > 3; i++) await sleep(100);
+  assert.equal(await js(`document.querySelector('#screen-zoom-now').textContent + document.querySelector('.screen-pan').hidden + document.querySelector('#screen-move').hidden`), 'Fittruetrue');
+  assert.ok(Math.abs((await drawn()) - fit) <= 3, 'back to the whole screen');
 
   // The field for a phone's keyboard, and the keys it lacks.
   await js(`(() => { const t = document.querySelector('#screen-type'); t.value = 'hi'; t.dispatchEvent(new Event('input', { bubbles: true })); })()`);

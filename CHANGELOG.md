@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.57.1 (2026-11-18)
+
+- **Screen: zoom.** **−** and **+** in the bar draw the screen at 150% to 400%, and the button between them goes back to **Fit**. Zoomed in, **Move** lets a drag move around the screen; with it off, a tap clicks in the computer as before.
+- **Screen: show the password.** The sign-in has a **Show the password** box: typed blind on a phone, a password goes wrong easily, and the Mac only says it was refused.
+- **Screen: a Mac with Remote Management on.** Such a Mac lets in only the users on its own list and refuses anyone else as if the password were wrong. When this computer's user is not on it, the Screen dialog says so before you sign in, with where to add the user and the command that does it.
+- **Tried:** Screen now works past a real Mac's sign-in, from a real phone. Zoom, Move and the password box are tried in desktop Chrome only; the Remote Management note is not tried in a browser.
+
 ## 1.57.0 (2026-11-17)
 
 - **Screen: this computer's desktop in the page, from the phone too.** A pop-up that waits for an answer, another program you want to watch: **Screen** in the top bar shows the computer's whole screen, and your clicks, taps and typing go back to it. It works on the computer itself and on any device signed in through remote access. On a phone the bar has a **Type here** field for the keyboard, and **Esc**, **Tab** and **⏎**.

@@ -100,6 +100,39 @@ export function initScreen({ api, esc, toast, $ }) {
   let ended = null; // why the last connection ended
 
   const remote = () => document.body.classList.contains('remote');
+
+  // Zoom: the screen is drawn larger than the dialog and scrolled. A finger on it clicks in the
+  // computer, so moving around is its own mode (Move), which puts a sheet over the screen.
+  const ZOOMS = [1, 1.5, 2, 3, 4];
+  let zoom = 1;
+  let moving = false;
+  let stage = null;
+  function layout(keep = true) {
+    if (!stage) return;
+    const cx = keep && view.scrollWidth ? (view.scrollLeft + view.clientWidth / 2) / view.scrollWidth : 0.5;
+    const cy = keep && view.scrollHeight ? (view.scrollTop + view.clientHeight / 2) / view.scrollHeight : 0.5;
+    if (zoom === 1) moving = false;
+    view.classList.toggle('zoomed', zoom > 1);
+    // The outer size: scrollbars that take room must not make the screen smaller than the zoom says.
+    const w = view.offsetWidth;
+    const h = view.offsetHeight;
+    stage.style.width = `${Math.round(w * zoom)}px`;
+    stage.style.height = `${Math.round(h * zoom)}px`;
+    view.scrollLeft = cx * w * zoom - w / 2;
+    view.scrollTop = cy * h * zoom - h / 2;
+    stage.querySelector('.screen-pan').hidden = !moving;
+    $('#screen-zoom-now').textContent = zoom === 1 ? 'Fit' : `${Math.round(zoom * 100)}%`;
+    const move = $('#screen-move');
+    move.hidden = zoom === 1;
+    move.setAttribute('aria-pressed', String(moving));
+    move.classList.toggle('on', moving);
+  }
+  function setZoom(step) {
+    const at = ZOOMS.indexOf(zoom);
+    zoom = step === 0 ? 1 : ZOOMS[Math.max(0, Math.min(ZOOMS.length - 1, at + step))];
+    layout();
+  }
+  new ResizeObserver(() => layout()).observe(view);
   const others = (v = status?.viewers ?? []) => v.filter((x) => x.who !== 'this computer');
 
   /** The dot on the button: someone on another device is looking at this computer's screen. */
@@ -109,6 +142,15 @@ export function initScreen({ api, esc, toast, $ }) {
     $('#screen-dot').hidden = !far.length;
     $('#screen-btn').title = far.length ? `Screen: viewed now from ${far.map((x) => x.who).join(', ')}` : "This computer's screen, to answer a pop-up or watch another program, from any device you're signed in on";
     if (dialog.open && !rfb) render();
+  }
+
+  /** A Mac with Remote Management on refuses a user it does not list, whatever the password. */
+  function notListed() {
+    const m = status?.mac;
+    if (!m || m.allowed) return '';
+    return `<div class="screen-note"><p><b>This Mac will refuse ${esc(m.user)}, even with the right password.</b> It has Remote Management on, which lets in only the users listed there, and ${esc(m.user)} is not one of them.</p>
+      <p>On the Mac: <b>System Settings → General → Sharing → Remote Management → ⓘ</b>, add your user with Observe and Control. Or in a terminal on it (the Terminal button here will do):</p>
+      <p><code>${esc(m.fix)}</code></p></div>`;
   }
 
   function render() {
@@ -138,7 +180,7 @@ export function initScreen({ api, esc, toast, $ }) {
       return;
     }
     state.textContent = ended ? 'Ended' : 'Ready';
-    body.innerHTML = `${ended ? `<p><b>Ended:</b> ${esc(ended)}</p>` : '<h3>Ready</h3>'}
+    body.innerHTML = `${ended ? `<p><b>Ended:</b> ${esc(ended)}</p>` : '<h3>Ready</h3>'}${notListed()}
       <p class="hint">${s.platform === 'darwin' ? 'The Mac asks for your Mac user name and password next. They go to the Mac and are not kept.' : 'The computer asks for its screen sharing password next. It is not kept.'}</p>
       <p><button class="primary" data-screen="connect">${ended ? 'Connect again' : 'Connect'}</button></p>${viewed}`;
   }
@@ -175,7 +217,7 @@ export function initScreen({ api, esc, toast, $ }) {
     body.innerHTML = `<form id="screen-login" class="screen-login" autocomplete="off">
         <h3>${mac ? 'Sign in to this Mac' : 'Screen sharing password'}</h3>
         ${types.includes('username') ? `<label>${mac ? 'Mac user name' : 'User name'} <input name="username" autocapitalize="none" autocorrect="off" spellcheck="false" required /></label>` : ''}
-        ${types.includes('password') ? '<label>Password <input name="password" type="password" autocomplete="off" required /></label>' : ''}
+        ${types.includes('password') ? '<label>Password <input name="password" type="password" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" required /></label><label class="screen-show"><input type="checkbox" data-screen-show /> Show the password</label>' : ''}
         <p class="hint">Sent to the computer's screen sharing and not kept anywhere.</p>
         <p><button class="primary" type="submit">Sign in</button> <button type="button" class="ghost" data-screen="cancel">Cancel</button></p>
       </form>`;
@@ -192,8 +234,12 @@ export function initScreen({ api, esc, toast, $ }) {
     } catch (err) {
       return drop(`The viewer could not be loaded (${err.message})`);
     }
-    view.replaceChildren();
-    const mine = new RFB(view, REMOTE ? new StreamChannel() : `ws://${location.host}/ws/screen`);
+    stage = document.createElement('div');
+    stage.className = 'screen-stage';
+    stage.innerHTML = '<div class="screen-pan" hidden></div>';
+    view.replaceChildren(stage);
+    zoom = 1;
+    const mine = new RFB(stage, REMOTE ? new StreamChannel() : `ws://${location.host}/ws/screen`);
     rfb = mine;
     mine.scaleViewport = true;
     mine.background = '#0f1117';
@@ -203,6 +249,7 @@ export function initScreen({ api, esc, toast, $ }) {
       if (rfb !== mine) return;
       state.textContent = 'Connected';
       render();
+      layout(false);
       mine.focus();
     });
     mine.addEventListener('disconnect', (e) => rfb === mine && drop(e.detail?.clean ? 'The connection was closed' : 'The connection was lost, or screen access is off'));
@@ -225,9 +272,16 @@ export function initScreen({ api, esc, toast, $ }) {
     rfb?.sendCredentials(creds);
   });
 
+  // Typed blind on a phone, a password goes wrong easily: let it be seen.
+  dialog.addEventListener('change', (e) => {
+    if (e.target.matches('[data-screen-show]')) e.target.form.password.type = e.target.checked ? 'text' : 'password';
+  });
+
   dialog.addEventListener('click', async (e) => {
     const key = e.target.closest('[data-screen-key]');
     if (key && rfb) return rfb.sendKey(KEYS[key.dataset.screenKey], null);
+    const z = e.target.closest('[data-screen-zoom]');
+    if (z) return setZoom(Number(z.dataset.screenZoom));
     const b = e.target.closest('[data-screen]');
     if (!b) return;
     const what = b.dataset.screen;
@@ -240,7 +294,10 @@ export function initScreen({ api, esc, toast, $ }) {
         render();
       } else if (what === 'check') await refresh();
       else if (what === 'connect') await connect();
-      else if (what === 'cancel') drop('You cancelled the sign-in');
+      else if (what === 'move') {
+        moving = !moving;
+        layout();
+      } else if (what === 'cancel') drop('You cancelled the sign-in');
       else if (what === 'close') dialog.close();
     } catch (err) {
       toast(`Error: ${err.message}`, 6000);
