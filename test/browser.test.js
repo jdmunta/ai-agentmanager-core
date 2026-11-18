@@ -440,6 +440,7 @@ test("Screen: off until turned on here, the screen sharing sign-in, the screen d
   });
   // A stand-in screen sharing service (RFB 3.8, password sign-in): a 64x48 screen named Test Mac.
   const keys = [];
+  const clicks = []; // [buttons, x, y] while a button is down
   let conns = 0;
   const vnc = net.createServer((sock) => {
     conns++;
@@ -487,6 +488,7 @@ test("Screen: off until turned on here, the screen sharing sign-in, the screen d
           const m = need(size);
           if (!m) return;
           if (t === 4 && m[1] === 1) keys.push(m.readUInt32BE(4));
+          if (t === 5 && m[1]) clicks.push([m[1], m.readUInt16BE(2), m.readUInt16BE(4)]);
         }
       }
     });
@@ -541,6 +543,22 @@ test("Screen: off until turned on here, the screen sharing sign-in, the screen d
   for (let i = 0; i < 30 && Math.abs((await drawn()) - fit) > 3; i++) await sleep(100);
   assert.equal(await js(`document.querySelector('#screen-zoom-now').textContent + document.querySelector('.screen-pan').hidden + document.querySelector('#screen-move').hidden`), 'Fittruetrue');
   assert.ok(Math.abs((await drawn()) - fit) <= 3, 'back to the whole screen');
+
+  // A click, and a finger's tap, land where they point on the computer's screen.
+  const at = await js(`(() => { const r = document.querySelector('#screen-view canvas').getBoundingClientRect(); return { x: r.left + r.width / 4, y: r.top + r.height / 2 }; })()`);
+  for (const type of ['mousePressed', 'mouseReleased']) await send('Input.dispatchMouseEvent', { type, x: at.x, y: at.y, button: 'left', clickCount: 1 });
+  for (let i = 0; i < 30 && clicks.length < 1; i++) await sleep(100);
+  assert.deepEqual(clicks.splice(0).map(([b, x, y]) => [b, Math.round(x / 4), Math.round(y / 4)])[0], [1, 4, 6], 'a click');
+  await js(`(() => { window.__rings = 0; new MutationObserver((ms) => { for (const m of ms) for (const n of m.addedNodes) if (n.className === 'screen-tap') window.__rings++; }).observe(document.querySelector('#screen-dialog'), { childList: true }); document.querySelector('#screen-type').focus(); })()`);
+  await send('Emulation.setTouchEmulationEnabled', { enabled: true });
+  await send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: at.x, y: at.y }] });
+  await sleep(60);
+  await send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  assert.equal(await js(`window.__rings`), 1, 'a ring where the tap landed');
+  for (let i = 0; i < 30 && clicks.length < 1; i++) await sleep(100);
+  await send('Emulation.setTouchEmulationEnabled', { enabled: false });
+  assert.deepEqual(clicks.splice(0).map(([b, x, y]) => [b, Math.round(x / 4), Math.round(y / 4)])[0], [1, 4, 6], 'a tap');
+  assert.equal(await js(`document.activeElement.id`), 'screen-type', "the tap left the phone's keyboard open");
 
   // The field for a phone's keyboard, and the keys it lacks.
   await js(`(() => { const t = document.querySelector('#screen-type'); t.value = 'hi'; t.dispatchEvent(new Event('input', { bubbles: true })); })()`);

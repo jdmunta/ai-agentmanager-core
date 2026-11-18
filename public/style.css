@@ -1820,3 +1820,5 @@ table.eval-items tr.eval-na td { color: var(--muted); }
 .screen-note code { display: block; overflow-wrap: anywhere; user-select: all; }
 .screen-login .screen-show input { display: inline; width: auto; margin: 0 4px 0 0; }
 .screen-combo { width: 74px; padding: 2px 4px; font-size: 13px; background: #161a22; color: #c9d1d9; border: 1px solid #30363d; border-radius: 6px; }
+.screen-tap { position: fixed; width: 28px; height: 28px; margin: -14px 0 0 -14px; border: 2px solid #4c8dff; border-radius: 50%; pointer-events: none; z-index: 5; animation: screen-tap 0.45s ease-out forwards; }
+@keyframes screen-tap { from { transform: scale(0.4); opacity: 1; } to { transform: scale(1.4); opacity: 0; } }
