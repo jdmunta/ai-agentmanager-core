@@ -421,13 +421,20 @@ test('review rounds and the AI judge: switches at the top of the inbox, and thei
   assert.deepEqual(errors, [], 'no errors on the page');
 });
 
-test("Screen: off until turned on here, the screen sharing sign-in, the screen drawn, typing sent, and Turn off", { skip }, async () => {
+test("Screen: off until turned on here, the screen sharing sign-in, the screen drawn, typing sent, and Turn off", { skip }, async (t) => {
   const net = await import('node:net');
+  const socks = new Set();
+  // A failed check must not leave the stand-in listening: the run would never end.
+  t.after(() => {
+    for (const s of socks) s.destroy();
+    vnc.close();
+  });
   // A stand-in screen sharing service (RFB 3.8, password sign-in): a 64x48 screen named Test Mac.
   const keys = [];
   let conns = 0;
   const vnc = net.createServer((sock) => {
     conns++;
+    socks.add(sock);
     let buf = Buffer.alloc(0);
     let step = 'version';
     sock.on('error', () => {});
@@ -508,6 +515,7 @@ test("Screen: off until turned on here, the screen sharing sign-in, the screen d
   await js(`document.querySelector('[data-screen-zoom="1"]').click(); document.querySelector('[data-screen-zoom="1"]').click()`);
   await until(`document.querySelector('#screen-zoom-now').textContent === '200%'`, 'zoomed');
   for (let i = 0; i < 30 && Math.abs((await drawn()) - fit * 2) > 3; i++) await sleep(100);
+  await sleep(300); // scrollbars that take room must not change the size afterwards
   assert.ok(Math.abs((await drawn()) - fit * 2) <= 3, `twice as large: ${await drawn()} for ${fit}`);
   assert.equal(await js(`(() => { const v = document.querySelector('#screen-view'); return v.scrollWidth > v.clientWidth && v.scrollLeft > 0; })()`), true, 'scrolls, around the middle');
   assert.equal(await js(`document.querySelector('.screen-pan').hidden`), true, 'a click still goes to the computer');

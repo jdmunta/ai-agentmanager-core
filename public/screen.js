@@ -113,8 +113,9 @@ export function initScreen({ api, esc, toast, $ }) {
     const cy = keep && view.scrollHeight ? (view.scrollTop + view.clientHeight / 2) / view.scrollHeight : 0.5;
     if (zoom === 1) moving = false;
     view.classList.toggle('zoomed', zoom > 1);
-    const w = view.clientWidth;
-    const h = view.clientHeight;
+    // The outer size: scrollbars that take room must not make the screen smaller than the zoom says.
+    const w = view.offsetWidth;
+    const h = view.offsetHeight;
     stage.style.width = `${Math.round(w * zoom)}px`;
     stage.style.height = `${Math.round(h * zoom)}px`;
     view.scrollLeft = cx * w * zoom - w / 2;
