@@ -852,6 +852,15 @@ test('remote access: HTTPS, token sign-in, local-only management, SSE terminal, 
   await assert.rejects(httpsReq(rport, 'GET', '/'), /ECONNREFUSED/);
 });
 
+test('screen: the status says when a Mac with Remote Management on does not list this user', async () => {
+  const { Screen } = await import('../src/screen.js');
+  const mac = async () => ({ user: 'sam', allowed: false, fix: 'sudo kickstart …' });
+  const off = await new Screen({ config: { screen: { enabled: false, port: 1 } }, mac }).status();
+  assert.equal(off.mac, null, 'not looked up while screen access is off');
+  const on = await new Screen({ config: { screen: { enabled: true, port: 1 } }, mac }).status();
+  assert.deepEqual(on.mac, { user: 'sam', allowed: false, fix: 'sudo kickstart …' });
+});
+
 test("screen: this computer's screen sharing relayed to signed-in pages; off until turned on here; a stream and POSTs for the phone", async () => {
   const net = await import('node:net');
   // A stand-in for the screen sharing service: greets like one, then answers in upper case.

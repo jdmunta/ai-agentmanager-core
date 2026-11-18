@@ -963,8 +963,13 @@ input.inline { display: inline-block; width: 80px; padding: 1px 4px; }
 .screen-dialog #screen-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-left: 8px; }
 .screen-body { flex: 1; min-height: 0; overflow: auto; padding: 18px 20px; max-width: 640px; line-height: 1.5; }
 .screen-body h3 { margin: 0 0 8px; }
-.screen-view { flex: 1; min-height: 0; display: flex; background: #0f1117; touch-action: none; }
-.screen-view > div { flex: 1; }
+.screen-view { flex: 1; min-height: 0; overflow: hidden; background: #0f1117; }
+.screen-view.zoomed { overflow: auto; }
+.screen-stage { position: relative; width: 100%; height: 100%; }
+.screen-stage > div:not(.screen-pan) { touch-action: none; }
+.screen-pan { position: absolute; inset: 0; z-index: 2; cursor: grab; touch-action: pan-x pan-y; }
+.screen-dialog .term-bar { flex-wrap: wrap; row-gap: 4px; }
+.screen-keys button.on { background: var(--accent, #4c8dff); color: #fff; }
 .screen-keys { display: inline-flex; gap: 4px; align-items: center; }
 .screen-type { width: 110px; padding: 2px 6px; font-size: 16px; } /* 16px: iOS zooms the page for less */
 .screen-login label { display: block; margin: 8px 0; }
@@ -1810,3 +1815,6 @@ table.eval-items tr.eval-na td { color: var(--muted); }
 }
 .os-local td:first-child { white-space: normal; overflow-wrap: anywhere; }
 .os-local-no code { opacity: 0.6; }
+.screen-note { border-left: 3px solid var(--warn, #d9a441); padding: 2px 10px; margin: 10px 0; }
+.screen-note code { display: block; overflow-wrap: anywhere; user-select: all; }
+.screen-login .screen-show input { display: inline; width: auto; margin: 0 4px 0 0; }

@@ -7,7 +7,10 @@
 // Whoever uses it controls the whole computer, so it is off until turned on, and only from the
 // computer itself.
 import net from 'node:net';
+import fs from 'node:fs';
+import os from 'node:os';
 import crypto from 'node:crypto';
+import { execFile } from 'node:child_process';
 
 export const SCREEN_DEFAULTS = { enabled: false, port: 5900 };
 const HOST = '127.0.0.1'; // never another computer: this is not a way into the network
@@ -36,9 +39,26 @@ export function listening(port, ms = 800) {
   });
 }
 
+const out = (cmd, args) => new Promise((resolve) => execFile(cmd, args, { timeout: 3000 }, (err, stdout) => resolve(err ? null : String(stdout).trim())));
+const KICKSTART = '/System/Library/CoreServices/RemoteManagement/ARDAgent.app/Contents/Resources/kickstart';
+
+/**
+ * A Mac with Remote Management on (instead of plain Screen Sharing) lets in only the users listed
+ * there, and refuses everyone else as if the password were wrong. Whether this computer's user is
+ * let in: `{ user, allowed, fix }`, or null where that does not apply.
+ */
+export async function macAccess() {
+  if (process.platform !== 'darwin' || !fs.existsSync('/Library/Application Support/Apple/Remote Desktop/RemoteManagement.launchd')) return null;
+  const user = os.userInfo().username;
+  const everyone = (await out('/usr/bin/defaults', ['read', '/Library/Preferences/com.apple.RemoteManagement', 'ARD_AllLocalUsers'])) === '1';
+  const listed = /naprivs:\s*-?\d/.test((await out('/usr/bin/dscl', ['.', '-read', `/Users/${user}`, 'naprivs'])) ?? '');
+  return { user, allowed: everyone || listed, fix: `sudo ${KICKSTART} -configure -users ${user} -access -on -privs -ControlObserve` };
+}
+
 export class Screen {
-  /** `onChange(viewers)` is called when someone connects or leaves. */
-  constructor({ config, onChange = () => {}, log = () => {} }) {
+  /** `onChange(viewers)` is called when someone connects or leaves. `mac` stands in for macAccess in tests. */
+  constructor({ config, onChange = () => {}, log = () => {}, mac = macAccess }) {
+    this.mac = mac;
     this.config = config;
     this.onChange = onChange;
     this.log = log;
@@ -55,7 +75,8 @@ export class Screen {
 
   async status() {
     const s = this.settings;
-    return { ...s, platform: process.platform, listening: await listening(s.port), viewers: this.viewers() };
+    const [on, mac] = await Promise.all([listening(s.port), s.enabled ? this.mac() : null]);
+    return { ...s, platform: process.platform, listening: on, mac, viewers: this.viewers() };
   }
 
   /** From the computer itself only (the route is local-only). Turning it off ends every viewer. */
