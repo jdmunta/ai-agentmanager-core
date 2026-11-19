@@ -52,6 +52,7 @@ import { initCodeMap } from '/codemap.js';
 import { initKeys } from '/keys.js';
 import { initPalette } from '/palette.js';
 import { initFiles } from '/files.js';
+import { initUpdateView, updateHtml, updateWaits } from '/announce.js';
 import { morph } from '/morph.js';
 
 const $ = (sel) => document.querySelector(sel);
@@ -629,16 +630,17 @@ const INSIGHT_ICONS = { why: '🎯', what: '📦', how: '🛠', now: '📍' };
 
 // ------------------------------------------------------------------ stakeholder documents
 
-const DOCS = { analysis: 'Analysis', design: 'Design', flow: 'Flow', proposal: 'Proposal', humanai: 'Human vs AI', estimate: 'Estimate', documentation: 'Documentation', diagrams: 'Diagrams', scorecard: 'Scorecard' };
+const DOCS = { analysis: 'Analysis', design: 'Design', flow: 'Flow', proposal: 'Proposal', humanai: 'Human vs AI', estimate: 'Estimate', documentation: 'Documentation', diagrams: 'Diagrams', scorecard: 'Scorecard', update: 'Update' };
 // What a document is before it's written, where "Write a … document for stakeholders" doesn't say it.
 const DOC_HINTS = {
+  update: 'What to tell the people who asked: a short Slack message and a short email for you to send, and the details they point to. Written by itself when the agent finishes or opens a pull request',
   estimate: 'For planning: how long a person would take to do this work by hand, split into tasks with optimistic, likely and pessimistic hours, a suggested split into tickets, the roles needed and the risks',
   documentation: 'The documentation for this change: what is new, how to use it, configuration, upgrade notes, which docs to add or update, and an OpenAPI spec of any API changes',
 };
 /** The OpenAPI spec in a Documentation document (its ```yaml block), if the change has API changes. */
 const openApiOf = (markdown) => (markdown ?? '').match(/```ya?ml\s*\n((?:#.*\n|\s*\n)*openapi:[\s\S]*?)```/)?.[1] ?? null;
 // Optional extras that "Write all" leaves out.
-const DOC_EXTRAS = new Set(['diagrams', 'scorecard']);
+const DOC_EXTRAS = new Set(['diagrams', 'scorecard', 'update']);
 const DOC_TITLES = { ...DOCS, estimate: 'Human time estimate', eval: 'Eval', plan: 'Plan', intent: 'Intent', spec: 'Spec', designdoc: 'Design doc', benchmark: 'Benchmark' };
 // The agent's intent, spec and plan files (read from the daemon when opened; kept here by agent and kind).
 const SPEC_KINDS = { intent: 'Intent', spec: 'Spec', plan: 'Plan', designdoc: 'Design doc', benchmark: 'Benchmark' };
@@ -784,10 +786,11 @@ function renderDocDialog() {
     // The scorecard's Improve button follows the agent being improved.
     const version = docView.kind === 'scorecard' ? `${d.at}:${Boolean(a.improving)}` : d.at;
     if (body.dataset.rendered !== version) {
-      body.innerHTML = docView.kind === 'scorecard' ? scorecardHtml(d, esc, { actions: improveHtml(a) }) : d.data ? humanAiHtml(d) : docHtml(d.markdown);
+      body.innerHTML = docView.kind === 'scorecard' ? scorecardHtml(d, esc, { actions: improveHtml(a) }) : docView.kind === 'update' ? updateHtml(a, d, { esc, docHtml }) : d.data ? humanAiHtml(d) : docHtml(d.markdown);
       body.dataset.rendered = version;
       renderDiagrams(body);
     }
+    if (docView.kind === 'update') announceUi.refresh(a);
   }
   const stale = !plan && d?.markdown && a.brief?.updatedAt && d.briefUpdatedAt !== a.brief.updatedAt;
   const by = d?.writer ? ` by ${d.writer}${d.critique ? `, checked by ${d.critique.label}` : ''}${d.from ? ` from ${d.from.length ? d.from.join(', ') : "the agent's work"}` : ''}` : '';
@@ -874,6 +877,9 @@ $('#doc-body').addEventListener('submit', (e) => {
     toast(r.testCommand ? `Saved; running ${r.testCommand}${r.testRuns > 1 ? ` ${r.testRuns} times` : ''}` : 'Saved', 4000);
   });
 });
+
+// The Update document's own buttons: copy, open in mail, post to Slack, the link to its details.
+const announceUi = initUpdateView({ body: $('#doc-body'), api, toast, ago, agentOf: (id) => agents.get(id), upsert: (a) => upsert(a) });
 
 function generateDoc() {
   const { agentId, kind } = docView;
@@ -1543,7 +1549,7 @@ function loadLimitEngines() {
     })
     .catch(() => (limitEngines = null));
 }
-const NEED_ORDER = { approval: 0, prompt: 0, limit: 1, waiting: 1, plan: 1, question: 1, team: 1, rule: 2, review: 2, prereview: 2, autopilot: 2, stuck: 3, conflict: 4, reminder: 5, close: 5, repeat: 5 };
+const NEED_ORDER = { approval: 0, prompt: 0, limit: 1, waiting: 1, plan: 1, question: 1, team: 1, rule: 2, review: 2, prereview: 2, autopilot: 2, stuck: 3, conflict: 4, reminder: 5, close: 5, repeat: 5, update: 4 };
 /** What an agent needs from the user. `both`: overlaps on both agents (detail), else only the one that should rebase (inbox). */
 function needsFor(a, { both = false } = {}) {
   const items = [];
@@ -1555,6 +1561,7 @@ function needsFor(a, { both = false } = {}) {
   if (['stalled', 'error'].includes(a.preReview?.status)) items.push({ a, kind: 'prereview', key: `prereview:${a.id}` });
   for (const q of a.questions ?? []) if (!q.answer) items.push({ a, kind: 'question', key: `q:${a.id}:${q.id}`, q });
   for (const f of a.stuck ?? []) items.push({ a, kind: 'stuck', key: `stuck:${a.id}:${f.key}`, f });
+  if (updateWaits(a)) items.push({ a, kind: 'update', key: `update:${a.id}` });
   if (a.followUp) items.push({ a, kind: a.followUp.kind === 'close' ? 'close' : 'reminder', key: `reminder:${a.id}`, r: a.followUp });
   for (const g of a.conflicts ?? []) if (both || g.mergeFirst !== a.id) items.push({ a, kind: 'conflict', key: `conflict:${a.id}:${g.agent.id}`, g });
   return items;
@@ -1591,7 +1598,7 @@ function inboxItems() {
     .sort((x, y) => NEED_ORDER[x.kind] - NEED_ORDER[y.kind] || (x.a.priority ?? 2) - (y.a.priority ?? 2));
 }
 
-const NEED_LABEL = { limit: 'Limit', reminder: 'Follow up', close: 'Close session?', repeat: 'Make it a playbook?', autopilot: 'Autopilot held', rule: 'Always allow?', approval: 'Approval', team: 'Team', prompt: 'Needs input', waiting: 'Waiting on you', plan: 'Plan review', question: 'Question', review: 'AI review', prereview: 'Not approved', stuck: 'Stuck?', conflict: 'Overlap' };
+const NEED_LABEL = { update: 'Update to send', limit: 'Limit', reminder: 'Follow up', close: 'Close session?', repeat: 'Make it a playbook?', autopilot: 'Autopilot held', rule: 'Always allow?', approval: 'Approval', team: 'Team', prompt: 'Needs input', waiting: 'Waiting on you', plan: 'Plan review', question: 'Question', review: 'AI review', prereview: 'Not approved', stuck: 'Stuck?', conflict: 'Overlap' };
 /** Why the AI judge thinks so, as a small tag. */
 const aiTag = (confidence, what = 'AI') => `<span class="tag ai" title="Judged by a model from the agent's activity; your reactions tune later calls">🤖 ${what}${confidence != null ? ` ${Math.round(confidence * 100)}%` : ''}</span>`;
 /** What a permission prompt asks about: the command, file or tool. */
@@ -1734,6 +1741,12 @@ function needCard(it, { inDetail = false } = {}) {
         <textarea rows="2" data-draft="${esc(it.key)}:text">${draft('text', FOLLOW_UP)}</textarea>
         <div class="need-actions"><button class="small primary">Send</button><button type="button" class="small ghost" data-ib="terminal">Open terminal</button><button type="button" class="small ghost" data-ib="remind-close">Close session</button>${later}</div>
       </form>`}`;
+  } else if (it.kind === 'update') {
+    const d = a.docs.update;
+    const why = a.announce.auto.milestone === 'done' ? 'It is finished' : 'It opened a pull request';
+    body = `<p class="need-title">${esc(d.parts?.subject || 'An update for the people who asked')}</p>
+      <p class="hint">${why}: what to tell the people who asked is written (${ago(d.at)}), a Slack message and an email. Nothing is sent until you send it.</p>
+      <div class="need-actions"><button class="small primary" data-ib="update-open">Read and send</button><button class="small ghost" data-ib="update-dismiss" title="This one is not needed">Not needed</button></div>`;
   } else if (it.kind === 'stuck') {
     const f = it.f;
     const judged = f.ai?.verdict === 'stuck' ? aiTag(f.ai.confidence, 'confirmed') : f.ai?.verdict === 'checking' ? '<span class="tag ai">🤖 checking…</span>' : '';
@@ -1965,6 +1978,10 @@ async function onNeed(e) {
       return act(async () => upsert(await api('POST', `/agents/${id}/stop`)), 'Session closed; resume it any time');
     case 'remind-resume':
       return act(async () => upsert(await api('POST', `/agents/${id}/start`, {})), 'Resumed');
+    case 'update-open':
+      return openDoc(id, 'update');
+    case 'update-dismiss':
+      return act(async () => upsert(await api('PUT', `/agents/${id}/announce`, { dismissed: true })));
     case 'remind-later':
       return act(async () => upsert(await api('POST', `/agents/${id}/reminder`, { action: 'later' })), 'Reminding you later');
     case 'remind-dismiss':

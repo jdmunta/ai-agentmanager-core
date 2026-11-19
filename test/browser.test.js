@@ -83,7 +83,7 @@ before(async () => {
   const http = await import('node:http');
   notes = http.createServer((req, res) => res.end(req.url.endsWith('.ics') ? calIcs() : notesMd));
   await new Promise((r) => notes.listen(0, '127.0.0.1', r));
-  fs.writeFileSync(path.join(home, 'config.json'), JSON.stringify({ claudeBin: process.execPath, claudeArgs: [path.join(here, 'fake-claude.js')], updates: { check: false }, judge: { enabled: false }, localModels: { enabled: false }, preReview: { enabled: false }, shell: '/bin/sh', gitRefreshSec: 1, conflictRefreshSec: 0, engines: { codex: { bin: path.join(here, 'fake-codex.js') } }, news: { sources: [], custom: [{ id: 'local', lab: 'Anthropic', label: 'Local notes', url: `http://127.0.0.1:${notes.address().port}/notes.md` }] } }));
+  fs.writeFileSync(path.join(home, 'config.json'), JSON.stringify({ claudeBin: process.execPath, claudeArgs: [path.join(here, 'fake-claude.js')], updates: { check: false }, announce: { auto: false }, judge: { enabled: false }, localModels: { enabled: false }, preReview: { enabled: false }, shell: '/bin/sh', gitRefreshSec: 1, conflictRefreshSec: 0, engines: { codex: { bin: path.join(here, 'fake-codex.js') } }, news: { sources: [], custom: [{ id: 'local', lab: 'Anthropic', label: 'Local notes', url: `http://127.0.0.1:${notes.address().port}/notes.md` }] } }));
   daemon = spawn(process.execPath, [path.join(here, '..', 'bin', 'agentmgr.js'), 'serve'], {
     env: { ...process.env, AGENTMGR_HOME: home, AGENTMGR_PORT: String(port), AGENTMGR_REMOTE: '0', AGENTMGR_PLUGINS: '', AGENTMGR_NO_GH: '1', AGENTMGR_CLIPBOARD_FILE: path.join(home, 'clipboard.txt'), CLAUDE_CONFIG_DIR: path.join(home, 'claude'), AGENTMGR_CLAUDE_DESKTOP_DIR: path.join(home, 'claude-desktop'), FAKE_CLAUDE_LOG: path.join(home, 'fake.log') },
     stdio: 'ignore',
@@ -1317,4 +1317,69 @@ test('Inbox, one at a time: a single card with the next after it, stepped throug
   for (const a of made) await api('DELETE', `/agents/${a.id}`).catch(() => {});
   await js(`document.querySelector('[data-tab="agents"]').click()`);
   assert.deepEqual(errors, [], 'no errors on the page');
+});
+
+test('Update: written when an agent finishes, a card in the inbox, the Slack message and email to change and send, the link to the details', { skip }, async () => {
+  const http = await import('node:http');
+  const got = [];
+  const hook = http.createServer((req, res) => {
+    let b = '';
+    req.on('data', (c) => (b += c));
+    req.on('end', () => {
+      got.push(JSON.parse(b).text);
+      res.end('ok');
+    });
+  });
+  await new Promise((r) => hook.listen(0, '127.0.0.1', r));
+  await api('PUT', '/announce/slack', { webhookUrl: `http://127.0.0.1:${hook.address().port}/services/T/B/u` });
+  await api('PUT', '/announce/settings', { auto: true });
+  try {
+    const [a] = await api('POST', '/agents', { intents: ['Ship the export #done'], workdir: home });
+    const card = `document.querySelector('#inbox-view [data-need="update:${a.id}"]')`;
+    await js(`document.querySelector('[data-tab="inbox"]').click()`);
+    await until(card, 'its card in the inbox', 30_000);
+    assert.match(await js(`${card}.textContent.replace(/\\s+/g, ' ')`), /Update to send.*Ship the export #done: finished.*It is finished: what to tell the people who asked is written.*Nothing is sent until you send it/);
+    await js(`${card}.querySelector('[data-ib="update-open"]').click()`);
+    await until(`document.querySelector('#doc-dialog').open && document.querySelector('#doc-body [data-upd]')`, 'the update, open');
+    const val = (k) => js(`document.querySelector('#doc-body [data-upd-text="${k}"]').value`);
+    assert.equal(await val('slack'), '*Ship the export #done*: finished\n• Safe call.');
+    assert.equal(await val('subject'), 'Ship the export #done: finished');
+    assert.match(await val('email'), /^Hi Pat,\n\n- It is finished\./);
+    assert.equal(await val('to'), '', 'a name is not an address');
+    assert.equal(await js(`document.querySelector('#doc-body [data-upd-text="to"]').placeholder`), "Pat Lee's address");
+    assert.match(await js(`document.querySelector('#doc-body .upd-details').textContent`), /Update: .*What was asked.*Ship the export #done.*Status.*It is finished/s);
+    await until(`document.querySelector('[data-upd-act="post-slack"]').textContent === 'Post to the updates webhook'`, 'where it would be posted');
+    assert.match(await js(`document.querySelector('[data-upd-note="slack"]').textContent`), /No link to the details yet/);
+
+    // Your words, and the link to the details, are what goes out; what you typed survives the page's updates.
+    await js(`(() => { const t = document.querySelector('[data-upd-text="slack"]'); t.value = 'The export is live. Thanks all.'; const l = document.querySelector('[data-upd-text="link"]'); l.value = 'https://docs.example.com/d/9'; l.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+    await until(`/The link to the details goes under it/.test(document.querySelector('[data-upd-note="slack"]').textContent)`, 'the link kept');
+    assert.equal(await val('slack'), 'The export is live. Thanks all.', 'not written over');
+    // Asked twice: the first press posts nothing.
+    await js(`document.querySelector('[data-upd-act="post-slack"]').click()`);
+    assert.equal(await js(`document.querySelector('[data-upd-act="post-slack"]').textContent`), 'Post it to the updates webhook?');
+    await sleep(300);
+    assert.deepEqual(got, []);
+    await js(`document.querySelector('[data-upd-act="post-slack"]').click()`);
+    await until(`/^Posted /.test(document.querySelector('[data-upd-note="slack"]').textContent)`, 'posted, and said so');
+    assert.deepEqual(got, ['The export is live. Thanks all.\n\nDetails: https://docs.example.com/d/9']);
+    assert.equal(await js(`document.querySelector('[data-upd-act="post-slack"]').textContent`), 'Post to the updates webhook');
+    await js(`document.querySelector('#doc-close').click()`);
+    await until(`!${card}`, 'sent: out of the inbox');
+
+    // Reached from the agent's documents too, and one that is not needed is set aside.
+    const [b] = await api('POST', '/agents', { intents: ['Tidy the logs #done'], workdir: home });
+    const other = `document.querySelector('#inbox-view [data-need="update:${b.id}"]')`;
+    await until(other, 'the next one', 30_000);
+    await js(`${other}.querySelector('[data-ib="update-dismiss"]').click()`);
+    await until(`!${other}`, 'set aside');
+    assert.equal((await api('GET', `/agents/${b.id}`)).docs.update.parts.subject, 'Tidy the logs #done: finished', 'still there to open');
+    for (const x of [a, b]) await api('DELETE', `/agents/${x.id}`).catch(() => {});
+    await js(`document.querySelector('[data-tab="agents"]').click()`);
+    assert.deepEqual(errors, [], 'no errors on the page');
+  } finally {
+    await api('PUT', '/announce/settings', { auto: false });
+    await api('PUT', '/announce/slack', { webhookUrl: '' });
+    hook.close();
+  }
 });

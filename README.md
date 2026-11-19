@@ -24,6 +24,7 @@ Run one background [Claude Code](https://claude.com/claude-code) agent per inten
 - **Projects.** The sidebar is a tree, project → agents, so you see how many projects are in flight and how many parallel sessions each has.
 - **Project shortcuts.** Each project gets a short name, such as `cc` for cloud-console. Use it instead of the repo URL: `agentmgr add @cc "…"`, `agentmgr ls cc`, `@cc` in the UI filter.
 - **Backlog.** Queue asks as work orders. Agents pick them up one by one, up to N in parallel per project, until each is done. You accept or reopen each one.
+- **Updates for the people who asked.** When an agent finishes or opens a pull request, a short Slack message, a short email and the details they point to are written for you to read, change and send.
 - **Alerts, in Slack and on the phone.** A Slack message, a notification on the phone, or both, when an agent needs input, finishes a backlog item, or fails.
 - **Priority.** Mark agents P0–P3. P0 and P1 are highlighted, and lists sort by priority.
 - **Share for review.** One click writes an **Analysis**, **Design**, **Flow** or **Proposal** document from the agent's work, a human time **Estimate** for planning, or the change's **Documentation** with an OpenAPI spec of any API changes. Copy it as Markdown, download it, or print it to PDF with diagrams.
@@ -198,6 +199,7 @@ agentmgr explain <agent>                      # full briefing: ask, status, plan
 agentmgr remote on | off | status | rotate    # phone / remote access (see below)
 agentmgr backlog add "ask" -r <repo> [-p 1]   # queue work; also: ls, start, accept, reopen, move, limit, pause
 agentmgr notify slack --webhook <url>         # Slack alerts; also: test, status, on, off, event <name> on|off
+agentmgr announce <agent>                     # what to tell the people who asked: a Slack message, an email and the details (--post, --link <url>; no agent: the settings)
 agentmgr notify phone                         # the same alerts as notifications on the phone (ntfy app); --off stops them
 agentmgr debug <agent> "what goes wrong"       # debug with an agent; no question prints its report; --fix applies the fixes
 agentmgr reverse <agent> -t /path/to/app "how does search work"  # reverse engineer with an agent and REA; no question prints the report; --build builds your own
@@ -409,6 +411,24 @@ Type your answers in the viewer, or tap an option to fill one in. **Send my answ
 - **Queueing.** At most `summaryConcurrency` (2) of these one-off Claude calls run at once, Explain and Insights included. The rest queue.
 
 **Behaviour.** Documents are kept per agent and marked out of date when the brief changes. They come from the same separate, tool-less Claude call as Explain, so the agent isn't interrupted. On the phone link, the print page needs sign-in like everything else.
+
+## Updates for the people who asked
+
+The people who asked for the work rarely watch it. **Update** (with the documents in the Brief panel, or `agentmgr announce <agent>`) writes what to tell them, from the agent's live context:
+
+- **Slack:** at most five short lines: what it is about and where it stands, what was done, what is left or needed from the reader.
+- **Email:** a subject and a short body saying the same, addressed to whoever asked when the work says who that is.
+- **Details:** the full write-up both point to: what was asked, what was done, the status, what is left, decisions and risks, and the links. It is a document like the others: **Copy Markdown**, **Print / PDF**, **Listen**.
+
+**They are drafts.** You read them and change them in place, then:
+
+- **Copy** either one, or **Post to Slack**, which asks once more before it posts, since a channel is full of people. It posts to a webhook for updates (`agentmgr announce --webhook <url>`, set on the computer itself) or, without one, to where the Slack alerts go.
+- **Open in mail** opens the email in the mail program of the device in your hand, filled in, for you to send from your own address.
+- **Link to the details:** paste where they can be read (a Google Doc, Confluence, the pull request), or **Publish to Google Drive** makes a Google Doc of them through the Drive connector of your Claude account. The link goes under both messages as `Details: …`.
+
+Nothing is sent to anyone by itself, and the messages never mention the agent: they are written as from the person responsible for the work.
+
+**Written by themselves.** When an agent finishes (its brief says done) or opens a pull request, the update is written in the background, an **Update to send** card appears in the inbox, and the alert says so (the *update ready* alert). **Read and send** opens it; **Not needed** sets it aside. Only what happens while AI Agent Manager runs counts: agents already finished when it starts are not announced. Each one is a separate, tool-less model call on the agent's engine, like the other documents. `agentmgr announce --auto off` (or `"announce": { "auto": false }` in config.json) turns that off; **Update** on an agent still writes one when you ask.
 
 ## Plan review
 

@@ -653,6 +653,11 @@ pre.diff .meta { color: var(--muted); font-weight: 600; }
 
 /* ---------- Human vs AI, plan review */
 .ha-card { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin: 10px 0; }
+.upd-card h3 { margin: 0 0 6px; }
+.upd-card textarea, .upd-card input { width: 100%; font: inherit; font-size: 16px; }
+.upd-card label { display: block; margin: 6px 0; color: var(--muted); font-size: 12px; }
+.upd-card textarea { resize: vertical; }
+.upd-details { margin-top: 10px; border-top: 1px solid var(--border); padding-top: 6px; }
 .ha-card.human { border-left: 3px solid var(--accent); }
 .ha-card h4 { margin: 0 0 6px; }
 .ha-card p { margin: 4px 0; }

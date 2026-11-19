@@ -290,6 +290,17 @@ if (args.includes('--input-format') && args.includes('stream-json')) {
       );
       return;
     }
+    if (input.startsWith('Write an update for the people who asked')) {
+      // Updates: a Slack message, an email and the details; "#noupdate" in the intent fails the call.
+      if (section('intent').includes('#noupdate')) return process.exit(1);
+      const stage = input.match(/^The work is (.+?)\. Base/m)?.[1];
+      const what = section('intent').split('\n')[0];
+      process.stdout.write(
+        `## Slack\n*${what}*: ${stage}\n• ${ok ? 'Safe call.' : 'UNSAFE call.'}\n\n## Email\nTo: Pat Lee\nSubject: ${what}: ${stage}\n\nHi Pat,\n\n- It is ${stage}.\n- Nothing is needed from you.\n\n## Details\n### What was asked\n${what}\n### Status\nIt is ${stage}.\n### Links\n- none\n`,
+        () => process.exit(0),
+      );
+      return;
+    }
     const doc = input.match(/^Write a (\w+)[\w ]* document/)?.[1];
     if (doc) {
       process.stdout.write(

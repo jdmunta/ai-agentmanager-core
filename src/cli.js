@@ -505,6 +505,50 @@ export async function main(argv) {
     });
 
   program
+    .command('announce')
+    .description('What to tell the people who asked: a short Slack message, a short email and the details, written from the agent work for you to send. Without an agent: the settings')
+    .argument('[agent]')
+    .option('--cached', 'print the last one instead of writing a new one')
+    .option('--slack', 'print only the Slack message')
+    .option('--email', 'print only the email')
+    .option('--details', 'print only the details (Markdown)')
+    .option('--link <url>', 'where the details can be read; it goes under both messages')
+    .option('--post', 'post the Slack message (to the webhook for updates, or where the Slack alerts go)')
+    .option('--auto <on|off>', 'settings: write one when an agent finishes or opens a pull request (on)')
+    .option('--webhook <url>', "settings: a Slack webhook for these (the stakeholders' channel); \"none\" goes back to where the alerts go")
+    .action(async (ref, opts) => {
+      await daemon();
+      if (!ref) {
+        if (opts.auto !== undefined) {
+          if (!['on', 'off'].includes(opts.auto)) throw new Error('--auto is on or off');
+          await api('PUT', '/announce/settings', { auto: opts.auto === 'on' });
+        }
+        if (opts.webhook !== undefined) await api('PUT', '/announce/slack', { webhookUrl: opts.webhook === 'none' ? '' : opts.webhook });
+        const v = await api('GET', '/announce/settings');
+        console.log(`Updates for the people who asked, written by themselves: ${v.auto ? green('on') : dim('off')} ${dim('(when an agent finishes or opens a pull request)')}`);
+        console.log(`Posted to Slack: ${v.slack ? v.slack : dim('nowhere yet: agentmgr announce --webhook <url>, or set up Slack alerts')}`);
+        return console.log(dim('They are drafts: nothing is sent to anyone until you send it (Update on an agent, or agentmgr announce <agent> --post).'));
+      }
+      let a = await resolveAgent(ref);
+      if (!opts.cached || !a.docs?.update?.markdown) {
+        process.stderr.write(dim('Writing the update… (a separate Claude call; the agent is not interrupted)\n'));
+        a = await api('POST', `/agents/${a.id}/docs/update`);
+      }
+      if (opts.link !== undefined) a = await api('PUT', `/agents/${a.id}/announce`, { link: opts.link });
+      const d = a.docs.update;
+      const link = a.announce?.link ? `\n\nDetails: ${a.announce.link}` : '';
+      const slack = `${d.parts.slack}${link}`;
+      const email = `${d.parts.to ? `To: ${d.parts.to}\n` : ''}Subject: ${d.parts.subject}\n\n${d.parts.email}${link}`;
+      if (opts.post) {
+        const r = await api('POST', `/agents/${a.id}/announce/slack`, {});
+        return console.log(`${green('✓')} posted to ${r.postedTo}`);
+      }
+      const only = opts.slack ? slack : opts.email ? email : opts.details ? d.markdown : null;
+      if (only !== null) return process.stdout.write(`${only}\n`);
+      process.stdout.write(`${bold('Slack')}\n${slack}\n\n${bold('Email')}\n${email}\n\n${bold('Details')}\n${d.markdown}\n`);
+    });
+
+  program
     .command('insights')
     .description('Why / What / How / Now for an agent, three tidy points each (one-off Claude call)')
     .argument('<agent>')
