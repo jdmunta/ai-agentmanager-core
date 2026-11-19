@@ -1275,7 +1275,9 @@ test('Inbox, one at a time: a single card with the next after it, stepped throug
   assert.equal(await js(`${seen}.length`), total, 'the whole list on a wide screen');
   await js(`document.querySelector('#inbox-view [data-inbox-one]').click()`);
   await until(`${seen}.length === 1 && document.querySelector('.inbox-step')`, 'one card');
-  const now = () => js(`document.querySelector('.inbox-step span').textContent + ' ' + ${seen}[0].dataset.need`);
+  // Where the steps are gone, say what the inbox looks like instead of failing on a missing element.
+  const now = () => js(`document.querySelector('.inbox-step span') ? document.querySelector('.inbox-step span').textContent + ' ' + ${seen}[0].dataset.need
+    : 'no steps: ' + JSON.stringify({ one: localStorage.getItem('agentmgr.inboxOne'), cards: [...${cards}].map((c) => c.dataset.need), hidden: document.querySelector('#inbox-view').hidden, head: document.querySelector('#inbox-view .counts')?.textContent ?? document.querySelector('#inbox-view').textContent.slice(0, 200), open: [...document.querySelectorAll('dialog[open]')].map((d) => d.id) })`);
   const first = await now();
   assert.match(first, new RegExp(`^1 of ${total} `));
   await js(`document.querySelector('[data-inbox-step="1"]').click()`);
