@@ -1733,16 +1733,27 @@ test('value: day, week, month and quarter totals, and the report for management'
   const quarters = aggregate(items, s, { period: 'quarter', t: now });
   assert.deepEqual([quarters[0].key, quarters[0].totals.items, quarters[1].key, quarters[1].totals.items], ['2026-Q4', 3, '2026-Q3', 1]);
   assert.equal(aggregate(items, s, { period: 'day', t: now })[1].totals.items, 1, 'yesterday');
-  assert.throws(() => aggregate(items, s, { period: 'year' }), /period is one of/);
+  assert.throws(() => aggregate(items, s, { period: 'decade' }), /period is one of/);
+  // Pull requests merged: each in the period it merged in; an item without them kept counts its link.
+  assert.deepEqual(weeks.slice(0, 2).map((w) => w.totals.prs), [2, 1], 'one per linked item');
+  const two = { ...item('5', new Date(2026, 9, 29, 9).toISOString(), 3), prs: [{ url: 'p1', mergedAt: new Date(2026, 9, 29, 9).toISOString() }, { url: 'p2', mergedAt: new Date(2026, 10, 3, 15).toISOString() }, { url: 'p3', mergedAt: null }] };
+  const none = { ...item('6', new Date(2026, 10, 3, 9).toISOString(), 1), prs: [] };
+  const more = aggregate([...items, two, none], s, { period: 'week', t: now });
+  assert.deepEqual([more[0].totals.items, more[0].totals.prs, more[1].totals.items, more[1].totals.prs], [3, 3, 2, 3], 'the later one counts in its own week; the one with no time, at delivery; done without a PR, none');
+  assert.deepEqual(aggregate([...items, two, none], s, { period: 'day', t: now }).slice(0, 3).map((d) => d.totals.prs), [0, 2, 1]);
+  const years = aggregate([...items, two, none], s, { period: 'year', t: now });
+  assert.deepEqual([years.length, years[0].key, years[0].label, years[0].totals.items, years[0].totals.prs, years[1].key, years[1].totals.prs], [5, '2026', '2026', 6, 7, '2025', 0]);
   assert.equal(PERIODS.month.key(PERIODS.month.start(now)), '2026-11');
   const md = valueMarkdown(weeks[0], items.slice(0, 2), s, { who: 'Pat', prev: weeks[1] });
   assert.match(md, /^# Value delivered: Week of Nov 2, Pat\n/);
   assert.match(md, /\*\*Value delivered\*\*: \$1,200 \(\+500% vs the period before\): \$1,200 of engineering time \(12 hours at \$100\/hour\)/);
   assert.match(md, /\*\*Potential revenue\*\*: \$1,000/);
+  assert.match(md, /\*\*Pull requests merged\*\*: 2 \(\+100% vs the period before\)/);
   assert.match(md, /\*\*AI augmentation\*\*: 12 hours of engineering per hour of my time \(1 hours of mine\); AI cost \$4, 300× value per AI dollar/);
   assert.match(md, /\| \[Work 1\]\(https:\/\/github\.com\/a\/b\/pull\/1\)<br>Sum 1\. \| revenue \| 8 \| \$800 \| \$1,000 \| 4\/5 \|/);
   const sl = valueSlack(weeks[0], s, 'http://x/#value');
   assert.match(sl.text, /^:chart_with_upwards_trend: \*Value delivered, Week of Nov 2\*: \$1,200/);
+  assert.match(sl.text, /from 2 items, 2 pull requests merged\n/);
   assert.match(sl.text, /<http:\/\/x\/#value\|Open the report>$/);
   assert.doesNotMatch(sl.plain, /[*<>]|:chart/);
 });
@@ -1777,6 +1788,8 @@ test('value: new deliveries found, estimated one at a time, corrected, left out,
   assert.deepEqual(Object.keys(v.state.items).sort(), ['a1', 'a2']);
   assert.equal(v.state.items.a1.aiCostUsd, 2.5);
   assert.equal(v.state.items.a1.issue, 'OPS-1');
+  assert.deepEqual(v.state.items.a1.prs, [{ url: 'https://github.com/a/b/pull/5', number: 5, mergedAt: '2026-11-03T10:00:00.000Z' }]);
+  assert.deepEqual(v.view({ period: 'year', t }).periods[0].totals.prs, 1, 'a2 finished without one');
   // Newest first; one call each; a failure is kept, not retried on its own.
   await v.estimateNext(t);
   assert.equal(v.state.items.a2.estError, 'model failed');
@@ -1813,9 +1826,9 @@ test('value: new deliveries found, estimated one at a time, corrected, left out,
   assert.match(fs.readFileSync(out[0].sent.file, 'utf8'), /^# Value delivered: Week of Nov 2, Pat/);
   assert.deepEqual(await v.dueReports(nextMonday + 3_600_000), [], 'once');
   const csv = fs.readFileSync(path.join(dir, 'value.csv'), 'utf8').split('\n');
-  assert.equal(csv[0], 'delivered,project,title,issue,link,category,human_hours,labor_usd,savings_usd,value_usd,revenue_usd,strategic,your_hours,ai_cost_usd,summary,set_by_you,confidence,agent_id');
+  assert.equal(csv[0], 'delivered,project,title,issue,link,category,human_hours,labor_usd,savings_usd,value_usd,revenue_usd,strategic,your_hours,ai_cost_usd,summary,set_by_you,confidence,agent_id,pull_requests');
   assert.equal(csv.filter(Boolean).length, 3, 'a4 is left out');
-  assert.match(csv.find((l) => l.includes('a1')), /,OPS-1,https:\/\/github\.com\/a\/b\/pull\/5,revenue,8,800,100,900,3000,2,0\.5,2\.5,Faster checkout\.,revenueUsd category,0\.6,a1$/);
+  assert.match(csv.find((l) => l.includes('a1')), /,OPS-1,https:\/\/github\.com\/a\/b\/pull\/5,revenue,8,800,100,900,3000,2,0\.5,2\.5,Faster checkout\.,revenueUsd category,0\.6,a1,1$/);
   fs.rmSync(dir, { recursive: true, force: true });
 });
 

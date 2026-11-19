@@ -1319,6 +1319,22 @@ test('Inbox, one at a time: a single card with the next after it, stepped throug
   assert.deepEqual(errors, [], 'no errors on the page');
 });
 
+test('Value: the pull requests merged next to the value, by day, week, month, quarter and year', { skip }, async () => {
+  await js(`document.querySelector('#value-btn').click()`);
+  await until(`document.querySelector('#value-dialog').open && document.querySelector('#value-body .value-cards')`, 'Value, open');
+  assert.deepEqual(await js(`[...document.querySelectorAll('#value-body [data-value-period]')].map((b) => b.textContent)`), ['Day', 'Week', 'Month', 'Quarter', 'Year']);
+  const card = `[...document.querySelectorAll('#value-body .value-card')].find((c) => c.textContent.startsWith('Pull requests'))`;
+  assert.match(await js(`${card}.textContent.replace(/\\s+/g, ' ')`), /^Pull requests\s*0\s*merged · 0 a day/);
+  await js(`document.querySelector('#value-body [data-value-period="year"]').click()`);
+  await until(`document.querySelector('#value-body [data-value-period="year"].active') && document.querySelectorAll('#value-body .value-bar').length === 5`, 'five years of bars');
+  assert.equal(await js(`document.querySelector('#value-body .value-period b').textContent`), String(new Date().getFullYear()));
+  assert.match(await js(`document.querySelector('#value-body .value-bar.on').title`), /0 pull requests merged$/);
+  assert.equal(await js(`document.querySelector('#value-body .value-bar.on .lbl').textContent`), String(new Date().getFullYear()));
+  await js(`document.querySelector('#value-body [data-value-period="week"]').click()`);
+  await until(`document.querySelector('#value-body [data-value-period="week"].active')`, 'back to weeks');
+  await js(`document.querySelector('#value-dialog').close()`);
+});
+
 test('Update: written when an agent finishes, a card in the inbox, the Slack message and email to change and send, the link to the details', { skip }, async () => {
   const http = await import('node:http');
   const got = [];

@@ -3,7 +3,8 @@
 // model call: the hours a person would have needed without AI, savings beyond that labor,
 // potential revenue, and strategic value, each with a reason. You can correct any figure; yours
 // win and are marked as yours. Totals by day, week, month and quarter set the value against the
-// AI cost and your own time, and a report goes to Slack (and Google Drive) on a schedule.
+// AI cost and your own time, and a report goes to Slack (and Google Drive) on a schedule. Next to
+// the value: how many pull requests merged in each day, week, month, quarter and year.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -78,6 +79,23 @@ export function deliveredAt(a) {
   if (!done || prs.some((p) => p.state !== 'MERGED')) return null;
   const at = Date.parse(a.brief?.updatedAt);
   return Number.isFinite(at) ? new Date(at).toISOString() : null;
+}
+
+/** An agent's merged pull requests (its own, not ones it only mentioned), with when each merged. */
+export function mergedPrs(a) {
+  return Object.values(a.prs ?? {})
+    .filter((p) => p.source !== 'mentioned' && p.state === 'MERGED')
+    .map((p) => ({ url: p.url ?? null, number: p.number ?? null, mergedAt: Number.isFinite(Date.parse(p.mergedAt)) ? new Date(p.mergedAt).toISOString() : null }));
+}
+
+/**
+ * When each of an item's pull requests merged, as times. One merged without a time counts at the
+ * item's delivery; an item from before pull requests were kept on it counts its link as one.
+ */
+export function prTimes(it) {
+  const at = Date.parse(it.deliveredAt);
+  if (!Array.isArray(it.prs)) return it.link ? [at] : [];
+  return it.prs.map((p) => (p.mergedAt ? Date.parse(p.mergedAt) : at));
 }
 
 /** What the estimate is based on, from what agentmgr tracks. */
@@ -231,11 +249,26 @@ export const PERIODS = {
     label: (s) => `Q${Math.floor(new Date(s).getMonth() / 3) + 1} ${new Date(s).getFullYear()}`,
     count: 8,
   },
+  year: {
+    start: (t) => {
+      const d = startOfDay(t);
+      d.setMonth(0, 1);
+      return d.getTime();
+    },
+    next: (s) => {
+      const d = new Date(s);
+      d.setFullYear(d.getFullYear() + 1);
+      return d.getTime();
+    },
+    key: (s) => String(new Date(s).getFullYear()),
+    label: (s) => String(new Date(s).getFullYear()),
+    count: 5,
+  },
 };
 
 /** Totals for a set of items. */
 export function totals(items, s) {
-  const t = { items: items.length, estimated: 0, humanHours: 0, laborUsd: 0, savingsUsd: 0, revenueUsd: 0, valueUsd: 0, aiCostUsd: 0, yourHours: 0, strategicHigh: 0 };
+  const t = { items: items.length, prs: 0, estimated: 0, humanHours: 0, laborUsd: 0, savingsUsd: 0, revenueUsd: 0, valueUsd: 0, aiCostUsd: 0, yourHours: 0, strategicHigh: 0 };
   for (const it of items) {
     const v = itemValue(it, s);
     if (v.humanHours != null) t.estimated += 1;
@@ -257,12 +290,16 @@ export function totals(items, s) {
   return t;
 }
 
-/** The last `count` periods of a kind, newest first, each with its totals and items. */
+/**
+ * The last `count` periods of a kind, newest first, each with its totals and items. Pull requests
+ * count in the period they merged in, which for an item's later ones can be after its own.
+ */
 export function aggregate(items, s, { period = 'week', count, t = Date.now() } = {}) {
   const P = PERIODS[period];
   if (!P) throw err(400, `period is one of ${Object.keys(PERIODS).join(', ')}`);
   const n = count ?? P.count;
   const out = [];
+  const merged = items.flatMap(prTimes);
   let start = P.start(t);
   for (let i = 0; i < n; i++) {
     const end = P.next(start);
@@ -270,7 +307,9 @@ export function aggregate(items, s, { period = 'week', count, t = Date.now() } =
       const at = Date.parse(it.deliveredAt);
       return at >= start && at < end;
     });
-    out.push({ key: P.key(start), label: P.label(start), start: new Date(start).toISOString(), end: new Date(end).toISOString(), current: i === 0, totals: totals(inside, s), items: inside.map((it) => it.agentId) });
+    const from = start;
+    const sums = { ...totals(inside, s), prs: merged.filter((at) => at >= from && at < end).length };
+    out.push({ key: P.key(start), label: P.label(start), start: new Date(start).toISOString(), end: new Date(end).toISOString(), current: i === 0, totals: sums, items: inside.map((it) => it.agentId) });
     start = P.start(start - 1);
   }
   return out;
@@ -291,6 +330,7 @@ export function valueMarkdown(p, items, s, { who = '', prev = null } = {}) {
     '',
     `${t.items} piece${t.items === 1 ? '' : 's'} of work delivered with AI agents.`,
     '',
+    `- **Pull requests merged**: ${t.prs}${change('prs')}`,
     `- **Value delivered**: ${money(t.valueUsd, s.currency)}${change('valueUsd')}: ${money(t.laborUsd, s.currency)} of engineering time (${t.humanHours} hours at ${money(s.hourlyRate, s.currency)}/hour) and ${money(t.savingsUsd, s.currency)} in other savings`,
     `- **Potential revenue**: ${money(t.revenueUsd, s.currency)} in the first year`,
     `- **Strategic**: ${t.strategicHigh} high-impact item${t.strategicHigh === 1 ? '' : 's'} (4 or 5 of 5)`,
@@ -318,7 +358,7 @@ export function valueMarkdown(p, items, s, { who = '', prev = null } = {}) {
 export function valueSlack(p, s, link) {
   const t = p.totals;
   const head = `Value delivered, ${p.label}`;
-  const line1 = `${money(t.valueUsd, s.currency)} (${t.humanHours} engineering hours) from ${t.items} item${t.items === 1 ? '' : 's'}`;
+  const line1 = `${money(t.valueUsd, s.currency)} (${t.humanHours} engineering hours) from ${t.items} item${t.items === 1 ? '' : 's'}, ${t.prs} pull request${t.prs === 1 ? '' : 's'} merged`;
   const line2 = [`Potential revenue ${money(t.revenueUsd, s.currency)}`, `${t.strategicHigh} high-impact`, t.leverage ? `${t.leverage}× leverage on my time` : null, t.roi ? `${t.roi}× per AI dollar` : null].filter(Boolean).join(' · ');
   return {
     text: [`:chart_with_upwards_trend: *${head}*: ${line1}`, line2, link ? `<${link}|Open the report>` : ''].filter(Boolean).join('\n'),
@@ -326,7 +366,7 @@ export function valueSlack(p, s, link) {
   };
 }
 
-export const CSV_COLUMNS = ['delivered', 'project', 'title', 'issue', 'link', 'category', 'human_hours', 'labor_usd', 'savings_usd', 'value_usd', 'revenue_usd', 'strategic', 'your_hours', 'ai_cost_usd', 'summary', 'set_by_you', 'confidence', 'agent_id'];
+export const CSV_COLUMNS = ['delivered', 'project', 'title', 'issue', 'link', 'category', 'human_hours', 'labor_usd', 'savings_usd', 'value_usd', 'revenue_usd', 'strategic', 'your_hours', 'ai_cost_usd', 'summary', 'set_by_you', 'confidence', 'agent_id', 'pull_requests'];
 
 /** The previous complete period of a kind before t: its start. */
 const lastComplete = (kind, t) => PERIODS[kind].start(PERIODS[kind].start(t) - 1);
@@ -376,6 +416,7 @@ export class Value {
         project: v.projectInfo?.name ?? null,
         issue: a.synopsis?.key ?? leadingJiraKey(a.intent) ?? null,
         link: pr?.url ?? null,
+        prs: mergedPrs(a),
         deliveredAt: at,
         aiCostUsd: round(costOf(a), 2),
       };
@@ -566,6 +607,7 @@ export class Value {
           set_by_you: v.yours.join(' '),
           confidence: it.est?.confidence ?? '',
           agent_id: it.agentId,
+          pull_requests: prTimes(it).length,
         };
       });
     fs.mkdirSync(this.dir, { recursive: true });

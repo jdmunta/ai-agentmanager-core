@@ -296,7 +296,7 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
       sendAlert(`:sunrise: *Standup ready*: ${what}\n<${link}|Play it>`, n, `Standup ready: ${what}\nPlay it: ${link}`).catch(() => {});
     },
   });
-  // Value: what delivered work is worth, by day, week, month and quarter, with scheduled reports (value.js).
+  // Value: what delivered work is worth, and the pull requests merged, by day, week, month, quarter and year, with scheduled reports (value.js).
   let pushValue = () => {};
   const value = new Value({
     manager,

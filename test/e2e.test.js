@@ -2304,6 +2304,7 @@ test('value: delivered work estimated by the model, corrected, totals by period,
     const it = v.items.find((x) => x.agentId === a.id);
     assert.ok(it, 'found as delivered');
     assert.equal(it.link, url);
+    assert.deepEqual(it.prs.map((p) => p.number), [77]);
     const est = (await call('POST', `/value/items/${a.id}/estimate`)).body;
     assert.deepEqual([est.est.humanHours, est.value.laborUsd, est.value.revenueUsd, est.value.category], [8, 800, 2000, 'quality']);
     assert.equal((await call('PATCH', `/value/items/${a.id}`, { humanHours: 6 })).body.value.laborUsd, 600);
@@ -2317,7 +2318,14 @@ test('value: delivered work estimated by the model, corrected, totals by period,
     const r = (await call('GET', '/value/report?kind=week&current=1')).body;
     assert.match(r.markdown, /^# Value delivered: Week of /);
     assert.match(r.markdown, /speed up checkout/);
-    assert.equal((await call('GET', '/value/report?kind=year')).status, 400);
+    assert.equal((await call('GET', '/value/report?kind=decade')).status, 400);
+    // Pull requests merged, counted when each merged: a second one on the same work adds one, an open one none.
+    assert.match(r.markdown, /\*\*Pull requests merged\*\*: 1/);
+    const second = 'https://github.com/acme/web/pull/78';
+    const open = 'https://github.com/acme/web/pull/79';
+    manager.patch(a.id, { prs: { [url]: { url, number: 77, title: 'Cache prices', source: 'branch', state: 'MERGED', mergedAt: new Date().toISOString() }, [second]: { url: second, number: 78, title: 'Cache taxes', source: 'branch', state: 'MERGED', mergedAt: new Date().toISOString() }, [open]: { url: open, number: 79, title: 'Later', source: 'branch', state: 'OPEN' } } });
+    for (const period of ['day', 'week', 'month', 'quarter', 'year']) assert.equal((await call('GET', `/value?period=${period}`)).body.periods[0].totals.prs, month.totals.prs + 1, period);
+    assert.match((await call('GET', '/value/report?kind=year&current=1')).body.markdown, new RegExp(`^# Value delivered: ${new Date().getFullYear()}`));
     const sent = (await call('POST', '/value/report', { kind: 'week', current: true })).body;
     assert.equal(sent.sent.slack, false, 'Slack is off in the settings');
     assert.ok(fs.readFileSync(sent.sent.file, 'utf8').includes('speed up checkout'));

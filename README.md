@@ -1172,11 +1172,12 @@ Agents started this way are marked **⚡ GitHub** or **⚡ webhook**, Slack aler
 
 ## Value
 
-**Value** in the top bar (or `v`) shows what the work delivered with agents is worth, for you and for management: by **Day**, **Week**, **Month** or **Quarter**, with bars for the last periods and the items behind each.
+**Value** in the top bar (or `v`) shows what the work delivered with agents is worth, for you and for management: by **Day**, **Week**, **Month**, **Quarter** or **Year**, with bars for the last periods and the items behind each.
 
 | Figure | What it is |
 |---|---|
 | Value delivered | Engineering hours the work saved × your loaded hourly rate, plus other savings in its first year |
+| Pull requests | Pull requests merged in the period (each counts when it merged), and how many a day |
 | Potential revenue | Revenue the work plausibly enables or protects in its first year (kept apart: it's the least certain) |
 | Strategic | Items rated 4 or 5 of 5 for moving the product or company position |
 | Leverage | Engineering hours delivered per hour of your own time (30 minutes per item unless you set it) |
@@ -1184,10 +1185,13 @@ Agents started this way are marked **⚡ GitHub** or **⚡ webhook**, Slack aler
 
 Work counts once it's delivered: its pull request merged, or the agent finished without one. Each item gets an estimate from one short model call (at most 30 a day) based on its issue, pull request, design doc, results and AI review, with a reason for each figure. They are estimates, and conservative by instruction. **Edit** any figure, category or the one-line summary for management: yours win, are marked, and stay through re-estimates. **Don't count it** leaves an item out. **Notes for the estimates** in settings give the model your context ("B2B SaaS, ~2,000 customers; checkout work affects revenue").
 
+Pull requests count in the period they merged in, so a second one on the same work is counted when it lands. Value keeps work from about 100 days before you first opened it, so a year's figures start there.
+
 Reports: **Copy report** (Markdown) or **Send** for the current period or the one just ended, and on a schedule (weekly on Mondays, monthly on the 1st and quarterly by default; daily if you turn it on; at 09:00) to Slack (with **value reports** on in Slack alerts) and, if you choose, as a Google Doc in "Value reports (AI Agent Manager)" through the Google Drive connector of your Claude account. Every report is also saved in `~/.agentmanager/value/`, next to `value.csv` with every item's figures.
 
 ```bash
 agentmgr value --period month            # totals by month, and this month's items
+agentmgr value --period year             # by year, with the pull requests merged in each
 agentmgr value edit OPS-7 --revenue 15000 --summary "Ends login timeouts for our largest customer"
 agentmgr value report --kind quarter --current   # this quarter so far, as Markdown
 agentmgr value set --rate 140 --reports weekly,monthly,quarterly --at 08:30 --drive on
