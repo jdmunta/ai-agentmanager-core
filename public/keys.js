@@ -17,6 +17,7 @@ export const SHORTCUTS = [
     [['n'], 'New agents', 'new'],
     [['a'], 'Ask Agent (a general session)', 'ask'],
     [['/'], 'Filter agents', 'filter'],
+    [['Ctrl+K', 'Cmd+K'], 'Go to: find a view, an agent or a setting by name', null],
     [['w'], 'Watch: agents side by side', 'watch'],
     [['p'], 'Play the standup', 'standup'],
     [['m'], 'Map: where agents are in the code', 'map'],

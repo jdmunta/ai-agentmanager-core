@@ -10,12 +10,14 @@ import net from 'node:net';
 import fs from 'node:fs';
 import os from 'node:os';
 import crypto from 'node:crypto';
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 
 export const SCREEN_DEFAULTS = { enabled: false, port: 5900 };
 const HOST = '127.0.0.1'; // never another computer: this is not a way into the network
 const MAX_VIEWERS = 4;
 const QUIET_MS = 60_000; // a stream whose page went away without closing it
+
+const CLIP_MAX = 200_000; // characters of text to and from the clipboard
 
 const fail = (status, message) => Object.assign(new Error(message), { status });
 
@@ -55,10 +57,47 @@ export async function macAccess() {
   return { user, allowed: everyone || listed, fix: `sudo ${KICKSTART} -configure -users ${user} -access -on -privs -ControlObserve` };
 }
 
+/** Run a program with `input` on its standard input; what it prints. */
+const pipe = (cmd, args, input = null) =>
+  new Promise((resolve, reject) => {
+    // UTF-8 whatever the daemon was started with: pbcopy and pbpaste go by the locale.
+    const child = spawn(cmd, args, { env: { ...process.env, LC_CTYPE: 'UTF-8' }, stdio: [input === null ? 'ignore' : 'pipe', 'pipe', 'ignore'] });
+    const chunks = [];
+    const timer = setTimeout(() => child.kill(), 4000);
+    child.stdout.on('data', (d) => chunks.push(d));
+    child.on('error', (err) => reject(fail(501, err.code === 'ENOENT' ? `${cmd} is not on this computer` : err.message)));
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      if (code === 0) resolve(Buffer.concat(chunks).toString('utf8'));
+      else reject(fail(500, `${cmd} failed`));
+    });
+    if (input !== null) {
+      child.stdin.on('error', () => {});
+      child.stdin.end(input);
+    }
+  });
+
+/**
+ * This computer's clipboard, as text: `read()` and `write(text)`. Asked of the computer itself and
+ * not of its screen sharing, which on a Mac shares the clipboard only with Apple's own viewer.
+ */
+export function systemClipboard(platform = process.platform) {
+  // A file in its place, for the tests: they must not take over the clipboard of whoever runs them.
+  const file = process.env.AGENTMGR_CLIPBOARD_FILE;
+  if (file) return { read: async () => fs.promises.readFile(file, 'utf8').catch(() => ''), write: (text) => fs.promises.writeFile(file, text) };
+  if (platform === 'darwin') return { read: () => pipe('/usr/bin/pbpaste', []), write: (text) => pipe('/usr/bin/pbcopy', [], text) };
+  const wayland = Boolean(process.env.WAYLAND_DISPLAY);
+  return {
+    read: () => (wayland ? pipe('wl-paste', ['--no-newline']) : pipe('xclip', ['-selection', 'clipboard', '-o'])),
+    write: (text) => (wayland ? pipe('wl-copy', [], text) : pipe('xclip', ['-selection', 'clipboard', '-i'], text)),
+  };
+}
+
 export class Screen {
-  /** `onChange(viewers)` is called when someone connects or leaves. `mac` stands in for macAccess in tests. */
-  constructor({ config, onChange = () => {}, log = () => {}, mac = macAccess }) {
+  /** `onChange(viewers)` is called when someone connects or leaves. `mac` and `clip` stand in for macAccess and the clipboard in tests. */
+  constructor({ config, onChange = () => {}, log = () => {}, mac = macAccess, clip = systemClipboard() }) {
     this.mac = mac;
+    this.clip = clip;
     this.config = config;
     this.onChange = onChange;
     this.log = log;
@@ -91,6 +130,24 @@ export class Screen {
     this.config.screen = next;
     if (!next.enabled) for (const id of [...this.links.keys()]) this.close(id, 'Screen access was turned off');
     return next;
+  }
+
+  /**
+   * The computer's clipboard goes with its screen: whoever may use the one may read and set the
+   * other, and nobody may while screen access is off.
+   */
+  async clipboard() {
+    if (!this.settings.enabled) throw fail(403, 'Screen access is off. Turn it on on the computer itself: the Screen button.');
+    const text = await this.clip.read();
+    return { text: text.slice(0, CLIP_MAX), cut: text.length > CLIP_MAX };
+  }
+
+  async setClipboard(text) {
+    if (!this.settings.enabled) throw fail(403, 'Screen access is off. Turn it on on the computer itself: the Screen button.');
+    if (typeof text !== 'string') throw fail(400, 'text is required');
+    if (text.length > CLIP_MAX) throw fail(413, `That is more than the ${CLIP_MAX / 1000}k characters the clipboard takes from here`);
+    await this.clip.write(text);
+    return { ok: true, length: text.length };
   }
 
   /**

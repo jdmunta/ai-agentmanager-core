@@ -85,7 +85,7 @@ before(async () => {
   await new Promise((r) => notes.listen(0, '127.0.0.1', r));
   fs.writeFileSync(path.join(home, 'config.json'), JSON.stringify({ claudeBin: process.execPath, claudeArgs: [path.join(here, 'fake-claude.js')], updates: { check: false }, judge: { enabled: false }, localModels: { enabled: false }, preReview: { enabled: false }, shell: '/bin/sh', gitRefreshSec: 1, conflictRefreshSec: 0, engines: { codex: { bin: path.join(here, 'fake-codex.js') } }, news: { sources: [], custom: [{ id: 'local', lab: 'Anthropic', label: 'Local notes', url: `http://127.0.0.1:${notes.address().port}/notes.md` }] } }));
   daemon = spawn(process.execPath, [path.join(here, '..', 'bin', 'agentmgr.js'), 'serve'], {
-    env: { ...process.env, AGENTMGR_HOME: home, AGENTMGR_PORT: String(port), AGENTMGR_REMOTE: '0', AGENTMGR_PLUGINS: '', AGENTMGR_NO_GH: '1', CLAUDE_CONFIG_DIR: path.join(home, 'claude'), AGENTMGR_CLAUDE_DESKTOP_DIR: path.join(home, 'claude-desktop'), FAKE_CLAUDE_LOG: path.join(home, 'fake.log') },
+    env: { ...process.env, AGENTMGR_HOME: home, AGENTMGR_PORT: String(port), AGENTMGR_REMOTE: '0', AGENTMGR_PLUGINS: '', AGENTMGR_NO_GH: '1', AGENTMGR_CLIPBOARD_FILE: path.join(home, 'clipboard.txt'), CLAUDE_CONFIG_DIR: path.join(home, 'claude'), AGENTMGR_CLAUDE_DESKTOP_DIR: path.join(home, 'claude-desktop'), FAKE_CLAUDE_LOG: path.join(home, 'fake.log') },
     stdio: 'ignore',
   });
   for (let i = 0; i < 100; i++) {
@@ -171,6 +171,26 @@ test('the top bar fits the window: the view buttons that do not fit go into More
     return { fits, scrolls, lastSeen: last.getBoundingClientRect().bottom <= innerHeight }; })()`);
   assert.deepEqual(long, { fits: true, scrolls: true, lastSeen: true });
   await js(`document.querySelector('#top-more-btn').click()`);
+  // Go to: on a phone too, a view is found by name instead of in that menu.
+  assert.equal(await js(`(() => { const r = document.querySelector('#go-btn').getBoundingClientRect(); return r.width > 0 && r.right <= innerWidth; })()`), true, 'the Go to button is on screen');
+  await js(`document.querySelector('#go-btn').click()`);
+  await until(`document.querySelector('#go-dialog').open && document.activeElement.id === 'go-input'`, 'the box, ready to type in');
+  assert.ok((await js(`document.querySelectorAll('#go-list li').length`)) >= 30, 'every view, list and menu item');
+  const find = (text) => js(`(() => { const i = document.querySelector('#go-input'); i.value = ${JSON.stringify(text)}; i.dispatchEvent(new Event('input', { bubbles: true })); return [...document.querySelectorAll('#go-list .go-name')].map((n) => n.textContent.trim()); })()`);
+  assert.equal((await find('scr'))[0], 'Screen', 'a name that starts with it comes first');
+  assert.deepEqual(await find('no such thing anywhere'), []);
+  assert.equal(await js(`document.querySelector('#go-none').hidden`), false);
+  assert.ok((await find('shortcuts')).includes('Keyboard shortcuts'), 'the account menu too');
+  assert.equal((await find('backlog'))[0], 'Backlog');
+  await find('usage');
+  await js(`document.querySelector('#go-input').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))`);
+  await until(`!document.querySelector('#go-dialog').open && document.querySelector('dialog[open]')`, 'Usage open, the box gone');
+  await js(`document.querySelector('dialog[open]').close()`);
+  // Ctrl+K opens it, and closes it again.
+  await js(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true, cancelable: true }))`);
+  await until(`document.querySelector('#go-dialog').open`, 'Ctrl+K');
+  await js(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', ctrlKey: true, bubbles: true, cancelable: true }))`);
+  await until(`!document.querySelector('#go-dialog').open`, 'Ctrl+K again');
   await width(1024);
   await sleep(300);
   await js(`document.querySelector('#top-more-btn').click()`);
@@ -441,6 +461,7 @@ test("Screen: off until turned on here, the screen sharing sign-in, the screen d
   // A stand-in screen sharing service (RFB 3.8, password sign-in): a 64x48 screen named Test Mac.
   const keys = [];
   const clicks = []; // [buttons, x, y] while a button is down
+  let pointer = null; // [buttons, x, y] as last told
   let conns = 0;
   const vnc = net.createServer((sock) => {
     conns++;
@@ -489,6 +510,7 @@ test("Screen: off until turned on here, the screen sharing sign-in, the screen d
           if (!m) return;
           if (t === 4 && m[1] === 1) keys.push(m.readUInt32BE(4));
           if (t === 5 && m[1]) clicks.push([m[1], m.readUInt16BE(2), m.readUInt16BE(4)]);
+          if (t === 5) pointer = [m[1], m.readUInt16BE(2), m.readUInt16BE(4)];
         }
       }
     });
@@ -549,6 +571,8 @@ test("Screen: off until turned on here, the screen sharing sign-in, the screen d
   for (const type of ['mousePressed', 'mouseReleased']) await send('Input.dispatchMouseEvent', { type, x: at.x, y: at.y, button: 'left', clickCount: 1 });
   for (let i = 0; i < 30 && clicks.length < 1; i++) await sleep(100);
   assert.deepEqual(clicks.splice(0).map(([b, x, y]) => [b, Math.round(x / 4), Math.round(y / 4)])[0], [1, 4, 6], 'a click');
+  // The sheet noVNC lays over the page while a button is down is gone when it is up: left there, it would take the next click after the dialog closes.
+  await until(`getComputedStyle(document.getElementById('noVNC_mouse_capture_elem')).display === 'none'`, 'nothing left over the page');
   await js(`(() => { window.__rings = 0; new MutationObserver((ms) => { for (const m of ms) for (const n of m.addedNodes) if (n.className === 'screen-tap') window.__rings++; }).observe(document.querySelector('#screen-dialog'), { childList: true }); document.querySelector('#screen-type').focus(); })()`);
   await send('Emulation.setTouchEmulationEnabled', { enabled: true });
   await send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: at.x, y: at.y }] });
@@ -559,6 +583,62 @@ test("Screen: off until turned on here, the screen sharing sign-in, the screen d
   await send('Emulation.setTouchEmulationEnabled', { enabled: false });
   assert.deepEqual(clicks.splice(0).map(([b, x, y]) => [b, Math.round(x / 4), Math.round(y / 4)])[0], [1, 4, 6], 'a tap');
   assert.equal(await js(`document.activeElement.id`), 'screen-type', "the tap left the phone's keyboard open");
+
+  // Pad: the screen as a trackpad, for targets a fingertip covers. It shows once the page was touched.
+  const touch = (type, ...points) => send('Input.dispatchTouchEvent', { type, touchPoints: points.map(([x, y], id) => ({ x, y, id })) });
+  const settle = async (ok, what) => {
+    for (let i = 0; i < 40 && !ok(); i++) await sleep(50);
+    assert.ok(ok(), `${what}: pointer ${JSON.stringify(pointer)}, clicks ${JSON.stringify(clicks)}`);
+  };
+  await send('Emulation.setTouchEmulationEnabled', { enabled: true });
+  await settle(() => pointer?.[0] === 0, 'the tap above let go');
+  assert.equal(await js(`document.querySelector('#screen-pad').hidden`), false, 'offered after a touch');
+  assert.equal(await js(`document.querySelector('.screen-pad').hidden && document.querySelector('.screen-pointer').hidden`), true, 'off until asked for');
+  await js(`document.querySelector('#screen-pad').click()`);
+  assert.equal(await js(`!document.querySelector('.screen-pad').hidden && !document.querySelector('.screen-pointer').hidden && document.querySelector('#screen-pad').getAttribute('aria-pressed')`), 'true');
+  await settle(() => pointer?.[0] === 0 && pointer[1] === 32 && pointer[2] === 24, 'the pointer starts in the middle');
+  // A drag moves the pointer and clicks nothing.
+  await touch('touchStart', [at.x, at.y]);
+  for (let i = 1; i <= 6; i++) {
+    await sleep(20);
+    await touch('touchMove', [at.x + i * 50, at.y]);
+  }
+  await touch('touchEnd');
+  await settle(() => pointer[1] >= 36 && pointer[2] === 24, 'moved right, not down');
+  assert.deepEqual(clicks, [], 'a drag is not a click');
+  const [, px, py] = pointer;
+  assert.equal(await js(`(() => { const c = document.querySelector('#screen-view canvas').getBoundingClientRect(); const a = document.querySelector('.screen-pointer').getBoundingClientRect(); return Math.abs(a.left - (c.left + c.width * ${px} / 64)) < c.width / 32; })()`), true, 'the arrow is drawn where the pointer is');
+  // A tap clicks where the pointer is, not under the finger.
+  await touch('touchStart', [at.x, at.y]);
+  await sleep(40);
+  await touch('touchEnd');
+  await settle(() => clicks.length === 1 && pointer[0] === 0, 'a tap: pressed and released');
+  assert.deepEqual(clicks.splice(0), [[1, px, py]]);
+  // Two fingers: a tap is the right button, a drag turns the wheel.
+  await touch('touchStart', [at.x, at.y], [at.x + 60, at.y]);
+  await sleep(40);
+  await touch('touchEnd');
+  await settle(() => clicks.length === 1 && pointer[0] === 0, 'a two-finger tap');
+  assert.deepEqual(clicks.splice(0), [[4, px, py]]);
+  await touch('touchStart', [at.x, at.y], [at.x + 60, at.y]);
+  for (let i = 1; i <= 4; i++) {
+    await sleep(20);
+    await touch('touchMove', [at.x, at.y + i * 20], [at.x + 60, at.y + i * 20]);
+  }
+  await touch('touchEnd');
+  await settle(() => clicks.length >= 2 && pointer[0] === 0, 'the wheel');
+  assert.deepEqual([...new Set(clicks.splice(0).map(([b]) => b))], [8], 'fingers down: the page above comes into view');
+  // A finger held still holds the button, to drag; lifting lets go.
+  await touch('touchStart', [at.x, at.y]);
+  await settle(() => pointer[0] === 1, 'held: the button is down');
+  await touch('touchMove', [at.x - 200, at.y]);
+  await settle(() => pointer[0] === 1 && pointer[1] < px, 'dragged left with it down');
+  await touch('touchEnd');
+  await settle(() => pointer[0] === 0, 'let go');
+  clicks.splice(0);
+  await js(`document.querySelector('#screen-pad').click()`);
+  assert.equal(await js(`document.querySelector('.screen-pad').hidden && document.querySelector('.screen-pointer').hidden && document.querySelector('#screen-pad').getAttribute('aria-pressed')`), 'false');
+  await send('Emulation.setTouchEmulationEnabled', { enabled: false });
 
   // The field for a phone's keyboard, and the keys it lacks.
   await js(`(() => { const t = document.querySelector('#screen-type'); t.value = 'hi'; t.dispatchEvent(new Event('input', { bubbles: true })); })()`);
@@ -584,6 +664,23 @@ test("Screen: off until turned on here, the screen sharing sign-in, the screen d
   for (let i = 0; i < 50 && keys.length < 6; i++) await sleep(100);
   await sleep(300);
   assert.deepEqual(keys.splice(3), [0xff0d, 0xff0d, 0xff0d]);
+
+  // Clip: text to the computer's clipboard and pasted there; what was copied there, fetched.
+  const clipFile = path.join(home, 'clipboard.txt');
+  assert.equal(await js(`document.querySelector('#screen-clip').hidden`), true);
+  await js(`document.querySelector('#screen-clip-btn').click()`);
+  assert.equal(await js(`!document.querySelector('#screen-clip').hidden && document.activeElement.id`), 'screen-clip-text');
+  await js(`(() => { document.querySelector('#screen-clip-text').value = 'héllo ✓ wörld'; document.querySelector('[data-screen="clip-paste"]').click(); })()`);
+  for (let i = 0; i < 50 && keys.length < 5; i++) await sleep(100);
+  const [pasteMod, v] = keys.splice(3);
+  assert.ok([0xffeb, 0xffe3].includes(pasteMod) && v === 0x76, `paste: a modifier, then v: ${pasteMod} ${v}`);
+  assert.equal(fs.readFileSync(clipFile, 'utf8'), 'héllo ✓ wörld', "on the computer's clipboard before the paste");
+  assert.equal(await js(`document.querySelector('#screen-clip-text').value`), '', 'ready for the next');
+  fs.writeFileSync(clipFile, 'copied on the mac');
+  await js(`document.querySelector('[data-screen="clip-get"]').click()`);
+  await until(`document.querySelector('#screen-clip-text').value === 'copied on the mac'`, 'what was copied there');
+  await js(`document.querySelector('#screen-clip-btn').click()`);
+  assert.equal(await js(`document.querySelector('#screen-clip').hidden`), true);
 
   // The phone's way in (a stream out, POSTs in; no WebSocket there): the same viewer over it.
   assert.equal(
@@ -1126,5 +1223,98 @@ test('Runbooks: written from the code changes of a time frame, read, revised, ed
     await until(`document.querySelectorAll('.rb-list tr').length === ${n - 1}`, `${n - 1} left`);
   }
   await js(`document.querySelector('[data-plan="close"]').click()`);
+  assert.deepEqual(errors, [], 'no errors on the page');
+});
+
+test('Files: a folder on this computer listed, a file sent into it, a folder opened and a file fetched', { skip }, async () => {
+  const dir = path.join(home, 'files-test');
+  fs.mkdirSync(path.join(dir, 'logs'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'logs', 'build.log'), 'built fine');
+  fs.writeFileSync(path.join(dir, 'report.txt'), 'the report');
+  const names = `[...document.querySelectorAll('#files-list .files-name')].map((n) => n.textContent)`;
+  await js(`document.querySelector('#files-btn').click()`);
+  await until(`document.querySelector('#files-dialog').open && document.querySelector('#files-path').value`, 'the dialog, at a folder');
+  // Typed, a folder is gone to; not this computer's own Downloads in a test.
+  await js(`(() => { const p = document.querySelector('#files-path'); p.value = ${JSON.stringify(dir)}; p.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })); })()`);
+  await until(`JSON.stringify(${names}) === '["logs","report.txt"]'`, 'folders first, then files');
+  assert.match(await js(`document.querySelector('#files-note').textContent`), /goes into files-test/);
+  // Dropped (or picked) files go into the folder shown, and never over one that is there.
+  const drop = (name, text) => js(`(() => { const dt = new DataTransfer(); dt.items.add(new File([${JSON.stringify(text)}], ${JSON.stringify(name)})); document.querySelector('#files-dialog').dispatchEvent(new DragEvent('drop', { dataTransfer: dt, bubbles: true, cancelable: true })); })()`);
+  await drop('photo.jpg', 'from the phone');
+  await until(`${names}.includes('photo.jpg')`, 'the file sent, in the list');
+  assert.equal(fs.readFileSync(path.join(dir, 'photo.jpg'), 'utf8'), 'from the phone');
+  await drop('report.txt', 'another');
+  await until(`${names}.includes('report (2).txt')`, 'a second one beside the first');
+  assert.equal(fs.readFileSync(path.join(dir, 'report.txt'), 'utf8'), 'the report');
+  // A folder opens; a file is a download of that file.
+  await js(`document.querySelector('#files-list [data-dir]').click()`);
+  await until(`JSON.stringify(${names}) === '["build.log"]' && document.querySelector('#files-path').value.endsWith('/logs')`, 'inside logs');
+  assert.equal(await js(`await (async () => { const a = document.querySelector('#files-list a'); const r = await fetch(a.href); return a.download + ' | ' + r.headers.get('content-disposition').split(';')[0] + ' | ' + (await r.text()); })()`), 'build.log | attachment | built fine');
+  await js(`document.querySelector('#files-up').click()`);
+  await until(`${names}.includes('logs')`, 'up again');
+  // Reached from the terminal on this computer and from Screen too.
+  assert.equal(await js(`document.querySelectorAll('#machine-dialog [data-open-files], #screen-dialog [data-open-files]').length`), 2);
+  await js(`document.querySelector('#files-close').click()`);
+  await until(`!document.querySelector('#files-dialog').open`, 'closed');
+  assert.deepEqual(errors, [], 'no errors on the page');
+});
+
+test('Inbox, one at a time: a single card with the next after it, stepped through with ‹ › and a swipe; Show all brings the list back', { skip }, async () => {
+  const made = await api('POST', '/agents', { intents: ['First, please #ask me', 'Second, please #ask me'], workdir: home });
+  await js(`document.querySelector('[data-tab="inbox"]').click()`);
+  const cards = `document.querySelectorAll('#inbox-view .needs.inbox > .need')`;
+  const seen = `[...${cards}].filter((c) => c.offsetParent !== null)`;
+  await until(`${cards}.length >= 2`, 'two cards at least', 30_000);
+  // Two agents asking the same thing get a card for both as well: wait for a count that holds.
+  let total = 0;
+  for (let i = 0, last = -1; i < 40 && total !== last; i++) {
+    last = total;
+    await sleep(700);
+    total = await js(`${cards}.length`);
+  }
+  assert.equal(await js(`${seen}.length`), total, 'the whole list on a wide screen');
+  await js(`document.querySelector('#inbox-view [data-inbox-one]').click()`);
+  await until(`${seen}.length === 1 && document.querySelector('.inbox-step')`, 'one card');
+  // Where the steps are gone, say what the inbox looks like instead of failing on a missing element.
+  const now = () => js(`document.querySelector('.inbox-step span') ? document.querySelector('.inbox-step span').textContent + ' ' + ${seen}[0].dataset.need
+    : 'no steps: ' + JSON.stringify({ at: location.href, cards: [...${cards}].map((c) => c.dataset.need), hidden: document.querySelector('#inbox-view').hidden, head: document.querySelector('#inbox-view .counts')?.textContent ?? document.querySelector('#inbox-view').textContent.slice(0, 200), open: [...document.querySelectorAll('dialog[open]')].map((d) => d.id) })`);
+  const first = await now();
+  assert.match(first, new RegExp(`^1 of ${total} `));
+  await js(`document.querySelector('[data-inbox-step="1"]').click()`);
+  const second = await now();
+  assert.match(second, new RegExp(`^2 of ${total} `));
+  assert.notEqual(second.split(' ').pop(), first.split(' ').pop(), 'another card');
+  // A swipe to the right goes back; one to the left goes on, and round to the first after the last.
+  const swipe = async (from, to) => {
+    const y = await js(`Math.round(${seen}[0].getBoundingClientRect().top + 20)`);
+    await send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: from, y }] });
+    await send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: (from + to) / 2, y }] });
+    await send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: to, y }] });
+    await send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    await sleep(100);
+  };
+  const box = await js(`(() => { const r = document.querySelector('#inbox-view').getBoundingClientRect(); return { left: Math.round(r.left + 30), right: Math.round(r.right - 30) }; })()`);
+  await send('Emulation.setTouchEmulationEnabled', { enabled: true });
+  await swipe(box.left, box.right);
+  assert.equal(await now(), first, 'swiped back');
+  await swipe(box.right, box.left);
+  assert.equal(await now(), second, 'swiped on');
+  await send('Emulation.setTouchEmulationEnabled', { enabled: false });
+  // Reloaded, it is still one at a time, and the last card steps round to the first.
+  assert.equal(await js(`localStorage.getItem('agentmgr.inboxOne')`), '1');
+  for (let i = 2; i < total; i++) await js(`document.querySelector('[data-inbox-step="1"]').click()`);
+  await js(`document.querySelector('[data-inbox-step="1"]').click()`);
+  assert.equal(await now(), first, 'round to the first');
+  // Answered, a card gives way to the next: still one shown, of one fewer.
+  const key = first.split(' ').pop();
+  const id = made.map((a) => a.id).find((x) => key.includes(x)) ?? made[0].id;
+  await api('POST', `/agents/${id}/stop`);
+  await api('DELETE', `/agents/${id}`).catch(() => {});
+  await until(`${cards}.length < ${total} && ${seen}.length === (${cards}.length ? 1 : 0)`, 'the next card in its place', 20_000);
+  await js(`document.querySelector('#inbox-view [data-inbox-one]')?.click()`);
+  await until(`${seen}.length === ${cards}.length && !document.querySelector('.inbox-step')`, 'the whole list again');
+  assert.equal(await js(`localStorage.getItem('agentmgr.inboxOne')`), '0');
+  for (const a of made) await api('DELETE', `/agents/${a.id}`).catch(() => {});
+  await js(`document.querySelector('[data-tab="agents"]').click()`);
   assert.deepEqual(errors, [], 'no errors on the page');
 });
