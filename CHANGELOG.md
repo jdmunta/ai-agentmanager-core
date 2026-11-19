@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.58.0 (2026-11-18)
+
+- **Screen: Pad, the screen as a trackpad.** A fingertip covers the button it aims at. With **Pad** on, a drag anywhere moves a pointer drawn on the screen (a slow finger moves it finely, a quick one crosses the screen) and a tap clicks where the pointer is. Two fingers scroll or, tapped, right-click; a finger held still, then dragged, drags. Zoomed in, the screen follows the pointer. The button appears on a touch screen and the choice is remembered. Tried in desktop Chrome with made-up touches, not yet on a phone against a real Mac.
+- **Alerts on the phone.** `agentmgr notify phone` (or **Alerts** on the computer) sends the alerts Slack gets as notifications to the phone, through the [ntfy](https://ntfy.sh) app: the agent as the title, a tap opens it, and what waits for an answer is high priority. It needs no Slack. The text passes through ntfy.sh unless you give a server of your own (`--server`), and whoever knows the topic can read it, so the topic made for you is one nobody can guess. ntfy.sh accepts what is sent; not yet seen arriving on a real phone.
+- **Screen: Clip, the computer's clipboard.** Type or paste text on the phone and **Send and paste** puts it on the computer's clipboard and pastes it there: a password, a link, a one-time code. **Fetch** brings back what was copied on the computer. Text only, and only while screen access is on. Tried on a Mac's clipboard and in desktop Chrome, not yet from a phone.
+- **Keep this computer awake.** In the Screen dialog, or `agentmgr awake always` (or `working`: while an agent works, and five minutes after). A sleeping computer runs no agents and cannot be reached from the phone. The display may still sleep and lock, and a closed lid still puts a laptop to sleep. Tried on a Mac; on Linux it uses `systemd-inhibit`, untried.
+- **Files on this computer.** **Files** in the Screen bar, the Terminal bar and the ☰ menu lists this computer's folders, starting in Downloads. Send files from the phone into the folder shown (photos too, up to 250 MB each, never over a file that is there), and tap a file to fetch it to the phone. It reaches what the terminal on this computer reaches. Tried in desktop Chrome, not yet from a phone.
+- **Inbox, one at a time.** On a phone the inbox shows one card filling the screen; answered, the next takes its place. Swipe to step through them, or **‹ ›**; **Show all** brings the list back. Tried in desktop Chrome with made-up swipes.
+- **Go to.** `Ctrl+K` or `⌘K`, or **⌕ Go to** in the top bar: one box that finds a view, a list, a menu item or an agent by name and opens it. Agents that wait for you come first. On a phone it saves looking through the More menu.
+- **Fixed: the first click after closing Screen did nothing.** After a mouse click in the screen, an unseen layer stayed over the page and took the next click once the dialog was closed. Found by a test here; a phone's taps did not leave it.
+- **Not the browser's own notifications:** a phone allows those only from a site whose certificate it trusts, and remote access uses a self-signed one.
+
 ## 1.57.3 (2026-11-18)
 
 - **Screen: taps from a phone.** A tap did nothing on a Mac. It was sent as move, press and release in the same instant; it is now spaced out as a hand on a mouse would, and a ring shows where the tap landed, so you can see the page took it. Not yet confirmed against a real Mac from a phone.

@@ -50,6 +50,8 @@ import { initBoard } from '/board.js';
 import { initMcp } from '/mcp.js';
 import { initCodeMap } from '/codemap.js';
 import { initKeys } from '/keys.js';
+import { initPalette } from '/palette.js';
+import { initFiles } from '/files.js';
 import { morph } from '/morph.js';
 
 const $ = (sel) => document.querySelector(sel);
@@ -371,6 +373,18 @@ const mcpUi = initMcp({ api, $, esc, ago, md: (t) => md(t), toast: (m, ms) => to
 $('#mcp-btn').onclick = () => mcpUi.open(selectedId && agents.get(selectedId)?.workdir ? selectedId : null);
 // Keyboard shortcuts (keys.js): the same actions as the buttons.
 const keysUi = initKeys({ $, esc, run: (act) => shortcut(act) });
+// Files on this computer: send one from this device, fetch one to it (files.js).
+initFiles({ api, esc, toast, ago, $ });
+// Go to (Ctrl+K): the agents that wait for you first.
+initPalette({
+  $,
+  esc,
+  select: (id) => (showTab('agents'), select(id)),
+  agents: () =>
+    [...agents.values()]
+      .map((a) => ({ id: a.id, label: a.name, state: statusOf(a), hint: [statusOf(a), a.projectInfo?.name, a.intent?.replace(/\s+/g, ' ').slice(0, 120)].filter(Boolean).join(' · ') }))
+      .sort((a, b) => (b.state === 'attention') - (a.state === 'attention')),
+});
 $('#keys-btn').onclick = () => keysUi.help();
 
 /** The agents in the list as shown (collapsed projects left out), top to bottom. */
@@ -1792,6 +1806,24 @@ function inboxSwitches() {
   return `<div class="inbox-switches hint">${rounds}${judge}<button class="link" data-inbox-settings title="Rounds, critics and the pull request: in Settings">Settings…</button></div>`;
 }
 
+// One at a time: on a phone the inbox is a long scroll of cards. Shown one by one instead, each
+// fills the screen with its buttons under the thumb; answered, the next takes its place. A swipe
+// (or ‹ ›) steps through them. The choice is kept in this browser; a narrow screen starts with it.
+let inboxOne = (() => {
+  try {
+    const kept = localStorage.getItem('agentmgr.inboxOne');
+    return kept === null ? matchMedia('(max-width: 800px)').matches : kept === '1';
+  } catch {
+    return false;
+  }
+})();
+let inboxAt = { key: null, i: 0 }; // the card shown: by its key, or where it was once it is gone
+
+function inboxStep(step, count) {
+  inboxAt = { key: null, i: (inboxAt.i + step + count) % Math.max(1, count) };
+  renderInbox();
+}
+
 function renderInbox() {
   const items = inboxItems();
   const urgent = items.filter((i) => i.kind === 'approval' || i.kind === 'prompt' || i.kind === 'question' || i.kind === 'waiting').length;
@@ -1800,11 +1832,16 @@ function renderInbox() {
   if (sideTab !== 'inbox') return;
   const view = $('#inbox-view');
   if (view.contains(document.activeElement) && document.activeElement.dataset.draft) return; // don't yank the field being typed in
+  const cards = [...promptGroups(items).map((g) => [`group:${g.map((it) => it.a.id).join(',')}`, groupCard(g)]), ...items.map((it) => [it.key, needCard(it)])];
+  const found = cards.findIndex(([key]) => key === inboxAt.key);
+  const now = Math.max(0, found >= 0 ? found : Math.min(inboxAt.i, cards.length - 1));
+  inboxAt = { key: cards[now]?.[0] ?? null, i: now };
+  const steps = inboxOne && cards.length > 1 ? `<span class="inbox-step"><button class="small ghost" data-inbox-step="-1" aria-label="The one before">‹</button><span>${now + 1} of ${cards.length}</span><button class="small ghost" data-inbox-step="1" aria-label="The next one">›</button></span>` : '';
   morph(
     view,
     inboxSwitches() +
       (items.length
-        ? `<div class="counts"><span>${items.length} waiting on you</span></div><div class="needs inbox">${promptGroups(items).map(groupCard).join('')}${items.map((it) => needCard(it)).join('')}</div>`
+        ? `<div class="counts inbox-counts" data-inbox-cards="${cards.length}"><span>${items.length} waiting on you</span><span class="spacer"></span>${steps}<button class="link" data-inbox-one title="${inboxOne ? 'The whole list again' : 'One card at a time, the next when it is answered; swipe to step through them'}">${inboxOne ? 'Show all' : 'One at a time'}</button></div><div class="needs inbox${inboxOne ? ' one' : ''}">${cards.map(([, html], n) => (inboxOne && n === now ? html.replace('class="need ', 'class="need now ') : html)).join('')}</div>`
         : `<div class="empty"><p>Nothing needs you right now.</p><p>Prompts waiting for an answer, questions agents ask, agents that seem stuck and agents editing the same files show up here.</p></div>`),
   );
 }
@@ -1813,6 +1850,16 @@ async function onNeed(e) {
   // A recommendation's own buttons (Decide draws them on plan and question cards).
   if (decideUi?.handle(e)) return e.preventDefault();
   if (e.target.closest('[data-inbox-settings]')) return $('#settings-btn').click();
+  if (e.target.closest('[data-inbox-one]')) {
+    inboxOne = !inboxOne;
+    inboxAt = { key: null, i: 0 }; // from the first, the most pressing
+    try {
+      localStorage.setItem('agentmgr.inboxOne', inboxOne ? '1' : '0');
+    } catch {}
+    return renderInbox();
+  }
+  const stepBtn = e.target.closest('[data-inbox-step]');
+  if (stepBtn) return inboxStep(Number(stepBtn.dataset.inboxStep), Number(stepBtn.closest('[data-inbox-cards]').dataset.inboxCards));
   const judge = e.target.closest('[data-judge]');
   if (judge) {
     e.preventDefault();
@@ -1965,6 +2012,23 @@ async function onNeedSubmit(e) {
     await act(async () => upsert(await api('POST', `/agents/${id}/stuck/nudge`, { key: form.dataset.k, text })), 'Nudge queued');
   }
   done();
+}
+// One at a time: a swipe to the left is the next card, to the right the one before.
+{
+  let from = null;
+  const inbox = $('#inbox-view');
+  inbox.addEventListener('touchstart', (e) => {
+    from = inboxOne && e.touches.length === 1 && !e.target.closest('input, textarea, select') ? { x: e.touches[0].clientX, y: e.touches[0].clientY } : null;
+  }, { passive: true });
+  inbox.addEventListener('touchend', (e) => {
+    const was = from;
+    from = null;
+    const t = e.changedTouches[0];
+    const count = Number(inbox.querySelector('[data-inbox-cards]')?.dataset.inboxCards ?? 0);
+    if (!was || !t || count < 2) return;
+    const dx = t.clientX - was.x;
+    if (Math.abs(dx) > 70 && Math.abs(dx) > 2 * Math.abs(t.clientY - was.y)) inboxStep(dx < 0 ? 1 : -1, count);
+  }, { passive: true });
 }
 for (const root of [$('#inbox-view'), $('#detail-body'), $('#needs-body')]) {
   root.addEventListener('click', onNeed);
@@ -5142,7 +5206,7 @@ $('#assistant-dialog').addEventListener('click', (e) => {
 loadAssistant({ fill: false }).catch(() => {});
 setInterval(() => loadAssistant({ fill: false }).catch(() => {}), 60_000);
 
-// ------------------------------------------------------------------ Slack alerts (from this computer)
+// ------------------------------------------------------------------ Alerts: Slack and the phone (from this computer)
 
 async function loadAlerts() {
   const n = await api('GET', '/notify');
@@ -5152,15 +5216,16 @@ async function loadAlerts() {
   f.channel.value = n.slack.channel ?? '';
   f.webhookUrl.placeholder = n.slack.webhookUrl ?? 'https://hooks.slack.com/services/…';
   f.botToken.placeholder = n.slack.botToken ?? 'xoxb-…';
+  f.phoneTopic.value = n.phone.topic ?? '';
+  f.phoneServer.value = n.phone.server === 'https://ntfy.sh' ? '' : n.phone.server;
   for (const k of Object.keys(n.events)) if (f[`ev_${k}`]) f[`ev_${k}`].checked = n.events[k];
   f.needsInputDelaySec.value = n.needsInputDelaySec;
   f.waitingDelaySec.value = n.waitingDelaySec;
   f.skipWhenWatching.checked = n.skipWhenWatching;
   f.includeIntent.checked = n.includeIntent;
   f.enabled.checked = n.enabled;
-  $('#alerts-current').textContent = n.configured
-    ? `Configured: ${n.slack.channel ? `bot token → ${n.slack.channel}` : `webhook ${n.slack.webhookUrl}`}. Leave the fields empty to keep it.`
-    : 'Not configured yet.';
+  const to = [n.slackConfigured ? `Slack (${n.slack.channel ? `bot token → ${n.slack.channel}` : `webhook ${n.slack.webhookUrl}`}; leave its fields empty to keep it)` : null, n.phone.topic ? 'the phone' : null].filter(Boolean);
+  $('#alerts-current').textContent = to.length ? `Alerts go to ${to.join(' and ')}.` : 'Not configured yet.';
   $('#alerts-recent').innerHTML = n.recent.length
     ? `Recent: ${n.recent.slice(0, 5).map((r) => `${esc(r.kind)} · ${esc(r.agent)} · ${r.error ? `<span class="error">${esc(r.error)}</span>` : TRIAGED[r.urgency] ?? 'sent'} · ${ago(r.at)}`).join('<br>')}`
     : '';
@@ -5186,6 +5251,7 @@ $('#alerts-form').addEventListener('submit', async (e) => {
     includeIntent: f.includeIntent.checked,
     enabled: f.enabled.checked,
     channel: f.channel.value.trim() || undefined,
+    phone: { topic: f.phoneTopic.value.trim() || null, server: f.phoneServer.value.trim() },
   };
   if (f.webhookUrl.value.trim()) body.webhookUrl = f.webhookUrl.value.trim();
   if (f.botToken.value.trim()) body.botToken = f.botToken.value.trim();
@@ -5198,10 +5264,14 @@ $('#alerts-form').addEventListener('submit', async (e) => {
     $('#alerts-error').hidden = false;
   }
 });
+$('#alerts-phone-new').onclick = () => {
+  const bytes = crypto.getRandomValues(new Uint8Array(12));
+  $('#alerts-form').phoneTopic.value = `agentmgr-${[...bytes].map((b) => b.toString(16).padStart(2, '0')).join('')}`;
+};
 $('#alerts-test').onclick = async () => {
   try {
     await api('POST', '/notify/test');
-    toast('Test message sent to Slack');
+    toast('Test message sent');
   } catch (err) {
     $('#alerts-error').textContent = err.message;
     $('#alerts-error').hidden = false;

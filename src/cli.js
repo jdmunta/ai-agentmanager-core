@@ -1784,6 +1784,21 @@ export async function main(argv) {
     });
 
   program
+    .command('awake')
+    .description('Keep this computer from going to sleep by itself, so agents keep working and the phone can reach it: always, or only while an agent works')
+    .argument('[mode]', 'off, working (while an agent works, and five minutes after) or always')
+    .option('--json', 'print JSON')
+    .action(async (mode, opts) => {
+      await daemon();
+      const v = mode ? await api('PUT', '/awake', { mode }) : await api('GET', '/awake');
+      if (opts.json) return console.log(JSON.stringify(v, null, 2));
+      console.log(`Keep awake: ${v.mode === 'off' ? dim('off') : green(v.mode === 'always' ? 'always' : 'while an agent works')}${v.holding ? ' (held awake now)' : ''}`);
+      if (!v.supported) console.log(yellow('This computer has nothing here to keep it awake with (macOS: caffeinate; Linux: systemd-inhibit).'));
+      else if (v.mode === 'off') console.log(dim('agentmgr awake always, or: agentmgr awake working'));
+      else console.log(dim('The display may still sleep and lock, and closing the lid still puts a laptop to sleep.'));
+    });
+
+  program
     .command('rounds')
     .description("Review rounds before a pull request: critics on other models read an agent's changes when it says it is done, the agent fixes what they find, and the pull request is opened when they approve")
     .argument('[agent]', "an agent, for its rounds; without one, the settings")
@@ -2411,9 +2426,10 @@ export async function main(argv) {
       printBacklog(await api('POST', '/backlog/settings', { autoRun: true }));
     });
 
-  const notifyCmd = program.command('notify').description('Slack alerts when an agent needs you');
+  const notifyCmd = program.command('notify').description('Alerts when an agent needs you: in Slack, and on the phone');
   const printNotify = (n) => {
-    console.log(`alerts ${n.enabled && n.configured ? green('on') : dim('off')}  ${n.configured ? (n.slack.channel ? `bot → ${n.slack.channel}` : `webhook ${n.slack.webhookUrl}`) : dim('Slack not configured')}`);
+    const to = [n.slackConfigured ? (n.slack.channel ? `Slack bot → ${n.slack.channel}` : `Slack webhook ${n.slack.webhookUrl}`) : null, n.phone?.topic ? `phone → ${n.phone.server}/${n.phone.topic}` : null].filter(Boolean);
+    console.log(`alerts ${n.enabled && n.configured ? green('on') : dim('off')}  ${to.length ? to.join(', ') : dim('neither Slack nor the phone is set up')}`);
     console.log(`  events: ${Object.entries(n.events).map(([k, v]) => `${k} ${v ? green('on') : dim('off')}`).join(', ')}`);
     console.log(dim(`  needs input after ${n.needsInputDelaySec}s, waiting after ${n.waitingDelaySec}s, skip while you watch: ${n.skipWhenWatching}`));
     for (const r of n.recent ?? []) console.log(dim(`  ${r.at} ${r.kind} ${r.agent} ${r.error ? red(r.error) : 'sent'}`));
@@ -2429,6 +2445,21 @@ export async function main(argv) {
       await daemon();
       printNotify(await api('POST', '/notify', { webhookUrl: opts.webhook, botToken: opts.token, channel: opts.channel }));
       console.log(dim('Send a test: agentmgr notify test'));
+    });
+  notifyCmd
+    .command('phone')
+    .description('Send alerts to the phone as notifications, through the ntfy app (ntfy.sh, or a server of your own)')
+    .option('--topic <topic>', 'the ntfy topic to publish to (default: a new one nobody can guess)')
+    .option('--server <url>', 'your own ntfy server instead of https://ntfy.sh')
+    .option('--token <token>', 'access token, for a server or topic that needs one')
+    .option('--off', 'stop sending alerts to the phone')
+    .action(async (opts) => {
+      await daemon();
+      if (opts.off) return printNotify(await api('POST', '/notify', { phone: { topic: null, token: null } }));
+      const n = await api('POST', '/notify', { phone: { create: true, topic: opts.topic, server: opts.server, token: opts.token } });
+      printNotify(n);
+      console.log(`\nOn the phone:\n  1. Install the ${bold('ntfy')} app (App Store or Google Play).\n  2. In it: + → Subscribe to topic → ${bold(n.phone.topic)}${n.phone.server === 'https://ntfy.sh' ? '' : `  (Use another server: ${n.phone.server})`}\n  3. Here: agentmgr notify test`);
+      console.log(dim(`\nA tap on a notification opens the agent${n.phone.server === 'https://ntfy.sh' ? '. Alerts pass through ntfy.sh, a public service: whoever knows the topic can read them, so keep it to yourself (--server for your own).' : '.'}`));
     });
   notifyCmd.command('test').description('Send a test message').action(async () => {
     await daemon();

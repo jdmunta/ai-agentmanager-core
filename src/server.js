@@ -19,6 +19,8 @@ import { Cleanup } from './cleanup.js';
 import { Landing } from './landing.js';
 import { PreReview } from './prereview.js';
 import { Screen } from './screen.js';
+import { Awake } from './awake.js';
+import { Files } from './files.js';
 import { Autopilot } from './autopilot.js';
 import { Goals, goalMarkdown } from './goals.js';
 import { Budgets } from './budgets.js';
@@ -37,7 +39,7 @@ import { installed, listEngines, localEngineId, registerAcpEngines, registerEngi
 import { LOCAL_ENGINES } from './engines/local.js';
 import { Plugins, pluginSpecs } from './plugins.js';
 import { HubLink, linkUrls } from './hublink.js';
-import { Notifier, isWorkflowUrl, loadNotify, publicNotify, saveNotify, sendSlack } from './notify.js';
+import { Notifier, isWorkflowUrl, loadNotify, newTopic, publicNotify, saveNotify, sendAlert } from './notify.js';
 import { Previews, parseUrl } from './preview.js';
 import { LiveBrowser } from './livebrowser.js';
 import * as remote from './remote.js';
@@ -262,6 +264,8 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
     return `${kind ? (/^[AEIOU]/i.test(kind) ? `an ${kind}` : `a ${kind}`) : 'a signed-in device'}${req.device?.ip ? ` (${String(req.device.ip).replace(/^::ffff:/, '')})` : ''}`;
   };
   const screen = new Screen({ config, onChange: (viewers) => pushScreen(viewers), log: (m) => console.log(`[agentmgr] ${m}`) });
+  // Awake (awake.js): the computer kept from sleeping, always or while an agent works.
+  const awake = new Awake({ config, working: () => manager.list().some((a) => a.runtime?.busy), log: (m) => console.log(`[agentmgr] ${m}`) });
   const standup = new Standup({
     manager,
     store,
@@ -274,7 +278,7 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
       const link = `${phone ? phone.url : `http://127.0.0.1:${port}/`}#standup`;
       const need = latest.items.filter((i) => i.needs).length;
       const what = `${latest.items.length} agent${latest.items.length === 1 ? '' : 's'} with news${need ? `, ${need} need you` : ''}`;
-      sendSlack(`:sunrise: *Standup ready*: ${what}\n<${link}|Play it>`, n, `Standup ready: ${what}\nPlay it: ${link}`).catch(() => {});
+      sendAlert(`:sunrise: *Standup ready*: ${what}\n<${link}|Play it>`, n, `Standup ready: ${what}\nPlay it: ${link}`).catch(() => {});
     },
   });
   // Value: what delivered work is worth, by day, week, month and quarter, with scheduled reports (value.js).
@@ -287,11 +291,11 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
     onChange: () => pushValue(),
     notify: async (period, s) => {
       const n = loadNotify();
-      if (!n.enabled || !n.events.value) throw new Error('Slack alerts are off');
+      if (!n.enabled || !n.events.value) throw new Error('Alerts are off');
       const phone = remoteServer ? remote.remoteUrls(remotePort).find((u) => !u.vpn) : null;
       const link = `${phone ? phone.url : `http://127.0.0.1:${port}/`}#value`;
       const msg = valueSlack(period, s, link);
-      await sendSlack(msg.text, n, msg.plain);
+      await sendAlert(msg.text, n, msg.plain);
     },
     publishDrive: async (title, markdown) => {
       const st = store.data.value;
@@ -335,7 +339,7 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
     notify: async (text, plain) => {
       const n = loadNotify();
       if (!n.enabled || !n.events.milestone) return;
-      await sendSlack(text, n, plain);
+      await sendAlert(text, n, plain);
     },
   });
   const decisions = new Decisions({
@@ -363,7 +367,7 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
     notify: async (text, plain) => {
       const n = loadNotify();
       if (!n.enabled || !n.events.decided) return;
-      await sendSlack(text, n, plain);
+      await sendAlert(text, n, plain);
     },
   });
   // Usage: each engine's plan limits, used and left (usage.js).
@@ -378,7 +382,7 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
     notify: async (text, plain) => {
       const n = loadNotify();
       if (!n.enabled || !n.events.usage) return;
-      await sendSlack(text, n, plain);
+      await sendAlert(text, n, plain);
     },
   });
   manager.on('usage', ({ engine, limits, at }) => engine === 'codex' && usage.record('codex', codexWindows(limits, Date.parse(at) || Date.now()), { at: at ?? undefined, source: 'Codex session log' }));
@@ -624,6 +628,29 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
   // Opening VS Code or Cursor happens on this computer, so only from it.
   api.get('/editors', wrap(() => studio.editors()));
   api.post('/agents/:id/open-in', wrap((req) => studio.openIn(req.params.id, req.body?.editor, req.body?.path ?? null)));
+  // Files (files.js): this computer's folders, to send it a file and fetch one. As far as its
+  // terminal reaches, and allowed where that is.
+  const files = new Files();
+  const filesAllowed = () => manager.plugins.check('terminal.open', { agent: null, kind: 'machine' });
+  api.get('/machine/files', wrap((req) => (filesAllowed(), files.list(req.query.dir, { hidden: req.query.hidden === '1' }))));
+  api.post(
+    '/machine/files',
+    express.raw({ type: () => true, limit: '250mb' }),
+    wrap((req) => {
+      filesAllowed();
+      if (!Buffer.isBuffer(req.body) || !req.body.length) throw fail(400, 'Empty file');
+      return files.save(req.query.name, req.body, req.query.dir || null);
+    }),
+  );
+  api.get('/machine/file', async (req, res) => {
+    try {
+      filesAllowed();
+      const f = await files.file(req.query.path);
+      res.download(f.path, f.name, { dotfiles: 'allow' });
+    } catch (err) {
+      res.status(err.status || 500).json({ error: err.message });
+    }
+  });
   // The machine terminal: shells in the home folder, not tied to an agent (Open Terminal).
   api.get('/machine/shells', wrap(() => ({ shells: manager.shellNumbers(MACHINE), home: os.homedir() })));
   api.post('/machine/shell/new', wrap(() => ({ n: manager.nextShellNumber(MACHINE) })));
@@ -754,7 +781,7 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
   api.delete('/agents/:id/links', wrap((req) => manager.removeLink(req.params.id, req.query)));
   api.post('/flush', wrap(() => manager.flush()));
 
-  // ---------------------------------------------------------- Slack alerts (local only)
+  // ---------------------------------------------------------- alerts: Slack, and the phone through ntfy (local only)
   const okUrl = (u) => /^https:\/\/[\w.-]+\//.test(u) || /^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?\//.test(u);
   api.get('/notify', wrap(() => ({ ...publicNotify(), workflow: isWorkflowUrl(loadNotify().slack.webhookUrl), recent: notifier.log, judge: judgeAlerts() })));
   const judgeAlerts = () => (manager.judge.enabled ? { digestMin: manager.judge.settings.digestMin, pending: notifier.digest.length } : null);
@@ -770,19 +797,35 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
       if (b.botToken !== undefined) slack.botToken = b.botToken || null;
       if (b.channel !== undefined) slack.channel = b.channel || null;
       const patch = { slack };
+      // The phone, through ntfy: `create` makes a topic nobody can guess; an empty topic turns it off.
+      const p = b.phone && typeof b.phone === 'object' ? b.phone : null;
+      if (p) {
+        patch.phone = {};
+        if (p.server !== undefined) {
+          const server = String(p.server || 'https://ntfy.sh').replace(/\/+$/, '');
+          if (!/^https:\/\/[\w.-]+(:\d+)?(\/|$)/.test(server) && !okUrl(`${server}/`)) throw fail(400, 'The ntfy server must be https://…');
+          patch.phone.server = server;
+        }
+        if (p.topic !== undefined) {
+          if (p.topic && !/^[\w-]{1,64}$/.test(p.topic)) throw fail(400, 'A topic is up to 64 letters, digits, - and _');
+          patch.phone.topic = p.topic || null;
+        }
+        if (p.token !== undefined) patch.phone.token = p.token || null;
+        if (p.create && !patch.phone.topic) patch.phone.topic = loadNotify().phone.topic ?? newTopic();
+      }
       for (const k of ['enabled', 'skipWhenWatching', 'includeIntent']) if (typeof b[k] === 'boolean') patch[k] = b[k];
       for (const k of ['needsInputDelaySec', 'waitingDelaySec']) if (Number(b[k]) >= 0) patch[k] = Number(b[k]);
       if (b.events && typeof b.events === 'object') patch.events = b.events;
       const next = saveNotify(patch);
-      // Configuring Slack for the first time turns alerts on.
-      if (b.enabled === undefined && (slack.webhookUrl || (slack.botToken && (b.channel ?? next.slack.channel)))) saveNotify({ enabled: true });
+      // Configuring Slack or the phone for the first time turns alerts on.
+      if (b.enabled === undefined && (slack.webhookUrl || (slack.botToken && (b.channel ?? next.slack.channel)) || patch.phone?.topic)) saveNotify({ enabled: true });
       return { ...publicNotify(), recent: notifier.log };
     }),
   );
   api.post(
     '/notify/test',
     wrap(async () => {
-      await sendSlack(':wave: Test from AI Agent Manager: alerts will arrive here when an agent needs you.', loadNotify());
+      await sendAlert(':wave: Test from AI Agent Manager: alerts will arrive here when an agent needs you.', loadNotify());
       return { ok: true };
     }),
   );
@@ -1681,6 +1724,13 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
       screen.close(id, 'The page closed it');
     });
   });
+  api.get('/screen/clipboard', wrap(() => screen.clipboard()));
+  api.put('/screen/clipboard', wrap((req) => screen.setClipboard(req.body?.text)));
+  api.get('/awake', wrap(() => awake.status()));
+  api.put('/awake', wrap((req) => {
+    saveConfig({ awake: awake.change(req.body ?? {}) });
+    return awake.status();
+  }));
   api.post('/screen/input', wrap((req) => {
     if (typeof req.body?.id !== 'string' || typeof req.body?.d !== 'string') throw fail(400, 'id and d (base64) are required');
     screen.write(req.body.id, Buffer.from(req.body.d, 'base64'));
@@ -1895,6 +1945,7 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
     mcp.close();
     assistant.close();
     screen.closeAll('AI Agent Manager is shutting down');
+    awake.stop();
     console.log(`[agentmgr] shutting down (${reason}); closing agents so their sessions are saved`);
     builder.stopAll();
     await manager.stopAll({ final: true });

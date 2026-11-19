@@ -2508,6 +2508,33 @@ test('keyboard shortcuts: every key does something, and the list shows each one'
   assert.equal(new Set(listed.flatMap(([keys]) => keys)).size, listed.flatMap(([keys]) => keys).length, 'no key twice');
 });
 
+test('go to: what was typed finds views and agents by name, the best match first', async () => {
+  const { findMatches } = await import('../public/palette.js');
+  const items = [
+    { label: 'Results', hint: 'Results across agents: merge rate, cost; the screen of numbers' },
+    { label: 'Screen', hint: "This computer's screen" },
+    { label: 'Split screen', hint: '' },
+    { label: 'fix-login', hint: 'attention · Console · Fix the login screen' },
+    { label: 'Usage', hint: '' },
+  ];
+  const names = (q) => findMatches(items, q).map((i) => i.label);
+  assert.deepEqual(names(''), items.map((i) => i.label), 'nothing typed: all, in their order');
+  assert.deepEqual(names('scr'), ['Screen', 'Split screen', 'Results', 'fix-login'], 'starts with it, a word starts with it, then the description');
+  assert.deepEqual(names('SCREEN login'), ['fix-login'], 'every word, in any case');
+  assert.deepEqual(names('console'), ['fix-login'], "an agent by its project");
+  assert.deepEqual(names('zzz'), []);
+});
+
+test('alerts on the phone: the icon as a tag, the first line as the title, the link as what a tap opens', async () => {
+  const { phoneMessage, newTopic } = await import('../src/notify.js');
+  assert.deepEqual(phoneMessage(':sunrise: Standup ready: 3 agents with news\nPlay it: https://10.0.0.2:4718/#standup'), { title: 'AI Agent Manager', message: 'Standup ready: 3 agents with news', tags: ['sunrise'], priority: 3, click: 'https://10.0.0.2:4718/#standup' });
+  assert.deepEqual(phoneMessage(':robot_face: Agent digest (2)\n- a: one\n- b: see https://x.test/y for more'), { title: 'Agent digest (2)', message: '- a: one\n- b: see https://x.test/y for more', tags: ['robot'], priority: 3 }, 'a link inside a sentence stays text');
+  assert.deepEqual(phoneMessage('ignored', { title: 'fix-login (Console)', message: 'needs input', link: 'https://h/#a/term', priority: 4 }), { title: 'fix-login (Console)', message: 'needs input', tags: [], priority: 4, click: 'https://h/#a/term' });
+  assert.equal(phoneMessage(`t\n${'x'.repeat(3000)}`).message.length, 1500, 'cut to what a notification holds');
+  assert.match(newTopic(), /^agentmgr-[\w-]{16}$/);
+  assert.notEqual(newTopic(), newTopic());
+});
+
 test('standup: facts since the last one, agents that need you first, plain wording, the reply checked', async () => {
   const { agentFacts, order, plainLine, parseStandup, standupSettings, needsOf } = await import('../src/standup.js');
   const since = '2026-11-05T09:00:00Z';

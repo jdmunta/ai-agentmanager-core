@@ -30,6 +30,7 @@ const port = await (async () => {
 })();
 
 process.env.AGENTMGR_HOME = home;
+process.env.AGENTMGR_CLIPBOARD_FILE = path.join(home, 'clipboard.txt'); // not the clipboard of whoever runs the tests
 process.env.AGENTMGR_PLUGINS = path.join(here, 'fixtures', 'test-plugin.js');
 process.env.AGENTMGR_PORT = String(port);
 process.env.CLAUDE_CONFIG_DIR = path.join(home, 'claude');
@@ -861,6 +862,132 @@ test('screen: the status says when a Mac with Remote Management on does not list
   assert.deepEqual(on.mac, { user: 'sam', allowed: false, fix: 'sudo kickstart …' });
 });
 
+test("screen: the computer's clipboard goes with it, text in and out, and not while screen access is off", async () => {
+  const { Screen } = await import('../src/screen.js');
+  let held = 'copied on the mac';
+  const clip = { read: async () => held, write: async (t) => void (held = t) };
+  const off = new Screen({ config: { screen: { enabled: false } }, clip });
+  await assert.rejects(off.clipboard(), { status: 403 });
+  await assert.rejects(off.setClipboard('x'), { status: 403 });
+  assert.equal(held, 'copied on the mac', 'untouched');
+  const on = new Screen({ config: { screen: { enabled: true } }, clip });
+  assert.deepEqual(await on.clipboard(), { text: 'copied on the mac', cut: false });
+  assert.deepEqual(await on.setClipboard('from the phone ✓'), { ok: true, length: 16 });
+  assert.equal(held, 'from the phone ✓');
+  await assert.rejects(on.setClipboard(42), { status: 400 });
+  await assert.rejects(on.setClipboard('x'.repeat(200_001)), { status: 413 });
+  held = 'y'.repeat(250_000);
+  const long = await on.clipboard();
+  assert.deepEqual([long.text.length, long.cut], [200_000, true]);
+
+  // Over the API: the same switch, read at the daemon.
+  await call('PUT', '/screen/settings', { enabled: false });
+  assert.equal((await call('GET', '/screen/clipboard')).status, 403);
+  assert.equal((await call('PUT', '/screen/clipboard', { text: 'no' })).status, 403);
+  await call('PUT', '/screen/settings', { enabled: true });
+  assert.equal((await call('PUT', '/screen/clipboard', { text: 'héllo ✓' })).status, 200);
+  assert.deepEqual((await call('GET', '/screen/clipboard')).body, { text: 'héllo ✓', cut: false });
+  await call('PUT', '/screen/settings', { enabled: false });
+});
+
+test('files: a folder listed, a file sent into it without replacing another, and one fetched', async () => {
+  const { Files } = await import('../src/files.js');
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentmgr-files-'));
+  try {
+    fs.mkdirSync(path.join(root, 'Downloads'));
+    fs.mkdirSync(path.join(root, 'work'));
+    fs.writeFileSync(path.join(root, 'b10.log'), 'ten');
+    fs.writeFileSync(path.join(root, 'b9.log'), 'nine!');
+    fs.writeFileSync(path.join(root, '.secret'), 'x');
+    const f = new Files({ home: root });
+    const home = await f.list('');
+    assert.deepEqual([home.dir, home.inbox, home.more], [root, path.join(root, 'Downloads'), 0]);
+    assert.deepEqual(home.entries.map((e) => [e.name, e.dir, e.size]), [['Downloads', true, null], ['work', true, null], ['b9.log', false, 5], ['b10.log', false, 3]], 'folders first, then by name as people count');
+    assert.ok((await f.list('~', { hidden: true })).entries.some((e) => e.name === '.secret'));
+    assert.equal((await f.list('~/work')).parent, root);
+    assert.equal((await f.list('/')).parent, null);
+    await assert.rejects(f.list('work'), { status: 400 }, 'a whole path, or ~/');
+    await assert.rejects(f.list('~/nope'), { status: 404 });
+    await assert.rejects(f.list('~/b9.log'), { status: 400 });
+
+    const sent = await f.save('photo.jpg', Buffer.from('one'));
+    assert.deepEqual(sent, { path: path.join(root, 'Downloads', 'photo.jpg'), name: 'photo.jpg', dir: path.join(root, 'Downloads'), size: 3 });
+    assert.equal((await f.save('photo.jpg', Buffer.from('two'))).name, 'photo (2).jpg', 'never over a file that is there');
+    assert.equal(fs.readFileSync(sent.path, 'utf8'), 'one');
+    assert.equal((await f.save('../../etc/passwd', Buffer.from('x'), '~/work')).path, path.join(root, 'work', 'passwd'), 'a name, not a way out of the folder');
+    assert.equal((await f.save('.zshrc', Buffer.from('x'))).name, 'zshrc', 'not as a hidden file');
+    await assert.rejects(f.save('a.txt', Buffer.from('x'), '~/b9.log'), { status: 403 });
+
+    assert.deepEqual(await f.file('~/b9.log'), { path: path.join(root, 'b9.log'), name: 'b9.log', size: 5 });
+    await assert.rejects(f.file('~/work'), { status: 400 });
+    await assert.rejects(f.file('~/gone'), { status: 404 });
+
+    // Over the API: sent as the file itself, fetched as a download.
+    const base = `http://127.0.0.1:${port}/api/machine`;
+    const up = await fetch(`${base}/files?name=${encodeURIComponent('notes ✓.txt')}&dir=${encodeURIComponent(path.join(root, 'work'))}`, { method: 'POST', headers: { 'content-type': 'application/octet-stream', 'x-agentmgr': '1' }, body: 'from the phone' });
+    assert.equal(up.status, 200);
+    const saved = await up.json();
+    assert.equal(saved.path, path.join(root, 'work', 'notes ✓.txt'));
+    assert.deepEqual((await call('GET', `/machine/files?dir=${encodeURIComponent(path.join(root, 'work'))}`)).body.entries.map((e) => e.name), ['notes ✓.txt', 'passwd']);
+    const down = await fetch(`${base}/file?path=${encodeURIComponent(saved.path)}`);
+    assert.match(down.headers.get('content-disposition'), /^attachment/);
+    assert.equal(await down.text(), 'from the phone');
+    assert.equal((await fetch(`${base}/file?path=${encodeURIComponent(path.join(root, 'nope'))}`)).status, 404);
+    assert.equal((await fetch(`${base}/files?name=x`, { method: 'POST', headers: { 'content-type': 'application/octet-stream', 'x-agentmgr': '1' }, body: '' })).status, 400);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('awake: the computer kept from sleeping always, or while an agent works and a while after; let go when not', async () => {
+  const { Awake, keeper, awakeSettings } = await import('../src/awake.js');
+  assert.deepEqual(awakeSettings({}), { mode: 'off' });
+  assert.deepEqual(awakeSettings({ awake: { mode: 'forever' } }), { mode: 'off' });
+  assert.deepEqual(keeper('darwin', () => true), ['/usr/bin/caffeinate', ['-i', '-w', String(process.pid)]]);
+  assert.equal(keeper('linux', () => true)[0], '/usr/bin/systemd-inhibit');
+  assert.equal(keeper('linux', () => false), null);
+  assert.equal(keeper('win32', () => true), null);
+
+  const runs = [];
+  const run = (cmd, args) => {
+    const child = { cmd, args, killed: false, kill: () => (child.killed = true), on: () => {} };
+    runs.push(child);
+    return child;
+  };
+  const config = {};
+  let busy = false;
+  let clock = 1_000_000;
+  const a = new Awake({ config, working: () => busy, how: ['keep', ['awake']], run, now: () => clock, timer: false });
+  assert.deepEqual(a.status(), { mode: 'off', supported: true, holding: false });
+  assert.throws(() => a.change({ mode: 'sometimes' }), { status: 400 });
+  assert.deepEqual(a.change({ mode: 'always' }), { mode: 'always' });
+  assert.deepEqual([runs.length, runs[0].cmd, a.status().holding], [1, 'keep', true]);
+  a.tick();
+  assert.equal(runs.length, 1, 'held once');
+  a.change({ mode: 'working' });
+  assert.deepEqual([runs[0].killed, a.status().holding], [true, false], 'no agent works: let go');
+  busy = true;
+  a.tick();
+  assert.deepEqual([runs.length, a.status().holding], [2, true]);
+  busy = false;
+  clock += 4 * 60_000;
+  a.tick();
+  assert.equal(a.status().holding, true, 'its next turn may be minutes away');
+  clock += 2 * 60_000;
+  a.tick();
+  assert.deepEqual([runs[1].killed, a.status().holding], [true, false]);
+  a.change({ mode: 'off' });
+  assert.equal(runs.length, 2);
+  // Where the computer has nothing to do it with, it says so instead of pretending.
+  const none = new Awake({ config: {}, how: null, run, timer: false });
+  assert.equal(none.status().supported, false);
+  assert.throws(() => none.change({ mode: 'always' }), { status: 400 });
+
+  // Over the API, without holding the test machine awake.
+  assert.equal((await call('GET', '/awake')).body.mode, 'off');
+  assert.equal((await call('PUT', '/awake', { mode: 'nope' })).status, 400);
+});
+
 test("screen: this computer's screen sharing relayed to signed-in pages; off until turned on here; a stream and POSTs for the phone", async () => {
   const net = await import('node:net');
   // A stand-in for the screen sharing service: greets like one, then answers in upper case.
@@ -1417,6 +1544,54 @@ test('Slack alerts: needs input after the delay, once per episode; review; setti
   } finally {
     await call('POST', '/notify', { enabled: false });
     hook.close();
+  }
+});
+
+test('Phone alerts: a topic made on request, a notification through ntfy with the agent as title and a link, and off again', async () => {
+  const http = await import('node:http');
+  const got = [];
+  const ntfy = http.createServer((req, res) => {
+    let b = '';
+    req.on('data', (c) => (b += c));
+    req.on('end', () => {
+      got.push({ ...JSON.parse(b), auth: req.headers.authorization ?? null, path: req.url });
+      res.end('{}');
+    });
+  });
+  await new Promise((r) => ntfy.listen(0, '127.0.0.1', r));
+  const before = (await call('GET', '/notify')).body;
+  try {
+    // Only the phone: Slack as the tests before left it must not be what delivers.
+    await call('POST', '/notify', { webhookUrl: '', botToken: '', channel: '' });
+    assert.equal((await call('POST', '/notify', { phone: { topic: 'not a topic!' } })).status, 400);
+    assert.equal((await call('POST', '/notify', { phone: { server: 'ftp://nope' } })).status, 400);
+    const set = (await call('POST', '/notify', { phone: { create: true, server: `http://127.0.0.1:${ntfy.address().port}/`, token: 'tk_secret_0123456789abcdefghij' }, needsInputDelaySec: 0 })).body;
+    assert.match(set.phone.topic, /^agentmgr-[\w-]{16}$/, 'a topic nobody can guess');
+    assert.equal(set.enabled && set.configured && !set.slackConfigured, true, 'setting up the phone turns alerts on');
+    assert.ok(!JSON.stringify(set).includes('tk_secret_0123456789abcdefghij'), 'the token is masked');
+    assert.equal((await call('POST', '/notify', { phone: { create: true } })).body.phone.topic, set.phone.topic, 'asked again, the topic stays');
+
+    assert.equal((await call('POST', '/notify/test')).status, 200);
+    await waitFor(() => got.length, 5000, 'the test notification');
+    assert.deepEqual({ ...got[0] }, { topic: set.phone.topic, title: 'AI Agent Manager', message: 'Test from AI Agent Manager: alerts will arrive here when an agent needs you.', tags: ['wave'], priority: 3, auth: 'Bearer tk_secret_0123456789abcdefghij', path: '/' });
+
+    const [a] = (await call('POST', '/agents', { intent: 'Please #ask me on the phone', project: 'Alerts' })).body;
+    await waitFor(() => got.some((m) => m.title.includes(a.name) && /^needs input/.test(m.message)), 15000, 'needs-input notification');
+    const m = got.find((x) => x.title.includes(a.name) && /^needs input/.test(x.message));
+    assert.equal(m.title, `${a.name} (Alerts)`);
+    assert.match(m.message, /^needs input: Permission prompt.*\nPlease #ask me on the phone$/s);
+    assert.match(m.click, new RegExp(`#${a.id}/term$`), 'a tap opens the agent');
+    assert.deepEqual([m.tags, m.priority], [['raised_hand'], 4], 'what waits for an answer is urgent');
+    assert.ok(!/Open:|https?:/.test(m.message), 'the link is not in the text too');
+    await call('POST', `/agents/${a.id}/stop`);
+
+    const off = (await call('POST', '/notify', { phone: { topic: null, token: null } })).body;
+    assert.equal(off.phone.topic, null);
+    assert.equal(off.configured, false);
+    assert.equal((await call('POST', '/notify/test')).status >= 400, true, 'nowhere to send to');
+  } finally {
+    await call('POST', '/notify', { enabled: before.enabled, needsInputDelaySec: before.needsInputDelaySec, phone: { topic: null, token: null, server: '' } });
+    ntfy.close();
   }
 });
 

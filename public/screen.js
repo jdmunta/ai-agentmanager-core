@@ -122,8 +122,13 @@ export function initScreen({ api, esc, toast, $ }) {
   const view = $('#screen-view');
   const state = $('#screen-state');
   let status = null;
+  let awake = null; // whether the computer is kept from sleeping (src/awake.js)
   let rfb = null;
   let ended = null; // why the last connection ended
+  // While a mouse button is down noVNC lays a sheet over the page to follow the mouse, and takes
+  // it away when the button comes up on that sheet. Under this dialog the sheet never gets that,
+  // and would stay over the page after the dialog closes, taking the next click. Taken away here.
+  let release = () => {};
 
   const remote = () => document.body.classList.contains('remote');
 
@@ -137,7 +142,7 @@ export function initScreen({ api, esc, toast, $ }) {
     if (!stage) return;
     const cx = keep && view.scrollWidth ? (view.scrollLeft + view.clientWidth / 2) / view.scrollWidth : 0.5;
     const cy = keep && view.scrollHeight ? (view.scrollTop + view.clientHeight / 2) / view.scrollHeight : 0.5;
-    if (zoom === 1) moving = false;
+    if (zoom === 1 || pad) moving = false;
     view.classList.toggle('zoomed', zoom > 1);
     // The outer size: scrollbars that take room must not make the screen smaller than the zoom says.
     const w = view.offsetWidth;
@@ -149,9 +154,16 @@ export function initScreen({ api, esc, toast, $ }) {
     stage.querySelector('.screen-pan').hidden = !moving;
     $('#screen-zoom-now').textContent = zoom === 1 ? 'Fit' : `${Math.round(zoom * 100)}%`;
     const move = $('#screen-move');
-    move.hidden = zoom === 1;
+    move.hidden = zoom === 1 || pad; // as a trackpad the screen follows the pointer
     move.setAttribute('aria-pressed', String(moving));
     move.classList.toggle('on', moving);
+    const sheet = stage.querySelector('.screen-pad');
+    sheet.hidden = !pad;
+    stage.querySelector('.screen-pointer').hidden = !pad;
+    const padBtn = $('#screen-pad');
+    padBtn.setAttribute('aria-pressed', String(pad));
+    padBtn.classList.toggle('on', pad);
+    if (pad) point(false);
   }
   function setZoom(step) {
     const at = ZOOMS.indexOf(zoom);
@@ -159,6 +171,156 @@ export function initScreen({ api, esc, toast, $ }) {
     layout();
   }
   new ResizeObserver(() => layout()).observe(view);
+
+  // Trackpad: a fingertip covers the button it aims at, so the screen can be a trackpad instead.
+  // A drag anywhere moves a pointer drawn here (slowly for a slow finger), a tap clicks where it
+  // is, two fingers scroll or, tapped, right-click, and a finger held down first drags.
+  let pad = false;
+  try {
+    pad = localStorage.getItem('screen-pad') === '1';
+  } catch {}
+  let at = null; // the pointer, in the computer's screen pixels
+  /** Where the pointer is: in the drawn screen (what noVNC counts in), in the stage and in the page. */
+  function spot() {
+    const c = stage?.querySelector('canvas');
+    if (!c?.width || !rfb?._handleMouseMove) return null;
+    at ??= { x: c.width / 2, y: c.height / 2 };
+    at.x = Math.max(0, Math.min(c.width - 1, at.x));
+    at.y = Math.max(0, Math.min(c.height - 1, at.y));
+    const r = c.getBoundingClientRect();
+    const s = stage.getBoundingClientRect();
+    // The middle of the pixel, so that it is the same pixel again when noVNC counts back.
+    const x = ((Math.floor(at.x) + 0.5) / c.width) * r.width;
+    const y = ((Math.floor(at.y) + 0.5) / c.height) * r.height;
+    return { x, y, left: r.left - s.left + x, top: r.top - s.top + y, pageX: r.left + x, pageY: r.top + y, per: c.width / (r.width || 1) };
+  }
+  /** Draw the pointer where it is, keep it in view when zoomed in, and tell the computer. */
+  function point(send = true) {
+    const p = spot();
+    if (!p) return null;
+    const arrow = stage.querySelector('.screen-pointer');
+    arrow.style.left = `${p.left}px`;
+    arrow.style.top = `${p.top}px`;
+    const edge = 36;
+    if (p.left < view.scrollLeft + edge) view.scrollLeft = p.left - edge;
+    else if (p.left > view.scrollLeft + view.clientWidth - edge) view.scrollLeft = p.left - view.clientWidth + edge;
+    if (p.top < view.scrollTop + edge) view.scrollTop = p.top - edge;
+    else if (p.top > view.scrollTop + view.clientHeight - edge) view.scrollTop = p.top - view.clientHeight + edge;
+    if (send) rfb._handleMouseMove(p.x, p.y);
+    return p;
+  }
+  /** The ring that shows the page took a tap. */
+  function ring(x, y) {
+    const el = document.createElement('div');
+    el.className = 'screen-tap';
+    el.style.left = `${x}px`;
+    el.style.top = `${y}px`;
+    dialog.append(el);
+    setTimeout(() => el.remove(), 450);
+  }
+  /** The trackpad's gestures, on the sheet that covers the screen while it is on. */
+  function trackpad(sheet, mine) {
+    const HOLD = 450; // ms a finger rests before it holds the button down
+    const STEP = 28; // px two fingers move for one notch of the wheel
+    let g = null; // the gesture under way
+    const mid = (ts) => ({ x: [...ts].reduce((n, t) => n + t.clientX, 0) / ts.length, y: [...ts].reduce((n, t) => n + t.clientY, 0) / ts.length });
+    const button = (mask) => {
+      const p = rfb === mine && spot();
+      if (p) mine._handleMouseButton(p.x, p.y, mask);
+      return p;
+    };
+    const down = () => (g?.held ? 0x1 : 0);
+    const arrow = () => stage?.querySelector('.screen-pointer');
+    sheet.addEventListener('touchstart', (e) => {
+      e.preventDefault(); // no focus change (the phone's keyboard stays open) and no made-up mouse
+      const m = mid(e.touches);
+      if (!g) {
+        g = { fingers: 0, moved: false, held: false, far: 0, sx: 0, sy: 0, since: e.timeStamp, timer: null };
+        g.timer = setTimeout(() => {
+          if (!g || g.moved || g.fingers !== 1 || !button(0x1)) return;
+          g.held = true;
+          arrow()?.classList.add('held');
+        }, HOLD);
+      }
+      g.fingers = Math.max(g.fingers, e.touches.length);
+      if (e.touches.length > 1) clearTimeout(g.timer);
+      Object.assign(g, { x: m.x, y: m.y, last: e.timeStamp });
+    }, { passive: false });
+    sheet.addEventListener('touchmove', (e) => {
+      e.preventDefault();
+      if (!g) return;
+      const m = mid(e.touches);
+      const dx = m.x - g.x;
+      const dy = m.y - g.y;
+      const ms = Math.max(1, e.timeStamp - g.last);
+      Object.assign(g, { x: m.x, y: m.y, last: e.timeStamp });
+      g.far += Math.hypot(dx, dy);
+      // A finger is never quite still: only past this is it a move, not a tap.
+      if (!g.moved && g.far < 8 && !g.held) return;
+      g.moved = true;
+      if (!g.held) clearTimeout(g.timer);
+      if (e.touches.length > 1) {
+        // As on the phone itself: what is under the fingers goes where they go.
+        g.sx += dx;
+        g.sy += dy;
+        for (const [axis, back, on] of [['sy', 0x8, 0x10], ['sx', 0x20, 0x40]]) {
+          while (Math.abs(g[axis]) >= STEP) {
+            const notch = g[axis] > 0 ? back : on;
+            g[axis] -= Math.sign(g[axis]) * STEP;
+            button(down() | notch);
+            button(down());
+          }
+        }
+        return;
+      }
+      const p = spot();
+      if (!p) return;
+      // A slow finger moves the pointer less than its own way, for small targets; a quick one crosses the screen.
+      const gain = p.per * Math.max(0.35, Math.min(2.5, 0.35 + 1.5 * (Math.hypot(dx, dy) / ms)));
+      at.x += dx * gain;
+      at.y += dy * gain;
+      point();
+    }, { passive: false });
+    const end = (e) => {
+      e.preventDefault();
+      if (!g) return;
+      if (e.touches.length) {
+        // One finger of several lifted: the rest carry on from where they are.
+        const m = mid(e.touches);
+        Object.assign(g, { x: m.x, y: m.y, last: e.timeStamp });
+        return;
+      }
+      const was = g;
+      g = null;
+      clearTimeout(was.timer);
+      if (was.held) {
+        button(0);
+        arrow()?.classList.remove('held');
+      } else if (!was.moved && e.type === 'touchend' && e.timeStamp - was.since < HOLD) {
+        // Press and release apart, as a hand on a mouse: a Mac does not take them in one instant.
+        const p = button(was.fingers > 1 ? 0x4 : 0x1);
+        if (p) ring(p.pageX, p.pageY);
+        setTimeout(() => button(0), 100);
+      }
+    };
+    sheet.addEventListener('touchend', end, { passive: false });
+    sheet.addEventListener('touchcancel', end, { passive: false });
+  }
+  function setPad(on) {
+    pad = on;
+    try {
+      localStorage.setItem('screen-pad', on ? '1' : '0');
+    } catch {}
+    layout();
+    if (on) {
+      point();
+      toast('Trackpad: drag to move the pointer, tap to click. Two fingers scroll, or tapped, right-click. Hold, then drag, to drag.', 7000);
+    }
+  }
+  // The button is for fingers: it shows once the page has been touched.
+  const showPad = () => ($('#screen-pad').hidden = false);
+  if (navigator.maxTouchPoints > 0 || pad) showPad(); // on already: there must be a way to turn it off
+  else dialog.addEventListener('touchstart', showPad, { once: true, passive: true, capture: true });
   const others = (v = status?.viewers ?? []) => v.filter((x) => x.who !== 'this computer');
 
   /** The dot on the button: someone on another device is looking at this computer's screen. */
@@ -179,12 +341,21 @@ export function initScreen({ api, esc, toast, $ }) {
       <p><code>${esc(m.fix)}</code></p></div>`;
   }
 
+  /** A sleeping computer shows nothing and runs nothing: it can be kept awake, from here too. */
+  function keepAwake() {
+    if (!awake?.supported) return '';
+    const opt = (v, label) => `<option value="${v}"${awake.mode === v ? ' selected' : ''}>${label}</option>`;
+    return `<p class="screen-awake"><label>Keep this computer awake <select data-screen-awake>${opt('off', 'No')}${opt('working', 'While an agent works')}${opt('always', 'Always')}</select></label>
+      <span class="hint">${awake.mode === 'off' ? 'Asleep, it cannot be reached from here and its agents stop.' : 'It will not go to sleep by itself. The display may still sleep and lock; a closed lid still puts a laptop to sleep.'}</span></p>`;
+  }
+
   function render() {
     const s = status;
     const connected = Boolean(rfb);
     view.hidden = !connected;
     body.hidden = connected;
     $('#screen-keys').hidden = !connected;
+    if (!connected) showClip(false);
     $('#screen-off').hidden = remote() || !s?.enabled;
     if (connected || !s) return;
     const far = others();
@@ -194,7 +365,7 @@ export function initScreen({ api, esc, toast, $ }) {
       body.innerHTML = `<h3>This computer's screen, here and on your phone</h3>
         <p>See the whole screen and click or type in it: a pop-up that needs an answer, another program you want to watch.</p>
         <p class="hint">Whoever uses this controls the whole computer, not only the agents. It is off until you turn it on, and it can only be turned on here, on the computer itself. The computer's own screen sharing still asks for its sign-in every time.</p>
-        ${remote() ? '<p><b>Off.</b> Turn it on on the computer: the Screen button, or <code>agentmgr screen --on</code>.</p>' : '<p><button class="primary" data-screen="on">Turn on</button></p>'}`;
+        ${remote() ? '<p><b>Off.</b> Turn it on on the computer: the Screen button, or <code>agentmgr screen --on</code>.</p>' : '<p><button class="primary" data-screen="on">Turn on</button></p>'}${keepAwake()}`;
       return;
     }
     if (!s.listening) {
@@ -208,10 +379,11 @@ export function initScreen({ api, esc, toast, $ }) {
     state.textContent = ended ? 'Ended' : 'Ready';
     body.innerHTML = `${ended ? `<p><b>Ended:</b> ${esc(ended)}</p>` : '<h3>Ready</h3>'}${notListed()}
       <p class="hint">${s.platform === 'darwin' ? 'The Mac asks for your Mac user name and password next. They go to the Mac and are not kept.' : 'The computer asks for its screen sharing password next. It is not kept.'}</p>
-      <p><button class="primary" data-screen="connect">${ended ? 'Connect again' : 'Connect'}</button></p>${viewed}`;
+      <p><button class="primary" data-screen="connect">${ended ? 'Connect again' : 'Connect'}</button></p>${viewed}${keepAwake()}`;
   }
 
   async function refresh() {
+    awake = await api('GET', '/awake').catch(() => null);
     try {
       status = await api('GET', '/screen');
     } catch (err) {
@@ -227,6 +399,7 @@ export function initScreen({ api, esc, toast, $ }) {
     const was = rfb;
     rfb = null;
     ended = reason;
+    release();
     try {
       was?.disconnect();
     } catch {}
@@ -257,14 +430,16 @@ export function initScreen({ api, esc, toast, $ }) {
     let RFB;
     try {
       ({ default: RFB } = await import('/vendor/novnc/core/rfb.js'));
+      ({ releaseCapture: release } = await import('/vendor/novnc/core/util/events.js'));
     } catch (err) {
       return drop(`The viewer could not be loaded (${err.message})`);
     }
     stage = document.createElement('div');
     stage.className = 'screen-stage';
-    stage.innerHTML = '<div class="screen-pan" hidden></div>';
+    stage.innerHTML = '<div class="screen-pan" hidden></div><div class="screen-pad" hidden></div><div class="screen-pointer" hidden></div>';
     view.replaceChildren(stage);
     zoom = 1;
+    at = null;
     const mine = new RFB(stage, REMOTE ? new StreamChannel() : `ws://${location.host}/ws/screen`);
     rfb = mine;
     mine.scaleViewport = true;
@@ -285,14 +460,11 @@ export function initScreen({ api, esc, toast, $ }) {
           mine._handleMouseButton = button;
         }
         calls.forEach((args, i) => setTimeout(() => rfb === mine && button.apply(mine, args), 50 + i * 100));
-        const ring = document.createElement('div');
-        ring.className = 'screen-tap';
-        ring.style.left = `${ev.detail.clientX}px`;
-        ring.style.top = `${ev.detail.clientY}px`;
-        dialog.append(ring);
-        setTimeout(() => ring.remove(), 450);
+        ring(ev.detail.clientX, ev.detail.clientY);
       };
     }
+    trackpad(stage.querySelector('.screen-pad'), mine);
+    stage.addEventListener('mouseup', () => setTimeout(release), true); // after noVNC has had it
     // A mouse still gives the screen the focus, for the computer's own keyboard.
     let touched = 0;
     stage.addEventListener('touchstart', () => {
@@ -335,9 +507,52 @@ export function initScreen({ api, esc, toast, $ }) {
   });
 
   // Typed blind on a phone, a password goes wrong easily: let it be seen.
-  dialog.addEventListener('change', (e) => {
+  dialog.addEventListener('change', async (e) => {
     if (e.target.matches('[data-screen-show]')) e.target.form.password.type = e.target.checked ? 'text' : 'password';
+    if (e.target.matches('[data-screen-awake]')) {
+      try {
+        awake = await api('PUT', '/awake', { mode: e.target.value });
+        toast(awake.mode === 'off' ? 'This computer may go to sleep by itself again' : awake.mode === 'always' ? 'This computer is kept awake' : 'This computer is kept awake while an agent works');
+      } catch (err) {
+        toast(`Error: ${err.message}`, 6000);
+      }
+      if (!rfb) render();
+    }
   });
+
+  // The computer's clipboard. Its screen sharing does not share it with a browser (a Mac's only
+  // with Apple's own viewer), so the daemon reads and sets it: text typed or pasted here goes
+  // there, and what was copied there comes here.
+  const clipText = $('#screen-clip-text');
+  function showClip(on) {
+    $('#screen-clip').hidden = !on;
+    $('#screen-clip-btn').setAttribute('aria-pressed', String(on));
+    $('#screen-clip-btn').classList.toggle('on', on);
+    if (on) clipText.focus();
+  }
+  async function clip(what) {
+    if (what === 'clip-get') {
+      const got = await api('GET', '/screen/clipboard');
+      clipText.value = got.text;
+      clipText.select();
+      if (!got.text) return toast("The computer's clipboard has no text");
+      // The page may put it on this device's clipboard only where the browser lets it.
+      const here = await navigator.clipboard?.writeText(got.text).then(() => true, () => false);
+      return toast(`${got.cut ? 'The first part of what' : 'What'} was copied on the computer${here ? ' is on this device\'s clipboard now' : ': copy it from the box'}`);
+    }
+    const text = clipText.value;
+    if (!text) return toast('Type or paste the text first');
+    await api('PUT', '/screen/clipboard', { text });
+    if (what === 'clip-paste' && rfb) {
+      const mod = MOD[status?.platform === 'darwin' ? 'cmd' : 'ctrl'];
+      rfb.sendKey(mod, null, true);
+      rfb.sendKey(key('v'), null);
+      rfb.sendKey(mod, null, false);
+      clipText.value = '';
+      return toast('Pasted on the computer');
+    }
+    toast("On the computer's clipboard");
+  }
 
   dialog.addEventListener('click', async (e) => {
     const key = e.target.closest('[data-screen-key]');
@@ -359,7 +574,9 @@ export function initScreen({ api, esc, toast, $ }) {
       else if (what === 'move') {
         moving = !moving;
         layout();
-      } else if (what === 'cancel') drop('You cancelled the sign-in');
+      } else if (what === 'pad') setPad(!pad);
+      else if (what === 'clip') showClip($('#screen-clip').hidden);
+      else if (what.startsWith('clip-')) await clip(what); else if (what === 'cancel') drop('You cancelled the sign-in');
       else if (what === 'close') dialog.close();
     } catch (err) {
       toast(`Error: ${err.message}`, 6000);
@@ -421,6 +638,7 @@ export function initScreen({ api, esc, toast, $ }) {
     const was = rfb;
     rfb = null;
     ended = null;
+    release();
     try {
       was?.disconnect();
     } catch {}

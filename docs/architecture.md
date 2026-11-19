@@ -28,7 +28,9 @@ No build step: Node ES modules on the server, plain ES modules in the browser. S
 | `src/judge.js` | The AI judge: one-shot, tool-less model calls that decide *what is going on* (stuck, waiting, done, collisions, backlog order, alert triage), with a daily cap and feedback examples. Falls back to the rules. |
 | `src/backlog.js`, `src/races.js` | Work orders picked up per project; several agents on one intent, compared. |
 | `src/teams.js` | Agents in roles on one problem: handoff files with a verdict line move the team from analysis to review. |
-| `src/notify.js` | Slack alerts, triaged by the judge. |
+| `src/notify.js` | Alerts to Slack and to the phone (ntfy), triaged by the judge. |
+| `src/awake.js` | Keeps the computer from sleeping, always or while an agent works. |
+| `src/files.js` | This computer's folders for a signed-in device: list, send a file, fetch one. |
 | `src/preview.js`, `src/livebrowser.js` | Browser tabs: HTTPS relays for remote devices, and a headless Chrome streamed over the Chrome DevTools Protocol (frames, input, sound). |
 | `src/sessions.js` | Finds Claude Code sessions started in a terminal so they can be continued as agents. |
 | `src/remote.js` | Remote access: certificate, token, device sessions. |

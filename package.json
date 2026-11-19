@@ -1,6 +1,6 @@
 {
   "name": "ai-agentmanager",
-  "version": "1.57.3",
+  "version": "1.58.0",
   "description": "Run background coding agents (Claude Code, Codex) per intent, and keep track of them from a web UI, your phone or the CLI",
   "keywords": [
     "claude",

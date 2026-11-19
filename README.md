@@ -24,7 +24,7 @@ Run one background [Claude Code](https://claude.com/claude-code) agent per inten
 - **Projects.** The sidebar is a tree, project → agents, so you see how many projects are in flight and how many parallel sessions each has.
 - **Project shortcuts.** Each project gets a short name, such as `cc` for cloud-console. Use it instead of the repo URL: `agentmgr add @cc "…"`, `agentmgr ls cc`, `@cc` in the UI filter.
 - **Backlog.** Queue asks as work orders. Agents pick them up one by one, up to N in parallel per project, until each is done. You accept or reopen each one.
-- **Slack alerts.** A message in your channel when an agent needs input, finishes a backlog item, or fails.
+- **Alerts, in Slack and on the phone.** A Slack message, a notification on the phone, or both, when an agent needs input, finishes a backlog item, or fails.
 - **Priority.** Mark agents P0–P3. P0 and P1 are highlighted, and lists sort by priority.
 - **Share for review.** One click writes an **Analysis**, **Design**, **Flow** or **Proposal** document from the agent's work, a human time **Estimate** for planning, or the change's **Documentation** with an OpenAPI spec of any API changes. Copy it as Markdown, download it, or print it to PDF with diagrams.
 - **Plan.** A project's commitment dates (code complete, release candidate, GA) with a checklist of what is still open for each, reminders as they come near, and an at-risk or late flag. A **decision log** gathered from plan reviews, your answers and design docs. A **tech debt radar** from git history and the code. What is open can be handed to an agent.
@@ -49,6 +49,7 @@ Run one background [Claude Code](https://claude.com/claude-code) agent per inten
 - **Standup.** Each weekday at 9:00 (or whenever you press **Standup**, or `p`), each agent with news since the last one is read aloud in a sentence or two, each in its own voice: what it did, what it's on, what it needs from you. Agents that need you go first and quiet ones are left out. It stops on an agent that needs you, with its questions beside it to answer by tap, or by voice when **Answer by voice** is on (what you say is read back, then sent when you say "send"). The wording comes from one short tool-less model call, plain wording if that fails. A Slack alert says when it's ready (Alerts). Change the time, weekends and wording in the player, or in config.json: `"standup": { "at": "09:00", "weekends": false, "ai": true, "notify": true }`. Speech is your browser's own; voice answers may be sent to your browser's maker to be turned into text.
 - **Map.** A project's folders as tiles sized by their files, with each agent as a badge on the folders it is changing (filled) or reading right now (ring), refreshed every few seconds (**Map** at the top, `m`, or `#map`). A red line joins two agents that changed the same file: they will conflict when merged. A dashed line runs from an agent reading a file to the agent that already changed it, which is the warning before they collide. Each pair is also spelled out above the map. Reading comes from the last half hour of each agent's session; changes from the conflict radar.
 - **Watch.** Every running agent's session side by side on one page, live (**Watch** at the top, or `#watch`), so you follow them all without clicking from one to the next. Tiles keep a fixed order; one waiting on you gets a red border and is counted at the top. Click a tile and type to answer it there; its name opens the agent. Show running agents, only those waiting on you or only those working, one project's, or a fixed number per row; **Fit** sizes the tiles so all of them (up to 12) are on screen, keeping the newest lines in view. Tiles show each session at its own size and never resize it.
+- **Go to.** `Ctrl+K` or `⌘K` (or **⌕ Go to** in the top bar) opens one box that finds a view, a list, a menu item or an agent by name; agents that wait for you come first. On a phone it saves looking through the More menu.
 - **Keyboard shortcuts.** Press **?** for the list. `j`/`k` move through the agents, `Enter` opens the terminal, `r` reviews changes, `s` resumes, `Shift+X` closes the session, `e` edits; `n` new agents, `a` Ask Agent, `/` filter, `w` Watch, `m` Map, `p` the standup, `i` the Jira summary, `d` Designs, `1`-`5` the side tabs. Single keys work when you're not typing in a field or a terminal. From inside a terminal, `Ctrl+Shift+↓`/`↑` switch to the next or previous agent's terminal and `Ctrl+Shift+L` leaves it.
 - **Landing.** A **Land** tab with every agent's open pull request: ready to merge, needs fixes, behind, waiting. Failing checks and requested changes go back to the agent automatically (a few times at most), and so does every new review comment while the PR is open; **Update**, **Ask to fix** and **Merge** in one click.
 - **Triggers.** A label on a GitHub issue starts an agent for it, `/agent …` comments on an agent's pull request reach the agent, and a webhook starts agents from Jira automation or CI. No model watches, so no tokens are spent waiting.
@@ -197,6 +198,7 @@ agentmgr explain <agent>                      # full briefing: ask, status, plan
 agentmgr remote on | off | status | rotate    # phone / remote access (see below)
 agentmgr backlog add "ask" -r <repo> [-p 1]   # queue work; also: ls, start, accept, reopen, move, limit, pause
 agentmgr notify slack --webhook <url>         # Slack alerts; also: test, status, on, off, event <name> on|off
+agentmgr notify phone                         # the same alerts as notifications on the phone (ntfy app); --off stops them
 agentmgr debug <agent> "what goes wrong"       # debug with an agent; no question prints its report; --fix applies the fixes
 agentmgr reverse <agent> -t /path/to/app "how does search work"  # reverse engineer with an agent and REA; no question prints the report; --build builds your own
 agentmgr dates <project> --cc 2026-12-01 --rc 2026-12-10 --ga 2026-12-20   # commitment dates; no dates: where each stands
@@ -207,6 +209,7 @@ agentmgr skills                               # Claude Code's skills here (look 
 agentmgr lanes                                # every agent's own ports and name ending (--off, --port off, --base, --size)
 agentmgr rounds [agent]                       # review rounds before a pull request: the settings, or an agent's rounds (--start, --again, --open, --stop)
 agentmgr screen                               # this computer's screen in the page, from the phone too: on or off (--on, --off), who is viewing
+agentmgr awake [off|working|always]           # keep this computer from going to sleep by itself: always, or while an agent works
 agentmgr models                               # models served on this computer (Ollama, LM Studio, llama.cpp, MLX), for --engine local
 agentmgr usage                                # each engine's plan limits: used, left, resets (--now, --lean on, --warn 80, --hold 95, --default codex)
 agentmgr runbook --ticket REL-42              # a support runbook from a release ticket (or --epic KEY, or --since 2026-10-01 -p <project>; -o file.md)
@@ -676,6 +679,8 @@ The **Inbox** tab (and `agentmgr inbox`) lists what needs you, across all agents
 | Follow up | An agent used in the last 3 days has been quiet for 2 hours and isn't finished: still open, or its session ended by itself or was closed by the session cap or clean up | Send the suggested nudge (edit it first), **Resume** a closed one, or **Close session**; **Later** (4 hours) or **Not needed** (until it's used again) |
 | Close session? | It's done (its brief says so, or its pull request merged), quiet for 2 hours, and its session is still open | **Close session** (it resumes when you open it), **Later** or **Not needed** |
 
+**One at a time.** On a phone the inbox opens as one card filling the screen, with its buttons under your thumb; answered, the next takes its place. Swipe left for the next card and right for the one before, or use **‹ ›**. **Show all** brings the list back and **One at a time** turns it on anywhere; the choice is kept in that browser.
+
 Follow-up reminders skip agents that are working or already waiting on you for something else, and agents you closed yourself. Change the timing in config.json: `"reminders": { "quietHours": 2, "recentDays": 3, "laterHours": 4 }`, or turn them off with `"enabled": false`. From the command line: `agentmgr remind <agent> later|dismiss`.
 
 **Limits.** When an engine stops at a usage limit ("5-hour limit reached ∙ resets 3pm", Codex's "You've hit your usage limit… try again at 3:05 PM", an exhausted quota) or a busy or failing service (429, 529 overloaded, 5xx), the agent shows **Limit** in the inbox with the message and when it resets. It is told to continue by itself a minute after the reset (a busy service: after 5 minutes), at most three times an hour; `"limits": { "autoResume": false }` in config.json turns that off. **Continue now** does it at once, and **Continue on Codex** (or any other installed engine; `agentmgr continue-on <agent> <engine>`) carries the work on: a new agent in the same folder and branch, started with the request, the brief and the end of the conversation (a conversation can't move between engines). The new agent owns the folder from then on; the old one is closed, and deleting it leaves the folder.
@@ -802,7 +807,25 @@ One test run can pass or fail by chance, so the app's own test runs can be repea
 
 Repeating costs test time, not AI usage.
 
-## Slack alerts
+## Alerts: Slack and the phone
+
+Alerts go to Slack, to the phone as notifications, or to both.
+
+**On the phone**, through [ntfy](https://ntfy.sh), an open-source notification service with an app for iPhone and Android:
+
+```sh
+agentmgr notify phone     # makes a topic nobody can guess and prints it
+```
+
+1. Install the **ntfy** app on the phone.
+2. In it: **+ → Subscribe to topic**, and enter the topic that was printed.
+3. `agentmgr notify test` sends one to try it.
+
+A notification's title is the agent, and a tap opens it (at your phone address when remote access is on). Prompts, questions, errors and blocked agents arrive as high priority. It needs no Slack and works on any network, since the phone does not have to reach this computer to be told.
+
+- **What leaves this computer.** The alert's text goes through ntfy.sh, a public service, and whoever knows the topic can read what is sent to it, so keep the topic to yourself. Turn off **include the intent text** to send less. `agentmgr notify phone --server https://ntfy.example.com` uses a server of your own, with `--token` if it needs one.
+- **Why not the browser's own notifications?** A phone only allows those from a site whose certificate it trusts, and remote access uses a self-signed one.
+- `agentmgr notify phone --off` stops them.
 
 **Three ways to connect Slack:**
 
@@ -823,7 +846,7 @@ agentmgr notify slack --token xoxb-… --channel '#agents'            # or a bot
 agentmgr notify test
 ```
 
-Or use **Alerts** in the header (on this computer only). Settings, including the webhook or token, are stored in `~/.agentmanager/notify.json` (mode 0600) and masked in the UI and API.
+Or use **Alerts** in the header (on this computer only), which has the phone's topic too. Settings, including the webhook or token, are stored in `~/.agentmanager/notify.json` (mode 0600) and masked in the UI and API.
 
 | Alert | Default | When |
 | --- | --- | --- |
@@ -885,9 +908,15 @@ It does not capture the screen itself. The computer's own screen sharing does, a
 2. On the computer itself: **Screen → Turn on** (or `agentmgr screen --on`).
 3. From any signed-in device: **Screen → Connect**, and sign in with your Mac user name and password when the Mac asks. They go to the Mac's screen sharing and are not kept.
 
-On a phone, the bar has a **Type here** field for the keyboard, and **Esc**, **Tab** and **⏎**. **−** and **+** zoom in up to 400% (the button between them goes back to **Fit**); zoomed in, **Move** lets a drag move around the screen instead of clicking in it. The sign-in has **Show the password**, for a password typed on a phone. **Keys…** sends shortcuts and keys a phone's keyboard does not have: ⌘Space, ⌘Tab, copy, paste, undo, close, quit, force quit, the arrows and delete. With a keyboard, `Shift+S` opens Screen and `Shift+T` the Terminal on this computer.
+On a phone, the bar has a **Type here** field for the keyboard, and **Esc**, **Tab** and **⏎**. **−** and **+** zoom in up to 400% (the button between them goes back to **Fit**); zoomed in, **Move** lets a drag move around the screen instead of clicking in it. **Pad** turns the screen into a trackpad, for targets a fingertip covers: drag anywhere to move a pointer (a slow finger moves it finely) and tap to click where it is. Two fingers scroll or, tapped, right-click; hold a finger still, then drag, to drag. Zoomed in, the screen follows the pointer. The sign-in has **Show the password**, for a password typed on a phone. **Keys…** sends shortcuts and keys a phone's keyboard does not have: ⌘Space, ⌘Tab, copy, paste, undo, close, quit, force quit, the arrows and delete. With a keyboard, `Shift+S` opens Screen and `Shift+T` the Terminal on this computer.
 
 A Mac with **Remote Management** on (instead of plain Screen Sharing) lets in only the users listed under **Sharing → Remote Management → ⓘ**, and refuses anyone else as if the password were wrong. The Screen dialog says so when this computer's user is not listed, with the command that adds it.
+
+**Clip** is the computer's clipboard, as text. Type or paste into its box and **Send and paste** puts it on the computer's clipboard and pastes it where the cursor is there (a password, a link, a one-time code); **Send** only puts it there. **Fetch** brings back what was copied on the computer (**Keys… → copy** first) and, where the browser allows, puts it on this device's clipboard too. The daemon reads and sets the clipboard itself (`pbcopy` and `pbpaste` on a Mac; `wl-copy` or `xclip` on Linux), because a Mac's screen sharing shares it only with Apple's own viewer. It works only while screen access is on.
+
+**Files** (in the Screen bar, the Terminal bar and the ☰ menu: **Files on this computer…**) shows this computer's folders, starting in Downloads. **Send files here…** puts files from the device in your hand (photos too, up to 250 MB each) into the folder shown, never over a file that is there: a second `photo.jpg` becomes `photo (2).jpg`. Tap a folder to open it and a file to fetch it to the device. It reaches what the terminal on this computer reaches, and is allowed wherever that is.
+
+**Keep this computer awake**, in the Screen dialog before you connect (or `agentmgr awake always`): a sleeping computer shows nothing, runs no agents and cannot be reached from the phone. **Always** keeps it from going to sleep by itself for as long as AI Agent Manager runs; **While an agent works** only then, and for five minutes after. It uses `caffeinate` on a Mac and `systemd-inhibit` on Linux. The display may still sleep and lock, and closing a laptop's lid still puts it to sleep.
 
 - **Whoever uses it controls the whole computer,** not only the agents. So it is off until you turn it on, it can be turned on only on the computer itself (not from a signed-in device), and the computer's screen sharing still asks for its own sign-in every time.
 - **Who is looking:** while another device views the screen, the **Screen** button shows a dot, and its tooltip and `agentmgr screen` name the device and its address. **Turn off** ends every view at once.

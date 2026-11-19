@@ -30,6 +30,7 @@
       </div>
       <div class="top-actions">
         <input id="filter" type="search" placeholder="Filter agents" aria-label="Filter agents" />
+        <button id="go-btn" class="go-btn" title="Go to: find a view, an agent or a setting by name (Ctrl+K or ⌘K)" aria-label="Go to a view, an agent or a setting">⌕ Go to</button>
         <nav class="top-nav" id="top-nav" aria-label="Views">
         <button id="today-btn" title="Today: what needs you, from every list, most pressing first, and why (y)">Today <span id="today-count" class="badge ready"></span></button>
         <button id="assistant-btn" title="An always-on session that finds new work and starts agents for it">Assistant <span id="assistant-dot" class="assistant-dot" hidden></span></button>
@@ -72,8 +73,9 @@
             <button role="menuitem" id="skills-btn" title="Skills: the Agent Skills Claude Code has here (yours and each project's), which agents used them, and adding more from a repository">Skills…</button>
             <button role="menuitem" id="settings-btn">Settings…</button>
             <button role="menuitem" id="worklog-btn" title="What your agents got done: pull requests, bugs fixed, issues filed; kept in a spreadsheet for reviews">Work record…</button>
+            <button role="menuitem" id="files-btn" data-open-files title="This computer's folders: send it a file from this device (a photo, a document), or fetch one from it (a log, a build)">Files on this computer…</button>
             <button role="menuitem" id="cleanup-btn" title="Close agents idle for a while, and delete old closed ones">Clean up…</button>
-            <button role="menuitem" id="alerts-btn" class="local-only" title="Slack alerts when an agent needs you">Alerts…</button>
+            <button role="menuitem" id="alerts-btn" class="local-only" title="Alerts when an agent needs you: a Slack message, or a notification on the phone">Alerts…</button>
             <button role="menuitem" id="remote-btn" class="local-only" title="Open AI Agent Manager from your phone">Remote access…</button>
             <div class="menu-sep"></div>
             <div class="menu-theme"><span>Theme</span><span class="seg" role="radiogroup" aria-label="Theme"><button type="button" data-theme-set="auto" title="Follow this device's setting">Auto</button><button type="button" data-theme-set="light">Light</button><button type="button" data-theme-set="dark">Dark</button></span></div>
@@ -608,13 +610,19 @@
 
     <dialog id="alerts-dialog">
       <form id="alerts-form" method="dialog" class="alerts-body">
-        <h2>Slack alerts</h2>
-        <p class="hint">Get a Slack message when an agent needs you. Use a <b>Workflow Builder</b> webhook (<code>…/triggers/…</code>, with one Text variable named <code>text</code>), an app's <b>incoming webhook</b> (<code>…/services/…</code>), or a <b>bot token</b> and channel. Stored only on this computer.</p>
+        <h2>Alerts</h2>
+        <p class="hint">Get a Slack message, a notification on the phone, or both, when an agent needs you. <b>Slack:</b> use a <b>Workflow Builder</b> webhook (<code>…/triggers/…</code>, with one Text variable named <code>text</code>), an app's <b>incoming webhook</b> (<code>…/services/…</code>), or a <b>bot token</b> and channel. Stored only on this computer.</p>
         <label>Webhook URL <input name="webhookUrl" type="password" autocomplete="off" placeholder="https://hooks.slack.com/services/…" /></label>
         <div class="row">
           <label>or bot token <input name="botToken" type="password" autocomplete="off" placeholder="xoxb-…" /></label>
           <label>channel <input name="channel" placeholder="#agents" /></label>
         </div>
+        <p class="hint"><b>Phone:</b> install the <b>ntfy</b> app on it (App Store or Google Play) and subscribe there to the topic below; a tap on a notification opens the agent. Alerts pass through ntfy.sh, a public service, and whoever knows the topic can read them: keep it to yourself, or give a server of your own.</p>
+        <div class="row">
+          <label>Phone topic <input name="phoneTopic" autocomplete="off" spellcheck="false" placeholder="empty: nothing goes to the phone" /></label>
+          <label>ntfy server <input name="phoneServer" autocomplete="off" spellcheck="false" placeholder="https://ntfy.sh" /></label>
+        </div>
+        <p><button type="button" class="ghost small" id="alerts-phone-new" title="Fill in a new topic nobody can guess; Save, then subscribe to it in the ntfy app">New topic</button></p>
         <p class="hint" id="alerts-current"></p>
         <fieldset>
           <legend>Alert when an agent…</legend>
@@ -1026,16 +1034,48 @@
           <button class="ghost small" data-screen-key="tab" title="Tab">Tab</button>
           <button class="ghost small" data-screen-key="enter" title="Return">⏎</button>
           <select id="screen-combo" class="screen-combo" aria-label="Send a shortcut or a key" title="Shortcuts and keys a phone's keyboard does not have"><option value="">Keys…</option></select>
+          <button class="ghost small" id="screen-clip-btn" data-screen="clip" title="The computer's clipboard: send text to it (and paste it), or fetch what was copied there" aria-pressed="false">Clip</button>
           <button class="ghost small" data-screen-zoom="-1" title="Zoom out" aria-label="Zoom out">−</button>
           <button class="ghost small" id="screen-zoom-now" data-screen-zoom="0" title="Fit the whole screen">Fit</button>
           <button class="ghost small" data-screen-zoom="1" title="Zoom in" aria-label="Zoom in">+</button>
+          <button class="ghost small" id="screen-pad" data-screen="pad" title="Use the screen as a trackpad: drag to move the pointer and tap to click where it is, so your finger does not cover what you aim at. Two fingers scroll or, tapped, right-click; hold, then drag, to drag" aria-pressed="false" hidden>Pad</button>
           <button class="ghost small" id="screen-move" data-screen="move" title="Drag to move around the zoomed screen instead of clicking in it" aria-pressed="false" hidden>Move</button>
         </span>
+        <button class="ghost small" data-open-files title="This computer's folders: send it a file from this device, or fetch one from it">Files</button>
         <button id="screen-off" class="ghost small" data-screen="off" title="No device can reach this computer's screen until you turn it on again here" hidden>Turn off</button>
         <button class="ghost small" data-screen="close" title="Close (ends your connection to the screen)">Close</button>
       </div>
+      <div id="screen-clip" class="screen-clip" hidden>
+        <textarea id="screen-clip-text" rows="2" aria-label="Text for the computer's clipboard, or fetched from it" placeholder="Text to put on the computer's clipboard. Or fetch what was copied there." autocapitalize="none" autocorrect="off" spellcheck="false"></textarea>
+        <span class="screen-clip-acts">
+          <button class="small primary" data-screen="clip-paste" title="Put it on the computer's clipboard and paste it where the cursor is there">Send and paste</button>
+          <button class="ghost small" data-screen="clip-send" title="Put it on the computer's clipboard">Send</button>
+          <button class="ghost small" data-screen="clip-get" title="Fetch the text on the computer's clipboard (copy there first: Keys… → copy)">Fetch</button>
+        </span>
+      </div>
       <div id="screen-body" class="screen-body"></div>
       <div id="screen-view" class="screen-view" hidden></div>
+    </dialog>
+    <dialog id="files-dialog" class="files-dialog">
+      <div class="files-head">
+        <b>Files on this computer</b>
+        <span class="spacer"></span>
+        <button id="files-close" class="ghost small">Close</button>
+      </div>
+      <div class="files-bar">
+        <button id="files-up" class="ghost small" title="The folder above" aria-label="The folder above">↑</button>
+        <input id="files-path" aria-label="Folder" title="The folder shown. Type another and press Return" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" />
+        <button id="files-home" class="ghost small" title="Your home folder">Home</button>
+        <button id="files-inbox" class="ghost small" title="The Downloads folder">Downloads</button>
+      </div>
+      <div class="files-bar">
+        <button id="files-pick" class="primary small" title="Pick files on this device (photos too) and put them in the folder shown. Or drop them here">Send files here…</button>
+        <input id="files-input" type="file" multiple hidden />
+        <label class="check"><input type="checkbox" id="files-hidden" /> hidden files</label>
+        <span id="files-note" class="hint"></span>
+      </div>
+      <ul id="files-list" class="files-list"></ul>
+      <p class="hint files-foot">Tap a folder to open it, a file to fetch it to this device.</p>
     </dialog>
     <dialog id="machine-dialog" class="machine-dialog">
       <div class="term-bar">
@@ -1043,6 +1083,7 @@
         <button class="term-tab term-add" id="machine-new" title="Open another terminal">+ Terminal</button>
         <span id="machine-title" class="hint"></span>
         <span class="spacer"></span>
+        <button class="ghost small" data-open-files title="This computer's folders: send it a file from this device, or fetch one from it">Files</button>
         <button id="machine-copy" class="ghost small" title="Copy text from the terminal">Copy</button>
         <button id="machine-paste" class="ghost small" title="Paste into the terminal">Paste</button>
         <button id="machine-close" class="ghost small" title="Hide (the shells keep running)">Hide</button>

@@ -1,7 +1,9 @@
-// Slack alerts when an agent needs you: an unanswered prompt, a backlog item
-// ready for review, an error, or (optionally) an agent sitting idle.
+// Alerts when an agent needs you: an unanswered prompt, a backlog item ready for
+// review, an error, or (optionally) an agent sitting idle. To Slack, and to the
+// phone as a notification through ntfy (ntfy.sh, or a server of your own).
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { paths } from './config.js';
 import { alertPrompt, hash } from './judge.js';
 
@@ -35,14 +37,22 @@ export function loadNotify() {
   } catch {}
   return {
     slack: { webhookUrl: s.slack?.webhookUrl ?? null, botToken: s.slack?.botToken ?? null, channel: s.slack?.channel ?? null },
+    phone: { server: s.phone?.server ?? NTFY, topic: s.phone?.topic ?? null, token: s.phone?.token ?? null },
     events: { ...EVENT_DEFAULTS, ...s.events },
     needsInputDelaySec: s.needsInputDelaySec ?? 60,
     waitingDelaySec: s.waitingDelaySec ?? 120,
     skipWhenWatching: s.skipWhenWatching ?? true,
     includeIntent: s.includeIntent ?? true,
-    enabled: s.enabled ?? Boolean(s.slack?.webhookUrl || (s.slack?.botToken && s.slack?.channel)),
+    enabled: s.enabled ?? Boolean(s.slack?.webhookUrl || (s.slack?.botToken && s.slack?.channel) || s.phone?.topic),
   };
 }
+
+const NTFY = 'https://ntfy.sh';
+const hasSlack = (n) => Boolean(n.slack.webhookUrl || (n.slack.botToken && n.slack.channel));
+const hasPhone = (n) => Boolean(n.phone.topic);
+
+/** A topic nobody can guess: on a public ntfy server, whoever knows the name can read the alerts. */
+export const newTopic = () => `agentmgr-${crypto.randomBytes(12).toString('base64url')}`;
 
 export function saveNotify(patch) {
   const cur = loadNotify();
@@ -50,6 +60,7 @@ export function saveNotify(patch) {
     ...cur,
     ...patch,
     slack: { ...cur.slack, ...patch.slack },
+    phone: { ...cur.phone, ...patch.phone },
     events: { ...cur.events, ...patch.events },
   };
   fs.mkdirSync(paths.home, { recursive: true });
@@ -66,7 +77,10 @@ export function publicNotify() {
   return {
     ...n,
     slack: { webhookUrl: mask(n.slack.webhookUrl), botToken: mask(n.slack.botToken), channel: n.slack.channel },
-    configured: Boolean(n.slack.webhookUrl || (n.slack.botToken && n.slack.channel)),
+    // The topic is shown: it is what you subscribe to on the phone, and these settings are local only.
+    phone: { ...n.phone, token: mask(n.phone.token) },
+    configured: hasSlack(n) || hasPhone(n),
+    slackConfigured: hasSlack(n),
   };
 }
 
@@ -103,6 +117,55 @@ export async function sendSlack(text, n = loadNotify(), plain = text) {
     const hint = workflow && res.status === 400 ? ' (does the workflow define exactly one variable named "text"?)' : '';
     throw new Error(`Slack ${workflow ? 'workflow' : 'webhook'}: HTTP ${res.status} ${detail}${hint}`);
   }
+}
+
+// Slack's names for the icons that lead a message, where ntfy calls them something else.
+const TAGS = { robot_face: 'robot' };
+
+/**
+ * A plain message as a phone notification: the icon as a tag, the first line as the title, and
+ * the link (a last "Open: https://…" line) as what a tap opens.
+ */
+export function phoneMessage(plain, { title = null, message = null, link = null, priority = 3 } = {}) {
+  const tags = [];
+  let lines = String(plain ?? '')
+    .replace(/^\s*:([\w+-]+):\s*/, (_m, code) => (tags.push(TAGS[code] ?? code), ''))
+    .split('\n')
+    .map((l) => l.replace(/^>\s*/, '').trimEnd());
+  lines = lines.filter((l) => {
+    const m = /^[^:\n]{0,24}:\s*(https?:\/\/\S+)$/.exec(l);
+    if (m) link ??= m[1];
+    return !m && l.trim();
+  });
+  const clip = (t, n) => (t.length > n ? `${t.slice(0, n - 1)}…` : t);
+  const head = title ?? (lines.length > 1 ? lines.shift() : 'AI Agent Manager');
+  const text = message ?? lines.join('\n');
+  return { title: clip(head, 120), message: clip(text || head, 1500), tags, priority, ...(link ? { click: link } : {}) };
+}
+
+/** One notification to the phone, through ntfy: the ntfy app on it is subscribed to the topic. */
+export async function sendPhone(msg, n = loadNotify()) {
+  const { server, topic, token } = n.phone;
+  if (!topic) throw new Error('Phone alerts are not set up (agentmgr notify phone)');
+  const res = await fetch(`${server.replace(/\/+$/, '')}/`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) },
+    body: JSON.stringify({ topic, ...msg }),
+  });
+  if (!res.ok) throw new Error(`ntfy: HTTP ${res.status} ${(await res.text().catch(() => '')).slice(0, 160)}`);
+}
+
+/**
+ * Send one alert everywhere it is set up to go: Slack, the phone, or both. `phone` may give the
+ * notification's own title, message, link and priority; otherwise they are read from `plain`.
+ */
+export async function sendAlert(text, n = loadNotify(), plain = text, phone = {}) {
+  const sends = [];
+  if (hasSlack(n)) sends.push(sendSlack(text, n, plain));
+  if (hasPhone(n)) sends.push(sendPhone(phoneMessage(plain, phone), n));
+  if (!sends.length) throw new Error('Alerts have nowhere to go: set up Slack (a webhook URL, or a bot token and channel) or the phone');
+  const failed = (await Promise.allSettled(sends)).filter((r) => r.status === 'rejected');
+  if (failed.length) throw new Error(failed.map((r) => r.reason.message).join('; '));
 }
 
 /**
@@ -264,7 +327,7 @@ export class Notifier {
     const text = `:memo: *Agent digest* (${items.length})\n${items.map((x) => `• *${line(x).replace(/^([^:]+):/, '$1*:')}`).join('\n')}`;
     const plain = `:memo: Agent digest (${items.length})\n${items.map((x) => `- ${line(x)}`).join('\n')}`;
     const who = { name: `${items.length} alerts` };
-    return sendSlack(text, n, plain)
+    return sendAlert(text, n, plain, { title: `Agent digest (${items.length})`, message: items.map((x) => `• ${line(x)}`).join('\n') })
       .then(() => this.record('digest', who, null))
       .catch((err) => this.record('digest', who, err.message));
   }
@@ -278,7 +341,14 @@ export class Notifier {
     const prio = agent.priority <= 1 ? `[P${agent.priority}] ` : '';
     const text = `${icon} ${prio ? `*${prio.trim()}* ` : ''}*${agent.name}*${project} ${what}${intent}${link ? `\n<${link}|Open in AI Agent Manager>` : ''}`;
     const plain = `${icon} ${prio}${agent.name}${project} ${what.replace(/\*/g, '')}${intent}${link ? `\nOpen: ${link}` : ''}`;
-    sendSlack(text, n, plain)
+    // On the phone: the agent as the title, and a tap opens it. What waits for an answer is urgent.
+    const phone = {
+      title: `${prio}${agent.name}${project}`,
+      message: `${what.replace(/\*/g, '')}${intent.replace('\n> ', '\n')}`,
+      link,
+      priority: ['needsInput', 'question', 'error', 'blocked'].includes(kind) ? 4 : 3,
+    };
+    sendAlert(text, n, plain, phone)
       .then(() => this.record(kind, agent, null, urgency))
       .catch((err) => this.record(kind, agent, err.message, urgency));
   }
@@ -286,6 +356,6 @@ export class Notifier {
   record(kind, agent, error, urgency = null) {
     this.log.unshift({ at: new Date().toISOString(), kind, agent: agent.name, error, ...(urgency ? { urgency } : {}) });
     this.log.length = Math.min(this.log.length, 20);
-    if (error) console.error(`[agentmgr] Slack alert failed: ${error}`);
+    if (error) console.error(`[agentmgr] Alert failed: ${error}`);
   }
 }
