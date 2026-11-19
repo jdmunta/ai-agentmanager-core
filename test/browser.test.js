@@ -1260,12 +1260,18 @@ test('Files: a folder on this computer listed, a file sent into it, a folder ope
 });
 
 test('Inbox, one at a time: a single card with the next after it, stepped through with ‹ › and a swipe; Show all brings the list back', { skip }, async () => {
-  const made = await api('POST', '/agents', { intents: ['First store #question', 'Second store #question'], workdir: home });
+  const made = await api('POST', '/agents', { intents: ['First, please #ask me', 'Second, please #ask me'], workdir: home });
   await js(`document.querySelector('[data-tab="inbox"]').click()`);
   const cards = `document.querySelectorAll('#inbox-view .needs.inbox > .need')`;
   const seen = `[...${cards}].filter((c) => c.offsetParent !== null)`;
   await until(`${cards}.length >= 2`, 'two cards at least', 30_000);
-  const total = await js(`${cards}.length`);
+  // Two agents asking the same thing get a card for both as well: wait for a count that holds.
+  let total = 0;
+  for (let i = 0, last = -1; i < 40 && total !== last; i++) {
+    last = total;
+    await sleep(700);
+    total = await js(`${cards}.length`);
+  }
   assert.equal(await js(`${seen}.length`), total, 'the whole list on a wide screen');
   await js(`document.querySelector('#inbox-view [data-inbox-one]').click()`);
   await until(`${seen}.length === 1 && document.querySelector('.inbox-step')`, 'one card');
