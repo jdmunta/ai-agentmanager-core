@@ -21,6 +21,7 @@ import { PreReview } from './prereview.js';
 import { Screen } from './screen.js';
 import { Awake } from './awake.js';
 import { Files } from './files.js';
+import { Announcer } from './announce.js';
 import { Autopilot } from './autopilot.js';
 import { Goals, goalMarkdown } from './goals.js';
 import { Budgets } from './budgets.js';
@@ -39,7 +40,7 @@ import { installed, listEngines, localEngineId, registerAcpEngines, registerEngi
 import { LOCAL_ENGINES } from './engines/local.js';
 import { Plugins, pluginSpecs } from './plugins.js';
 import { HubLink, linkUrls } from './hublink.js';
-import { Notifier, isWorkflowUrl, loadNotify, newTopic, publicNotify, saveNotify, sendAlert } from './notify.js';
+import { Notifier, isWorkflowUrl, loadNotify, newTopic, publicNotify, saveNotify, sendAlert, sendSlack, announceSlack } from './notify.js';
 import { Previews, parseUrl } from './preview.js';
 import { LiveBrowser } from './livebrowser.js';
 import * as remote from './remote.js';
@@ -107,7 +108,7 @@ function isAllowedOrigin(origin, port) {
 const PUBLIC_REMOTE_API = new Set(['POST /api/login', 'GET /api/session']);
 // Updates are not here: a signed-in device (a phone) can install the newest release too. It only
 // ever installs an official release from where this copy came from (git tag or npm) and restarts.
-const LOCAL_ONLY_API = /^\/api\/(remote(\/|$)|notify(\/|$)|hub(\/|$)|triggers(\/|$)|service$|jira(\/check)?$|isolation\/|screen\/settings$|editors$|agentkit\/connect$|agents\/[\w-]+\/open-in$|local-models\/settings$|shutdown$)/;
+const LOCAL_ONLY_API = /^\/api\/(remote(\/|$)|notify(\/|$)|hub(\/|$)|triggers(\/|$)|service$|jira(\/check)?$|isolation\/|screen\/settings$|announce\/slack$|editors$|agentkit\/connect$|agents\/[\w-]+\/open-in$|local-models\/settings$|shutdown$)/;
 const HOOK_PATH = '/api/hooks/agents';
 const REPORT_PATH = '/api/agentkit/report';
 const NO_REPO_KINDS = new Set(['general', 'assistant']);
@@ -264,6 +265,20 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
     return `${kind ? (/^[AEIOU]/i.test(kind) ? `an ${kind}` : `a ${kind}`) : 'a signed-in device'}${req.device?.ip ? ` (${String(req.device.ip).replace(/^::ffff:/, '')})` : ''}`;
   };
   const screen = new Screen({ config, onChange: (viewers) => pushScreen(viewers), log: (m) => console.log(`[agentmgr] ${m}`) });
+  // Announce (announce.js): when an agent finishes or opens a pull request, what to tell the people
+  // who asked is written and waits for you to send; the alert says it is ready.
+  const announcer = new Announcer({
+    manager,
+    config,
+    log: (m) => console.log(`[agentmgr] ${m}`),
+    prepare: async (id, milestone) => {
+      await manager.summarize(id, 'update');
+      const cur = store.get(id);
+      if (!cur?.docs?.update?.markdown) return;
+      manager.patch(id, { announce: { ...cur.announce, auto: { milestone, at: new Date().toISOString() }, sent: {}, dismissedAt: null } });
+      notifier.send('announce', manager.get(id), `${milestone === 'done' ? 'is finished' : 'opened a pull request'}: an update for the people who asked is ready for you to send`);
+    },
+  });
   // Awake (awake.js): the computer kept from sleeping, always or while an agent works.
   const awake = new Awake({ config, working: () => manager.list().some((a) => a.runtime?.busy), log: (m) => console.log(`[agentmgr] ${m}`) });
   const standup = new Standup({
@@ -587,6 +602,29 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
       return manager.document(req.params.id, req.params.kind);
     }),
   );
+  // An update for the people who asked: its link and recipients, what was sent, and the posting itself.
+  const announceView = () => ({ ...announcer.settings, slack: announceSlack()?.where ?? null, webhookUrl: publicNotify().announce.webhookUrl });
+  api.get('/announce/settings', wrap(() => announceView()));
+  api.put('/announce/settings', wrap((req) => {
+    saveConfig({ announce: announcer.change(req.body ?? {}) });
+    return announceView();
+  }));
+  // Where they are posted is a way out of this computer: set here only (local only, like the alerts).
+  api.put('/announce/slack', wrap((req) => {
+    const url = String(req.body?.webhookUrl ?? '').trim();
+    if (url && !okUrl(url)) throw fail(400, 'The webhook URL must be https://…');
+    saveNotify({ announce: { webhookUrl: url || null } });
+    return announceView();
+  }));
+  api.put('/agents/:id/announce', wrap((req) => manager.updateState(req.params.id, req.body ?? {})));
+  api.post('/agents/:id/announce/publish', wrap((req) => manager.publishUpdate(req.params.id)));
+  api.post('/agents/:id/announce/slack', wrap(async (req) => {
+    const to = announceSlack();
+    if (!to) throw fail(409, 'Slack is not set up: give a webhook for updates (agentmgr announce --webhook <url>), or set up Slack alerts');
+    const text = manager.updateSlackText(req.params.id, req.body?.text ?? null);
+    await sendSlack(text, to, text);
+    return { ...manager.updateState(req.params.id, { sent: 'slack' }), postedTo: to.where };
+  }));
   api.get('/agents/:id/specs/:name', wrap((req) => manager.specDoc(req.params.id, req.params.name)));
   // The agent's demo page, sandboxed: no access to this page's origin, and nothing loaded from elsewhere.
   api.get('/agents/:id/demo', (req, res) => {

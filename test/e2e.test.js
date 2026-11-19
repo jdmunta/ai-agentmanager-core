@@ -57,6 +57,8 @@ fs.writeFileSync(
     judge: { enabled: false },
     // No release checks against GitHub; the cap acts at once (its own test sets a limit).
     updates: { check: false },
+    // Updates for the people who asked are written by themselves only in their own test.
+    announce: { auto: false },
     // AI News reads public pages: never from the tests (its own tests use a local page).
     news: { enabled: false },
     // No repository scans in the background either.
@@ -1714,6 +1716,86 @@ test('MCP: a folder\'s own MCP session lists servers, signs in to one, reconnect
   const fresh = await call('GET', `/mcp?agent=${a.id}&refresh=1`);
   assert.equal(sessions(), 2);
   assert.equal(fresh.body.servers.find((s) => s.name === 'tracker').status, 'needs-auth');
+});
+
+test('updates for the people who asked: written when an agent finishes, a Slack message, an email and the details; posted only when you post it', async () => {
+  const http = await import('node:http');
+  const got = [];
+  const hook = http.createServer((req, res) => {
+    let b = '';
+    req.on('data', (c) => (b += c));
+    req.on('end', () => {
+      got.push(JSON.parse(b));
+      res.end('ok');
+    });
+  });
+  await new Promise((r) => hook.listen(0, '127.0.0.1', r));
+  try {
+    // Off (as the tests have it): finishing writes nothing.
+    assert.deepEqual((await call('GET', '/announce/settings')).body, { auto: false, slack: (await call('GET', '/announce/settings')).body.slack, webhookUrl: null });
+    assert.equal((await call('PUT', '/announce/settings', { auto: 'yes' })).status, 400);
+    assert.equal((await call('PUT', '/announce/settings', { auto: true })).body.auto, true);
+    assert.equal(JSON.parse(fs.readFileSync(path.join(home, 'config.json'), 'utf8')).announce.auto, true, 'kept, beside the update check');
+    assert.equal(JSON.parse(fs.readFileSync(path.join(home, 'config.json'), 'utf8')).updates.check, false);
+
+    const [a] = (await call('POST', '/agents', { intent: 'Ship the login fix #done', project: 'Announce' })).body;
+    const done = await waitFor(async () => {
+      const v = await agentNow(a.id);
+      return v.announce?.auto && v.docs?.update?.markdown && !v.docs.update.pending ? v : null;
+    }, 30000, 'the update, written by itself');
+    assert.equal(done.announce.auto.milestone, 'done');
+    const d = done.docs.update;
+    assert.equal(d.stage, 'finished');
+    assert.deepEqual(d.parts, { slack: '*Ship the login fix #done*: finished\n• Safe call.', to: 'Pat Lee', subject: 'Ship the login fix #done: finished', email: 'Hi Pat,\n\n- It is finished.\n- Nothing is needed from you.' });
+    assert.match(d.markdown, new RegExp(`^# Update: ${a.name}\\n\\n### What was asked\\nShip the login fix #done\\n### Status\\nIt is finished\\.`), 'the details are the document: read, printed and published like the others');
+    assert.equal(got.length, 0, 'nothing was sent to anyone');
+    await new Promise((r) => setTimeout(r, 1500));
+    assert.equal((await agentNow(a.id)).docs.update.at, d.at, 'written once for the moment, not at every change');
+
+    // Where the details are read, and who it is for.
+    assert.equal((await call('PUT', `/agents/${a.id}/announce`, { link: 'not a link' })).status, 400);
+    const linked = (await call('PUT', `/agents/${a.id}/announce`, { link: 'https://docs.example.com/d/1', to: 'pat@example.com' })).body;
+    assert.deepEqual([linked.announce.link, linked.announce.to], ['https://docs.example.com/d/1', 'pat@example.com']);
+
+    // Posting: nowhere to post until a webhook is given (set on the computer only); then your text, with the link under it.
+    await call('POST', '/notify', { webhookUrl: '', botToken: '', channel: '' });
+    assert.equal((await call('POST', `/agents/${a.id}/announce/slack`, {})).status, 409);
+    assert.equal((await call('PUT', '/announce/slack', { webhookUrl: 'ftp://nope' })).status, 400);
+    const set = (await call('PUT', '/announce/slack', { webhookUrl: `http://127.0.0.1:${hook.address().port}/services/T/B/updates` })).body;
+    assert.equal(set.slack, 'the updates webhook');
+    assert.ok(!JSON.stringify(set).includes('/services/T/B/updates'), 'the webhook is masked');
+    const posted = (await call('POST', `/agents/${a.id}/announce/slack`, { text: 'Login fix is out. Thanks all.' })).body;
+    assert.equal(posted.postedTo, 'the updates webhook');
+    assert.deepEqual(got.map((m) => m.text), ['Login fix is out. Thanks all.\n\nDetails: https://docs.example.com/d/1']);
+    assert.ok(posted.announce.sent.slack, 'kept that it was posted');
+    await call('POST', `/agents/${a.id}/announce/slack`, {});
+    assert.equal(got[1].text, `${d.parts.slack}\n\nDetails: https://docs.example.com/d/1`, 'without your own text: as written');
+    assert.equal((await call('PUT', `/agents/${a.id}/announce`, { sent: 'email' })).body.announce.sent.email > '', true);
+    assert.equal((await call('PUT', `/agents/${a.id}/announce`, { dismissed: true })).body.announce.dismissedAt > '', true);
+
+    // On request at any time, for work under way; a failed call says so and keeps the last one.
+    const [b] = (await call('POST', '/agents', { intent: 'Half way there', start: false })).body;
+    await waitFor(async () => (await agentNow(b.id)).status === 'stopped', 8000, 'ready');
+    assert.equal((await call('POST', `/agents/${b.id}/announce/publish`)).status, 409, 'nothing to publish yet');
+    const asked = (await call('POST', `/agents/${b.id}/docs/update`)).body;
+    assert.deepEqual([asked.docs.update.stage, asked.docs.update.parts.subject, asked.announce ?? null], ['in progress', 'Half way there: in progress', null]);
+    const [c] = (await call('POST', '/agents', { intent: 'Never told #noupdate', start: false })).body;
+    await waitFor(async () => (await agentNow(c.id)).status === 'stopped', 8000, 'ready');
+    assert.equal((await call('POST', `/agents/${c.id}/docs/update`)).status >= 400, true);
+    assert.ok((await agentNow(c.id)).docs.update.error);
+
+    // Turned off again: the next one to finish gets none.
+    await call('PUT', '/announce/settings', { auto: false });
+    const [e] = (await call('POST', '/agents', { intent: 'Quietly #done', project: 'Announce' })).body;
+    await waitFor(async () => (await agentNow(e.id)).brief?.status === 'done', 20000, 'finished');
+    await new Promise((r) => setTimeout(r, 1500));
+    assert.equal((await agentNow(e.id)).docs?.update ?? null, null);
+    for (const x of [a, e]) await call('POST', `/agents/${x.id}/stop`);
+  } finally {
+    await call('PUT', '/announce/settings', { auto: false });
+    await call('PUT', '/announce/slack', { webhookUrl: '' });
+    hook.close();
+  }
 });
 
 test('documents in the background: returns at once, all seven, at most two Claude calls at a time', async () => {

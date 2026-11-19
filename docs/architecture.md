@@ -29,6 +29,7 @@ No build step: Node ES modules on the server, plain ES modules in the browser. S
 | `src/backlog.js`, `src/races.js` | Work orders picked up per project; several agents on one intent, compared. |
 | `src/teams.js` | Agents in roles on one problem: handoff files with a verdict line move the team from analysis to review. |
 | `src/notify.js` | Alerts to Slack and to the phone (ntfy), triaged by the judge. |
+| `src/announce.js` | Updates for the people who asked: the prompt, the parts, and writing one when an agent finishes or opens a PR. |
 | `src/awake.js` | Keeps the computer from sleeping, always or while an agent works. |
 | `src/files.js` | This computer's folders for a signed-in device: list, send a file, fetch one. |
 | `src/preview.js`, `src/livebrowser.js` | Browser tabs: HTTPS relays for remote devices, and a headless Chrome streamed over the Chrome DevTools Protocol (frames, input, sound). |

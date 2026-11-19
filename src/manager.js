@@ -67,6 +67,7 @@ const SUMMARIES = {
   diagrams: { doc: 'diagrams', run: 'runDiagrams' },
   walkthrough: { doc: 'walkthrough', run: 'runWalkthrough' },
   scorecard: { doc: 'scorecard', run: 'runScorecard' },
+  update: { doc: 'update', run: 'runUpdate' },
 };
 /** Read / write where a summary of `kind` is kept on the agent record. */
 const getSummary = (agent, kind) => (SUMMARIES[kind].doc ? agent.docs?.[kind] : agent[SUMMARIES[kind].field]);
@@ -143,6 +144,7 @@ import { Rules, describeTool } from './rules.js';
 import { continuePrompt, findLimit } from './limits.js';
 import { runningClaude, scanClaudeSessions } from './sessions.js';
 import { builderAllowedTools, builderPrompt } from './builder.js';
+import { parseUpdate, stageOf, updatePrompt, withLink } from './announce.js';
 import { DRIVE_DOCS, DRIVE_TOOLS, docUrl, driveHtml, drivePrompt, folderUrl, parseDrive } from './drive.js';
 import {
   bugFromRef,
@@ -2900,6 +2902,76 @@ export class AgentManager extends EventEmitter {
     const r = parseDrive(reply, ['doc']);
     if (!r.files.doc) throw new Error(r.errors[0] ?? 'Google Drive returned no document (is the Google Drive connector linked to your Claude account?)');
     return { folderId: r.folderId, id: r.files.doc, url: docUrl(r.files.doc) };
+  }
+
+  /**
+   * An update for the people who asked (announce.js): a Slack message and an email to send, kept as
+   * `parts`, and the details they point to, kept as the document itself so it reads, prints and
+   * publishes like the others.
+   */
+  async runUpdate(agent, ctx) {
+    const writer = this.writerFor(agent);
+    const stage = stageOf(this.view(agent));
+    const u = parseUpdate(await this.oneShot(agent, updatePrompt({ ...ctx, stage }), writer));
+    const cur = this.store.get(agent.id);
+    if (!cur) return null;
+    return this.view(
+      this.patch(
+        agent.id,
+        summaryPatch(cur, 'update', {
+          markdown: `# Update: ${agent.name}\n\n${u.details || 'To be confirmed.'}`,
+          parts: { slack: u.slack, to: u.to, subject: u.subject, email: u.email },
+          stage,
+          writer: `${writer.engine.label}${writer.model ? ` (${writer.model})` : ''}`,
+          at: now(),
+          briefUpdatedAt: cur.brief?.updatedAt ?? null,
+          pending: false,
+          error: null,
+        }),
+      ),
+    );
+  }
+
+  /** What goes with an update besides its text: the link to its details, who it is for, what was sent, set aside. */
+  updateState(ref, b = {}) {
+    const agent = this.mustGet(ref);
+    const next = { ...agent.announce };
+    if (b.link !== undefined) {
+      const link = String(b.link ?? '').trim();
+      if (link && !/^https?:\/\/\S+$/.test(link)) throw Object.assign(new Error('The link starts with https://'), { status: 400 });
+      next.link = link || null;
+    }
+    if (b.to !== undefined) next.to = String(b.to ?? '').trim().slice(0, 500) || null;
+    if (['slack', 'email'].includes(b.sent)) next.sent = { ...next.sent, [b.sent]: now() };
+    if (b.dismissed !== undefined) next.dismissedAt = b.dismissed ? now() : null;
+    return this.view(this.patch(agent.id, { announce: next }));
+  }
+
+  /** The update's Slack message as it goes out: the text given (yours, edited) or the written one, with the link. */
+  updateSlackText(ref, text = null) {
+    const agent = this.mustGet(ref);
+    const body = String(text ?? agent.docs?.update?.parts?.slack ?? '').trim();
+    if (!body) throw Object.assign(new Error('There is no message to post: write the update first'), { status: 409 });
+    return withLink(body.slice(0, 3000), agent.announce?.link);
+  }
+
+  /** The update's details as one Google Doc, through the Drive connector; its link then goes under both messages. */
+  publishUpdate(ref) {
+    const agent = this.mustGet(ref);
+    const markdown = agent.docs?.update?.markdown;
+    if (!markdown) throw Object.assign(new Error('Write the update first'), { status: 409 });
+    if (agent.announce?.publishing) return this.view(agent);
+    this.patch(agent.id, { announce: { ...agent.announce, publishing: true, publishError: null } });
+    this.publishDriveDoc({ folderTitle: `${agent.name} (AI Agent Manager)`, folderId: agent.drive?.folderId ?? null, title: `Update: ${agent.name}`, markdown })
+      .then((r) => {
+        const cur = this.store.get(agent.id);
+        if (cur) this.patch(agent.id, { announce: { ...cur.announce, publishing: false, link: r.url, published: { id: r.id, at: now() } } });
+      })
+      .catch((e) => {
+        const cur = this.store.get(agent.id);
+        if (cur) this.patch(agent.id, { announce: { ...cur.announce, publishing: false, publishError: e.message } });
+      });
+    return this.view(this.store.get(agent.id));
   }
 
   /** Diagrams only: the problem and its solution drawn from the documents already written and the live context. */

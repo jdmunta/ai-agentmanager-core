@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.59.0 (2026-11-19)
+
+- **Updates for the people who asked.** When an agent finishes or opens a pull request, what to tell the requester and other stakeholders is written from its work: a Slack message of a few lines, a short email with its subject, and the details both point to. An **Update to send** card appears in the inbox and the alert says it is ready. **Update** with an agent's documents (or `agentmgr announce <agent>`) writes one at any time, for work under way too.
+- **Drafts, sent by you.** Change the text in place, then **Copy**, **Post to Slack** (asked twice; to a webhook for updates, `agentmgr announce --webhook <url>`, or where the Slack alerts go) or **Open in mail**, which fills in your own mail program. Nothing is sent to anyone by itself.
+- **The details as a link.** Paste where they can be read, or **Publish to Google Drive** makes a Google Doc of them; the link goes under both messages.
+- **Cost and turning it off.** Each update is one more tool-less model call on the agent's engine. `agentmgr announce --auto off` stops writing them by themselves.
+- **Tried:** in desktop Chrome with a stand-in Slack webhook, and the wording once with a real model on made-up work. Not yet on a real agent's work, a real Slack channel, a phone's mail program or Google Drive.
+- **Tests on CI stop at the first failure.** A failing slice ends the others, so a failure is known as soon as it happens and not when the slowest slice is through.
+
 ## 1.58.0 (2026-11-18)
 
 - **Screen: Pad, the screen as a trackpad.** A fingertip covers the button it aims at. With **Pad** on, a drag anywhere moves a pointer drawn on the screen (a slow finger moves it finely, a quick one crosses the screen) and a tap clicks where the pointer is. Two fingers scroll or, tapped, right-click; a finger held still, then dragged, drags. Zoomed in, the screen follows the pointer. The button appears on a touch screen and the choice is remembered. Tried in desktop Chrome with made-up touches, not yet on a phone against a real Mac.

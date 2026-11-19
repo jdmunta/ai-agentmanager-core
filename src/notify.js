@@ -25,6 +25,7 @@ export const EVENT_DEFAULTS = {
   milestone: true, // a project's date (code complete, RC, GA) is coming up, at risk or late
   usage: true, // an engine's plan limit is nearly used up (Usage)
   decided: true, // something was decided for you (a standing decision, or within the autonomy you set)
+  announce: true, // an update for the people who asked is written and ready for you to send
 };
 
 // Alerts the AI judge may hold for the digest or drop; the rest are always sent at once.
@@ -38,6 +39,8 @@ export function loadNotify() {
   return {
     slack: { webhookUrl: s.slack?.webhookUrl ?? null, botToken: s.slack?.botToken ?? null, channel: s.slack?.channel ?? null },
     phone: { server: s.phone?.server ?? NTFY, topic: s.phone?.topic ?? null, token: s.phone?.token ?? null },
+    // Where updates for stakeholders are posted (their channel), when not where the alerts go.
+    announce: { webhookUrl: s.announce?.webhookUrl ?? null },
     events: { ...EVENT_DEFAULTS, ...s.events },
     needsInputDelaySec: s.needsInputDelaySec ?? 60,
     waitingDelaySec: s.waitingDelaySec ?? 120,
@@ -51,6 +54,13 @@ const NTFY = 'https://ntfy.sh';
 const hasSlack = (n) => Boolean(n.slack.webhookUrl || (n.slack.botToken && n.slack.channel));
 const hasPhone = (n) => Boolean(n.phone.topic);
 
+/** Where an update for stakeholders is posted: its own webhook, else the Slack the alerts use; null when neither. */
+export function announceSlack(n = loadNotify()) {
+  if (n.announce.webhookUrl) return { slack: { webhookUrl: n.announce.webhookUrl, botToken: null, channel: null }, where: 'the updates webhook' };
+  if (hasSlack(n)) return { slack: n.slack, where: n.slack.botToken && n.slack.channel ? n.slack.channel : 'the alerts webhook' };
+  return null;
+}
+
 /** A topic nobody can guess: on a public ntfy server, whoever knows the name can read the alerts. */
 export const newTopic = () => `agentmgr-${crypto.randomBytes(12).toString('base64url')}`;
 
@@ -61,6 +71,7 @@ export function saveNotify(patch) {
     ...patch,
     slack: { ...cur.slack, ...patch.slack },
     phone: { ...cur.phone, ...patch.phone },
+    announce: { ...cur.announce, ...patch.announce },
     events: { ...cur.events, ...patch.events },
   };
   fs.mkdirSync(paths.home, { recursive: true });
@@ -79,6 +90,7 @@ export function publicNotify() {
     slack: { webhookUrl: mask(n.slack.webhookUrl), botToken: mask(n.slack.botToken), channel: n.slack.channel },
     // The topic is shown: it is what you subscribe to on the phone, and these settings are local only.
     phone: { ...n.phone, token: mask(n.phone.token) },
+    announce: { webhookUrl: mask(n.announce.webhookUrl) },
     configured: hasSlack(n) || hasPhone(n),
     slackConfigured: hasSlack(n),
   };
@@ -334,7 +346,7 @@ export class Notifier {
 
   deliver(kind, agent, what, n, urgency = null) {
     if (!n.enabled || !n.events[kind]) return;
-    const icon = { needsInput: ':raised_hand:', review: ':white_check_mark:', error: ':x:', waiting: ':hourglass_flowing_sand:', blocked: ':no_entry:', stuck: ':repeat:', conflict: ':crossed_swords:', question: ':question:', assistant: ':robot_face:', budget: ':moneybag:' }[kind];
+    const icon = { needsInput: ':raised_hand:', review: ':white_check_mark:', error: ':x:', waiting: ':hourglass_flowing_sand:', blocked: ':no_entry:', stuck: ':repeat:', conflict: ':crossed_swords:', question: ':question:', assistant: ':robot_face:', budget: ':moneybag:', announce: ':mega:' }[kind];
     const project = agent.projectInfo?.name ? ` (${agent.projectInfo.name})` : '';
     const link = this.linkFor(agent.id);
     const intent = n.includeIntent && agent.intent ? `\n> ${agent.intent.replace(/\s+/g, ' ').slice(0, 200)}` : '';

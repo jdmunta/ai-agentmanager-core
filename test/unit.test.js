@@ -2508,6 +2508,71 @@ test('keyboard shortcuts: every key does something, and the list shows each one'
   assert.equal(new Set(listed.flatMap(([keys]) => keys)).size, listed.flatMap(([keys]) => keys).length, 'no key twice');
 });
 
+test('updates for the people who asked: the written update taken apart, the stage of the work, and the moments one is written for', async () => {
+  const { parseUpdate, stageOf, milestonesOf, withLink, updatePrompt, Announcer } = await import('../src/announce.js');
+  const { EventEmitter } = await import('node:events');
+  const u = parseUpdate('## Slack\n*Login fix*: ready for review\n• Needs a review of PR 12\n\n## Email\nTo: Pat Lee\nSubject: Login fix ready for review\n\nHi Pat,\n\n- Please review PR 12.\n\n## Details\n### What was asked\nFix it.\n## Not a part\nstill details');
+  assert.deepEqual(u, { slack: '*Login fix*: ready for review\n• Needs a review of PR 12', to: 'Pat Lee', subject: 'Login fix ready for review', email: 'Hi Pat,\n\n- Please review PR 12.', details: '### What was asked\nFix it.\n## Not a part\nstill details' });
+  assert.deepEqual(parseUpdate('## slack\n```\nhello\n```\n## EMAIL\n**To:** To be confirmed\n**Subject:** S\n\nbody'), { slack: 'hello', to: '', subject: 'S', email: 'body', details: '' }, 'a fence and bold labels are the model being careful');
+  assert.deepEqual(parseUpdate('No sections at all.'), { slack: '', to: '', subject: '', email: '', details: 'No sections at all.' }, 'nothing written is lost');
+  assert.equal(withLink(' hi \n', 'https://d'), 'hi\n\nDetails: https://d');
+  assert.equal(withLink('hi', null), 'hi');
+
+  assert.equal(stageOf({ brief: { status: 'done' } }), 'finished');
+  assert.equal(stageOf({ results: { outcome: 'done' } }), 'finished');
+  assert.equal(stageOf({ prs: [{ state: 'MERGED' }] }), 'finished');
+  assert.equal(stageOf({ prs: [{ state: 'OPEN' }, { state: 'MERGED' }] }), 'ready for review');
+  assert.equal(stageOf({ prs: [{ state: 'OPEN', source: 'mentioned' }] }), 'in progress', 'a pull request it only read is not its work');
+  assert.deepEqual(milestonesOf({ prs: [{ url: 'u1', state: 'OPEN' }, { url: 'u2', state: 'CLOSED' }, { url: 'u3', state: 'OPEN', source: 'mentioned' }], brief: { status: 'done' } }), ['pr:u1', 'done']);
+  const p = updatePrompt({ intent: 'Fix login', status: 'status: running', digest: '', repo: '', briefMarkdown: '', stage: 'ready for review' });
+  assert.match(p, /^Write an update for the people who asked/);
+  assert.match(p, /The work is ready for review\./);
+  assert.match(p, /## Slack[\s\S]*## Email[\s\S]*## Details/);
+  assert.match(p, /No mention of an AI agent/);
+
+  const { mailtoFor, updateWaits } = await import('../public/announce.js');
+  assert.equal(mailtoFor('pat@example.com; sam+qa@example.com', 'Login fix: done & out', 'Hi,\n- 100% done'), 'mailto:pat@example.com,sam%2Bqa@example.com?subject=Login%20fix%3A%20done%20%26%20out&body=Hi%2C%0A-%20100%25%20done');
+  assert.equal(mailtoFor('', 's', 'b'), 'mailto:?subject=s&body=b', 'no address yet: the mail program asks');
+  const waiting = { docs: { update: { markdown: 'x' } }, announce: { auto: { milestone: 'done' } } };
+  assert.equal(updateWaits(waiting), true);
+  assert.equal(updateWaits({ ...waiting, announce: { ...waiting.announce, sent: { email: 't' } } }), false, 'sent: no longer waiting');
+  assert.equal(updateWaits({ ...waiting, announce: { ...waiting.announce, dismissedAt: 't' } }), false);
+  assert.equal(updateWaits({ docs: { update: { markdown: 'x' } } }), false, 'one you asked for is not put in the inbox');
+
+  // Written by itself only for what is seen to happen: not for what was already so, not twice, not when off.
+  const manager = new EventEmitter();
+  const config = {};
+  const made = [];
+  const an = new Announcer({ manager, config, prepare: async (id, m) => void made.push([id, m]) });
+  const see = (a) => manager.emit('change', a);
+  see({ id: 'old', brief: { status: 'done' } });
+  see({ id: 'old', brief: { status: 'done' } });
+  assert.deepEqual(made, [], 'finished before this started: not announced after the fact');
+  see({ id: 'a1' });
+  see({ id: 'a1', prs: [{ url: 'u1', state: 'OPEN' }] });
+  see({ id: 'a1', prs: [{ url: 'u1', state: 'OPEN' }] });
+  see({ id: 'a1', prs: [{ url: 'u1', state: 'MERGED' }], brief: { status: 'done' } });
+  see({ id: 'a1', prs: [{ url: 'u1', state: 'MERGED' }], brief: { status: 'working' } });
+  see({ id: 'a1', prs: [{ url: 'u1', state: 'MERGED' }], brief: { status: 'done' } });
+  assert.deepEqual(made, [['a1', 'pr:u1'], ['a1', 'done']], 'once for each moment');
+  see({ id: 'g1', kind: 'general' });
+  see({ id: 'g1', kind: 'general', brief: { status: 'done' } });
+  see({ id: 'h1', hunting: true });
+  see({ id: 'h1', hunting: true, brief: { status: 'done' } });
+  assert.equal(made.length, 2, 'not for a general session or a bug hunt');
+  see({ id: 'a2' });
+  see({ id: 'a2', prs: [{ url: 'u2', state: 'OPEN' }], brief: { status: 'done' } });
+  assert.deepEqual(made.at(-1), ['a2', 'done'], 'finished says more than the pull request that came with it');
+  assert.throws(() => an.change({ auto: 'no' }), { status: 400 });
+  an.change({ auto: false });
+  assert.deepEqual(config.announce, { auto: false });
+  see({ id: 'a3' });
+  see({ id: 'a3', brief: { status: 'done' } });
+  an.change({ auto: true });
+  see({ id: 'a3', brief: { status: 'done' } });
+  assert.equal(made.length, 3, 'off: none, and none later for what happened while it was off');
+});
+
 test('go to: what was typed finds views and agents by name, the best match first', async () => {
   const { findMatches } = await import('../public/palette.js');
   const items = [
