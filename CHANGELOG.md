@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.60.0 (2026-11-19)
+
+- **Value: pull requests merged.** Next to the value delivered, how many pull requests merged in the period and how many a day, with the change against the period before. Each counts in the period it merged in, so a second pull request on the same work is counted when it lands. It is on the page, in `agentmgr value`, in the report (Markdown and Slack) and as a `pull_requests` column at the end of `value.csv`.
+- **Value by year.** **Year** joins Day, Week, Month and Quarter, on the page and as `--period year` and `report --kind year`. There is no scheduled yearly report.
+- **How far back it goes.** Value keeps work delivered from about 100 days before you first opened it, so a year's count starts there, and delivered work whose agent you have since deleted counts as one pull request.
+
 ## 1.59.0 (2026-11-19)
 
 - **Updates for the people who asked.** When an agent finishes or opens a pull request, what to tell the requester and other stakeholders is written from its work: a Slack message of a few lines, a short email with its subject, and the details both point to. An **Update to send** card appears in the inbox and the alert says it is ready. **Update** with an agent's documents (or `agentmgr announce <agent>`) writes one at any time, for work under way too.

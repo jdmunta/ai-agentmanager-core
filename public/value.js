@@ -1,6 +1,7 @@
-// Value: what the delivered work is worth, by day, week, month and quarter: the engineering time it
+// Value: what the delivered work is worth, by day, week, month, quarter and year: the engineering time it
 // saved, other savings, potential revenue and strategic weight, against the AI cost and your own
-// time. Each item's figures are AI estimates you can correct; reports go out on a schedule.
+// time, with the pull requests merged in each. Each item's figures are AI estimates you can correct;
+// reports go out on a schedule.
 
 import { expandButton, expandable } from './expand.js';
 
@@ -9,6 +10,7 @@ const PERIODS = [
   ['week', 'Week'],
   ['month', 'Month'],
   ['quarter', 'Quarter'],
+  ['year', 'Year'],
 ];
 const CATEGORIES = ['cost savings', 'revenue', 'risk reduction', 'quality', 'customer experience', 'strategic', 'maintenance'];
 const SAVED = 'agentmgr.valuePeriod';
@@ -27,6 +29,11 @@ export function initValue({ api, $, esc, toast, openAgent }) {
 
   const money = (n) => (n == null ? '—' : new Intl.NumberFormat(undefined, { style: 'currency', currency: data?.settings.currency ?? 'USD', maximumFractionDigits: 0 }).format(n));
   const pct = (a, b) => (b ? Math.round(((a - b) / b) * 100) : null);
+  // Pull requests a day over a period's days so far (the current one has not ended).
+  const perDay = (p) => {
+    const days = Math.max(1, Math.ceil((Math.min(Date.now(), Date.parse(p.end)) - Date.parse(p.start)) / 86_400_000));
+    return Math.round((p.totals.prs / days) * 10) / 10;
+  };
 
   async function load() {
     try {
@@ -50,7 +57,7 @@ export function initValue({ api, $, esc, toast, openAgent }) {
         const v = (p.totals.valueUsd / max) * 100;
         const r = (p.totals.revenueUsd / max) * 100;
         const on = (selected ?? periods[0].key) === p.key;
-        return `<button class="value-bar ${on ? 'on' : ''}" role="listitem" data-value-pick="${esc(p.key)}" title="${esc(`${p.label}: ${money(p.totals.valueUsd)} value, ${money(p.totals.revenueUsd)} potential revenue, ${p.totals.items} items`)}">
+        return `<button class="value-bar ${on ? 'on' : ''}" role="listitem" data-value-pick="${esc(p.key)}" title="${esc(`${p.label}: ${money(p.totals.valueUsd)} value, ${money(p.totals.revenueUsd)} potential revenue, ${p.totals.items} items, ${p.totals.prs} pull requests merged`)}">
             <span class="stack"><span class="rev" style="height:${r}%"></span><span class="val" style="height:${v}%"></span></span>
             <span class="lbl">${esc(shortLabel(p))}</span>
           </button>`;
@@ -63,7 +70,7 @@ export function initValue({ api, $, esc, toast, openAgent }) {
     if (period === 'day') return d.toLocaleDateString(undefined, { weekday: 'narrow', day: 'numeric' });
     if (period === 'week') return d.toLocaleDateString(undefined, { month: 'numeric', day: 'numeric' });
     if (period === 'month') return d.toLocaleDateString(undefined, { month: 'short' });
-    return p.label.split(' ')[0];
+    return period === 'year' ? p.label : p.label.split(' ')[0];
   };
 
   function itemRow(it) {
@@ -167,6 +174,7 @@ export function initValue({ api, $, esc, toast, openAgent }) {
       <p class="value-period"><b>${esc(p.label)}</b>${p.current ? ' <span class="hint">so far</span>' : ''} · ${t.items} item${t.items === 1 ? '' : 's'} delivered${data.pending ? ` · <span class="hint">${data.pending} waiting for an estimate</span>` : ''}</p>
       <div class="value-cards">
         ${card('Value delivered', money(t.valueUsd), `${t.humanHours} engineering hours${t.savingsUsd ? ` + ${money(t.savingsUsd)} savings` : ''}`, prev?.totals.valueUsd, t.valueUsd)}
+        ${card('Pull requests', String(t.prs), `merged${period === 'day' ? '' : ` · ${perDay(p)} a day`}`, prev?.totals.prs, t.prs)}
         ${card('Potential revenue', money(t.revenueUsd), 'first year', prev?.totals.revenueUsd, t.revenueUsd)}
         ${card('Strategic', String(t.strategicHigh), 'high-impact items (4–5 of 5)', null, null)}
         ${card('Leverage', t.leverage ? `${t.leverage}×` : '—', `engineering hours per hour of yours (${t.yourHours}h)`, prev?.totals.leverage, t.leverage)}

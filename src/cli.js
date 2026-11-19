@@ -1378,12 +1378,12 @@ export async function main(argv) {
       console.log(`${r.dismissed} dismissed`);
     });
 
-  const valueCmd = program.command('value').description('What the delivered work is worth (AI estimates you can correct), by day, week, month and quarter, with reports for management');
+  const valueCmd = program.command('value').description('What the delivered work is worth (AI estimates you can correct), and the pull requests merged, by day, week, month, quarter and year, with reports for management');
   const money = (n, cur = 'USD') => (n == null ? '—' : new Intl.NumberFormat('en-US', { style: 'currency', currency: cur, maximumFractionDigits: 0 }).format(n));
   valueCmd
     .command('show', { isDefault: true })
     .description('Totals for the last periods and the items in the current one')
-    .option('-p, --period <period>', 'day, week, month or quarter', 'week')
+    .option('-p, --period <period>', 'day, week, month, quarter or year', 'week')
     .option('--json', 'print JSON')
     .action(async (opts) => {
       await daemon();
@@ -1392,7 +1392,7 @@ export async function main(argv) {
       const cur = v.settings.currency;
       for (const p of v.periods.slice(0, 6)) {
         const t = p.totals;
-        console.log(`${bold(p.label.padEnd(22))} ${money(t.valueUsd, cur).padStart(9)} value  ${money(t.revenueUsd, cur).padStart(9)} revenue  ${String(t.humanHours).padStart(5)} h  ${t.items} items${t.leverage ? dim(`  ${t.leverage}× leverage`) : ''}${p.current ? dim('  (so far)') : ''}`);
+        console.log(`${bold(p.label.padEnd(22))} ${money(t.valueUsd, cur).padStart(9)} value  ${money(t.revenueUsd, cur).padStart(9)} revenue  ${String(t.humanHours).padStart(5)} h  ${t.items} items  ${t.prs} PRs${t.leverage ? dim(`  ${t.leverage}× leverage`) : ''}${p.current ? dim('  (so far)') : ''}`);
       }
       const now = v.periods[0];
       const items = v.items.filter((it) => now.items.includes(it.agentId));
@@ -1439,7 +1439,7 @@ export async function main(argv) {
   valueCmd
     .command('report')
     .description('The report for the period just ended (or --current), as Markdown; --send to Slack and Google Drive as set')
-    .option('-k, --kind <kind>', 'day, week, month or quarter', 'week')
+    .option('-k, --kind <kind>', 'day, week, month, quarter or year', 'week')
     .option('--current', 'the current period so far')
     .option('--send', 'send it now')
     .action(async (o) => {
