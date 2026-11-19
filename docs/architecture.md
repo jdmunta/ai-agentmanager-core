@@ -68,4 +68,4 @@ Design notes: [distributed.md](distributed.md) (hub) and [engines.md](engines.md
 
 ## Tests
 
-`test/e2e.test.js` starts a real daemon on a temporary home and port, with fake engines that print what the real CLIs print. `test/unit.test.js` covers parsers and pure functions. CI runs both on macOS and Linux, Node 20 and 22.
+`test/e2e.test.js` starts a real daemon on a temporary home and port, with fake engines that print what the real CLIs print. `test/unit.test.js` covers parsers and pure functions. CI runs them on macOS and Linux, Node 20 and 22, on every push to `main` and nightly. A pull request runs the basic set (the whole suite once, on Linux with Node 22, and the package check); the label `full-ci` on it, for a big change or a release, runs all four.

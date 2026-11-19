@@ -4,7 +4,14 @@ on:
   push:
     branches: [main]
     paths-ignore: ['**.md', 'docs/**']
+  # A pull request runs the basic set: the whole suite once, on Ubuntu with Node 22, and the package
+  # check. The label "full-ci" on it (for a big change or a release) runs the suite on every system
+  # and Node version, as a push to main and the nightly run do.
   pull_request:
+    types: [opened, synchronize, reopened, labeled]
+  schedule:
+    - cron: '17 9 * * *'
+  workflow_dispatch:
 
 # A newer push to the same branch or PR replaces a run still in progress.
 concurrency:
@@ -23,19 +30,31 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
         node: [20, 22]
+    env:
+      # Branch protection asks for all four of these jobs by name, so one left out of the basic set
+      # still runs, and passes with its steps skipped.
+      RUN: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'full-ci') || (matrix.os == 'ubuntu-latest' && matrix.node == 22) }}
     steps:
+      - name: Not in the basic set
+        if: env.RUN != 'true'
+        run: echo "Skipped on this pull request. Add the label full-ci to run it."
       - uses: actions/checkout@v4
+        if: env.RUN == 'true'
       - uses: actions/setup-node@v4
+        if: env.RUN == 'true'
         with:
           node-version: ${{ matrix.node }}
           cache: npm
       - name: Git identity for the test repos
+        if: env.RUN == 'true'
         run: |
           git config --global user.name "CI"
           git config --global user.email "ci@example.com"
           git config --global init.defaultBranch main
       - run: npm ci
+        if: env.RUN == 'true'
       - name: Tests
+        if: env.RUN == 'true'
         run: npm test
         env:
           # Ubuntu 23.10+ runners restrict user namespaces, so Chrome's sandbox can't start there.
