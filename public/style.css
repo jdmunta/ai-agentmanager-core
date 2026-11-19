@@ -573,6 +573,8 @@ dialog::backdrop { background: rgba(0, 0, 0, .45); }
 .needs { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; }
 .needs.inbox { margin: 8px 10px 16px; }
 .needs.inbox.one > .need:not(.now) { display: none; }
+/* A sideways swipe on the card is ours (the next card): not the browser's, which on Android goes back a page. */
+.needs.inbox.one { touch-action: pan-y; }
 .needs.inbox.one > .need.now { min-height: 40vh; }
 .inbox-counts { align-items: center; }
 .inbox-counts .spacer { flex: 1; }
