@@ -68,6 +68,7 @@ const SUMMARIES = {
   walkthrough: { doc: 'walkthrough', run: 'runWalkthrough' },
   scorecard: { doc: 'scorecard', run: 'runScorecard' },
   update: { doc: 'update', run: 'runUpdate' },
+  claims: { doc: 'claims', run: 'runClaims' },
 };
 /** Read / write where a summary of `kind` is kept on the agent record. */
 const getSummary = (agent, kind) => (SUMMARIES[kind].doc ? agent.docs?.[kind] : agent[SUMMARIES[kind].field]);
@@ -129,7 +130,8 @@ import { preReviewPrompt } from './prereview.js';
 import { reviewPath, reviewerPrompt } from './reviews.js';
 import { findingsPath, fixPath, fixerPrompt, hunterPrompt } from './bughunt.js';
 import { reminderFor, reminderSettings } from './reminders.js';
-import { combine, facts as scoreFacts, improveMessage, scorecardMarkdown, scorecardPrompt } from './scorecard.js';
+import { combine, factLines, facts as scoreFacts, improveMessage, scorecardMarkdown, scorecardPrompt } from './scorecard.js';
+import { CLAIM_TEXTS, claimsMarkdown, claimsPrompt, combineClaims, parseClaims, totals as claimTotals } from './claims.js';
 import { CONTAINER_ENGINES, claudeToken, containerName, containerRunning, engineMounts, gitCommonDir, removeContainer, runArgs, stopContainer } from './container.js';
 import { conflictMessage, findConflicts, related, repoKey, summarize as summarizeConflicts } from './conflicts.js';
 import { answerMessage, loadQuestions, questionsPath, questionsPrompt } from './inbox.js';
@@ -2833,6 +2835,86 @@ export class AgentManager extends EventEmitter {
         }),
         improving: null,
       }),
+    );
+  }
+
+  /** The texts of an agent whose statements can be checked: its brief, and what was written about its work. */
+  claimTexts(agent) {
+    const brief = this.briefFile(agent.id).markdown ?? '';
+    const u = agent.docs?.update;
+    const of = {
+      brief: { text: brief, at: agent.brief?.updatedAt ?? null },
+      update: { text: u?.markdown ? [`Slack:\n${u.parts?.slack ?? ''}`, `Email: ${u.parts?.subject ?? ''}\n${u.parts?.email ?? ''}`, u.markdown].join('\n\n') : '', at: u?.at ?? null },
+      explain: { text: agent.explanation?.markdown ?? '', at: agent.explanation?.at ?? null },
+      insights: { text: agent.insights?.markdown ?? '', at: agent.insights?.at ?? null },
+    };
+    return Object.entries(CLAIM_TEXTS)
+      .map(([key, label]) => ({ key, label, ...(of[key] ?? { text: agent.docs?.[key]?.markdown ?? '', at: agent.docs?.[key]?.at ?? null }) }))
+      .filter((t) => t.text.trim());
+  }
+
+  /**
+   * The claims check (see claims.js): each statement of fact in the agent's brief and in what was
+   * written about its work, traced to a source by another model than the writer, and the app
+   * checking the model: the statement is in the text, the quote in the source, the particulars exist.
+   */
+  async runClaims(agent, ctx) {
+    const cur0 = this.store.get(agent.id) ?? agent;
+    const texts = this.claimTexts(cur0);
+    if (!texts.length) throw Object.assign(new Error('Nothing to check yet: no brief, update or explanation is written'), { status: 400 });
+    const doc = (n) => readSpecDoc(agent.id, n)?.markdown ?? '';
+    const cut = (s, max) => (s.length > max ? `${s.slice(0, max)}\n… (the rest was cut)` : s);
+    const data = this.changesSource && !NO_REPO.has(agent.kind) && agent.workdir ? await this.changesSource(agent.id).catch(() => null) : null;
+    const bar = cur0.standards?.bar?.results ?? [];
+    const measured = [
+      ctx.status,
+      // Not the agent's own checks: those are its account, in its brief.
+      data ? factLines(scoreFacts({ files: data.files, prs: Object.values(cur0.prs ?? {}), brief: null, plan: doc('plan'), spec: doc('spec'), standards: cur0.standards ?? null })).split('\n').filter((l) => !l.startsWith("the agent's own checks")).join('\n') : '',
+      data?.files?.length ? `files changed:\n${data.files.map((f) => `${f.path} (+${f.added ?? 0} -${f.removed ?? 0})`).join('\n')}` : '',
+      ...bar.map((r) => `quality bar check "${r.name}": ${r.ok ? 'passed' : 'failed'}`),
+    ];
+    const briefText = texts.find((t) => t.key === 'brief')?.text ?? '';
+    const sources = [
+      { name: 'What the app measured', text: measured.filter(Boolean).join('\n') },
+      { name: 'The repository: commits and changed files', text: ctx.repo },
+      { name: 'The changes themselves (the diff)', text: cut(data?.diff ?? '', 60_000) },
+      { name: 'What was asked', text: [ctx.intent, doc('intent')].filter(Boolean).join('\n\n') },
+      { name: 'The conversation with the agent', text: cut(ctx.digest ?? '', 30_000), own: true },
+      { name: "The agent's spec and plan", text: cut([doc('spec'), doc('plan')].filter(Boolean).join('\n\n'), 20_000), own: true },
+      { name: "The agent's brief", text: cut(briefText, 20_000), own: true, brief: true },
+    ]
+      .filter((s) => s.text?.trim())
+      .map((s, i) => ({ ...s, id: `S${i + 1}`, own: Boolean(s.own) }));
+    const checker = this.criticFor(this.writerFor(agent));
+    const done = [];
+    for (const t of texts) {
+      // The brief is not a source for itself.
+      const from = t.key === 'brief' ? sources.filter((s) => !s.brief) : sources;
+      const text = cut(t.text, 20_000);
+      try {
+        const reply = parseClaims(await this.oneShot(agent, claimsPrompt({ label: t.label, text, sources: from }), { ...checker, timeoutMs: 300_000 }));
+        done.push({ key: t.key, label: t.label, at: t.at, ...combineClaims(reply, { text, sources: from }) });
+      } catch (e) {
+        done.push({ key: t.key, label: t.label, at: t.at, error: e.message.slice(0, 200) });
+      }
+    }
+    if (done.every((t) => t.error)) throw new Error(done[0].error);
+    const result = { texts: done, ...claimTotals(done), sources: sources.map((s) => ({ id: s.id, name: s.name, own: s.own })) };
+    const cur = this.store.get(agent.id);
+    if (!cur) return null;
+    return this.view(
+      this.patch(
+        agent.id,
+        summaryPatch(cur, 'claims', {
+          data: result,
+          markdown: claimsMarkdown(result, cur.name),
+          writer: `${checker.engine.label}${checker.model ? ` (${checker.model})` : ''}`,
+          at: now(),
+          briefUpdatedAt: cur.brief?.updatedAt ?? null,
+          pending: false,
+          error: null,
+        }),
+      ),
     );
   }
 

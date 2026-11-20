@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Stand-in for the claude CLI: records its argv, writes a transcript where
 // Claude Code would, echoes input, and exits on "exit" or SIGHUP.
+import { claimsReply } from './fake-claims.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { transcriptPath } from '../src/tracker.js';
@@ -274,6 +275,10 @@ if (args.includes('--input-format') && args.includes('stream-json')) {
         // Lessons of the repository: one whose text says #broken is found broken in the diff.
         ...(input.includes('<lessons>') ? { lessons: [...section('lessons').matchAll(/^(L\d+): (.*)$/gm)].map((m) => ({ id: m[1], status: m[2].includes('#broken') ? 'broken' : 'followed', evidence: `seen in ${ids[0] ?? 'the diff'}` })) } : {}),
       });
+    }
+    if (input.startsWith('Check the statements of a text')) {
+      const reply = ok ? claimsReply(input) : null;
+      return reply ? json(reply) : process.exit(1);
     }
     if (input.startsWith('Write one lesson for AI coding agents')) {
       process.stdout.write(`"Check ${/Pull request (#\d+)/.exec(input)?.[1] ?? 'it'} again: ${section('what_happened').split('\n')[1] ?? ''}"`, () => process.exit(0));

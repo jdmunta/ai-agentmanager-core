@@ -43,7 +43,7 @@ export function facts({ files = [], prs = [], brief = null, plan = '', spec = ''
   };
 }
 
-const factLines = (f) =>
+export const factLines = (f) =>
   [
     `files changed: ${f.files} (+${f.added} -${f.removed}); code files: ${f.codeFiles}; test files: ${f.testFiles}`,
     `CI on the pull request: ${f.ci ?? 'no pull request or no checks yet'}${f.ciFailed.length ? ` (failing: ${f.ciFailed.join(', ')})` : ''}`,

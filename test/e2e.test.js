@@ -112,6 +112,20 @@ const freePort = async () => {
   return port;
 };
 const launches = () => readLog(claudeLog);
+/**
+ * A port remote access really started on. The parts of the suite run side by side, and a port that
+ * was free a moment ago may have gone to another of them: try another, and say why if none works.
+ */
+const remotePort = async () => {
+  let last;
+  for (let i = 0; i < 4; i++) {
+    const p = await freePort();
+    last = await call('POST', '/remote/enable', { port: p });
+    if (last.status === 200 && last.body.running) return p;
+    console.log(`remote access did not start on ${p}: ${JSON.stringify(last.body)}`);
+  }
+  throw new Error(`Remote access would not start: ${JSON.stringify(last.body)}`);
+};
 
 test.after(async () => {
   live.stop();
@@ -781,7 +795,7 @@ const sseUntil = (rport, route, cookie, until, ms = 8000) =>
 
 test('remote access: HTTPS, token sign-in, local-only management, SSE terminal, revocation', async () => {
   const remote = await import('../src/remote.js');
-  const rport = await freePort();
+  const rport = await remotePort();
   remote.saveSettings({ extraHosts: ['127.0.0.1'] }); // the test connects over loopback
   const st = (await call('POST', '/remote/enable', { port: rport })).body;
   assert.equal(st.running, true, JSON.stringify(st));
@@ -1041,7 +1055,7 @@ test("screen: this computer's screen sharing relayed to signed-in pages; off unt
 
   // A signed-in phone: a stream out and POSTs in. It cannot turn it on or off.
   const remote = await import('../src/remote.js');
-  const rport = await freePort();
+  const rport = await remotePort();
   remote.saveSettings({ extraHosts: ['127.0.0.1'] });
   const enabled = await call('POST', '/remote/enable', { port: rport });
   assert.equal(enabled.body.running, true, JSON.stringify(enabled.body));
@@ -1140,7 +1154,7 @@ test('browser tabs: any address, saved per agent, suggested from terminal output
 
   // From another device: a relay listener per address, behind the same sign-in.
   const remote = await import('../src/remote.js');
-  const rport = await freePort();
+  const rport = await remotePort();
   remote.saveSettings({ extraHosts: ['127.0.0.1'] });
   await call('POST', '/remote/enable', { port: rport });
   test.after(() => call('POST', '/remote/disable'));
@@ -1797,6 +1811,81 @@ test('updates for the people who asked: written when an agent finishes, a Slack 
     await call('PUT', '/announce/settings', { auto: false });
     await call('PUT', '/announce/slack', { webhookUrl: '' });
     hook.close();
+  }
+});
+
+test('claims check: what a brief and an update say, traced to sources by another model and checked by the app; made by itself for an update written by itself', async () => {
+  try {
+    assert.deepEqual((await call('GET', '/claims/settings')).body, { auto: true });
+    assert.equal((await call('PUT', '/claims/settings', { auto: 'no' })).status, 400);
+
+    // Nothing written: nothing to check.
+    const [n] = (await call('POST', '/agents', { intent: 'Repair the tokenizer #wrong', start: false })).body;
+    await waitFor(async () => (await agentNow(n.id)).status === 'stopped', 8000, 'ready');
+    const none = await call('POST', `/agents/${n.id}/docs/claims`);
+    assert.equal(none.status, 400);
+    assert.match(none.body.error, /Nothing to check yet/);
+
+    // On request: the update's statements, each with a quote the app found in a source.
+    const upd = (await call('POST', `/agents/${n.id}/docs/update`)).body.docs.update;
+    const c = (await call('POST', `/agents/${n.id}/docs/claims`)).body.docs.claims;
+    assert.deepEqual(c.data.texts.map((t) => [t.key, t.at]), [['update', upd.at]], 'of the update as it is now');
+    const t = c.data.texts[0];
+    assert.equal(t.dropped, 1, 'the statement the checker made up is not in the text: left out');
+    assert.ok(!t.claims.some((x) => /made up/.test(x.text)));
+    const wrong = t.claims.filter((x) => x.verdict === 'contradicted');
+    assert.ok(wrong.length && wrong.every((x) => x.text.includes('#wrong') && x.source.name === 'What was asked' && x.quote.includes('Repair the tokenizer')), JSON.stringify(t.claims));
+    assert.equal(c.data.verdict, 'wrong');
+    assert.equal(t.claims.length, Object.values(t.counts).reduce((x, y) => x + y, 0));
+    assert.deepEqual(c.data.counts, t.counts, 'one text: its counts are the total');
+    assert.ok(!c.data.sources.some((x) => /brief/.test(x.name)), 'no brief: not a source');
+    assert.match(c.markdown, new RegExp(`^# Claims check: ${n.name}\\n\\n\\*\\*\\d+ contradicted`));
+    assert.match(c.markdown, /## Update\n[\s\S]*### Contradicted\n\n- .*#wrong[\s\S]*What was asked: "/);
+    // Another model than the one that wrote it.
+    assert.notEqual(c.writer, upd.writer);
+    assert.match(c.writer, /^Codex/);
+
+    // The checker fails: said so, and the last check is kept.
+    const [f] = (await call('POST', '/agents', { intent: 'Never checked #nocheck', start: false })).body;
+    await waitFor(async () => (await agentNow(f.id)).status === 'stopped', 8000, 'ready');
+    await call('POST', `/agents/${f.id}/docs/update`);
+    assert.equal((await call('POST', `/agents/${f.id}/docs/claims`)).status >= 400, true);
+    assert.ok((await agentNow(f.id)).docs.claims.error);
+
+    // An update written by itself is checked by itself, with the brief: the brief is not its own source.
+    await call('PUT', '/announce/settings', { auto: true });
+    const [a] = (await call('POST', '/agents', { intent: 'Ship the parser #done', project: 'Claims' })).body;
+    const done = await waitFor(async () => {
+      const v = await agentNow(a.id);
+      return v.docs?.claims?.data && !v.docs.claims.pending ? v : null;
+    }, 40000, 'the check, made by itself');
+    const d = done.docs.claims.data;
+    assert.deepEqual(d.texts.map((x) => [x.key, x.at]), [['brief', done.brief.updatedAt], ['update', done.docs.update.at]]);
+    assert.ok(d.sources.some((x) => x.name === "The agent's brief" && x.own));
+    const [brief, update] = d.texts;
+    assert.ok(!brief.claims.some((x) => x.source?.name === "The agent's brief"), 'the brief does not back itself');
+    // A file the brief names that is in no source: not backed, whatever the checker said.
+    const ghost = [...brief.claims.filter((x) => x.verdict === 'not_backed').map((x) => `${x.text} ${x.note}`), ...brief.missing.map((x) => x.value)].join('\n');
+    assert.match(ghost, /auth\/session\.go/, JSON.stringify(brief));
+    assert.ok(!brief.claims.some((x) => ['backed', 'said'].includes(x.verdict) && x.text.includes('auth/session.go')));
+    assert.notEqual(d.verdict, 'backed');
+    // What the update takes from the brief is only said by the agent, not measured.
+    assert.ok(update.claims.every((x) => x.verdict !== 'backed' || !x.source || x.source.name !== "The agent's brief"));
+
+    // Turned off: the next update written by itself is not checked.
+    assert.deepEqual((await call('PUT', '/claims/settings', { auto: false })).body, { auto: false });
+    assert.equal(JSON.parse(fs.readFileSync(path.join(home, 'config.json'), 'utf8')).claims.auto, false);
+    const [b] = (await call('POST', '/agents', { intent: 'Ship the lexer #done', project: 'Claims' })).body;
+    await waitFor(async () => {
+      const v = await agentNow(b.id);
+      return v.announce?.auto && v.docs?.update?.markdown;
+    }, 40000, 'its update');
+    await new Promise((r) => setTimeout(r, 1500));
+    assert.equal((await agentNow(b.id)).docs.claims ?? null, null);
+    for (const x of [a, b]) await call('POST', `/agents/${x.id}/stop`);
+  } finally {
+    await call('PUT', '/announce/settings', { auto: false });
+    await call('PUT', '/claims/settings', { auto: true });
   }
 });
 
@@ -4158,7 +4247,7 @@ test('hub sign-in links: only with "signin", one use, a minute, then the machine
     const res = await fetch(`${hubBase}/api${route}`, { method, headers: { 'content-type': 'application/json', authorization: `Bearer ${hub.token}` }, body: body && JSON.stringify(body) });
     return { status: res.status, body: await res.json().catch(() => ({})) };
   };
-  const rport = await freePort();
+  const rport = await remotePort();
   remote.saveSettings({ extraHosts: ['127.0.0.1'] });
   try {
     assert.equal((await call('POST', '/remote/enable', { port: rport })).status, 200);

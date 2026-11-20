@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.62.0 (2026-11-19)
+
+- **Claims check: what the documents say, against the work.** A new document on every agent, **Claims** (or `agentmgr claims <agent>`), checks the statements of fact in the agent's brief and in what was written about its work (the update for the people who asked, Explanation, Insights, Analysis, Documentation) and shows each with what backs it: Contradicted, Not backed, Only the agent says so, Backed.
+- **Another model checks, and the app checks that model.** A different model than the writer (another engine when one is installed) lists the statements and quotes a source for each. With no model, the app then drops statements that are not in the text, and marks as not backed any statement whose quote is not in the sources or that names a file, link, pull request, ticket, commit, version or number found in none of them. What only the agent says (brief, spec, plan, conversation) is not counted as backed, and the brief is never a source for itself.
+- **Changed for everyone: updates written by themselves are checked before you are told.** When an agent finishes or opens a pull request and its update is written, the update and the brief are checked first (and the Explanation, Insights, Analysis or Documentation if written): one more model call for each, and the alert comes that much later. The alert says how many statements are not backed, and the Update shows it over the drafts. Turn it off with `agentmgr claims --auto off`.
+- **Limits.** Whether a quote really shows a statement is the checking model's reading. A true statement can be "Not backed" when the source was cut (the diff after 60,000 characters) or is not on this computer. Standups and Value estimates are not checked.
+- **Fixed:** the daemon no longer prints a "MaxListenersExceededWarning" at start.
+- **Tests:** unit, end-to-end and browser tests with stand-in models. Tests that turn on remote access now try another port when the first does not start, and print why. The prompt was also tried once with a real model on a made-up update with four planted errors: it found all four, and its reply had malformed JSON, which is why replies are now read statement by statement when the whole does not parse.
+
 ## 1.61.0 (2026-11-19)
 
 - **Quality: what happened after the merge.** A new view (top bar, or `Q`) shows what became of the agents' pull requests once they merged: the share that held up, and the ones reverted, fixed afterwards, or with failed checks on the commit they merged as. From before the merge it shows how many had a reviewer ask for changes and the median time from opened to merged. By day, week, month, quarter and year, with the change against the period before.

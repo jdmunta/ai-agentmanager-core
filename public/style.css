@@ -1887,3 +1887,20 @@ table.eval-items tr.eval-na td { color: var(--muted); }
 .screen-tap { position: fixed; width: 28px; height: 28px; margin: -14px 0 0 -14px; border: 2px solid #4c8dff; border-radius: 50%; pointer-events: none; z-index: 5; animation: screen-tap 0.45s ease-out forwards; }
 @keyframes screen-tap { from { transform: scale(0.4); opacity: 1; } to { transform: scale(1.4); opacity: 0; } }
 @media (max-width: 800px) { .needs.inbox.one .need-actions button { padding: 10px 14px; font-size: 15px; } }
+
+/* Claims check (claims.js): statements of fact and what backs them. */
+.cl-counts { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; }
+.cl-chip { display: inline-block; padding: 1px 8px; border-radius: 10px; border: 1px solid var(--border); font-size: 12px; white-space: nowrap; }
+.cl-chip.cl-contradicted { border-color: var(--red); color: var(--red); font-weight: 600; }
+.cl-chip.cl-not_backed { border-color: var(--yellow); color: var(--yellow); font-weight: 600; }
+.cl-chip.cl-backed { border-color: var(--green); color: var(--green); }
+.cl-group { margin: 8px 0; }
+.cl-group summary { cursor: pointer; }
+.cl-list { list-style: none; margin: 6px 0 0; padding: 0; }
+.cl-claim { border-left: 3px solid var(--border); padding: 4px 0 4px 10px; margin: 6px 0; overflow-wrap: anywhere; }
+.cl-claim.cl-contradicted { border-left-color: var(--red); }
+.cl-claim.cl-not_backed { border-left-color: var(--yellow); }
+.cl-claim.cl-backed { border-left-color: var(--green); }
+.cl-quote { margin-top: 2px; }
+.cl-note { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 6px 0; }
+.cl-note.cl-doubt { border: 1px solid var(--yellow); border-radius: 8px; padding: 6px 10px; }
