@@ -1197,6 +1197,64 @@ agentmgr value report --kind quarter --current   # this quarter so far, as Markd
 agentmgr value set --rate 140 --reports weekly,monthly,quarterly --at 08:30 --drive on
 ```
 
+## Quality: what happened after the merge
+
+**Quality** in the top bar (or `Q`) shows what became of the agents' pull requests once they merged, by **Day**, **Week**, **Month**, **Quarter** or **Year**. Merging more is only good news if it holds up, so this sits next to the pull request count in Value.
+
+| Figure | What it is |
+|---|---|
+| Held up | The share of the merged pull requests looked at that had no problem after the merge |
+| Reverted | A later pull request titled Revert that names it, or a commit that reverts the commit it merged as |
+| Fixed afterwards | A later pull request, within the days watched, whose title says it fixes something and that changes one of the same files or names it |
+| Checks failed | A check failed or timed out on the commit it merged as (a cancelled run is not a failure) |
+| Changes requested | How many had a reviewer ask for changes before the merge |
+| Opened to merged | Median hours from opening the pull request to merging it |
+
+Each pull request is watched for 14 days after it merges (set it from 1 to 90). GitHub is asked through the `gh` CLI as you: a few pull requests every two minutes, and each again every six hours while it is watched. No model is called.
+
+**Fixed afterwards is a guess**, from titles and files: a fix in the same file may be about something else. **Not a problem** on a pull request overrules what was found, **It was a problem** records one nothing here saw, and **Undo** goes back; yours are marked. **Look again** asks GitHub now. **Only the ones with a problem** narrows the list, and **Copy report** gives the period as Markdown.
+
+It covers pull requests of agents here, from about 100 days before you first opened it. A problem that never showed on GitHub (an incident fixed elsewhere, a bug nobody linked) is not seen unless you mark it.
+
+```bash
+agentmgr quality --period month          # the share that held up, by month
+agentmgr quality mark https://github.com/acme/shop/pull/77 --clean --note "the fix was about another bug"
+agentmgr quality report --kind month     # last month, as Markdown
+agentmgr quality set --days 30           # watch each merge for 30 days
+```
+
+## Standards: what every change in a repository has to meet
+
+The **Standards** tab in Quality (or `agentmgr standards`) holds, per repository, the rules that turn what went wrong before into how agents work next. Only you set them; an agent's own calls to change them are refused.
+
+**Lessons.** Whenever a merged pull request is reverted, fixed afterwards, fails its checks or had changes requested by a reviewer, a lesson is proposed for its repository. Word it in one line, or use **Suggest wording** to have a model draft it from the pull request and what reviewers wrote, then **Accept** or **Dismiss**. You can add your own too. Accepted lessons (at most 40 per repository) are given to every agent started there from then on, and the review scorecard checks each one against the changes: a lesson not followed means "Not ready", and Improve sends it back to the agent.
+
+**High-risk paths.** Mark the parts where a mistake is expensive: `src/auth/**`, `**/migrations/**`, `*.sql`. `*` stays inside a folder, `**` crosses folders, and a name without a slash fits at any depth. A change that touches one:
+
+- cannot be scored "Ready to approve"; the scorecard says which paths it touched
+- is held by autopilot for you. **Ship it** opens the pull request, and autopilot never merges it
+- is not merged on its Eval ("merge when sure")
+- is reviewed by another model when the agent finishes, also with review rounds turned off; the pull request is then yours to open
+
+Agents are told which paths are high risk and to say in their brief what they will change there before they do.
+
+**The quality bar.** Checks the app runs itself, in the agent's folder, before its changes are scored:
+
+- your commands, each with a name: lint, a type check, the tests, a dependency scan. Commands found in the repository are offered with one click
+- code changes need a test file changed too (off by default)
+- no keys or tokens on the added lines (on by default, for every repository)
+
+A failed check caps the Tests score at 30 and means "Not ready" whatever the agent says, and on autopilot the work goes back to the agent with the check's output. The bar runs once per state of the changes; `agentmgr standards run <agent>` runs it now. Each command gets 10 minutes (`"standards": { "checkTimeoutMs": 600000 }` in `config.json`), and runs on this computer as you. `"standards": { "enabled": false }` turns all of it off.
+
+```sh
+agentmgr standards                                  # every repository: lessons, high-risk paths, the bar
+agentmgr standards lesson shop "Exports are paged, never loaded whole"
+agentmgr standards lesson shop --accept 3fa2c1d0 "Rotate tokens behind a flag"
+agentmgr standards risk shop "src/auth/**" "**/migrations/**" --why "sign-in and data"
+agentmgr standards bar shop --add "Lint=npm run lint" --add "Types=npx tsc --noEmit" --tests
+agentmgr standards run my-agent                     # run the bar on its changes now
+```
+
 ## Results and spend
 
 **Results** in the top bar shows how agents did over the last 7, 30 or 90 days (or all time): how many started and how many opened a pull request, PRs merged and closed, the merge rate, the median time from starting an agent to its first PR and to merge, and the cost per merged PR. The same by engine and model (which one gets merged more, for less), by where agents came from (you, the assistant, triggers, the backlog, teams, races) and by project. `agentmgr stats --days 30`.

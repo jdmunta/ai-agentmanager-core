@@ -84,6 +84,21 @@ before(async () => {
   notes = http.createServer((req, res) => res.end(req.url.endsWith('.ics') ? calIcs() : notesMd));
   await new Promise((r) => notes.listen(0, '127.0.0.1', r));
   fs.writeFileSync(path.join(home, 'config.json'), JSON.stringify({ claudeBin: process.execPath, claudeArgs: [path.join(here, 'fake-claude.js')], updates: { check: false }, announce: { auto: false }, judge: { enabled: false }, localModels: { enabled: false }, preReview: { enabled: false }, shell: '/bin/sh', gitRefreshSec: 1, conflictRefreshSec: 0, engines: { codex: { bin: path.join(here, 'fake-codex.js') } }, news: { sources: [], custom: [{ id: 'local', lab: 'Anthropic', label: 'Local notes', url: `http://127.0.0.1:${notes.address().port}/notes.md` }] } }));
+  // Quality: merged pull requests already looked at (GitHub is not asked in these tests).
+  const mergedPr = (n, title, extra = {}) => [`https://github.com/acme/shop/pull/${n}`, { url: `https://github.com/acme/shop/pull/${n}`, number: n, title, repo: 'acme/shop', agentId: 'gone', agentName: `agent-${n}`, project: 'Shop', openedAt: new Date(Date.now() - 3 * 3_600_000 - 2000).toISOString(), mergedAt: new Date(Date.now() - 2000).toISOString(), facts: { mergeCommit: `sha${n}`, base: 'main', files: ['src/cache.js'], lines: 40 + n, changesRequested: n === 71 ? 2 : 0, reviews: 1 }, after: { reverted: null, fixes: [], checks: { state: 'passed', failed: [] } }, checkedAt: new Date().toISOString(), ...extra }];
+  const qualityItems = Object.fromEntries([
+    mergedPr(71, 'Cache prices', { after: { reverted: null, fixes: [{ number: 75, title: 'Fix stale prices', url: 'https://github.com/acme/shop/pull/75', at: new Date().toISOString(), shared: ['src/cache.js'], named: false }], checks: { state: 'passed', failed: [] } } }),
+    mergedPr(72, 'Export orders', { after: { reverted: { number: 76, title: 'Revert "Export orders"', url: 'https://github.com/acme/shop/pull/76', at: new Date().toISOString() }, fixes: [], checks: { state: 'passed', failed: [] } } }),
+    mergedPr(73, 'Faster search'),
+    mergedPr(74, 'New footer', { facts: null, after: null, checkedAt: null }),
+  ]);
+  // Standards: a repository with a lesson proposed from the pull request that was reverted.
+  const shop = 'repo:github.com/acme/shop';
+  const standards = {
+    repos: { [shop]: { name: 'acme/shop', risk: [], bar: { tests: false, secrets: true, checks: [] }, lessons: [{ id: 'p72', text: '', state: 'proposed', source: { kind: 'reverted', detail: 'Reverted by #76 Revert "Export orders"', url: 'https://github.com/acme/shop/pull/72', number: 72, title: 'Export orders', agentId: 'gone' }, at: new Date().toISOString() }] } },
+    seen: { 'https://github.com/acme/shop/pull/72': shop },
+  };
+  fs.writeFileSync(path.join(home, 'state.json'), JSON.stringify({ version: 1, agents: {}, quality: { items: qualityItems }, standards }));
   daemon = spawn(process.execPath, [path.join(here, '..', 'bin', 'agentmgr.js'), 'serve'], {
     env: { ...process.env, AGENTMGR_HOME: home, AGENTMGR_PORT: String(port), AGENTMGR_REMOTE: '0', AGENTMGR_PLUGINS: '', AGENTMGR_NO_GH: '1', AGENTMGR_CLIPBOARD_FILE: path.join(home, 'clipboard.txt'), CLAUDE_CONFIG_DIR: path.join(home, 'claude'), AGENTMGR_CLAUDE_DESKTOP_DIR: path.join(home, 'claude-desktop'), FAKE_CLAUDE_LOG: path.join(home, 'fake.log') },
     stdio: 'ignore',
@@ -158,7 +173,7 @@ test('the top bar fits the window: the view buttons that do not fit go into More
       menuOk: document.querySelector('#menu-btn').getBoundingClientRect().right <= innerWidth,
     })`);
     assert.ok(r.page <= w, `${w}px: the page is ${r.page}px wide`);
-    assert.equal(r.inRow + r.inMore, 21, `${w}px: every view button is in the row or in More`);
+    assert.equal(r.inRow + r.inMore, 22, `${w}px: every view button is in the row or in More`);
     assert.ok(r.newOk && r.menuOk, `${w}px: New agents and the account menu are on screen`);
     if (w >= 1024) assert.ok(r.inRow >= 3, `${w}px: only ${r.inRow} buttons in the row`);
   }
@@ -166,6 +181,8 @@ test('the top bar fits the window: the view buttons that do not fit go into More
   await width(420, 700);
   await sleep(300);
   await js(`document.querySelector('#top-more-btn').click()`);
+  // A loaded runner lays the menu out a moment after the click.
+  await until(`(() => { const m = document.querySelector('#top-more-menu'); return m.getBoundingClientRect().height > 0 && m.scrollHeight > m.clientHeight; })()`, 'the menu open, longer than the screen');
   const long = await js(`(() => { const m = document.querySelector('#top-more-menu'); const last = m.querySelector(':scope > button:last-of-type');
     const fits = m.getBoundingClientRect().bottom <= innerHeight; const scrolls = m.scrollHeight > m.clientHeight; last.scrollIntoView({ block: 'nearest' });
     return { fits, scrolls, lastSeen: last.getBoundingClientRect().bottom <= innerHeight }; })()`);
@@ -1333,6 +1350,110 @@ test('Value: the pull requests merged next to the value, by day, week, month, qu
   await js(`document.querySelector('#value-body [data-value-period="week"]').click()`);
   await until(`document.querySelector('#value-body [data-value-period="week"].active')`, 'back to weeks');
   await js(`document.querySelector('#value-dialog').close()`);
+});
+
+test('Quality: the share of merged pull requests that held up, why each did not, Not a problem and back, only the problems, by year', { skip }, async () => {
+  await js(`document.querySelector('#quality-btn').click()`);
+  await until(`document.querySelector('#quality-dialog').open && document.querySelector('#quality-body .value-cards')`, 'Quality, open');
+  const cards = () => js(`Object.fromEntries([...document.querySelectorAll('#quality-body .value-card')].map((c) => [c.children[0].textContent, c.children[1].textContent + ' | ' + (c.children[2]?.textContent ?? '')]))`);
+  const c = await cards();
+  assert.equal(c['Held up'], '33% | 1 of 3 looked at; 1 still watched');
+  assert.equal(c['Problems after the merge'], '2 | 67% of those looked at');
+  assert.deepEqual([c.Reverted.split(' | ')[0], c['Fixed afterwards'].split(' | ')[0], c['Checks failed'].split(' | ')[0]], ['1', '1', '0']);
+  assert.equal(c['Changes requested'], '33% | by a reviewer, before the merge (1)');
+  assert.equal(c['Opened to merged'], '3h | median');
+  assert.match(await js(`document.querySelector('#quality-body .value-period').textContent`), /4 pull requests from agents merged · 1 not looked at yet/);
+  assert.match(await js(`document.querySelector('#quality-body').textContent`), /GitHub is not asked on this computer/);
+  const rows = () => js(`[...document.querySelectorAll('#quality-body .quality-items tbody tr')].map((r) => [r.children[1].querySelector('a').textContent, r.children[2].textContent.trim(), r.children[3].textContent.replace(/\\s+/g, ' ').trim()])`);
+  const byName = async (n) => (await rows()).find((r) => r[0].startsWith(`#${n} `));
+  assert.deepEqual(await byName(71), ['#71 Cache prices', 'Fixed afterwards', '#75 Fix stale prices same file: src/cache.js']);
+  assert.deepEqual(await byName(72), ['#72 Export orders', 'Reverted', 'Reverted by #76 Revert "Export orders"']);
+  assert.deepEqual((await byName(73)).slice(0, 2), ['#73 Faster search', 'Fine so far']);
+  assert.deepEqual(await byName(74), ['#74 New footer', 'Not looked at', 'GitHub is not asked here']);
+  assert.equal(await js(`document.querySelector('#quality-body .value-bar.on').title.replace(/^.*?: /, '')`), '4 merged, 2 with a problem, 33% held up');
+  // Not a problem: the fix was about something else. It counts as held up, marked as yours; Undo takes it back.
+  const btn = (n, label) => `[...document.querySelectorAll('#quality-body .quality-items tbody tr')].find((r) => r.textContent.includes('#${n} ')).querySelector('button[data-quality-mark]')`;
+  assert.equal(await js(`${btn(71)}.textContent`), 'Not a problem');
+  await js(`${btn(71)}.click()`);
+  await until(`${btn(71)}?.textContent === 'Undo'`, 'marked as not a problem');
+  assert.deepEqual(await byName(71), ['#71 Cache prices', 'Held up ✎', 'You said so']);
+  assert.equal((await cards())['Held up'], '67% | 2 of 3 looked at; 1 still watched');
+  // Only the ones with a problem.
+  await js(`document.querySelector('#quality-body [data-quality-only]').click()`);
+  await until(`document.querySelectorAll('#quality-body .quality-items tbody tr').length === 1`, 'only the reverted one');
+  assert.equal((await rows())[0][0], '#72 Export orders');
+  await js(`document.querySelector('#quality-body [data-quality-only]').click()`);
+  await until(`document.querySelectorAll('#quality-body .quality-items tbody tr').length === 4`, 'all four again');
+  await js(`${btn(71)}.click()`);
+  await until(`${btn(71)}?.textContent === 'Not a problem'`, 'back to what was found');
+  // It was a problem nothing here saw.
+  assert.equal(await js(`${btn(73)}.textContent`), 'It was a problem');
+  await js(`${btn(73)}.click()`);
+  await until(`${btn(73)}?.textContent === 'Undo'`, 'marked as a problem');
+  assert.equal((await cards())['Problems after the merge'], '3 | 100% of those looked at');
+  await js(`${btn(73)}.click()`);
+  await until(`${btn(73)}?.textContent === 'It was a problem'`, 'and back');
+  // By year; the watch days saved.
+  await js(`document.querySelector('#quality-body [data-quality-period="year"]').click()`);
+  await until(`document.querySelector('#quality-body [data-quality-period="year"].active') && document.querySelectorAll('#quality-body .value-bar').length === 5`, 'five years of bars');
+  assert.equal(await js(`document.querySelector('#quality-body .value-period b').textContent`), String(new Date().getFullYear()));
+  await js(`(() => { const f = document.querySelector('[data-quality-settings]'); f.watchDays.value = '21'; f.requestSubmit(); })()`);
+  await until(`document.querySelector('[data-quality-settings]').watchDays.value === '21' && document.querySelector('#quality-body').textContent.includes('within 21 days')`, 'the watch days saved');
+  assert.equal((await api('GET', '/quality')).settings.watchDays, 21);
+  await api('PUT', '/quality', { watchDays: 14 });
+  await js(`document.querySelector('#quality-body [data-quality-period="week"]').click()`);
+  await until(`document.querySelector('#quality-body [data-quality-period="week"].active')`, 'back to weeks');
+  await js(`document.querySelector('#quality-dialog').close()`);
+  // The shortcut opens it too.
+  await key('KeyQ', 'Q', 81, 8);
+  await until(`document.querySelector('#quality-dialog').open`, 'opened with Q');
+  await js(`document.querySelector('#quality-dialog').close()`);
+});
+
+test('Standards, in Quality: a proposed lesson worded and accepted, one of your own, a high-risk path, and the checks of the bar', { skip }, async () => {
+  await js(`document.querySelector('#quality-btn').click()`);
+  await until(`document.querySelector('#quality-dialog').open && document.querySelector('#quality-body [data-quality-mode="standards"] .badge')?.textContent === '1'`, 'Quality, with one lesson proposed');
+  await js(`document.querySelector('#quality-body [data-quality-mode="standards"]').click()`);
+  await until(`document.querySelector('#quality-body .std-proposed')`, 'Standards, open');
+  const repo = async () => (await api('GET', '/standards')).repos.find((r) => r.name === 'acme/shop');
+  assert.equal(await js(`document.querySelector('#quality-body [data-std-repo]').selectedOptions[0].textContent`), 'acme/shop (1 proposed)');
+  assert.equal(await js(`document.querySelector('#quality-body .std-proposed .hint').textContent`), '#72 Export orders · Reverted by #76 Revert "Export orders"');
+  // Not worded yet: Accept asks for the words. Worded: it joins the lessons, and the badge goes.
+  await js(`document.querySelector('#quality-body .std-proposed [data-std="accept"]').click()`);
+  await until(`[...document.querySelectorAll('.toast, #toast')].some((t) => /Word the lesson first/.test(t.textContent))`, 'asked for the words');
+  await js(`(() => { const i = document.querySelector('#quality-body .std-proposed input'); i.focus(); i.value = 'Exports are paged, never loaded whole'; })()`);
+  await js(`document.querySelector('#quality-body .std-proposed [data-std="accept"]').click()`);
+  await until(`!document.querySelector('#quality-body .std-proposed') && document.querySelector('#quality-body .std-list .std-text')?.textContent === 'Exports are paged, never loaded whole'`, 'accepted');
+  assert.equal(await js(`document.querySelector('#quality-body [data-quality-mode="standards"] .badge')`), null);
+  assert.deepEqual((await repo()).lessons.map((l) => [l.text, l.source.number]), [['Exports are paged, never loaded whole', 72]]);
+  // One of your own.
+  await js(`(() => { const f = document.querySelector('#quality-body [data-std-form="lesson"]'); f.text.value = 'Every endpoint checks permissions in a test'; f.requestSubmit(); })()`);
+  await until(`document.querySelectorAll('#quality-body .std-list .std-text').length === 2`, 'a lesson added');
+  assert.match(await js(`document.querySelector('#quality-body .std-section h3').textContent`), /^Lessons 2 of 40$/);
+  // A high-risk path, with why.
+  await js(`(() => { const f = document.querySelector('#quality-body [data-std-form="risk"]'); f.pattern.value = 'src/payments/**'; f.why.value = 'money'; f.requestSubmit(); })()`);
+  await until(`[...document.querySelectorAll('#quality-body code.std-text')].some((c) => c.textContent === 'src/payments/**')`, 'marked high risk');
+  assert.deepEqual((await repo()).risk, [{ pattern: 'src/payments/**', why: 'money' }]);
+  // The bar: a built-in check turned on, a command added and removed.
+  await js(`document.querySelector('#quality-body [data-std-bar="tests"]').click()`);
+  await until(`document.querySelector('#quality-body [data-std-bar="tests"]')?.checked && [...document.querySelectorAll('#quality-body .std-section h3')].some((h) => h.textContent === 'Quality bar 2 checks')`, 'tests required');
+  await js(`(() => { const f = document.querySelector('#quality-body [data-std-form="check"]'); f.label.value = 'Lint'; f.command.value = 'npm run lint'; f.requestSubmit(); })()`);
+  await until(`[...document.querySelectorAll('#quality-body code.std-text')].some((c) => c.textContent === 'npm run lint')`, 'a check added');
+  assert.deepEqual((await repo()).bar, { tests: true, secrets: true, checks: [{ name: 'Lint', command: 'npm run lint' }] });
+  await js(`document.querySelector('#quality-body [data-std="uncheck"][data-name="Lint"]').click()`);
+  await until(`![...document.querySelectorAll('#quality-body code.std-text')].some((c) => c.textContent === 'npm run lint')`, 'the check removed');
+  await js(`document.querySelector('#quality-body [data-std="unrisk"]').click()`);
+  await until(`!document.querySelector('#quality-body [data-std="unrisk"]')`, 'no longer high risk');
+  // Removed: one that came from a pull request stays dismissed, so it is not proposed again.
+  await js(`document.querySelector('#quality-body [data-std-lesson="p72"] [data-std="remove"]').click()`);
+  await until(`document.querySelectorAll('#quality-body .std-list .std-text').length === 1`, 'the lesson removed');
+  const end = await repo();
+  assert.deepEqual([end.lessons.length, end.proposed.length, end.dismissed, end.risk.length, end.bar.checks.length], [1, 0, 1, 0, 0]);
+  // Fits a phone: nothing wider than the dialog.
+  assert.ok(await js(`document.querySelector('#quality-body').scrollWidth <= document.querySelector('#quality-body').clientWidth + 1`), 'no sideways scroll');
+  await js(`document.querySelector('#quality-body [data-quality-mode="after"]').click()`);
+  await until(`document.querySelector('#quality-body .value-cards')`, 'back to After the merge');
+  await js(`document.querySelector('#quality-dialog').close()`);
 });
 
 test('Update: written when an agent finishes, a card in the inbox, the Slack message and email to change and send, the link to the details', { skip }, async () => {

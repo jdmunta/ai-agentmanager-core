@@ -271,7 +271,13 @@ if (args.includes('--input-format') && args.includes('stream-json')) {
         scores: { intent: { score: 88, why: 'Does what was asked' }, scope: { score: 92, why: 'On task' }, plan: { score: 80, why: 'As planned' }, tests: { score: 90, why: 'Tested' }, safety: { score: 85, why: 'Nothing risky' } },
         criteria: [],
         look: ids.slice(0, 1).map((id) => ({ id, reason: 'The core change' })),
+        // Lessons of the repository: one whose text says #broken is found broken in the diff.
+        ...(input.includes('<lessons>') ? { lessons: [...section('lessons').matchAll(/^(L\d+): (.*)$/gm)].map((m) => ({ id: m[1], status: m[2].includes('#broken') ? 'broken' : 'followed', evidence: `seen in ${ids[0] ?? 'the diff'}` })) } : {}),
       });
+    }
+    if (input.startsWith('Write one lesson for AI coding agents')) {
+      process.stdout.write(`"Check ${/Pull request (#\d+)/.exec(input)?.[1] ?? 'it'} again: ${section('what_happened').split('\n')[1] ?? ''}"`, () => process.exit(0));
+      return;
     }
     if (input.startsWith("You help a person review an AI coding agent's changes")) {
       // Every hunk but the last, in reverse order (a reading order other than the diff's).

@@ -246,6 +246,9 @@ export class Landing {
       tried[key] = { at: new Date().toISOString() };
       this.store.save();
       try {
+        // Under a path you marked high risk (standards.js): merged by you, not on a score.
+        const risk = (await this.manager.standards?.risk(agent.id)) ?? [];
+        if (risk.length) throw err(409, `It changes high-risk paths (${risk.slice(0, 3).map((r) => r.path).join(', ')}): yours to merge`);
         await this.merge(agent.id, { url: pr.url });
         tried[key].merged = true;
         this.log(`landing: merged ${pr.url}: its Eval is 100% on its latest commit`);

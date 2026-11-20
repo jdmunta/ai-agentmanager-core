@@ -24,7 +24,7 @@ let stopped = null; // the run whose failure ended the others
 const run = ({ label, files, env }) =>
   new Promise((resolve) => {
     const started = Date.now();
-    const child = spawn(process.execPath, ['--test', '--test-concurrency=1', ...files.map((f) => path.join(here, f))], { env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn(process.execPath, ['--test', '--test-force-exit', '--test-concurrency=1', ...files.map((f) => path.join(here, f))], { env: { ...process.env, ...env }, stdio: ['ignore', 'pipe', 'pipe'] });
     let out = '';
     child.stdout.on('data', (d) => (out += d));
     child.stderr.on('data', (d) => (out += d));

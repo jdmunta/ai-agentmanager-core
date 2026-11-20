@@ -6,17 +6,39 @@ import fs from 'node:fs';
 
 const args = process.argv.slice(2);
 const file = process.env.FAKE_GH_STATE;
-const state = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : { prs: [] };
+// A test may be writing the file this moment: half a file is read again, not taken as broken.
+const read = () => {
+  for (let i = 0; ; i++) {
+    try {
+      return JSON.parse(fs.readFileSync(file, 'utf8'));
+    } catch (e) {
+      if (i >= 20) throw e;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+    }
+  }
+};
+const state = fs.existsSync(file) ? read() : { prs: [] };
 fs.appendFileSync(process.env.FAKE_GH_LOG, `${JSON.stringify(args)}\n`);
 const opt = (name) => (args.includes(name) ? args[args.indexOf(name) + 1] : undefined);
 const pick = (pr) => {
   const fields = (opt('--json') ?? '').split(',').filter(Boolean);
   return fields.length ? Object.fromEntries(fields.map((f) => [f, pr[f] ?? null])) : pr;
 };
-const save = () => fs.writeFileSync(file, JSON.stringify(state));
+// Whole or not at all, for whoever reads it next.
+const save = () => {
+  fs.writeFileSync(`${file}.${process.pid}.tmp`, JSON.stringify(state));
+  fs.renameSync(`${file}.${process.pid}.tmp`, file);
+};
 
 const [group, cmd] = args;
-if (group === 'pr' && cmd === 'list') {
+if (group === 'pr' && cmd === 'list' && opt('--state') === 'merged') {
+  // A repository's merged pull requests (Quality): every one merged, whatever the search says.
+  console.log(JSON.stringify(state.prs.filter((p) => p.state === 'MERGED' && p.url.includes(`/${opt('--repo')}/pull/`)).map(pick)));
+} else if (group === 'api' && /\/check-runs/.test(cmd)) {
+  console.log(JSON.stringify({ check_runs: state.checkRuns?.[/commits\/(\w+)\//.exec(cmd)[1]] ?? [] }));
+} else if (group === 'api' && /\/commits\?/.test(cmd)) {
+  console.log(JSON.stringify(state.commits ?? []));
+} else if (group === 'pr' && cmd === 'list') {
   console.log(JSON.stringify(state.prs.filter((p) => p.headRefName === opt('--head')).map(pick)));
 } else if (group === 'pr' && cmd === 'view') {
   const pr = state.prs.find((p) => p.url === args[2]);
