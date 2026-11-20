@@ -124,6 +124,7 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
   // ACP agents (Gemini CLI, OpenCode, Goose, … and config's "acp") become engines.
   registerAcpEngines(config);
   const manager = new AgentManager({ store, config, plugins });
+  manager.setMaxListeners(40); // each feature below listens for changes
   const localModels = new LocalModels({ config, save: saveConfig });
   localModels.view().catch(() => {});
   const backlog = new Backlog({ manager, store, config });
@@ -278,7 +279,11 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
       const cur = store.get(id);
       if (!cur?.docs?.update?.markdown) return;
       manager.patch(id, { announce: { ...cur.announce, auto: { milestone, at: new Date().toISOString() }, sent: {}, dismissedAt: null } });
-      notifier.send('announce', manager.get(id), `${milestone === 'done' ? 'is finished' : 'opened a pull request'}: an update for the people who asked is ready for you to send`);
+      // Its statements are checked against the work before you are told it is ready (claims.js).
+      if (config.claims?.auto !== false) await manager.summarize(id, 'claims').catch((e) => console.log(`[agentmgr] claims check for ${cur.name}: ${e.message.slice(0, 160)}`));
+      const checked = store.get(id)?.docs?.claims?.data?.texts.find((t) => t.key === 'update' && t.at === store.get(id).docs.update?.at && !t.error);
+      const doubt = checked ? checked.counts.contradicted + checked.counts.not_backed + checked.missing.length : 0;
+      notifier.send('announce', manager.get(id), `${milestone === 'done' ? 'is finished' : 'opened a pull request'}: an update for the people who asked is ready for you to send${doubt ? ` (${doubt} of its statements ${doubt === 1 ? 'is' : 'are'} not backed by the work: see Claims)` : ''}`);
     },
   });
   // Awake (awake.js): the computer kept from sleeping, always or while an agent works.
@@ -622,6 +627,14 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
     if (url && !okUrl(url)) throw fail(400, 'The webhook URL must be https://…');
     saveNotify({ announce: { webhookUrl: url || null } });
     return announceView();
+  }));
+  // Claims check: whether an update written by itself is checked by itself too.
+  api.get('/claims/settings', wrap(() => ({ auto: config.claims?.auto !== false })));
+  api.put('/claims/settings', wrap((req) => {
+    if (typeof req.body?.auto !== 'boolean') throw fail(400, 'auto is true or false');
+    config.claims = { ...config.claims, auto: req.body.auto };
+    saveConfig({ claims: config.claims });
+    return { auto: config.claims.auto };
   }));
   api.put('/agents/:id/announce', wrap((req) => manager.updateState(req.params.id, req.body ?? {})));
   api.post('/agents/:id/announce/publish', wrap((req) => manager.publishUpdate(req.params.id)));

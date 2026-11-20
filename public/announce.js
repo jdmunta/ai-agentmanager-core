@@ -18,6 +18,7 @@ export function updateHtml(a, d, { esc, docHtml }) {
   const to = a.announce?.to ?? (/@/.test(p.to ?? '') ? p.to : '');
   return `<div class="upd" data-upd="${esc(a.id)}">
     <p class="hint">Drafts, written from the work as it stands (${esc(d.stage ?? 'in progress')}). Change them as you like: nothing goes to anyone until you send it.</p>
+    <div data-upd-claims></div>
     <section class="ha-card upd-card">
       <h3>Slack</h3>
       <textarea data-upd-text="slack" rows="6" aria-label="The Slack message">${esc(p.slack ?? '')}</textarea>
@@ -42,7 +43,7 @@ export function updateHtml(a, d, { esc, docHtml }) {
   </div>`;
 }
 
-export function initUpdateView({ body, api, toast, ago, agentOf, upsert }) {
+export function initUpdateView({ body, api, toast, ago, agentOf, upsert, claimsNote = null }) {
   let slack; // where Post to Slack goes: undefined until asked, null when nowhere
   const root = () => body.querySelector('[data-upd]');
   const field = (k) => root()?.querySelector(`[data-upd-text="${k}"]`);
@@ -55,6 +56,13 @@ export function initUpdateView({ body, api, toast, ago, agentOf, upsert }) {
   function refresh(a) {
     if (!root() || !a) return;
     const u = a.announce ?? {};
+    // Its statements checked against the work (claims.js): what to read before it goes out.
+    const cl = root().querySelector('[data-upd-claims]');
+    const html = claimsNote?.(a) ?? '';
+    if (cl && cl.dataset.html !== html) {
+      cl.innerHTML = html;
+      cl.dataset.html = html;
+    }
     const link = u.link ? 'The link to the details goes under it.' : 'No link to the details yet: it goes without one.';
     note('slack', `${u.sent?.slack ? `Posted ${ago(u.sent.slack)}. ` : ''}${link}`);
     note('email', `${u.sent?.email ? `Opened in mail ${ago(u.sent.email)}. ` : ''}${link}`);

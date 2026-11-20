@@ -1501,6 +1501,20 @@ test('Update: written when an agent finishes, a card in the inbox, the Slack mes
     await until(`/^Posted /.test(document.querySelector('[data-upd-note="slack"]').textContent)`, 'posted, and said so');
     assert.deepEqual(got, ['The export is live. Thanks all.\n\nDetails: https://docs.example.com/d/9']);
     assert.equal(await js(`document.querySelector('[data-upd-act="post-slack"]').textContent`), 'Post to the updates webhook');
+
+    // Its statements were checked against the work by another model: said over the drafts, the whole check one press away.
+    await until(`document.querySelector('[data-upd-claims] [data-doc="claims"]:not([data-run])')`, 'the check, said over the drafts', 30_000);
+    assert.match(await js(`document.querySelector('[data-upd-claims]').textContent`), /^(Read before sending: |Checked against the work: ).*\d+ backed/);
+    assert.equal(await val('slack'), 'The export is live. Thanks all.', 'still not written over');
+    await js(`document.querySelector('[data-upd-claims] [data-doc="claims"]').click()`);
+    await until(`document.querySelector('#doc-body .cl [data-claims-text="update"]')`, 'the claims check, open');
+    assert.match(await js(`document.querySelector('#doc-title').textContent`), /^Claims · /);
+    assert.match(await js(`document.querySelector('#doc-meta').textContent`), /^Checked .* by Codex/);
+    const checked = await js(`document.querySelector('#doc-body .cl').textContent.replace(/\\s+/g, ' ')`);
+    assert.match(checked, /The agent's brief.*Update.*Sources: What the app measured/);
+    assert.match(await js(`document.querySelector('[data-claims-text="brief"] .cl-claim.cl-not_backed .cl-said').closest('ul').textContent`), /Fix the token refresh in `auth\/session\.go`/, 'what the brief says and nothing shows');
+    assert.ok(await js(`document.querySelector('[data-claims-text="brief"] details.cl-group').open && !document.querySelector('[data-claims-text="update"] details .cl-chip.cl-backed').closest('details').open`), 'what needs reading is open; the backed ones are folded');
+    assert.ok(await js(`document.documentElement.scrollWidth <= window.innerWidth`), 'no sideways scroll');
     await js(`document.querySelector('#doc-close').click()`);
     await until(`!${card}`, 'sent: out of the inbox');
 

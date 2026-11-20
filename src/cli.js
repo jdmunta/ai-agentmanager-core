@@ -475,9 +475,9 @@ export async function main(argv) {
 
   program
     .command('doc')
-    .description('Write a stakeholder document from the agent work: analysis, design, flow, proposal, humanai (Human vs AI), estimate (human time estimate for planning), documentation (user, developer and OpenAPI docs), diagrams (diagrams only), walkthrough (its changes explained one by one) or scorecard (its changes scored for review)')
+    .description('Write a stakeholder document from the agent work: analysis, design, flow, proposal, humanai (Human vs AI), estimate (human time estimate for planning), documentation (user, developer and OpenAPI docs), diagrams (diagrams only), walkthrough (its changes explained one by one), scorecard (its changes scored for review) or claims (what its brief and documents say, checked against the work)')
     .argument('<agent>')
-    .argument('<kind>', 'analysis, design, flow, proposal, humanai, estimate, documentation, diagrams, walkthrough, scorecard, or all (background; diagrams, walkthrough and scorecard not included)')
+    .argument('<kind>', 'analysis, design, flow, proposal, humanai, estimate, documentation, diagrams, walkthrough, scorecard, claims, or all (background; diagrams, walkthrough, scorecard and claims not included)')
     .option('-o, --output <file>', 'also save the Markdown to this file')
     .option('--cached', 'print the last version instead of writing a new one')
     .option('-b, --background', 'start writing and return at once (kind "all" writes all seven)')
@@ -546,6 +546,36 @@ export async function main(argv) {
       const only = opts.slack ? slack : opts.email ? email : opts.details ? d.markdown : null;
       if (only !== null) return process.stdout.write(`${only}\n`);
       process.stdout.write(`${bold('Slack')}\n${slack}\n\n${bold('Email')}\n${email}\n\n${bold('Details')}\n${d.markdown}\n`);
+    });
+
+  program
+    .command('claims')
+    .description("Check what an agent's brief and the documents written about its work say against the work itself: each statement of fact traced to a source by another model, with the app checking that the quotes and the files, links and numbers are really there. Without an agent: the setting")
+    .argument('[agent]')
+    .option('--cached', 'print the last check instead of running a new one')
+    .option('--json', 'print it as JSON')
+    .option('--auto <on|off>', 'setting: check an update written by itself before you are told it is ready (on)')
+    .action(async (ref, opts) => {
+      await daemon();
+      if (!ref) {
+        if (opts.auto !== undefined) {
+          if (!['on', 'off'].includes(opts.auto)) throw new Error('--auto is on or off');
+          await api('PUT', '/claims/settings', { auto: opts.auto === 'on' });
+        }
+        const v = await api('GET', '/claims/settings');
+        console.log(`Updates written by themselves are checked before you are told: ${v.auto ? green('on') : dim('off')}`);
+        return console.log(dim('Check an agent: agentmgr claims <agent>'));
+      }
+      let a = await resolveAgent(ref);
+      if (!opts.cached || !a.docs?.claims?.data) {
+        process.stderr.write(dim('Checking… (a separate model call for each text; the agent is not interrupted)\n'));
+        a = await api('POST', `/agents/${a.id}/docs/claims`);
+      }
+      const d = a.docs.claims;
+      if (opts.json) console.log(JSON.stringify(d.data, null, 2));
+      else process.stdout.write(`${d.markdown}\n${dim(`Checked by ${d.writer}`)}\n`);
+      // For scripts: something a source contradicts.
+      if (d.data.verdict === 'wrong') process.exitCode = 1;
     });
 
   program

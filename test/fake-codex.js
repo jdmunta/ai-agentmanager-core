@@ -3,6 +3,7 @@
 // writes a session log where Codex would ($CODEX_HOME/sessions/YYYY/MM/DD), picks its own
 // session ID, echoes input, and draws Codex's approval menu for "#ask".
 import crypto from 'node:crypto';
+import { claimsReply } from './fake-claims.js';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -26,6 +27,10 @@ if (args[0] === 'exec') {
       };
       process.stdout.write(JSON.stringify(reply), () => process.exit(0));
       return;
+    }
+    if (input.startsWith('Check the statements of a text')) {
+      const reply = safe ? claimsReply(input) : null;
+      return reply ? process.stdout.write(JSON.stringify(reply), () => process.exit(0)) : process.exit(1);
     }
     const intent = input.match(/<intent>\n([\s\S]*?)\n<\/intent>/)?.[1] ?? '';
     process.stdout.write(`### The ask\n${safe ? 'Safe call.' : 'UNSAFE call.'} Intent: ${intent}\n### Where it stands\nfrom codex\n### Conclusions so far\nsaw: ${input.includes('[agent] Working on it')}\n`, () => process.exit(0));

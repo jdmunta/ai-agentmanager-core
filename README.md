@@ -1255,6 +1255,38 @@ agentmgr standards bar shop --add "Lint=npm run lint" --add "Types=npx tsc --noE
 agentmgr standards run my-agent                     # run the bar on its changes now
 ```
 
+## Claims check: what the documents say, against the work
+
+Models write confidently, also when they are wrong. **Claims**, among an agent's documents, checks what was written about its work against the work itself: the agent's own brief, the update for the people who asked, and the Explanation, Insights, Analysis and Documentation if they are written.
+
+```sh
+agentmgr claims fix-login            # check, and print each statement with what backs it
+agentmgr claims fix-login --cached   # the last check
+agentmgr claims fix-login --json
+agentmgr claims --auto off           # do not check updates by themselves
+```
+
+**How it works.** Another model than the one that wrote the text (another engine if one is installed, as for Human vs AI) lists every statement of fact in it and gives each a verdict, with the source and a quote from it, word for word. Then the app checks the checker, with no model:
+
+- a statement that is not in the text is left out;
+- a quote that is not in the source it names (or any other) makes the statement **Not backed**;
+- a file, link, pull request, ticket, commit, version or number in the statement that appears in none of the sources makes it **Not backed**;
+- what only the agent itself says (its brief, spec, plan, the conversation) counts as **Only the agent says so**, not as backed. The brief is never a source for itself.
+
+| Verdict | Meaning |
+|---|---|
+| **Contradicted** | A source says otherwise: the update says merged, the pull request is open |
+| **Not backed** | No source says so, or the checker could not quote one |
+| **Only the agent says so** | In the brief, spec, plan or conversation only; nothing measured shows it |
+| **Backed** | A measured source says so, and the quote was found in it |
+| **Opinion or plan** | A judgment, estimate or recommendation: not counted |
+
+The sources are what the app measured (status, pull requests and their checks, files changed, the quality bar), the commits, the diff (the first 60,000 characters), what was asked, and the agent's own account. Particulars in statements the checker passed over are listed too.
+
+**By itself.** An update written by itself (when an agent finishes or opens a pull request) is checked before you are told it is ready, together with the brief (and the other documents above that are written); the alert says how many of its statements are not backed, and the Update shows it over the drafts with **Claims** one press away. `agentmgr claims --auto off` or `"claims": { "auto": false }` in config.json turns that off. Everything else is checked when you ask: **Claims** among the documents, **Regenerate** to check again.
+
+**Limits.** That a quote is in a source is checked by the app; that the quote really shows the statement is the checking model's reading, so read the ones that matter. A statement can be true and not backed (the sources are what this computer has, and long diffs and conversations are cut), and numbers under 10 are not checked as particulars. Each text is one model call. Standups and Value estimates are not checked. `agentmgr claims` exits with 1 when something is contradicted.
+
 ## Results and spend
 
 **Results** in the top bar shows how agents did over the last 7, 30 or 90 days (or all time): how many started and how many opened a pull request, PRs merged and closed, the merge rate, the median time from starting an agent to its first PR and to merge, and the cost per merged PR. The same by engine and model (which one gets merged more, for less), by where agents came from (you, the assistant, triggers, the backlog, teams, races) and by project. `agentmgr stats --days 30`.

@@ -10,6 +10,7 @@ import { openCopy, pasteInto } from '/termclip.js';
 import { initBuilt } from '/built.js';
 import { addTools, download, htmlFile, initExport } from '/export.js';
 import { evalChip, evalHtml } from '/eval.js';
+import { claimsHtml, claimsNote } from '/claims.js';
 import { badgeHtml as scoreBadge, chipHtml as scoreChip, improveHtml, scorecardHtml, scorecardSpeech } from '/scorecard.js';
 import { bindListen, listenHtml, play, speakable, now as speaking, stop as stopSpeaking } from '/speak.js';
 import { initReview } from '/review.js';
@@ -636,9 +637,10 @@ const INSIGHT_ICONS = { why: '🎯', what: '📦', how: '🛠', now: '📍' };
 
 // ------------------------------------------------------------------ stakeholder documents
 
-const DOCS = { analysis: 'Analysis', design: 'Design', flow: 'Flow', proposal: 'Proposal', humanai: 'Human vs AI', estimate: 'Estimate', documentation: 'Documentation', diagrams: 'Diagrams', scorecard: 'Scorecard', update: 'Update' };
+const DOCS = { analysis: 'Analysis', design: 'Design', flow: 'Flow', proposal: 'Proposal', humanai: 'Human vs AI', estimate: 'Estimate', documentation: 'Documentation', diagrams: 'Diagrams', scorecard: 'Scorecard', update: 'Update', claims: 'Claims' };
 // What a document is before it's written, where "Write a … document for stakeholders" doesn't say it.
 const DOC_HINTS = {
+  claims: 'Check what the brief and the documents written about this work say against the work itself: each statement of fact traced to a source by another model, and the app checking the quotes, files, links and numbers are really there',
   update: 'What to tell the people who asked: a short Slack message and a short email for you to send, and the details they point to. Written by itself when the agent finishes or opens a pull request',
   estimate: 'For planning: how long a person would take to do this work by hand, split into tasks with optimistic, likely and pessimistic hours, a suggested split into tickets, the roles needed and the risks',
   documentation: 'The documentation for this change: what is new, how to use it, configuration, upgrade notes, which docs to add or update, and an OpenAPI spec of any API changes',
@@ -646,7 +648,7 @@ const DOC_HINTS = {
 /** The OpenAPI spec in a Documentation document (its ```yaml block), if the change has API changes. */
 const openApiOf = (markdown) => (markdown ?? '').match(/```ya?ml\s*\n((?:#.*\n|\s*\n)*openapi:[\s\S]*?)```/)?.[1] ?? null;
 // Optional extras that "Write all" leaves out.
-const DOC_EXTRAS = new Set(['diagrams', 'scorecard', 'update']);
+const DOC_EXTRAS = new Set(['diagrams', 'scorecard', 'update', 'claims']);
 const DOC_TITLES = { ...DOCS, estimate: 'Human time estimate', eval: 'Eval', plan: 'Plan', intent: 'Intent', spec: 'Spec', designdoc: 'Design doc', benchmark: 'Benchmark' };
 // The agent's intent, spec and plan files (read from the daemon when opened; kept here by agent and kind).
 const SPEC_KINDS = { intent: 'Intent', spec: 'Spec', plan: 'Plan', designdoc: 'Design doc', benchmark: 'Benchmark' };
@@ -732,7 +734,7 @@ function docButtons(a) {
       const d = a.docs?.[k];
       const stale = d?.markdown && a.brief?.updatedAt && d.briefUpdatedAt !== a.brief.updatedAt;
       return `<button class="small doc-btn ${d?.markdown ? 'has' : ''}" data-doc="${k}" ${d?.pending ? 'disabled' : ''}
-        title="${k === 'scorecard' ? (d?.markdown ? `Open the review scorecard: ${d.data?.overall ?? '—'}/100` : 'Score the changes for review: intent, spec, scope, plan, tests and safety, with an overall readiness and where to look') : k === 'diagrams' ? (d?.markdown ? `Open the diagrams${stale ? ' (the brief changed since)' : ''}` : 'Draw the problem and its solution for a quick grasp: architecture, design, data flow (animated) and the key interaction, diagrams only. Built from the documents already written and the agent\'s work') : d?.markdown ? `Open the ${label.toLowerCase()} document${stale ? ' (the brief changed since)' : ''}` : DOC_HINTS[k] ?? `Write a ${label.toLowerCase()} document for stakeholders`}">${d?.pending ? `${label}…` : label}${d?.markdown ? (stale ? ' •' : ' ✓') : ''}</button>`;
+        title="${k === 'claims' && d?.data ? `Open the claims check: ${claimsLine(d.data)}` : k === 'scorecard' ? (d?.markdown ? `Open the review scorecard: ${d.data?.overall ?? '—'}/100` : 'Score the changes for review: intent, spec, scope, plan, tests and safety, with an overall readiness and where to look') : k === 'diagrams' ? (d?.markdown ? `Open the diagrams${stale ? ' (the brief changed since)' : ''}` : 'Draw the problem and its solution for a quick grasp: architecture, design, data flow (animated) and the key interaction, diagrams only. Built from the documents already written and the agent\'s work') : d?.markdown ? `Open the ${label.toLowerCase()} document${stale ? ' (the brief changed since)' : ''}` : DOC_HINTS[k] ?? `Write a ${label.toLowerCase()} document for stakeholders`}">${d?.pending ? `${label}…` : label}${d?.markdown ? (k === 'claims' && d.data?.verdict !== 'backed' ? ' !' : stale ? ' •' : ' ✓') : ''}</button>`;
     })
     .join('')}</span>${specButtons(a)}${driveButton(a)}`;
 }
@@ -767,6 +769,9 @@ function demoButton(a) {
     : '<button class="small doc-btn" disabled title="The agent makes it once the change works and publishes it as an Artifact">Demo page</button>';
 }
 
+/** "1 contradicted, 2 not backed, 5 backed" for a tooltip. */
+const claimsLine = (c) => [c.counts.contradicted && `${c.counts.contradicted} contradicted`, (c.counts.not_backed || c.missing) && `${c.counts.not_backed + c.missing} not backed`, `${c.counts.backed} backed`].filter(Boolean).join(', ');
+
 let docView = null; // { agentId, kind }
 
 function renderDocDialog() {
@@ -782,9 +787,9 @@ function renderDocDialog() {
   if (docView.kind === 'eval') return renderEval(a, body, d);
   body.classList.toggle('diagrams-view', docView.kind === 'diagrams');
   if (d?.pending) {
-    body.innerHTML = `<p class="hint">${docView.kind === 'humanai' ? 'Splitting the open questions and answering the AI ones, then asking a second model to check…' : docView.kind === 'diagrams' ? "Drawing the diagrams from the documents and the agent's work so far…" : `Writing the ${label.toLowerCase()} document from the agent's work so far…`}</p>`;
+    body.innerHTML = `<p class="hint">${docView.kind === 'humanai' ? 'Splitting the open questions and answering the AI ones, then asking a second model to check…' : docView.kind === 'diagrams' ? "Drawing the diagrams from the documents and the agent's work so far…" : docView.kind === 'claims' ? 'Checking each statement of the brief and the documents against the work, with another model… a minute or two.' : `Writing the ${label.toLowerCase()} document from the agent's work so far…`}</p>`;
     body.dataset.rendered = '';
-  } else if (d?.error) body.innerHTML = `<p class="error">Couldn't write it: ${esc(d.error)}</p>`;
+  } else if (d?.error) body.innerHTML = `<p class="error">Couldn't ${docView.kind === 'claims' ? 'check' : 'write'} it: ${esc(d.error)}</p>`;
   else if (plan && !d?.markdown) body.innerHTML = '<p class="hint">The agent is investigating and hasn\'t written its plan yet. You\'ll see it here (and in the inbox) when it has.</p>';
   else if (specKind && !d?.loaded) body.innerHTML = '<p class="hint">Loading…</p>';
   else if (specKind && !d?.markdown) body.innerHTML = `<p class="hint">${docView.kind === 'intent' ? 'No intent file for this agent (agents created before 1.9 have none).' : `The agent hasn't written its ${label.toLowerCase()} yet. It writes ${docView.kind === 'spec' ? 'the spec before changing code' : docView.kind === 'designdoc' ? 'the design doc once its plan is settled and publishes it as an Artifact' : docView.kind === 'benchmark' ? 'the benchmark results once the change works' : 'the plan and keeps it current'}.`}</p>`;
@@ -792,7 +797,7 @@ function renderDocDialog() {
     // The scorecard's Improve button follows the agent being improved.
     const version = docView.kind === 'scorecard' ? `${d.at}:${Boolean(a.improving)}` : d.at;
     if (body.dataset.rendered !== version) {
-      body.innerHTML = docView.kind === 'scorecard' ? scorecardHtml(d, esc, { actions: improveHtml(a) }) : docView.kind === 'update' ? updateHtml(a, d, { esc, docHtml }) : d.data ? humanAiHtml(d) : docHtml(d.markdown);
+      body.innerHTML = docView.kind === 'scorecard' ? scorecardHtml(d, esc, { actions: improveHtml(a) }) : docView.kind === 'update' ? updateHtml(a, d, { esc, docHtml }) : docView.kind === 'claims' ? claimsHtml(d, esc) : d.data ? humanAiHtml(d) : docHtml(d.markdown);
       body.dataset.rendered = version;
       renderDiagrams(body);
     }
@@ -800,7 +805,7 @@ function renderDocDialog() {
   }
   const stale = !plan && d?.markdown && a.brief?.updatedAt && d.briefUpdatedAt !== a.brief.updatedAt;
   const by = d?.writer ? ` by ${d.writer}${d.critique ? `, checked by ${d.critique.label}` : ''}${d.from ? ` from ${d.from.length ? d.from.join(', ') : "the agent's work"}` : ''}` : '';
-  $('#doc-meta').textContent = d?.markdown ? `${plan ? `Plan · ${PLAN_LABEL[a.planReview.status]} · updated` : specKind ? 'Updated' : docView.kind === 'diagrams' ? 'Drawn' : 'Written'} ${ago(d.at)}${by}${stale && !specKind ? ' · the brief has changed since; Regenerate for the latest' : ''}${specKind ? ' · goes into the pull request description' : ''}` : '';
+  $('#doc-meta').textContent = d?.markdown ? `${plan ? `Plan · ${PLAN_LABEL[a.planReview.status]} · updated` : specKind ? 'Updated' : docView.kind === 'diagrams' ? 'Drawn' : docView.kind === 'claims' ? 'Checked' : 'Written'} ${ago(d.at)}${by}${stale && !specKind ? ' · the brief has changed since; Regenerate for the latest' : ''}${specKind ? ' · goes into the pull request description' : ''}` : '';
   for (const id of ['doc-copy', 'doc-download', 'doc-print']) $(`#${id}`).disabled = !d?.markdown;
   // Diagrams: the whole document as one HTML file with every diagram (each also has Copy / PNG / SVG).
   $('#doc-html').hidden = !/```mermaid/.test(d?.markdown ?? '');
@@ -885,7 +890,7 @@ $('#doc-body').addEventListener('submit', (e) => {
 });
 
 // The Update document's own buttons: copy, open in mail, post to Slack, the link to its details.
-const announceUi = initUpdateView({ body: $('#doc-body'), api, toast, ago, agentOf: (id) => agents.get(id), upsert: (a) => upsert(a) });
+const announceUi = initUpdateView({ body: $('#doc-body'), api, toast, ago, agentOf: (id) => agents.get(id), upsert: (a) => upsert(a), claimsNote: (a) => claimsNote(a, 'update', a.docs?.update?.at ?? null, esc) });
 
 function generateDoc() {
   const { agentId, kind } = docView;
@@ -940,6 +945,14 @@ $('#doc-openapi').onclick = () => {
   link.click();
   setTimeout(() => URL.revokeObjectURL(link.href), 1000);
 };
+// From one document to another (an update to its claims check); "run" checks again when it is of an earlier text.
+$('#doc-body').addEventListener('click', (e) => {
+  const b = e.target.closest('button[data-doc]');
+  if (!b || !docView) return;
+  const had = Boolean(agents.get(docView.agentId)?.docs?.[b.dataset.doc]?.markdown);
+  openDoc(docView.agentId, b.dataset.doc);
+  if (had && 'run' in b.dataset) generateDoc();
+});
 const haAnswers = () => Object.fromEntries([...document.querySelectorAll('#doc-body [data-ha]')].map((t) => [t.dataset.ha, t.value]));
 $('#doc-body').addEventListener('click', (e) => {
   const pick = e.target.closest('[data-ha-pick]');
