@@ -99,11 +99,18 @@ export class Autopilot {
     if (agent.preReview?.status === 'stalled') return this.hold(it, `The review rounds did not approve its changes (${agent.preReview.round} ${agent.preReview.round === 1 ? 'round' : 'rounds'}): see what is still open on the agent.`);
     if (pr?.state === 'CLOSED') return this.hold(it, 'Its pull request was closed without merging.');
     // Shipped in this round of review: see it through. Reopened since: the new work is scored and pushed to it.
-    if (pr && ap.shipped === it.reviewAt) return level === 'merge' ? this.land(it, agent, pr) : undefined;
+    if (pr && ap.shipped === it.reviewAt) return level === 'merge' && !ap.risk ? this.land(it, agent, pr) : undefined;
 
     // Not shipped yet: the scorecard of the current changes decides (unless you said Ship it).
     const changes = await this.review.get(agent.id);
     if (!changes.files?.length) return this.hold(it, 'There are no changes to ship.');
+    // Under a path you marked high risk (standards.js): yours to approve, and never merged from here.
+    const risk = this.manager.standards?.riskIn(agent, changes.files) ?? [];
+    if (risk.length) {
+      if (ap.ship) return this.ship(it, agent, 'pr', { risk: true });
+      const paths = `${risk.slice(0, 3).map((r) => r.path).join(', ')}${risk.length > 3 ? ` and ${risk.length - 3} more` : ''}`;
+      return this.hold(it, `It changes high-risk paths (${paths}), so it is yours to approve. Ship it opens the pull request; merging it stays with you.`);
+    }
     if (ap.ship) return this.ship(it, agent, level);
     const card = agent.docs?.scorecard;
     if (card?.pending) return;
@@ -141,7 +148,7 @@ export class Autopilot {
   }
 
   /** Commit what's left, push and open the pull request; at "merge", landing takes it from there. */
-  async ship(it, agent, level) {
+  async ship(it, agent, level, { risk = false } = {}) {
     this.note(it, { state: 'shipping', note: null });
     const title = it.title.split('\n')[0].slice(0, 100);
     try {
@@ -152,7 +159,7 @@ export class Autopilot {
     const { url } = await this.review.pr(agent.id, { title });
     if (!url) throw err(502, 'Pushed, but no pull request link came back.');
     this.log(`autopilot: opened ${url} for "${it.title}"`);
-    this.note(it, { state: level === 'merge' ? 'landing' : 'pr', pr: url, shipped: it.reviewAt, ship: false });
+    this.note(it, { state: level === 'merge' ? 'landing' : 'pr', pr: url, shipped: it.reviewAt, ship: false, risk });
     await this.manager.refresh(agent.id, { withPrs: true }).catch(() => {});
   }
 

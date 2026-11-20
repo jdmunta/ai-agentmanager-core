@@ -70,6 +70,16 @@ export function scorecardHtml(doc, esc, { stale = false, actions = '' } = {}) {
     ? `<div class="sc-look"><b>Where to look</b><ol>${sc.look.map((l) => `<li><button type="button" class="link" data-sc-look="${esc(`${l.file}\t${l.head}`)}"><code>${esc(l.file)}</code></button> ${esc(l.reason)}</li>`).join('')}</ol></div>`
     : '';
   const f = sc.facts;
+  // The repository's standards (Quality, Standards): the bar the app ran, its lessons, high-risk paths touched.
+  const barBad = (sc.bar?.results ?? []).filter((r) => !r.ok);
+  const bar = sc.bar
+    ? `<details class="sc-crit" ${barBad.length ? 'open' : ''}><summary>Quality bar, run by the app: ${sc.bar.results.length - barBad.length} of ${sc.bar.results.length} passed</summary><ul>${sc.bar.results.map((r) => `<li class="${r.ok ? 'met' : 'not_met'}">${r.ok ? '✅' : '❌'} ${esc(r.name)}${r.command ? ` <code>${esc(r.command)}</code>` : ''}${!r.ok && r.tail ? `<pre class="sc-tail">${esc(r.tail)}</pre>` : ''}</li>`).join('')}</ul></details>`
+    : '';
+  const lessonMark = { followed: '✅', broken: '❌', not_applicable: '➖', unverified: '❔' };
+  const lessons = sc.lessons?.length
+    ? `<details class="sc-crit" ${sc.lessons.some((l) => l.status === 'broken') ? 'open' : ''}><summary>Lessons of this repository: ${sc.lessons.filter((l) => l.status === 'broken').length} not followed, ${sc.lessons.filter((l) => l.status === 'followed').length} followed, of ${sc.lessons.length}</summary><ul>${sc.lessons.map((l) => `<li class="${l.status === 'broken' ? 'not_met' : l.status === 'followed' ? 'met' : ''}">${lessonMark[l.status] ?? '❔'} ${esc(l.text)}${l.evidence ? ` <span class="hint">${esc(l.evidence)}</span>` : ''}</li>`).join('')}</ul></details>`
+    : '';
+  const risk = f.risk?.length ? `<p class="sc-risk"><b>High-risk paths touched</b>: ${f.risk.map((p) => `<code>${esc(p)}</code>`).join(', ')} <span class="hint">yours to approve and merge</span></p>` : '';
   return `<div class="scorecard">
     <div class="sc-head">
       <span class="sc-overall ${recTone[sc.recommendation]}"><b>${sc.overall ?? '—'}</b><small>/100</small>${delta(doc)}</span>
@@ -78,7 +88,7 @@ export function scorecardHtml(doc, esc, { stale = false, actions = '' } = {}) {
     </div>
     ${stale ? '<p class="hint sc-stale"><b>The changes moved since this was scored.</b> Score again for the latest.</p>' : ''}
     <div class="sc-rows">${rows}</div>
-    ${crit}${look}
+    ${risk}${bar}${lessons}${crit}${look}
     <div class="hint sc-facts">Measured: ${f.files} files (+${f.added} −${f.removed}) · ${f.testFiles} test files · CI ${esc(f.ci ?? 'n/a')} · checks ${f.checks.passed}✓ ${f.checks.failed}✗${f.plan ? ` · plan ${f.plan.done}/${f.plan.steps}` : ''}${doc.writer ? ` · scored by ${esc(doc.writer)}` : ''}</div>
   </div>`;
 }

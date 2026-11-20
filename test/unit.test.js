@@ -2326,6 +2326,26 @@ test('autopilot: ready work becomes a merged pull request, not-ready work goes b
     await ap.tick();
     assert.deepEqual(calls, ['score', 'commit:Add the thing', 'pr']);
     assert.equal(it.autopilot.state, 'pr', 'at "pr" it stops at the pull request');
+
+    // A high-risk path touched (standards.js): held for you whatever the score; Ship it opens the pull request, and it is never merged from here.
+    Object.assign(it, { status: 'review', reviewAt: 't7', autopilot: undefined });
+    level = 'merge';
+    manager.standards = { riskIn: (a, files) => (files.length ? [{ path: 'src/auth/token.js', pattern: 'src/auth/**' }] : []) };
+    calls.length = 0;
+    await ap.tick();
+    assert.deepEqual(calls, []);
+    assert.equal(it.autopilot.state, 'held');
+    assert.match(it.autopilot.note, /^It changes high-risk paths \(src\/auth\/token\.js\), so it is yours to approve\./);
+    assert.equal(ap.inbox().length, 1);
+    ap.shipNow('i1');
+    await ap.tick();
+    assert.deepEqual(calls, ['commit:Add the thing', 'pr']);
+    assert.deepEqual([it.autopilot.state, it.autopilot.risk], ['pr', true]);
+    agent.prs['https://github.com/o/r/pull/7'] = { url: 'https://github.com/o/r/pull/7', state: 'OPEN', mergeable: 'MERGEABLE', checks: { state: 'passed', failed: [] }, review: 'APPROVED' };
+    await ap.tick();
+    await ap.tick();
+    assert.deepEqual(calls, ['commit:Add the thing', 'pr'], 'at "merge" too, it is not merged');
+    delete manager.standards;
   } finally {
     ap.close();
   }
@@ -5211,4 +5231,363 @@ test('review rounds: settings, a critic\'s reply made safe, findings merged acro
   assert.equal(pre.applies(task), false);
   assert.throws(() => pre.change({ rounds: 6 }), /rounds is a number from 1 to 5/);
   assert.deepEqual(pre.change({ enabled: 'on', rounds: 5, critics: 1, openPr: false }), { enabled: true, rounds: 5, critics: 1, openPr: false });
+});
+
+test('quality: what followed a merged pull request, its verdict, and the totals by period', async () => {
+  const { followUps, commitChecks, verdictOf, totals, aggregate, qualityMarkdown, qualitySettings, looksLikeFix } = await import('../src/quality.js');
+  const s = qualitySettings({});
+  assert.deepEqual(s, { enabled: true, watchDays: 14 });
+  assert.deepEqual(qualitySettings({ quality: { enabled: false, watchDays: 400 } }), { enabled: false, watchDays: 90 });
+  assert.equal(qualitySettings({ quality: { watchDays: 'soon' } }).watchDays, 14);
+  assert.deepEqual(['Fix the cache', 'hotfix: login', 'Prices: fixes rounding', 'Add a fixture loader', 'Prefix the keys', 'Add export'].map(looksLikeFix), [true, true, true, false, false, false]);
+  const at = (d, h = 9) => new Date(2026, 10, d, h).toISOString();
+  const it = { url: 'https://github.com/a/b/pull/5', number: 5, title: 'Cache prices', openedAt: at(2, 5), mergedAt: at(2), facts: { mergeCommit: 'abc123', base: 'main', files: ['src/cache.js', 'src/price.js'], changesRequested: 1 } };
+  const pr = (number, title, d, files = [], body = '') => ({ number, title, url: `https://github.com/a/b/pull/${number}`, mergedAt: at(d), files, body });
+  // A fix to the same file, or one that names it, within the watch days; not before, not after, not a feature.
+  const f = followUps(it, { later: [pr(4, 'Fix the cache', 1, ['src/cache.js']), pr(6, 'Fix stale prices', 4, ['src/cache.js', 'README.md']), pr(7, 'Add a discount', 5, ['src/price.js']), pr(8, 'Fix the build', 6, ['ci.yml']), pr(9, 'Fix what #5 broke', 7, ['other.js']), pr(10, 'Fix #50', 8, ['x.js']), pr(11, 'Fix the cache again', 20, ['src/cache.js']), pr(5, 'Cache prices', 2, ['src/cache.js'])] }, s);
+  assert.equal(f.reverted, null);
+  assert.deepEqual(f.fixes.map((x) => [x.number, x.shared, x.named]), [[6, ['src/cache.js'], false], [9, [], true]]);
+  // Reverted: by a pull request that names it or carries its title, or by a commit; any time after.
+  assert.equal(followUps(it, { later: [pr(12, 'Revert "Cache prices"', 25, [], 'Reverts a/b#5')] }, s).reverted.number, 12);
+  assert.equal(followUps(it, { later: [pr(12, 'Revert "Cache prices"', 25)] }, s).reverted.number, 12);
+  assert.equal(followUps(it, { later: [pr(12, 'Revert "Other thing"', 25, ['src/cache.js'])] }, s).reverted, null);
+  const byCommit = followUps(it, { commits: [{ message: 'Revert "Cache prices"\n\nThis reverts commit abc123.', at: at(3), url: 'c1' }, { message: 'This reverts commit abc1239.', at: at(1) }] }, s);
+  assert.deepEqual([byCommit.reverted.title, byCommit.reverted.url], ['Revert "Cache prices"', 'c1']);
+  // Checks on the merged commit: cancelled is not a failure.
+  assert.deepEqual(commitChecks([{ name: 'test', status: 'completed', conclusion: 'success' }, { name: 'lint', status: 'completed', conclusion: 'cancelled' }]), { state: 'passed', failed: [] });
+  assert.deepEqual(commitChecks([{ name: 'test', status: 'completed', conclusion: 'failure' }, { name: 'test', status: 'completed', conclusion: 'timed_out' }, { name: 'e2e', status: 'in_progress' }]), { state: 'failed', failed: ['test'] });
+  assert.equal(commitChecks([{ name: 'e2e', status: 'queued' }]).state, 'running');
+  assert.equal(commitChecks([]).state, 'none');
+  // The verdict: what you said, then reverted, fixed, failed checks; fine so far until the watch days end.
+  const now = new Date(2026, 10, 4, 12).getTime();
+  const after = (x = {}) => ({ reverted: null, fixes: [], checks: { state: 'passed', failed: [] }, ...x });
+  const v = (x, t = now) => verdictOf({ ...it, ...x }, s, t);
+  assert.deepEqual([v({}), v({ after: after() }), v({ after: after() }, now + 20 * 86_400_000), v({ after: after({ checks: { state: 'failed', failed: ['test'] } }) }), v({ after: after({ fixes: f.fixes, checks: { state: 'failed', failed: ['test'] } }) }), v({ after: after({ reverted: { title: 'r' }, fixes: f.fixes }) })], ['unchecked', 'watching', 'clean', 'broke', 'fixed', 'reverted']);
+  assert.equal(v({ after: after({ reverted: { title: 'r' } }), mark: { verdict: 'clean' } }), 'clean');
+  assert.equal(v({ after: after(), mark: { verdict: 'problem' } }), 'problem');
+  // Totals and periods.
+  const items = [
+    { ...it, after: after({ fixes: f.fixes }) },
+    { ...it, url: 'u2', number: 6, facts: { changesRequested: 0 }, openedAt: at(3, 8), mergedAt: at(3), after: after() },
+    { ...it, url: 'u3', number: 7, facts: { changesRequested: 0 }, openedAt: at(3, 6), mergedAt: at(3), after: after({ reverted: { title: 'Revert "x"', url: 'r1' } }) },
+    { ...it, url: 'u4', number: 8, facts: null, openedAt: null, mergedAt: at(3) },
+    { ...it, url: 'u5', number: 9, facts: { changesRequested: 2 }, openedAt: new Date(2026, 9, 27, 9).toISOString(), mergedAt: new Date(2026, 9, 28, 9).toISOString(), after: after() },
+  ];
+  const t = totals(items.slice(0, 4), s, now);
+  assert.deepEqual([t.prs, t.checked, t.unchecked, t.problems, t.fixed, t.reverted, t.held, t.watching, t.heldPct, t.failurePct, t.changesRequested, t.changesPct, t.hoursToMerge], [4, 3, 1, 2, 1, 1, 1, 1, 33, 67, 1, 33, 3]);
+  assert.deepEqual([totals([], s).heldPct, totals([], s).hoursToMerge], [null, null]);
+  const weeks = aggregate(items, s, { period: 'week', t: now });
+  assert.deepEqual([weeks[0].totals.prs, weeks[0].items.length, weeks[1].totals.prs, weeks[1].totals.heldPct], [4, 4, 1, 100]);
+  assert.equal(aggregate(items, s, { period: 'year', t: now })[0].totals.prs, 5);
+  assert.throws(() => aggregate(items, s, { period: 'decade' }), /period is one of/);
+  const md = qualityMarkdown(weeks[0], items.slice(0, 4), s, { who: 'Pat', prev: weeks[1], t: now });
+  assert.match(md, /^# Quality of merged work: Week of Nov 2, Pat\n\n4 pull requests from AI agents merged\./);
+  assert.match(md, /\*\*Held up\*\*: 33% \(100% the period before\): 1 of 3 looked at, 1 still within the 14 days watched/);
+  assert.match(md, /\*\*Problems after the merge\*\*: 2: 1 reverted, 1 fixed afterwards, 0 with failed checks/);
+  assert.match(md, /a reviewer asked for changes on 1 \(33%\); 3 hours from opened to merged \(median\)/);
+  assert.match(md, /- \[#5 Cache prices\]\(https:\/\/github\.com\/a\/b\/pull\/5\): fixed afterwards: \[Fix stale prices\]\(https:\/\/github\.com\/a\/b\/pull\/6\)/);
+  assert.match(md, /- \[#7 Cache prices\]\(u3\): reverted: \[Revert "x"\]\(r1\)/);
+});
+
+test('quality: merged pull requests found, looked at on GitHub a few at a time, looked at again, and marked by you', async () => {
+  const { Quality } = await import('../src/quality.js');
+  const day = 86_400_000;
+  const t = new Date(2026, 10, 4, 12).getTime();
+  const iso = (ms) => new Date(ms).toISOString();
+  const pr = (n, mergedAt, extra = {}) => ({ url: `https://github.com/a/b/pull/${n}`, number: n, title: `Change ${n}`, source: 'branch', state: 'MERGED', openedAt: iso(mergedAt - 2 * 3_600_000), mergedAt: iso(mergedAt), ...extra });
+  const agents = [
+    { id: 'a1', kind: 'task', name: 'one', prs: { p1: pr(1, t - day), p2: pr(2, t - 2 * day), m: pr(3, t - day, { source: 'mentioned' }), o: { url: 'https://github.com/a/b/pull/4', source: 'branch', state: 'OPEN' } } },
+    { id: 'a2', kind: 'task', name: 'two', prs: { p5: pr(5, t - 30 * day), old: pr(6, t - 200 * day) } },
+    { id: 'g', kind: 'general', name: 'chat', prs: { p7: pr(7, t - day) } },
+  ];
+  const store = { data: {}, list: () => agents, get: (id) => agents.find((a) => a.id === id), save() {} };
+  const calls = [];
+  const later = [{ number: 8, title: 'Fix change 1', url: 'https://github.com/a/b/pull/8', mergedAt: iso(t - day / 2), files: ['a.js'], body: '' }];
+  const gh = {
+    facts: async (url) => (calls.push(`facts ${url.split('/').pop()}`), url.endsWith('/2') ? Promise.reject(new Error('gh: not logged in')) : { mergeCommit: `sha${url.split('/').pop()}`, base: 'main', files: ['a.js'], lines: 12, changesRequested: 0, reviews: 1 }),
+    mergedSince: async (repo, since) => (calls.push(`merged ${repo} ${iso(since).slice(0, 10)}`), later),
+    commitsSince: async () => (calls.push('commits'), []),
+    checkRuns: async (repo, sha) => (calls.push(`checks ${sha}`), sha === 'sha5' ? [{ name: 'test', status: 'completed', conclusion: 'failure' }] : [{ name: 'test', status: 'in_progress' }]),
+  };
+  const saved = process.env.AGENTMGR_NO_GH;
+  delete process.env.AGENTMGR_NO_GH;
+  const q = new Quality({ manager: { view: (a) => ({ ...a, projectInfo: { name: 'web' } }) }, store, config: {}, who: 'Pat', gh, log: () => {} });
+  q.close();
+  try {
+    assert.equal(q.scan(t), 3, 'the three merged by task agents, in the last 100 days: not the one only mentioned, the open one, the old one, or a chat');
+    assert.deepEqual(Object.keys(q.state.items).map((u) => u.split('/').pop()).sort(), ['1', '2', '5']);
+    assert.equal(q.view({ t }).periods[0].totals.unchecked, 2);
+    // A tick: newest first; one list of the repository's later pull requests serves them all; a failure waits an hour.
+    await q.tick(t);
+    assert.deepEqual(calls, ['facts 1', `merged a/b ${iso(t - 30 * day).slice(0, 10)}`, 'commits', 'checks sha1', 'facts 2', 'facts 5', 'checks sha5']);
+    const item = (n) => q.itemView(q.state.items[`https://github.com/a/b/pull/${n}`], t);
+    assert.deepEqual([item(1).verdict, item(1).after.fixes[0].number, item(1).final, item(2).verdict, item(2).error, item(5).verdict, item(5).final], ['fixed', 8, false, 'unchecked', 'gh: not logged in', 'broke', true]);
+    assert.deepEqual(q.due(t + 60_000), [], 'nothing again so soon');
+    // Six hours on: the one still watched is looked at again (its facts are kept; its checks were still running); the failed one is tried again.
+    calls.length = 0;
+    gh.facts = async (url) => (calls.push(`facts ${url.split('/').pop()}`), { mergeCommit: 'sha2', base: 'main', files: [], lines: 1, changesRequested: 2, reviews: 2 });
+    gh.checkRuns = async (repo, sha) => (calls.push(`checks ${sha}`), [{ name: 'test', status: 'completed', conclusion: 'success' }]);
+    await q.tick(t + 7 * 3_600_000);
+    assert.deepEqual(calls, ['facts 2', `merged a/b ${iso(t - 2 * day).slice(0, 10)}`, 'commits', 'checks sha2', 'checks sha1']);
+    assert.deepEqual([item(2).verdict, item(1).after.checks.state], ['watching', 'passed']);
+    // Passed checks are not asked for again; past the watch days it is done.
+    calls.length = 0;
+    await q.tick(t + 20 * day);
+    assert.ok(!calls.some((c) => c.startsWith('checks') || c.startsWith('facts')), calls.join());
+    assert.deepEqual([q.state.items['https://github.com/a/b/pull/1'].final, q.state.items['https://github.com/a/b/pull/2'].final], [true, true]);
+    assert.deepEqual(q.due(t + 40 * day), []);
+    // What you say wins, and can be taken back.
+    assert.equal(q.mark('https://github.com/a/b/pull/1', { verdict: 'clean', note: 'unrelated fix' }).verdict, 'clean');
+    assert.equal(q.mark('https://github.com/a/b/pull/2', { verdict: 'problem' }).verdict, 'problem');
+    const tot = q.view({ period: 'year', t }).periods[0].totals;
+    assert.deepEqual([tot.prs, tot.problems, tot.broke, tot.problem, tot.clean, tot.changesRequested], [3, 2, 1, 1, 1, 1]);
+    assert.equal(q.mark('https://github.com/a/b/pull/1', { verdict: null }).verdict, 'fixed');
+    assert.throws(() => q.mark('https://github.com/a/b/pull/1', { verdict: 'great' }), /verdict is clean, problem or null/);
+    assert.throws(() => q.mark('nope', { verdict: 'clean' }), /No merged pull request/);
+    // Longer watch days open the finished ones again; the report reads as of now.
+    assert.equal(q.update({ watchDays: 60 }).watchDays, 60);
+    assert.equal(q.state.items['https://github.com/a/b/pull/1'].final, false);
+    assert.throws(() => q.update({ watchDays: 'x' }), /must be a number/);
+    const r = await q.report('week', { current: true, t });
+    assert.match(r.markdown, /^# Quality of merged work: Week of Nov 2, Pat\n\n2 pull requests/);
+    assert.match(r.markdown, /#1 Change 1\]\(https:\/\/github\.com\/a\/b\/pull\/1\): fixed afterwards: \[Fix change 1\]/);
+    await assert.rejects(q.report('decade'), /kind is one of/);
+    // Where GitHub is not asked, nothing is.
+    process.env.AGENTMGR_NO_GH = '1';
+    calls.length = 0;
+    await q.tick(t + 21 * day);
+    assert.deepEqual(calls, []);
+    await assert.rejects(q.check('https://github.com/a/b/pull/1'), /GitHub is not asked here/);
+    assert.equal(q.view({ t }).github, false);
+  } finally {
+    if (saved === undefined) delete process.env.AGENTMGR_NO_GH;
+    else process.env.AGENTMGR_NO_GH = saved;
+  }
+});
+
+test('standards: high-risk paths, secrets on added lines, the bar the app runs, and what agents are told', async () => {
+  const { pathMatcher, riskOf, findSecrets, barSettings, builtInChecks, suggestChecks, runCheck, standardsPrompt, cleanLesson } = await import('../src/standards.js');
+  // Patterns: * stays in a folder, ** crosses folders, a bare name fits at any depth, a folder covers what is under it.
+  const fits = (p, f) => pathMatcher(p)(f);
+  assert.ok(fits('src/auth/**', 'src/auth/a/b.js') && fits('src/auth', 'src/auth/x.js') && fits('src/auth/', 'src/auth/x.js'));
+  assert.ok(!fits('src/auth', 'src/authx/x.js') && !fits('src/*.js', 'src/a/b.js') && fits('src/*.js', 'src/a.js'));
+  assert.ok(fits('*.sql', 'db/m/1.sql') && fits('**/migrations/**', 'migrations/1.js') && fits('migrations', 'a/migrations/1.js') && !fits('*.sql', 'a.sqlx'));
+  assert.ok(!fits('', 'a.js') && fits('a.b', 'a.b') && !fits('a.b', 'axb'), 'a dot is a dot');
+  const rules = [{ pattern: 'src/auth/**', why: 'sign-in' }, { pattern: '*.sql' }];
+  assert.deepEqual(riskOf([{ path: 'src/auth/token.js' }, { path: 'README.md' }, 'db/1.sql', { file: 'x' }], rules), [
+    { path: 'src/auth/token.js', pattern: 'src/auth/**', why: 'sign-in' },
+    { path: 'db/1.sql', pattern: '*.sql', why: '' },
+  ]);
+
+  // Secrets: only on added lines, with the file and line, and never the text itself.
+  const key = 'AKIA' + 'ABCDEFGHIJKLMNOP';
+  const diff = ['diff --git a/a.js b/a.js', '--- a/a.js', '+++ b/a.js', '@@ -1,3 +1,4 @@', ' const a = 1;', `-const old = "${key}";`, '+const b = 2;', `+const k = "${key}";`, ' const c = 3;', '+++ b/id_rsa', '@@ -0,0 +1,1 @@', `+-----BEGIN ${'OPENSSH'} PRIVATE KEY-----`].join('\n');
+  const found = findSecrets(diff);
+  assert.deepEqual(found, [
+    { file: 'a.js', line: 3, kind: 'an AWS access key' },
+    { file: 'id_rsa', line: 1, kind: 'a private key' },
+  ]);
+  assert.ok(!JSON.stringify(found).includes(key));
+  assert.deepEqual(findSecrets(`+++ b/a.js\n@@ -1 +1 @@\n-x = "${key}"\n+x = process.env.KEY`), [], 'a removed secret is not one');
+
+  // Settings and the built-in checks.
+  assert.deepEqual(barSettings({}), { tests: false, secrets: true, checks: [] });
+  assert.deepEqual(barSettings({ tests: true, checks: [{ command: ' npm run lint ' }, { name: 'Types', command: 'tsc -p .' }, { name: 'x' }] }).checks, [{ name: 'npm run lint', command: 'npm run lint' }, { name: 'Types', command: 'tsc -p .' }]);
+  assert.throws(() => barSettings({ checks: [{ name: 'A', command: 'a' }, { name: 'A', command: 'b' }] }), /Two checks are named/);
+  const built = (files, d = '') => builtInChecks({ tests: true, secrets: true, checks: [] }, { files: files.map((p) => ({ path: p })), diff: d });
+  assert.deepEqual(built(['src/a.js']).map((r) => r.ok), [false, true]);
+  assert.deepEqual(built(['src/a.js', 'test/a.test.js'], diff).map((r) => r.ok), [true, false]);
+  assert.match(built(['a.js'], diff)[1].tail, /a\.js:3 looks like an AWS access key/);
+  assert.ok(built(['README.md', 'docs/x.png'])[0].ok, 'no code changed: nothing to test');
+
+  // Checks found in a folder, and one run for real: its exit code, the end of what it printed, a stop at the time limit.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentmgr-std-'));
+  try {
+    fs.writeFileSync(path.join(dir, 'package.json'), JSON.stringify({ scripts: { lint: 'eslint .', test: 'node --test', build: 'x' } }));
+    fs.writeFileSync(path.join(dir, 'package-lock.json'), '{}');
+    assert.deepEqual(suggestChecks(dir), [
+      { name: 'Lint', command: 'npm run lint' },
+      { name: 'Tests', command: 'npm test' },
+      { name: 'Dependencies', command: 'npm audit --audit-level=high' },
+    ]);
+    assert.deepEqual(suggestChecks(path.join(dir, 'nope')), []);
+    fs.writeFileSync(path.join(dir, 'here.txt'), 'x');
+    const ok = await runCheck('ls && echo fine', { cwd: dir });
+    assert.ok(ok.ok && ok.code === 0 && /here\.txt[\s\S]*fine$/.test(ok.tail), JSON.stringify(ok));
+    const bad = await runCheck('echo "2 problems" >&2; exit 3', { cwd: dir });
+    assert.deepEqual([bad.ok, bad.code, bad.tail], [false, 3, '2 problems']);
+    const slow = await runCheck('sleep 30', { cwd: dir, timeoutMs: 300 });
+    assert.ok(!slow.ok && slow.code === null && /stopped after/.test(slow.tail) && slow.ms < 5000, JSON.stringify(slow));
+    assert.equal((await runCheck('no-such-command-xyz', { cwd: dir })).ok, false);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+
+  // What agents are told.
+  assert.equal(standardsPrompt({}), '');
+  const said = standardsPrompt({ lessons: [{ text: 'Every endpoint checks permissions in a test' }], risk: rules });
+  assert.match(said, /^Lessons from earlier work in this repository[\s\S]*\n- Every endpoint checks permissions in a test\n\nHigh-risk parts of this repository[\s\S]*\n- src\/auth\/\*\* \(sign-in\)\n- \*\.sql\n[\s\S]*not merged without the person/);
+  assert.equal(cleanLesson('  - Do   the thing\n'), 'Do the thing');
+  assert.throws(() => cleanLesson(' '), /one line/);
+});
+
+test('standards in the scorecard: a failed bar or a lesson not followed is not ready; a high-risk path is never ready on a score', async () => {
+  const { facts, combine, scorecardPrompt, scorecardMarkdown, improveMessage } = await import('../src/scorecard.js');
+  const reply = (lessons) => ({ summary: 's', scores: { intent: { score: 95 }, scope: { score: 95 }, plan: { score: 95 }, tests: { score: 95 }, safety: { score: 95 } }, criteria: [], look: [], lessons });
+  const files = [{ path: 'src/a.js', added: 3, removed: 0 }, { path: 'test/a.test.js', added: 3, removed: 0 }];
+  const prs = [{ state: 'OPEN', checks: { state: 'passed', failed: [] } }];
+  const plain = facts({ files, prs });
+  assert.deepEqual([plain.risk, plain.bar], [[], null]);
+  assert.equal(combine(reply(), plain, []).recommendation, 'ready');
+  assert.deepEqual(combine(reply(), plain, []).lessons, []);
+
+  // The bar: a failed check caps Tests and is the reason; its output goes back to the agent.
+  const bar = { ok: false, results: [{ name: 'No secrets in the changes', ok: true, tail: 'ok' }, { name: 'Lint', command: 'npm run lint', ok: false, code: 1, tail: 'a.js:1 unused variable\n1 problem' }] };
+  const f1 = facts({ files, prs, standards: { risk: [], bar } });
+  assert.deepEqual(f1.bar, { passed: 1, failed: ['Lint'] });
+  const sc1 = combine(reply(), f1, [], { bar });
+  assert.equal(sc1.recommendation, 'not_ready');
+  assert.deepEqual(sc1.reasons, ['the quality bar is not met: Lint']);
+  assert.equal(sc1.scores.tests.score, 30);
+  assert.match(improveMessage(sc1), /The repository's quality bar, run on your changes[^\n]*\n- Lint \(`npm run lint`\) failed:\n {4}a\.js:1 unused variable\n {4}1 problem/);
+  assert.match(scorecardMarkdown(sc1), /\*\*Quality bar\*\* \(run by the app\)\n\n- ✅ No secrets in the changes\n- ❌ Lint \(`npm run lint`\)/);
+  assert.match(scorecardPrompt({ hunks: [], facts: f1, status: '' }), /the repository's quality bar, run by the app: 1 passed, 1 failed \(Lint\)/);
+
+  // Lessons: given to the model by number, a broken one holds the change, one it left out is unverified.
+  const lessons = [{ id: 'aa', text: 'Every endpoint checks permissions in a test' }, { id: 'bb', text: 'No raw SQL outside db/' }, { id: 'cc', text: 'Third' }];
+  const prompt = scorecardPrompt({ hunks: [], facts: plain, status: '', lessons });
+  assert.match(prompt, /"lessons": \[\{"id": "L1"[\s\S]*<lessons>\nL1: Every endpoint checks permissions in a test\nL2: No raw SQL outside db\/\nL3: Third\n<\/lessons>/);
+  assert.doesNotMatch(scorecardPrompt({ hunks: [], facts: plain, status: '' }), /lessons/i);
+  const sc2 = combine(reply([{ id: 'L1', status: 'followed', evidence: 'test/a.test.js' }, { id: 'l2', status: 'broken', evidence: 'src/a.js builds a query' }, { id: 'L9', status: 'broken' }]), plain, [], { lessons });
+  assert.deepEqual(sc2.lessons.map((l) => [l.id, l.status]), [['aa', 'followed'], ['bb', 'broken'], ['cc', 'unverified']]);
+  assert.deepEqual([sc2.recommendation, sc2.reasons], ['not_ready', ['1 lesson of this repository not followed']]);
+  assert.match(improveMessage(sc2), /Lessons of this repository your changes do not follow:\n- No raw SQL outside db\/ \(src\/a\.js builds a query\)/);
+  assert.match(scorecardMarkdown(sc2), /\*\*Lessons of this repository\*\*\n\n- ✅ Every endpoint[^\n]*\n- ❌ No raw SQL outside db\/[^\n]*\n- ❔ Third/);
+
+  // High risk: scores that would be "ready" become "look", and say why.
+  const f3 = facts({ files, prs, standards: { risk: [{ path: 'src/a.js', pattern: 'src/**' }], bar: null } });
+  const sc3 = combine(reply(), f3, []);
+  assert.deepEqual([sc3.recommendation, sc3.reasons], ['look', ['touches high-risk paths (src/a.js)']]);
+  assert.match(scorecardMarkdown(sc3), /\*\*High-risk paths touched\*\*: `src\/a\.js`/);
+});
+
+test('standards: lessons proposed from merged pull requests that had a problem, worded and accepted by you; the bar run once per state of the changes', async () => {
+  const { Standards, lessonSource, lessonPrompt } = await import('../src/standards.js');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'agentmgr-std-'));
+  const agents = [
+    { id: 'a1', kind: 'task', name: 'one', repo: 'https://github.com/acme/shop.git', workdir: dir },
+    { id: 'g', kind: 'general', name: 'chat' },
+  ];
+  const store = { data: {}, saves: 0, list: () => agents, get: (id) => agents.find((a) => a.id === id), save: () => store.saves++ };
+  const begun = [];
+  const asked = [];
+  const manager = {
+    mustGet: (id) => store.get(id) ?? (() => { throw new Error('no agent'); })(),
+    patch: (id, p) => Object.assign(store.get(id), p),
+    changes: { files: [{ path: 'src/auth/token.js' }, { path: 'README.md' }], diff: '+++ b/src/auth/token.js\n@@ -0,0 +1 @@\n+export const t = 1;', diffHash: 'h1' },
+    changesSource: async () => manager.changes,
+    writerFor: () => ({ engine: { label: 'Fake' }, model: null }),
+    oneShot: async (agent, prompt) => (asked.push(prompt), manager.reply),
+    preReview: { can: () => true, begin: (id, o) => begun.push([id, o]) },
+  };
+  const item = (n, verdict, extra = {}) => ({ url: `https://github.com/acme/shop/pull/${n}`, number: n, title: `Change ${n}`, agentId: 'a1', verdict, facts: { changesRequested: 0 }, after: {}, ...extra });
+  const items = [
+    item(1, 'reverted', { after: { reverted: { number: 9, title: 'Revert "Change 1"' } } }),
+    item(2, 'clean'),
+    item(3, 'clean', { facts: { changesRequested: 2 } }),
+    item(4, 'fixed', { agentId: 'gone', after: { fixes: [{ number: 10, title: 'Fix change 4' }] } }),
+  ];
+  const quality = { view: () => ({ items }) };
+  let changed = 0;
+  const env = process.env.AGENTMGR_NO_GH;
+  process.env.AGENTMGR_NO_GH = '1';
+  try {
+    const st = new Standards({ manager, store, config: {}, quality, onChange: () => changed++, log: () => {} });
+    assert.equal(manager.standards, st);
+    assert.deepEqual(lessonSource(items[0]), { kind: 'reverted', detail: 'Reverted by #9 Revert "Change 1"' });
+    assert.equal(lessonSource(items[1]), null);
+
+    // One repository, with a proposal for the revert and one for the change requests; the agent that is gone has none.
+    let v = st.view();
+    assert.equal(v.repos.length, 1);
+    const key = v.repos[0].key;
+    assert.equal(key, 'repo:github.com/acme/shop');
+    assert.deepEqual([v.repos[0].name, v.repos[0].agents], ['acme/shop', 1]);
+    assert.deepEqual(v.repos[0].proposed.map((l) => [l.source.number, l.source.kind, l.text]), [[1, 'reverted', ''], [3, 'review', '']]);
+    assert.equal(st.pending(), 2);
+    assert.equal(st.view().repos[0].proposed.length, 2, 'proposed once');
+    assert.equal(st.find('shop'), key);
+    assert.throws(() => st.find('nope'), /No repository/);
+    // Nothing is given to agents until you accept.
+    assert.equal(st.prompt(agents[0]), '');
+    const [p1, p3] = v.repos[0].proposed;
+    assert.throws(() => st.setLesson(key, p1.id, { state: 'accepted' }), /one line/);
+
+    // A model words it from what happened; UNKNOWN is said as such.
+    manager.reply = 'UNKNOWN';
+    await assert.rejects(st.draft(key, p1.id), /could not tell/);
+    manager.reply = '"Run the migration tests before changing a schema file."';
+    assert.equal((await st.draft(key, p1.id)).text, 'Run the migration tests before changing a schema file.');
+    assert.match(asked.at(-1), /^Write one lesson for AI coding agents[\s\S]*<repository>acme\/shop<\/repository>[\s\S]*Pull request #1 "Change 1" was reverted\.\nReverted by #9/);
+    assert.equal(lessonPrompt({ source: p3.source }).includes('had changes requested by a reviewer'), true);
+    st.setLesson(key, p1.id, { state: 'accepted' });
+    assert.match(st.prompt(agents[0]), /- Run the migration tests before changing a schema file\./);
+    // The change requests turn out to be nothing: it goes, and can be proposed again later.
+    items[2].facts.changesRequested = 0;
+    assert.equal(st.view().repos[0].proposed.length, 0);
+    // Dismissed: not proposed again. Yours: added, not twice, removed for good.
+    st.removeLesson(key, p1.id);
+    v = st.view();
+    assert.deepEqual([v.repos[0].lessons.length, v.repos[0].proposed.length, v.repos[0].dismissed], [0, 0, 1]);
+    const mine = st.addLesson(key, ' - Every endpoint checks permissions in a test ');
+    assert.equal(mine.text, 'Every endpoint checks permissions in a test');
+    assert.throws(() => st.addLesson(key, 'every endpoint checks permissions in a test.'), /already there/);
+    assert.throws(() => st.addLesson(null, 'x'), /Which repository/);
+
+    // High-risk paths and the bar, per repository.
+    fs.writeFileSync(path.join(dir, 'count.sh'), 'echo run >> runs.txt\n');
+    st.update(key, { risk: [{ pattern: 'src/auth/**', why: 'sign-in' }, 'src/auth/**', { pattern: ' ' }], bar: { tests: true, checks: [{ name: 'Count', command: 'sh count.sh' }] } });
+    assert.deepEqual(st.repoView(key).risk, [{ pattern: 'src/auth/**', why: 'sign-in' }]);
+    assert.deepEqual(st.riskIn(agents[0], manager.changes.files).map((r) => r.path), ['src/auth/token.js']);
+    assert.deepEqual(st.riskIn(agents[1], manager.changes.files), [], 'a session without a repository has none');
+    assert.match(st.prompt(agents[0]), /High-risk parts of this repository[\s\S]*- src\/auth\/\*\* \(sign-in\)/);
+
+    // Assessed: the risk, and the bar run in the agent's folder, once for the same changes.
+    const runs = () => fs.readFileSync(path.join(dir, 'runs.txt'), 'utf8').trim().split('\n').length;
+    const [r1, r1b] = await Promise.all([st.assess('a1'), st.assess('a1')]);
+    assert.equal(r1b.bar, r1.bar, 'asked twice at once: run once');
+    assert.deepEqual(r1.bar.results.map((r) => [r.name, r.ok]), [['Tests changed with the code', false], ['No secrets in the changes', true], ['Count', true]]);
+    assert.equal(r1.bar.ok, false);
+    assert.deepEqual(r1.lessons.map((l) => l.text), ['Every endpoint checks permissions in a test']);
+    assert.deepEqual([agents[0].standards.diffHash, agents[0].standards.risk.length, agents[0].standards.lessons], ['h1', 1, undefined]);
+    await st.assess('a1');
+    assert.equal(runs(), 1);
+    await st.assess('a1', null, { fresh: true });
+    assert.equal(runs(), 2, 'asked for again');
+    manager.changes = { ...manager.changes, files: [...manager.changes.files, { path: 'test/token.test.js' }], diffHash: 'h2' };
+    const r2 = await st.assess('a1');
+    assert.equal(runs(), 3, 'the changes moved');
+    assert.equal(r2.bar.ok, true);
+    st.update(key, { bar: { checks: [] } });
+    assert.equal((await st.assess('a1')).bar.results.length, 2, 'the bar changed: worked out again');
+    assert.equal(runs(), 3);
+
+    // Done, with a high-risk path touched: another model reviews it, also with review rounds off.
+    assert.equal(await st.finished(agents[0]), true);
+    assert.deepEqual(begun, [['a1', { forced: 'risk' }]]);
+    agents[0].preReview = { status: 'reviewing' };
+    assert.equal(await st.finished(agents[0]), false, 'already under review');
+    agents[0].preReview = null;
+    manager.changes = { files: [{ path: 'README.md' }], diff: '', diffHash: 'h3' };
+    assert.equal(await st.finished(agents[0]), false, 'nothing risky touched');
+    assert.ok(changed > 0 && store.saves > 0);
+
+    // Turned off in config.json: nothing is told or applied.
+    st.config.standards = { enabled: false };
+    assert.deepEqual([st.prompt(agents[0]), st.riskIn(agents[0], [{ path: 'src/auth/a.js' }]), await st.assess('a1')], ['', [], null]);
+  } finally {
+    if (env === undefined) delete process.env.AGENTMGR_NO_GH;
+    else process.env.AGENTMGR_NO_GH = env;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

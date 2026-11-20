@@ -55,6 +55,8 @@ import { AgentkitReports } from './agentkit-reports.js';
 import { Builder } from './builder.js';
 import { Standup } from './standup.js';
 import { Value, valueSlack } from './value.js';
+import { Quality } from './quality.js';
+import { Standards } from './standards.js';
 import { News } from './news.js';
 import { System } from './system.js';
 import { Advisor } from './advisor.js';
@@ -320,6 +322,11 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
       return r;
     },
   });
+  // Quality: what happened to the agents' pull requests after they merged (quality.js).
+  let pushQuality = () => {};
+  const quality = new Quality({ manager, store, config, who: me, onChange: () => pushQuality() });
+  // Standards per repository: lessons from what went wrong, high-risk paths, and the quality bar (standards.js).
+  const standards = new Standards({ manager, store, config, quality, onChange: () => pushQuality() });
   // AI News: the frontier labs' latest releases, summarized (news.js).
   let pushNews = () => {};
   const news = new News({
@@ -1258,6 +1265,28 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
     saveConfig({ value: next });
     return value.view({ period: String(req.query.period ?? 'week') });
   }));
+  api.get('/quality', wrap((req) => quality.view({ period: String(req.query.period ?? 'week') })));
+  api.put('/quality', wrap((req) => {
+    saveConfig({ quality: quality.update(req.body ?? {}) });
+    return quality.view({ period: String(req.query.period ?? 'week') });
+  }));
+  // A pull request is named by its link, so it travels in the body.
+  api.post('/quality/mark', wrap((req) => quality.mark(String(req.body?.url ?? ''), { verdict: req.body?.verdict ?? null, note: req.body?.note ?? '' })));
+  api.post('/quality/check', wrap((req) => quality.check(String(req.body?.url ?? ''), { fresh: true })));
+  // Standards are the person's to set: an agent's own calls can read them, not change them.
+  const yours = (req) => {
+    if (req.headers['x-agentmgr-agent']) throw Object.assign(new Error('Standards are set by the person, not by an agent'), { status: 403 });
+    return req.body ?? {};
+  };
+  api.get('/standards', wrap(() => standards.view()));
+  api.put('/standards/repo', wrap((req) => standards.update(standards.find(String(yours(req).key ?? '')), { risk: req.body.risk, bar: req.body.bar })));
+  api.post('/standards/lessons', wrap((req) => standards.addLesson(standards.find(String(yours(req).key ?? '')), req.body.text)));
+  api.put('/standards/lessons/:id', wrap((req) => standards.setLesson(standards.find(String(yours(req).key ?? '')), req.params.id, { state: req.body.state, text: req.body.text })));
+  api.delete('/standards/lessons/:id', wrap((req) => (yours(req), standards.removeLesson(standards.find(String(req.query.key ?? '')), req.params.id))));
+  api.post('/standards/lessons/:id/draft', wrap((req) => standards.draft(standards.find(String(yours(req).key ?? '')), req.params.id)));
+  api.get('/agents/:id/standards', wrap((req) => standards.assess(req.params.id)));
+  api.post('/agents/:id/standards', wrap((req) => (yours(req), standards.assess(req.params.id, null, { fresh: true }))));
+  api.get('/quality/report', wrap((req) => quality.report(String(req.query.kind ?? 'week'), { current: req.query.current === '1' })));
   api.patch('/value/items/:id', wrap((req) => value.edit(req.params.id, req.body ?? {})));
   api.post('/value/items/:id/estimate', wrap((req) => value.estimate(req.params.id).then((it) => value.itemView(it))));
   api.post('/value/items/:id/exclude', wrap((req) => value.exclude(req.params.id, req.body?.excluded !== false)));
@@ -1799,6 +1828,7 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
   pushScreen = (viewers) => broadcast({ t: 'screen', viewers });
   pushStandup = (latest) => broadcast({ t: 'standup', latest });
   pushValue = () => broadcast({ t: 'value' });
+  pushQuality = () => broadcast({ t: 'quality' });
   pushNews = () => broadcast({ t: 'news' });
   pushPlan = () => broadcast({ t: 'plan' });
   pushAdvisor = () => broadcast({ t: 'advisor' });
@@ -1962,6 +1992,7 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
     landing.close();
     standup.close();
     value.close();
+    quality.close();
     news.close();
     system.close();
     milestones.close();

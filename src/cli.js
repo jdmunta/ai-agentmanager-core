@@ -1378,6 +1378,149 @@ export async function main(argv) {
       console.log(`${r.dismissed} dismissed`);
     });
 
+  const qualityCmd = program.command('quality').description("What happened to the agents' pull requests after they merged: reverted, fixed afterwards, failed checks, or held up; by day, week, month, quarter and year");
+  qualityCmd
+    .command('show', { isDefault: true })
+    .description('The share that held up over the last periods, and the pull requests of the current one')
+    .option('-p, --period <period>', 'day, week, month, quarter or year', 'week')
+    .option('--json', 'print JSON')
+    .action(async (opts) => {
+      await daemon();
+      const v = await api('GET', `/quality?period=${encodeURIComponent(opts.period)}`);
+      if (opts.json) return console.log(JSON.stringify(v, null, 2));
+      for (const p of v.periods.slice(0, 6)) {
+        const t = p.totals;
+        console.log(`${bold(p.label.padEnd(22))} ${String(t.prs).padStart(3)} PRs  ${(t.heldPct == null ? '—' : `${t.heldPct}%`).padStart(4)} held up  ${t.reverted} reverted  ${t.fixed} fixed after  ${t.broke} failed checks${t.problem ? `  ${t.problem} marked` : ''}${t.unchecked ? dim(`  ${t.unchecked} not looked at`) : ''}${p.current ? dim('  (so far)') : ''}`);
+      }
+      const now = v.periods[0];
+      const items = v.items.filter((it) => now.items.includes(it.url));
+      if (items.length) console.log('');
+      const word = { reverted: 'reverted', fixed: 'fixed afterwards', broke: 'failed checks', problem: 'a problem (yours)', clean: 'held up', watching: 'fine so far', unchecked: 'not looked at' };
+      for (const it of items) console.log(`  ${truncate(`#${it.number ?? '?'} ${it.title}`, 54).padEnd(54)} ${(['clean', 'watching'].includes(it.verdict) ? green : it.verdict === 'unchecked' ? dim : yellow)(word[it.verdict].padEnd(17))} ${dim(it.url)}`);
+      if (!v.github) console.log(dim('\nGitHub is not asked here, so nothing is looked at.'));
+    });
+  qualityCmd
+    .command('mark <pr-url>')
+    .description('Say what a merged pull request was: not a problem, a problem, or back to what was found')
+    .option('--clean', 'it was not a problem')
+    .option('--problem', 'it was a problem')
+    .option('--found', 'back to what was found')
+    .option('--note <text>', 'why, in a line')
+    .action(async (url, o) => {
+      await daemon();
+      if ([o.clean, o.problem, o.found].filter(Boolean).length !== 1) throw new Error('Give one of --clean, --problem or --found');
+      const it = await api('POST', '/quality/mark', { url, verdict: o.clean ? 'clean' : o.problem ? 'problem' : null, note: o.note ?? '' });
+      console.log(`${green('✓')} #${it.number ?? '?'} ${bold(it.title)}: ${it.verdict}`);
+    });
+  qualityCmd
+    .command('report')
+    .description('The report for a period, as Markdown')
+    .option('-k, --kind <kind>', 'day, week, month, quarter or year', 'week')
+    .option('--current', 'the period so far, not the one just ended')
+    .action(async (o) => {
+      await daemon();
+      console.log((await api('GET', `/quality/report?kind=${encodeURIComponent(o.kind)}${o.current ? '&current=1' : ''}`)).markdown);
+    });
+  qualityCmd
+    .command('set')
+    .description('Settings: how many days after a merge are watched, and on or off')
+    .option('--days <n>', 'days watched after each merge (1 to 90)')
+    .option('--on', 'look at merged pull requests')
+    .option('--off', 'stop looking')
+    .action(async (o) => {
+      await daemon();
+      const patch = { ...(o.days !== undefined ? { watchDays: Number(o.days) } : {}), ...(o.on ? { enabled: true } : {}), ...(o.off ? { enabled: false } : {}) };
+      const v = Object.keys(patch).length ? await api('PUT', '/quality', patch) : await api('GET', '/quality');
+      console.log(`quality: ${v.settings.enabled ? 'on' : 'off'}, ${v.settings.watchDays} days watched after each merge`);
+    });
+
+  const standardsCmd = program.command('standards').description('What every change in a repository has to meet: lessons from what went wrong, high-risk paths that are never merged without you, and the checks the app runs itself');
+  standardsCmd
+    .command('show [repo]', { isDefault: true })
+    .description('The lessons, high-risk paths and checks of each repository (or one)')
+    .option('--json', 'print JSON')
+    .action(async (repo, opts) => {
+      await daemon();
+      const v = await api('GET', '/standards');
+      const repos = repo ? v.repos.filter((r) => r.key === repo || r.name === repo || r.name.split('/').at(-1) === repo) : v.repos;
+      if (opts.json) return console.log(JSON.stringify(repo ? repos : v, null, 2));
+      if (!repos.length) return console.log(dim(repo ? `No repository "${repo}" here.` : 'No repository yet: standards are per repository agents have worked in.'));
+      for (const r of repos) {
+        console.log(`${bold(r.name)} ${dim(r.key)}`);
+        console.log(`  Lessons: ${r.lessons.length}${r.proposed.length ? yellow(`, ${r.proposed.length} proposed`) : ''}`);
+        for (const l of r.lessons) console.log(`    ${dim(l.id)} ${l.text}`);
+        for (const l of r.proposed) console.log(`    ${dim(l.id)} ${yellow('proposed')} ${l.text || dim('(not worded yet)')} ${dim(`#${l.source?.number ?? '?'} ${truncate(l.source?.title ?? '', 40)}: ${l.source?.detail ?? ''}`)}`);
+        console.log(`  High-risk paths: ${r.risk.length ? '' : dim('none')}`);
+        for (const x of r.risk) console.log(`    ${x.pattern}${x.why ? dim(` (${x.why})`) : ''}`);
+        console.log(`  Quality bar: ${[r.bar.tests ? 'tests changed with the code' : null, r.bar.secrets ? 'no secrets in the changes' : null].filter(Boolean).join(', ') || dim('no built-in checks')}`);
+        for (const c of r.bar.checks) console.log(`    ${c.name}: ${dim(c.command)}`);
+        for (const c of r.suggested) console.log(dim(`    suggested: ${c.name}: ${c.command}`));
+      }
+    });
+  standardsCmd
+    .command('lesson <repo> [text]')
+    .description('Add a lesson (one line); or with --accept, --dismiss or --draft and an id, decide a proposed one')
+    .option('--accept <id>', 'accept a proposed lesson (with [text] as its wording, if given)')
+    .option('--dismiss <id>', 'dismiss a lesson')
+    .option('--draft <id>', 'have a model word a proposed lesson')
+    .action(async (repo, text, o) => {
+      await daemon();
+      if (o.draft) return console.log((await api('POST', `/standards/lessons/${o.draft}/draft`, { key: repo })).text);
+      if (o.dismiss) return (await api('DELETE', `/standards/lessons/${o.dismiss}?key=${encodeURIComponent(repo)}`), console.log(`${green('✓')} dismissed`));
+      const l = o.accept ? await api('PUT', `/standards/lessons/${o.accept}`, { key: repo, state: 'accepted', ...(text ? { text } : {}) }) : await api('POST', '/standards/lessons', { key: repo, text });
+      console.log(`${green('✓')} ${l.text}`);
+    });
+  standardsCmd
+    .command('risk <repo> [patterns...]')
+    .description('Mark paths high risk (src/auth/**, **/migrations/**, *.sql); with --remove, unmark them')
+    .option('--why <text>', 'why, in a few words')
+    .option('--remove', 'unmark the patterns')
+    .action(async (repo, patterns, o) => {
+      await daemon();
+      const cur = (await api('GET', '/standards')).repos.find((r) => r.key === repo || r.name === repo || r.name.split('/').at(-1) === repo);
+      if (!cur) throw new Error(`No repository "${repo}" here`);
+      const risk = o.remove ? cur.risk.filter((x) => !patterns.includes(x.pattern)) : [...cur.risk.filter((x) => !patterns.includes(x.pattern)), ...patterns.map((pattern) => ({ pattern, why: o.why ?? '' }))];
+      const r = patterns.length ? await api('PUT', '/standards/repo', { key: cur.key, risk }) : cur;
+      console.log(r.risk.length ? r.risk.map((x) => `${x.pattern}${x.why ? dim(` (${x.why})`) : ''}`).join('\n') : dim('No high-risk paths'));
+    });
+  standardsCmd
+    .command('bar <repo>')
+    .description('The checks the app runs on changes before they are scored')
+    .option('--add <name=command>', 'add a check, e.g. "Lint=npm run lint" (repeat for more)', (v, all) => [...all, v], [])
+    .option('--remove <name>', 'remove a check (repeat for more)', (v, all) => [...all, v], [])
+    .option('--tests', 'code changes need a test file changed too')
+    .option('--no-tests', 'they do not')
+    .option('--secrets', 'no keys or tokens on the added lines')
+    .option('--no-secrets', 'do not look for them')
+    .action(async (repo, o, cmd) => {
+      await daemon();
+      const cur = (await api('GET', '/standards')).repos.find((r) => r.key === repo || r.name === repo || r.name.split('/').at(-1) === repo);
+      if (!cur) throw new Error(`No repository "${repo}" here`);
+      const set = (n) => cmd.getOptionValueSource(n) === 'cli';
+      const added = o.add.map((v) => {
+        const i = v.indexOf('=');
+        if (i < 1) throw new Error(`--add takes name=command, not "${v}"`);
+        return { name: v.slice(0, i).trim(), command: v.slice(i + 1).trim() };
+      });
+      const checks = [...cur.bar.checks.filter((c) => !o.remove.includes(c.name) && !added.some((a) => a.name === c.name)), ...added];
+      const change = added.length || o.remove.length || set('tests') || set('secrets');
+      const r = change ? await api('PUT', '/standards/repo', { key: cur.key, bar: { checks, ...(set('tests') ? { tests: o.tests } : {}), ...(set('secrets') ? { secrets: o.secrets } : {}) } }) : cur;
+      console.log(`tests changed with the code: ${r.bar.tests ? 'required' : 'not required'}; secrets: ${r.bar.secrets ? 'looked for' : 'not looked for'}`);
+      for (const c of r.bar.checks) console.log(`${c.name}: ${dim(c.command)}`);
+    });
+  standardsCmd
+    .command('run <agent>')
+    .description("Run the repository's bar on an agent's changes now, and show the high-risk paths they touch")
+    .action(async (ref) => {
+      await daemon();
+      const r = await api('POST', `/agents/${encodeURIComponent(ref)}/standards`, {});
+      if (!r) return console.log(dim('Standards are turned off.'));
+      for (const x of r.bar?.results ?? []) console.log(`${x.ok ? green('✓') : yellow('✗')} ${x.name}${x.command ? dim(` (${x.command})`) : ''}${x.ok ? '' : `\n${dim(x.tail)}`}`);
+      if (!r.bar) console.log(dim('No checks set for this repository.'));
+      if (r.risk.length) console.log(yellow(`High-risk paths touched: ${r.risk.map((x) => x.path).join(', ')}`));
+      if (r.bar && !r.bar.ok) process.exitCode = 1;
+    });
+
   const valueCmd = program.command('value').description('What the delivered work is worth (AI estimates you can correct), and the pull requests merged, by day, week, month, quarter and year, with reports for management');
   const money = (n, cur = 'USD') => (n == null ? '—' : new Intl.NumberFormat('en-US', { style: 'currency', currency: cur, maximumFractionDigits: 0 }).format(n));
   valueCmd

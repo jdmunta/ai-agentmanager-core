@@ -40,6 +40,7 @@ import { initReviews } from '/reviews.js';
 import { initBugHunt } from '/bughunt.js';
 import { drawDiagram } from '/diagram.js';
 import { initValue } from '/value.js';
+import { initQuality } from '/quality.js';
 import { initNews } from '/news.js';
 import { initPlan } from '/plan.js';
 import { initSystem } from '/system.js';
@@ -78,6 +79,7 @@ const watchOnLoad = hashId === 'watch';
 const standupOnLoad = hashId === 'standup';
 const mapOnLoad = hashId === 'map';
 const valueOnLoad = hashId === 'value';
+const qualityOnLoad = hashId === 'quality';
 const newsOnLoad = hashId === 'news';
 // "#plan" or "#plan/<dates|decisions|debt>".
 const planOnLoad = hashId === 'plan';
@@ -89,7 +91,7 @@ const reviewsOnLoad = hashId === 'reviews';
 // "#mcp" or "#mcp/<agent>": the MCP window on its own.
 const mcpOnLoad = hashId === 'mcp';
 let watchShown = false;
-let selectedId = (watchOnLoad || standupOnLoad || mapOnLoad || valueOnLoad || newsOnLoad || planOnLoad || osOnLoad || boardOnLoad || decideOnLoad || reviewsOnLoad || mcpOnLoad ? null : hashId) || null;
+let selectedId = (watchOnLoad || standupOnLoad || mapOnLoad || valueOnLoad || qualityOnLoad || newsOnLoad || planOnLoad || osOnLoad || boardOnLoad || decideOnLoad || reviewsOnLoad || mcpOnLoad ? null : hashId) || null;
 let openTermOnLoad = hashView === 'term' || hashView === 'code' || isShell(hashView) || isBrowser(hashView);
 let filterText = '';
 // Only agents whose session is open (the "running" count above the list, clicked).
@@ -325,6 +327,9 @@ $('#bugs-btn').onclick = () => bugsUi.open();
 // Value: what the delivered work is worth, for you and for management.
 const valueUi = initValue({ api, $, esc, toast: (m, ms) => toast(m, ms), openAgent: (id) => (showTab('agents'), select(id)) });
 $('#value-btn').onclick = () => valueUi.open();
+// Quality: what happened to the agents' pull requests after they merged.
+const qualityUi = initQuality({ api, $, esc, toast: (m, ms) => toast(m, ms), ago: (t) => ago(t), openAgent: (id) => (showTab('agents'), select(id)) });
+$('#quality-btn').onclick = () => qualityUi.open();
 // AI News: the frontier labs' latest releases, summarized.
 const newsUi = initNews({ api, $, esc, ago, toast: (m, ms) => toast(m, ms) });
 $('#news-btn').onclick = () => newsUi.open();
@@ -434,6 +439,7 @@ function shortcut(act) {
   if (act === 'reviews') return reviewsUi.open();
   if (act === 'bugs') return bugsUi.open();
   if (act === 'value') return valueUi.open();
+  if (act === 'quality') return qualityUi.open();
   if (act === 'news') return newsUi.open();
   if (act === 'plan') return planUi.open();
   if (act === 'os') return osUi.open();
@@ -4695,6 +4701,11 @@ function handleEvent(msg) {
       history.replaceState(null, '', '#');
       valueUi.open();
     }
+    if (qualityOnLoad && !watchShown) {
+      watchShown = true;
+      history.replaceState(null, '', '#');
+      qualityUi.open();
+    }
     if (planOnLoad && !watchShown) {
       watchShown = true;
       history.replaceState(null, '', '#');
@@ -4769,6 +4780,8 @@ function handleEvent(msg) {
     teams.delete(msg.id);
   } else if (msg.t === 'value') {
     valueUi.changed();
+  } else if (msg.t === 'quality') {
+    qualityUi.changed();
   } else if (msg.t === 'news') {
     newsUi.changed();
   } else if (msg.t === 'usage') {

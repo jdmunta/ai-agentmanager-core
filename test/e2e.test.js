@@ -59,6 +59,7 @@ fs.writeFileSync(
     updates: { check: false },
     // Updates for the people who asked are written by themselves only in their own test.
     announce: { auto: false },
+    quality: { enabled: false }, // looked at when a test asks, not by the minute timer while another test stands in for gh
     // AI News reads public pages: never from the tests (its own tests use a local page).
     news: { enabled: false },
     // No repository scans in the background either.
@@ -783,7 +784,7 @@ test('remote access: HTTPS, token sign-in, local-only management, SSE terminal, 
   const rport = await freePort();
   remote.saveSettings({ extraHosts: ['127.0.0.1'] }); // the test connects over loopback
   const st = (await call('POST', '/remote/enable', { port: rport })).body;
-  assert.equal(st.running, true);
+  assert.equal(st.running, true, JSON.stringify(st));
   assert.equal(st.port, rport);
   assert.match(st.fingerprint, /^([0-9A-F]{2}:){31}[0-9A-F]{2}$/);
   // Named curve, not explicit EC parameters (which browsers reject in the TLS handshake).
@@ -1042,7 +1043,8 @@ test("screen: this computer's screen sharing relayed to signed-in pages; off unt
   const remote = await import('../src/remote.js');
   const rport = await freePort();
   remote.saveSettings({ extraHosts: ['127.0.0.1'] });
-  await call('POST', '/remote/enable', { port: rport });
+  const enabled = await call('POST', '/remote/enable', { port: rport });
+  assert.equal(enabled.body.running, true, JSON.stringify(enabled.body));
   const json = { 'content-type': 'application/json', 'x-agentmgr': '1' };
   assert.equal((await httpsReq(rport, 'GET', '/api/screen/stream')).status, 401, 'not without signing in');
   const cookie = (await httpsReq(rport, 'POST', '/api/login', { headers: json, body: { token: remote.accessToken() } })).headers['set-cookie'][0].split(';')[0];
@@ -2340,6 +2342,64 @@ test('value: delivered work estimated by the model, corrected, totals by period,
   }
 });
 
+test('quality: a merged pull request looked at on GitHub: fixed afterwards, then reverted; marked by you; the report', async () => {
+  const ghState = path.join(home, 'fake-gh-quality.json');
+  const saved = { bin: process.env.AGENTMGR_GH_BIN, noGh: process.env.AGENTMGR_NO_GH, st: process.env.FAKE_GH_STATE, log: process.env.FAKE_GH_LOG };
+  const [a] = (await call('POST', '/agents', { intent: 'Cache the prices', start: false })).body;
+  const url = 'https://github.com/acme/shop/pull/77';
+  const ago = (min) => new Date(Date.now() - min * 60_000).toISOString();
+  const merged = { url, number: 77, title: 'Cache prices', state: 'MERGED', createdAt: ago(240), mergedAt: ago(60), mergeCommit: { oid: 'abc123' }, baseRefName: 'main', files: [{ path: 'src/cache.js' }, { path: 'src/price.js' }], reviews: [{ state: 'CHANGES_REQUESTED' }, { state: 'APPROVED' }], additions: 40, deletions: 2 };
+  const fix = { url: 'https://github.com/acme/shop/pull/78', number: 78, title: 'Fix stale prices in the cache', state: 'MERGED', mergedAt: ago(10), files: [{ path: 'src/cache.js' }], body: '' };
+  const write = (prs) => fs.writeFileSync(ghState, JSON.stringify({ prs, checkRuns: { abc123: [{ name: 'test', status: 'completed', conclusion: 'success' }] }, commits: [] }));
+  write([merged, fix]);
+  try {
+    // Where GitHub is not asked, it is listed and not looked at.
+    manager.patch(a.id, { prs: { [url]: { url, number: 77, title: 'Cache prices', source: 'branch', state: 'MERGED', openedAt: merged.createdAt, mergedAt: merged.mergedAt } } });
+    const first = (await call('GET', '/quality?period=week')).body;
+    assert.equal(first.github, false);
+    const mine = (v) => v.items.find((x) => x.url === url);
+    assert.deepEqual([mine(first).verdict, mine(first).number, mine(first).repo, mine(first).agentId], ['unchecked', 77, 'acme/shop', a.id]);
+    assert.equal((await call('POST', '/quality/check', { url })).status, 409);
+    Object.assign(process.env, { AGENTMGR_GH_BIN: path.join(here, 'fake-gh.js'), FAKE_GH_STATE: ghState, FAKE_GH_LOG: path.join(home, 'fake-gh-quality.log') });
+    delete process.env.AGENTMGR_NO_GH;
+    // Looked at: a fix to one of its files followed; a reviewer had asked for changes.
+    const it = (await call('POST', '/quality/check', { url })).body;
+    assert.deepEqual([it.verdict, it.after.fixes.map((f) => [f.number, f.shared]), it.after.checks.state, it.facts.changesRequested, it.facts.lines, it.facts.mergeCommit], ['fixed', [[78, ['src/cache.js']]], 'passed', 1, 42, 'abc123']);
+    for (const period of ['day', 'week', 'month', 'quarter', 'year']) {
+      const p = (await call('GET', `/quality?period=${period}`)).body.periods[0];
+      assert.ok(p.items.includes(url) && p.totals.fixed >= 1 && p.totals.problems >= 1 && p.totals.changesRequested >= 1, period);
+    }
+    // Not a problem, says you; and back.
+    assert.equal((await call('POST', '/quality/mark', { url, verdict: 'clean', note: 'another bug' })).body.verdict, 'clean');
+    assert.equal(mine((await call('GET', '/quality')).body).mark.note, 'another bug');
+    assert.equal((await call('POST', '/quality/mark', { url, verdict: null })).body.verdict, 'fixed');
+    assert.equal((await call('POST', '/quality/mark', { url, verdict: 'fine' })).status, 400);
+    assert.equal((await call('POST', '/quality/mark', { url: 'https://github.com/acme/shop/pull/1', verdict: 'clean' })).status, 404);
+    // Then it is reverted: Look again finds it.
+    write([merged, fix, { url: 'https://github.com/acme/shop/pull/79', number: 79, title: 'Revert "Cache prices"', state: 'MERGED', mergedAt: ago(1), files: [{ path: 'src/cache.js' }], body: 'Reverts acme/shop#77' }]);
+    const again = (await call('POST', '/quality/check', { url })).body;
+    assert.deepEqual([again.verdict, again.after.reverted.number], ['reverted', 79]);
+    const r = (await call('GET', '/quality/report?kind=week&current=1')).body;
+    assert.match(r.markdown, /^# Quality of merged work: Week of /);
+    assert.match(r.markdown, /\[#77 Cache prices\]\(https:\/\/github\.com\/acme\/shop\/pull\/77\): reverted: \[Revert "Cache prices"\]\(https:\/\/github\.com\/acme\/shop\/pull\/79\)/);
+    assert.equal((await call('GET', '/quality/report?kind=decade')).status, 400);
+    // Settings.
+    const put = (await call('PUT', '/quality', { watchDays: 30 })).body;
+    assert.deepEqual(put.settings, { enabled: false, watchDays: 30 });
+    assert.equal((await call('PUT', '/quality', { watchDays: 'long' })).status, 400);
+    // It stays after its agent is gone.
+    await call('DELETE', `/agents/${a.id}`);
+    assert.equal(mine((await call('GET', '/quality')).body).gone, true);
+  } finally {
+    for (const [k, val] of [['AGENTMGR_GH_BIN', saved.bin], ['AGENTMGR_NO_GH', saved.noGh], ['FAKE_GH_STATE', saved.st], ['FAKE_GH_LOG', saved.log]]) {
+      if (val === undefined) delete process.env[k];
+      else process.env[k] = val;
+    }
+    await call('PUT', '/quality', { watchDays: 14 });
+    await call('DELETE', `/agents/${a.id}`);
+  }
+});
+
 test('intent, spec and plan: INTENT.md on create, the agent told to keep SPEC.md and PLAN.md, all readable', async () => {
   const [a] = (await call('POST', '/agents', { intent: 'Add a dark mode toggle' })).body;
   const dir = fs.realpathSync(path.join(home, 'briefs', a.id));
@@ -2509,6 +2569,113 @@ test('scorecard: the changes scored, capped by what was measured, kept with the 
     }
   }
   await call('DELETE', `/agents/${a.id}`);
+});
+
+test('standards: lessons, high-risk paths and the bar of a repository, told to its agents and applied when their changes are scored', async () => {
+  const origin = makeOrigin('standards');
+  const [a] = (await call('POST', '/agents', { intent: 'Rotate the sign-in tokens', repo: `file://${origin}`, start: false })).body;
+  const ready = await waitFor(async () => ((await agentNow(a.id)).status === 'stopped' ? agentNow(a.id) : null), 20000, 'ready');
+  const repo = (await call('GET', '/standards')).body.repos.find((r) => r.key.endsWith('/standards'));
+  assert.ok(repo, 'the repository is listed once an agent works in it');
+  assert.deepEqual([repo.lessons, repo.risk, repo.bar], [[], [], { tests: false, secrets: true, checks: [] }]);
+  const key = repo.key;
+  // Set by you: an agent's own calls are refused.
+  const asAgent = { 'x-agentmgr': '1', 'x-agentmgr-agent': a.id };
+  assert.equal((await call('PUT', '/standards/repo', { key, risk: [] }, asAgent)).status, 403);
+  assert.equal((await call('POST', '/standards/lessons', { key, text: 'Anything goes' }, asAgent)).status, 403);
+  assert.equal((await call('PUT', '/standards/repo', { key: 'nope', risk: [] })).status, 404);
+  assert.equal((await call('PUT', '/standards/repo', { key, risk: 'src' })).status, 400);
+
+  const set = await call('PUT', '/standards/repo', { key, risk: [{ pattern: 'src/auth/**', why: 'sign-in' }], bar: { tests: true, checks: [{ name: 'Marker', command: 'echo looking for ok.txt; test -f ok.txt' }] } });
+  assert.equal(set.status, 200, JSON.stringify(set.body));
+  assert.deepEqual(set.body.bar.checks, [{ name: 'Marker', command: 'echo looking for ok.txt; test -f ok.txt' }]);
+  const small = (await call('POST', '/standards/lessons', { key: 'standards', text: 'Keep each change small' })).body;
+  const broken = (await call('POST', '/standards/lessons', { key, text: 'Never leave a #broken thing behind' })).body;
+  assert.equal((await call('POST', '/standards/lessons', { key, text: 'keep each change small.' })).status, 409);
+
+  // Its changes: under a high-risk path, with no test, and the bar's command failing.
+  fs.mkdirSync(path.join(ready.workdir, 'src/auth'), { recursive: true });
+  fs.writeFileSync(path.join(ready.workdir, 'src/auth/token.js'), 'export const rotate = () => 1;\n');
+  const ran = (await call('POST', `/agents/${a.id}/standards`, {})).body;
+  assert.deepEqual(ran.risk, [{ path: 'src/auth/token.js', pattern: 'src/auth/**', why: 'sign-in' }]);
+  assert.deepEqual(ran.bar.results.map((r) => [r.name, r.ok]), [['Tests changed with the code', false], ['No secrets in the changes', true], ['Marker', false]]);
+  assert.match(ran.bar.results[2].tail, /looking for ok\.txt/);
+  let sc = (await call('POST', `/agents/${a.id}/docs/scorecard`)).body.docs.scorecard.data;
+  assert.equal(sc.recommendation, 'not_ready');
+  assert.deepEqual(sc.reasons, ['the quality bar is not met: Tests changed with the code, Marker', '1 lesson of this repository not followed', 'touches high-risk paths (src/auth/token.js)']);
+  assert.equal(sc.scores.tests.score, 30);
+  assert.deepEqual(sc.lessons.map((l) => [l.id, l.status]), [[small.id, 'followed'], [broken.id, 'broken']]);
+  assert.deepEqual(sc.facts.risk, ['src/auth/token.js']);
+  assert.equal((await agentNow(a.id)).standards.bar.ok, false, 'kept on the agent');
+
+  // The bar met and the lesson gone: still not "ready", since a high-risk path is touched.
+  fs.writeFileSync(path.join(ready.workdir, 'ok.txt'), 'ok\n');
+  fs.mkdirSync(path.join(ready.workdir, 'test'), { recursive: true });
+  fs.writeFileSync(path.join(ready.workdir, 'test/token.test.js'), 'import "../src/auth/token.js";\n');
+  assert.equal((await call('DELETE', `/standards/lessons/${broken.id}?key=${encodeURIComponent(key)}`)).status, 200);
+  sc = (await call('POST', `/agents/${a.id}/docs/scorecard`)).body.docs.scorecard.data;
+  assert.equal(sc.bar.ok, true, JSON.stringify(sc.bar));
+  assert.deepEqual([sc.recommendation, sc.reasons], ['look', ['touches high-risk paths (src/auth/token.js)']]);
+  assert.match((await agentNow(a.id)).docs.scorecard.markdown, /\*\*Quality bar\*\* \(run by the app\)[\s\S]*- ✅ Marker[\s\S]*\*\*Lessons of this repository\*\*\n\n- ✅ Keep each change small[\s\S]*\*\*High-risk paths touched\*\*: `src\/auth\/token\.js`/);
+
+  // A merged pull request of this agent that was reverted: a lesson is proposed, worded by a model, accepted by you.
+  const url = 'https://github.com/acme/standards/pull/5';
+  const at = new Date(Date.now() - 3_600_000).toISOString();
+  ((manager.store.data.quality ??= { items: {} }).items ??= {})[url] = { url, number: 5, title: 'Rotate tokens', repo: 'acme/standards', agentId: a.id, agentName: ready.name, openedAt: at, mergedAt: at, facts: { changesRequested: 0, files: [], lines: 1 }, after: { reverted: { number: 6, title: 'Revert "Rotate tokens"', url: 'https://github.com/acme/standards/pull/6' }, fixes: [], checks: { state: 'none', failed: [] } }, checkedAt: at, final: true };
+  try {
+    const proposed = (await call('GET', '/standards')).body.repos.find((r) => r.key === key).proposed;
+    assert.deepEqual(proposed.map((l) => [l.source.number, l.source.kind, l.source.detail]), [[5, 'reverted', 'Reverted by #6 Revert "Rotate tokens"']]);
+    assert.equal((await call('PUT', `/standards/lessons/${proposed[0].id}`, { key, state: 'accepted' })).status, 400, 'not worded yet');
+    const drafted = await call('POST', `/standards/lessons/${proposed[0].id}/draft`, { key });
+    assert.equal(drafted.status, 200, JSON.stringify(drafted.body));
+    assert.equal(drafted.body.text, 'Check #5 again: Reverted by #6 Revert "Rotate tokens"');
+    assert.equal((await call('PUT', `/standards/lessons/${proposed[0].id}`, { key, state: 'accepted', text: 'Rotate tokens behind a flag' })).body.state, 'accepted');
+    const now = (await call('GET', '/standards')).body.repos.find((r) => r.key === key);
+    assert.deepEqual([now.lessons.map((l) => l.text), now.proposed.length], [['Keep each change small', 'Rotate tokens behind a flag'], 0]);
+
+    // Started now: the agent is told the lessons and the high-risk paths.
+    await call('POST', `/agents/${a.id}/start`);
+    const told = await waitFor(() => readLog(process.env.FAKE_CLAUDE_LOG).find((l) => l.cwd && l.args.join(' ').includes('Rotate tokens behind a flag')), 20000, 'started with the standards');
+    assert.match(told.args.join(' '), /Lessons from earlier work in this repository[\s\S]*- Keep each change small\n- Rotate tokens behind a flag[\s\S]*High-risk parts of this repository[\s\S]*- src\/auth\/\*\* \(sign-in\)/);
+  } finally {
+    delete manager.store.data.quality.items[url];
+    await call('POST', `/agents/${a.id}/stop`);
+    await call('PUT', '/standards/repo', { key, risk: [], bar: { tests: false, checks: [] } });
+  }
+});
+
+test('standards: finished changes under a high-risk path are reviewed by another model with review rounds off, and the pull request is left to you', async () => {
+  const origin = makeOrigin('riskrounds');
+  const saved = process.env.FAKE_DONE;
+  assert.equal((await call('GET', '/prereview')).body.enabled, false);
+  const [a] = (await call('POST', '/agents', { intent: 'Change the payments rounding #done', repo: `file://${origin}`, start: false })).body;
+  const [b] = (await call('POST', '/agents', { intent: 'Fix a typo in the readme #done', repo: `file://${origin}`, start: false })).body;
+  const stopped = (id) => waitFor(async () => ((await agentNow(id)).status === 'stopped' ? agentNow(id) : null), 20000, 'ready');
+  const [ra, rb] = [await stopped(a.id), await stopped(b.id)];
+  const key = (await call('GET', '/standards')).body.repos.find((r) => r.key.endsWith('/riskrounds')).key;
+  try {
+    await call('PUT', '/standards/repo', { key, risk: [{ pattern: 'payments', why: 'money' }] });
+    fs.mkdirSync(path.join(ra.workdir, 'src/payments'), { recursive: true });
+    fs.writeFileSync(path.join(ra.workdir, 'src/payments/round.js'), 'export const round = (n) => Math.round(n * 100) / 100;\n');
+    fs.writeFileSync(path.join(rb.workdir, 'NOTES.md'), 'A note.\n');
+    await call('POST', `/agents/${a.id}/start`);
+    await call('POST', `/agents/${b.id}/start`);
+    const done = await waitFor(async () => ((await agentNow(a.id)).preReview?.status === 'approved' ? agentNow(a.id) : null), 30000, 'reviewed and approved');
+    assert.equal(done.preReview.forced, 'risk');
+    assert.ok(done.preReview.rounds[0].critics.length >= 1);
+    assert.deepEqual([done.preReview.pr, done.preReview.prError ?? null], [null, null], 'the pull request is yours to open: not tried');
+    // The other agent's changes touch nothing high risk: no rounds.
+    await waitFor(async () => (await agentNow(b.id)).brief?.status === 'done' || null, 20000, 'the other one done');
+    await new Promise((r) => setTimeout(r, 1500));
+    assert.equal((await agentNow(b.id)).preReview ?? null, null);
+    assert.match(execFileSync('git', ['status', '--porcelain'], { cwd: ra.workdir }).toString(), /src\//, 'nothing was committed or pushed for you');
+  } finally {
+    if (saved === undefined) delete process.env.FAKE_DONE;
+    else process.env.FAKE_DONE = saved;
+    await call('PUT', '/standards/repo', { key, risk: [] });
+    await call('POST', `/agents/${a.id}/stop`);
+    await call('POST', `/agents/${b.id}/stop`);
+  }
 });
 
 test('scorecard Improve: the scorecard goes back to the agent before review, and its next done brief is scored again', async () => {
@@ -4762,6 +4929,16 @@ test('landing: open a PR, failing checks and requested changes go back to the ag
     assert.equal((await call('PUT', '/landing', { mergeWhenSure: true })).body.settings.mergeWhenSure, true);
     await call('POST', `/agents/${a.id}/refresh`);
     assert.ok(!ghCalls().some((c) => c[1] === 'merge'), 'not merged on an Eval of another commit');
+    // It changes a path marked high risk (standards.js): not merged on its Eval, and it says why.
+    const stdKey = (await call('GET', '/standards')).body.repos.find((r) => r.key.endsWith('/land-origin')).key;
+    await call('PUT', '/standards/repo', { key: stdKey, risk: [{ pattern: 'b.txt' }] });
+    manager.patch(a.id, { eval: sureEval('f'.repeat(40)) });
+    manager.emit('evaluated', manager.store.get(a.id));
+    const heldWhy = await waitFor(async () => (await agentNow(a.id)).landing?.sure?.[`${opened.body.url}@${'f'.repeat(40)}`]?.error || null, 10000, 'held on the high-risk path');
+    assert.match(heldWhy, /It changes high-risk paths \(b\.txt\): yours to merge/);
+    assert.ok(!ghCalls().some((c) => c[1] === 'merge'), 'not merged on a score');
+    await call('PUT', '/standards/repo', { key: stdKey, risk: [] });
+    manager.patch(a.id, { landing: { ...manager.store.get(a.id).landing, sure: {} } });
     // Tested on the commit the PR is at: merged on its own, once.
     manager.patch(a.id, { eval: sureEval('f'.repeat(40)) });
     manager.emit('evaluated', manager.store.get(a.id));

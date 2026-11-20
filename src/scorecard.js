@@ -16,7 +16,7 @@ const WEIGHTS = { intent: 25, spec: 20, tests: 20, safety: 15, scope: 10, plan: 
 const TEST_FILE = /(^|\/)(tests?|__tests__|spec|specs)\/|[._-](test|spec)\.[a-z]+$|_test\.go$|Test\.java$/i;
 
 /** Facts the app knows without a model: CI, test files touched, the agent's checks, plan and spec progress. */
-export function facts({ files = [], prs = [], brief = null, plan = '', spec = '' }) {
+export function facts({ files = [], prs = [], brief = null, plan = '', spec = '', standards = null }) {
   const paths = files.map((f) => f.path);
   const tests = paths.filter((p) => TEST_FILE.test(p));
   const code = paths.filter((p) => !TEST_FILE.test(p) && !/\.(md|txt|rst|adoc)$/i.test(p) && !/(^|\/)docs?\//i.test(p));
@@ -37,6 +37,9 @@ export function facts({ files = [], prs = [], brief = null, plan = '', spec = ''
     plan: steps.length ? { steps: steps.length, done: steps.filter((s) => s === 'x').length } : null,
     criteria: criteriaBlock.split('\n').filter((l) => /^\s*[-*\d]/.test(l) && /\w/.test(l)).length,
     hasSpec: Boolean(String(spec).trim()),
+    // The repository's standards (standards.js): high-risk files touched, and the bar the app ran.
+    risk: (standards?.risk ?? []).map((r) => r.path),
+    bar: standards?.bar ? { passed: standards.bar.results.filter((r) => r.ok).length, failed: standards.bar.results.filter((r) => !r.ok).map((r) => r.name) } : null,
   };
 }
 
@@ -47,9 +50,11 @@ const factLines = (f) =>
     `the agent's own checks (from its brief): ${f.checks.passed} passed, ${f.checks.failed} failed, ${f.checks.pending} pending`,
     `plan: ${f.plan ? `${f.plan.done} of ${f.plan.steps} steps ticked` : 'no plan written'}`,
     `spec: ${f.hasSpec ? `${f.criteria} acceptance criteria` : 'no spec written'}`,
+    ...(f.bar ? [`the repository's quality bar, run by the app: ${f.bar.passed} passed, ${f.bar.failed.length} failed${f.bar.failed.length ? ` (${f.bar.failed.join(', ')})` : ''}`] : []),
+    ...(f.risk?.length ? [`files under paths the person marked high risk: ${f.risk.join(', ')}`] : []),
   ].join('\n');
 
-export function scorecardPrompt({ intent, status, digest, briefMarkdown, intentDoc, specDoc, planDoc, hunks, facts: f }) {
+export function scorecardPrompt({ intent, status, digest, briefMarkdown, intentDoc, specDoc, planDoc, hunks, facts: f, lessons = [] }) {
   return [
     "You score an AI coding agent's changes for a reviewer who wants to approve with confidence and read as little as possible.",
     'Be skeptical: a claim without evidence in the diff, the tests or the checks counts as unverified. Base everything on the material below.',
@@ -58,7 +63,8 @@ export function scorecardPrompt({ intent, status, digest, briefMarkdown, intentD
     '{"summary": "<two sentences: what the change does and how sure you are>",',
     ' "scores": {"intent": {"score": 0-100, "why": "<one sentence>"}, "scope": {...}, "plan": {...}, "tests": {...}, "safety": {...}},',
     ' "criteria": [{"criterion": "<an acceptance criterion from the spec>", "status": "met|not_met|unverified", "evidence": "<where: file, test, check>"}],',
-    ' "look": [{"id": "H3", "reason": "<why a person should read this hunk>"}]}',
+    ` "look": [{"id": "H3", "reason": "<why a person should read this hunk>"}]${lessons.length ? ',' : '}'}`,
+    ...(lessons.length ? [' "lessons": [{"id": "L1", "status": "followed|broken|not_applicable", "evidence": "<where in the diff>"}]}'] : []),
     '',
     'Scoring (100 is best; be calibrated, not generous):',
     '- intent: how fully the change does what INTENT asks. Missing parts of the ask pull it down hard.',
@@ -68,6 +74,7 @@ export function scorecardPrompt({ intent, status, digest, briefMarkdown, intentD
     '- safety: 100 when nothing risky is touched or risks are handled; lower for security, auth, data loss, migrations, concurrency, money, new dependencies or public API changes without care.',
     '- criteria: one entry per acceptance criterion in SPEC, in its order; leave the list empty if there is no spec.',
     '- look: at most 5 hunks a person must read (the risky, subtle or unverified ones), most important first. Not the obvious ones.',
+    ...(lessons.length ? ['- lessons: one entry per lesson in LESSONS. "broken" only when the diff shows the change going against it; "not_applicable" when the change has nothing to do with it.'] : []),
     '',
     '<facts_measured_by_the_app>',
     factLines(f),
@@ -81,6 +88,7 @@ export function scorecardPrompt({ intent, status, digest, briefMarkdown, intentD
     '<plan>',
     planDoc || '(no plan written)',
     '</plan>',
+    ...(lessons.length ? ['<lessons>', ...lessons.map((l, i) => `L${i + 1}: ${l.text}`), '</lessons>'] : []),
     '<agent_status>',
     status,
     '</agent_status>',
@@ -102,7 +110,7 @@ const clamp = (n) => Math.max(0, Math.min(100, Math.round(Number(n) || 0)));
  * The scorecard from the model's reply and the facts: scores capped by what was measured, the spec
  * score computed from the criteria, the overall weighted, and a recommendation by rule.
  */
-export function combine(reply, f, hunks) {
+export function combine(reply, f, hunks, { lessons = [], bar = null } = {}) {
   const s = reply?.scores ?? {};
   const score = (k) => (s[k] && Number.isFinite(Number(s[k].score)) ? { score: clamp(s[k].score), why: String(s[k].why ?? '').slice(0, 300), notes: [] } : null);
   const out = { intent: score('intent'), scope: score('scope'), plan: score('plan'), tests: score('tests'), safety: score('safety'), spec: null };
@@ -116,6 +124,9 @@ export function combine(reply, f, hunks) {
   if (f.ci === 'failed') cap('tests', 30, `CI is failing${f.ciFailed.length ? ` (${f.ciFailed.join(', ')})` : ''}`);
   if (f.checks.failed) cap('tests', 40, `${f.checks.failed} of the agent's checks failed`);
   if (f.codeFiles && !f.testFiles && !f.checks.passed && f.ci !== 'passed') cap('tests', 45, 'code changed with no tests and no passing checks');
+  // The repository's quality bar, run by the app: a failed check is not verified, whatever else passed.
+  const barFailed = (bar?.results ?? []).filter((r) => !r.ok);
+  if (barFailed.length) cap('tests', 30, `the quality bar is not met (${barFailed.map((r) => r.name).join(', ')})`);
   // Plan: bounded by the steps ticked.
   if (f.plan && out.plan) cap('plan', Math.round(40 + (60 * f.plan.done) / f.plan.steps), `${f.plan.done} of ${f.plan.steps} plan steps ticked`);
   if (!f.plan && out.plan) out.plan.notes.push('no plan written');
@@ -140,11 +151,26 @@ export function combine(reply, f, hunks) {
   if (f.ci === 'failed') reasons.push('CI is failing');
   if (notMet.length) reasons.push(`${notMet.length} acceptance criteri${notMet.length === 1 ? 'on' : 'a'} not met`);
   if (out.intent && out.intent.score < 50) reasons.push('it does not do enough of what was asked');
-  if (out.tests && out.tests.score < 40 && f.ci !== 'failed') reasons.push('it is barely verified');
+  if (barFailed.length) reasons.push(`the quality bar is not met: ${barFailed.map((r) => r.name).join(', ')}`);
+  // Lessons of the repository, as the model found them in the diff: one it says is broken holds the change.
+  const said = new Map((Array.isArray(reply?.lessons) ? reply.lessons : []).map((l) => [String(l?.id ?? '').trim().toUpperCase(), l]));
+  const checked = lessons.map((l, i) => {
+    const r = said.get(`L${i + 1}`);
+    return { id: l.id, text: l.text, status: ['followed', 'broken', 'not_applicable'].includes(r?.status) ? r.status : 'unverified', evidence: String(r?.evidence ?? '').slice(0, 300) };
+  });
+  const broken = checked.filter((l) => l.status === 'broken');
+  if (broken.length) reasons.push(`${broken.length} lesson${broken.length === 1 ? '' : 's'} of this repository not followed`);
+  if (out.tests && out.tests.score < 40 && f.ci !== 'failed' && !barFailed.length) reasons.push('it is barely verified');
   let recommendation;
   if (reasons.length) recommendation = 'not_ready';
   else if (overall != null && overall >= 80 && (out.tests?.score ?? 0) >= 70 && (out.safety?.score ?? 100) >= 70 && (out.spec?.score ?? 100) >= 70 && f.ci !== 'running') recommendation = 'ready';
   else recommendation = 'look';
+  // High-risk paths: never "ready" on a score alone; a person reads it.
+  if (f.risk?.length) {
+    if (recommendation === 'ready') recommendation = 'look';
+    const shown = f.risk.slice(0, 4).join(', ');
+    reasons.push(`touches high-risk paths (${shown}${f.risk.length > 4 ? `, and ${f.risk.length - 4} more` : ''})`);
+  }
   // Where to look, mapped back to hunks.
   const byId = new Map(hunks.map((h) => [h.id, h]));
   const look = (Array.isArray(reply?.look) ? reply.look : [])
@@ -152,7 +178,7 @@ export function combine(reply, f, hunks) {
     .filter((l) => l.h)
     .slice(0, 5)
     .map(({ h, reason }) => ({ file: h.file, head: h.head, reason }));
-  return { summary: String(reply?.summary ?? '').slice(0, 600), overall, recommendation, reasons, scores: out, criteria, look, facts: f };
+  return { summary: String(reply?.summary ?? '').slice(0, 600), overall, recommendation, reasons, scores: out, criteria, look, lessons: checked, bar: bar ? { ok: !barFailed.length, results: bar.results.map((r) => ({ name: r.name, ok: r.ok, ...(r.command ? { command: r.command } : {}), tail: String(r.tail ?? '').slice(-600) })) } : null, facts: f };
 }
 
 export const RECOMMENDATION = { ready: 'Ready to approve', look: 'Look at these first', not_ready: 'Not ready' };
@@ -169,10 +195,14 @@ export function improveMessage(sc) {
     .map(([k, label]) => `- ${label} ${sc.scores[k].score}/100: ${[sc.scores[k].why, ...sc.scores[k].notes].filter(Boolean).join('; ')}`);
   const criteria = sc.criteria.filter((c) => c.status !== 'met').map((c) => `- ${c.status === 'not_met' ? 'Not met' : 'Not verified'}: ${c.criterion}${c.evidence ? ` (${c.evidence})` : ''}`);
   const look = sc.look.map((l) => `- ${l.file}: ${l.reason}`);
+  const bar = (sc.bar?.results ?? []).filter((r) => !r.ok).map((r) => `- ${r.name}${r.command ? ` (\`${r.command}\`)` : ''} failed${r.tail ? `:\n${r.tail.split('\n').slice(-12).map((l) => `    ${l}`).join('\n')}` : ''}`);
+  const lessons = (sc.lessons ?? []).filter((l) => l.status === 'broken').map((l) => `- ${l.text}${l.evidence ? ` (${l.evidence})` : ''}`);
   return [
     `Before this goes to review: the review scorecard rates your changes ${sc.overall ?? '?'}/100 (${RECOMMENDATION[sc.recommendation]}${sc.reasons.length ? `: ${sc.reasons.join('; ')}` : ''}). Improve them where they fall short.`,
     weak.length ? `Scores to raise:\n${weak.join('\n')}` : '',
     criteria.length ? `Acceptance criteria:\n${criteria.join('\n')}` : '',
+    bar.length ? `The repository's quality bar, run on your changes (run the same commands yourself until they pass):\n${bar.join('\n')}` : '',
+    lessons.length ? `Lessons of this repository your changes do not follow:\n${lessons.join('\n')}` : '',
     look.length ? `Where a reviewer would look first:\n${look.join('\n')}` : '',
     'Fix what these point at: add or fix tests and run them, meet the criteria, handle the risky spots. Stay within the task, and say in the brief what you left as it is and why. Update the brief when you are done; the changes are scored again then.',
   ]
@@ -202,11 +232,20 @@ export function scorecardMarkdown(sc, title = '') {
     out.push('', '**Acceptance criteria**', '');
     for (const c of sc.criteria) out.push(`- ${c.status === 'met' ? '✅' : c.status === 'not_met' ? '❌' : '❔'} ${c.criterion}${c.evidence ? ` (${c.evidence})` : ''}`);
   }
+  const f = sc.facts;
+  if (sc.bar) {
+    out.push('', '**Quality bar** (run by the app)', '');
+    for (const r of sc.bar.results) out.push(`- ${r.ok ? '✅' : '❌'} ${r.name}${r.command ? ` (\`${r.command}\`)` : ''}`);
+  }
+  if (sc.lessons?.length) {
+    out.push('', '**Lessons of this repository**', '');
+    for (const l of sc.lessons) out.push(`- ${l.status === 'followed' ? '✅' : l.status === 'broken' ? '❌' : l.status === 'not_applicable' ? '➖' : '❔'} ${l.text}${l.evidence ? ` (${l.evidence})` : ''}`);
+  }
+  if (f.risk?.length) out.push('', `**High-risk paths touched**: ${f.risk.map((p) => `\`${p}\``).join(', ')}`);
   if (sc.look.length) {
     out.push('', '**Where to look**', '');
     for (const l of sc.look) out.push(`- \`${l.file}\` \`${l.head.replace(/^(@@[^@]*@@).*/, '$1')}\`: ${l.reason}`);
   }
-  const f = sc.facts;
   out.push('', `<sub>Measured: ${f.files} files (+${f.added} −${f.removed}), ${f.testFiles} test files, CI ${f.ci ?? 'n/a'}, checks ${f.checks.passed}✓ ${f.checks.failed}✗${f.plan ? `, plan ${f.plan.done}/${f.plan.steps}` : ''}. Scored by AI Agent Manager.</sub>`);
   return out.join('\n');
 }

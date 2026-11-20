@@ -253,7 +253,12 @@ export class PreReview {
 
   /** Task agents with changes of their own that something here can review: not reviewers, bug hunts and their fixers, teams or agent builders (those have their own checks). */
   applies(agent) {
-    return Boolean(this.settings.enabled && agent.kind === 'task' && agent.workdir && !agent.hunting && !agent.fixing && !agent.reviewing && !agent.team && !agent.builds && !agent.raceId && !this.skip(agent) && this.candidates(agent).length);
+    return Boolean(this.settings.enabled && this.can(agent));
+  }
+
+  /** Could its changes be reviewed here, whether or not rounds are on? */
+  can(agent) {
+    return Boolean(agent.kind === 'task' && agent.workdir && !agent.hunting && !agent.fixing && !agent.reviewing && !agent.team && !agent.builds && !agent.raceId && !this.skip(agent) && this.candidates(agent).length);
   }
 
   /** Told at launch that the pull request waits for the review? */
@@ -309,8 +314,9 @@ export class PreReview {
     return true;
   }
 
-  begin(id) {
-    this.manager.patch(id, { preReview: { status: 'reviewing', round: 0, max: this.settings.rounds, findings: [], rounds: [], startedAt: now(), endedAt: null, pr: null, error: null } });
+  /** `forced`: why rounds run with the switch off ('risk': a high-risk path was touched); the pull request is then left to the person. */
+  begin(id, { forced = null } = {}) {
+    this.manager.patch(id, { preReview: { status: 'reviewing', round: 0, max: this.settings.rounds, findings: [], rounds: [], startedAt: now(), endedAt: null, pr: null, error: null, ...(forced ? { forced } : {}) } });
     this.run(id);
   }
 
@@ -396,7 +402,7 @@ export class PreReview {
     this.manager.patch(id, { preReview: state });
     this.log(`review rounds: ${this.manager.store.get(id)?.name ?? id} ${state.status === 'approved' ? 'approved' : 'not approved'} in round ${state.round} of ${state.max}`);
     await this.after(id);
-    if (state.status === 'approved' && this.settings.openPr && !this.managed(id)) await this.open(id).catch(() => {});
+    if (state.status === 'approved' && this.settings.openPr && !state.forced && !this.managed(id)) await this.open(id).catch(() => {});
   }
 
   /** What waited for the rounds: the AI review, and the score (which goes in the pull request's description). */

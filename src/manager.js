@@ -1434,6 +1434,9 @@ export class AgentManager extends EventEmitter {
       prompts.push(memoryPrompt(memoryText(memoryKey(agent))));
       allowedTools = [`Bash(${learnCommand()}:*)`];
     }
+    // The repository's standards (standards.js): lessons to follow and the parts marked high risk.
+    const standards = task ? this.standards?.prompt(agent) : '';
+    if (standards) prompts.push(standards);
     // Commands you chose to always allow in this repo.
     const ruled = agent.workdir ? this.rules.allowed(memoryKey(agent)) : [];
     if (ruled.length) allowedTools = [...(allowedTools ?? []), ...ruled];
@@ -2499,6 +2502,8 @@ export class AgentManager extends EventEmitter {
       if (agent.hunting) return;
       // Reviewed in rounds before a pull request (prereview.js): the review and the score wait for their end.
       const rounds = !NO_REPO.has(agent.kind) && this.changesSource && this.preReview?.brief(agent, { finished });
+      // A change under a high-risk path is reviewed by another model, also with review rounds off (standards.js).
+      if (finished && !rounds && !NO_REPO.has(agent.kind) && this.changesSource) this.standards?.finished(agent).catch((e) => this.log?.(`standards: ${e.message}`));
       if (finished && this.judge.enabled && !rounds) this.requestReview(id, { trigger: 'brief' }).catch(() => {});
       // ...and score it for the reviewer ("scorecard": { "auto": false } in config.json turns this off).
       if ((improved || (finished && this.config.scorecard?.auto !== false && !rounds)) && !NO_REPO.has(agent.kind) && this.changesSource) this.summarize(id, 'scorecard').catch(() => {});
@@ -2802,10 +2807,12 @@ export class AgentManager extends EventEmitter {
     if (!hunks.length) throw Object.assign(new Error('No changes to score yet'), { status: 400 });
     const cur0 = this.store.get(agent.id) ?? agent;
     const doc = (n) => readSpecDoc(agent.id, n)?.markdown ?? '';
-    const f = scoreFacts({ files: data.files, prs: Object.values(cur0.prs ?? {}), brief: cur0.brief, plan: doc('plan'), spec: doc('spec') });
+    // The repository's standards: its bar is run here, by the app, before the model is asked.
+    const standards = (await this.standards?.assess(agent.id, data)) ?? null;
+    const f = scoreFacts({ files: data.files, prs: Object.values(cur0.prs ?? {}), brief: cur0.brief, plan: doc('plan'), spec: doc('spec'), standards });
     const writer = this.writerFor(agent);
-    const prompt = scorecardPrompt({ ...ctx, briefMarkdown: this.briefFile(agent.id).markdown ?? '', intentDoc: doc('intent'), specDoc: doc('spec'), planDoc: doc('plan'), hunks, facts: f });
-    const sc = combine(parseJsonReply(await this.oneShot(agent, prompt, writer)), f, hunks);
+    const prompt = scorecardPrompt({ ...ctx, briefMarkdown: this.briefFile(agent.id).markdown ?? '', intentDoc: doc('intent'), specDoc: doc('spec'), planDoc: doc('plan'), hunks, facts: f, lessons: standards?.lessons ?? [] });
+    const sc = combine(parseJsonReply(await this.oneShot(agent, prompt, writer)), f, hunks, { lessons: standards?.lessons ?? [], bar: standards?.bar ?? null });
     const cur = this.store.get(agent.id);
     if (!cur) return null;
     return this.view(
