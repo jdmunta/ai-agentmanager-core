@@ -5,6 +5,7 @@ import DOMPurify from '/vendor/dompurify/purify.es.mjs';
 import { touchScroll } from '/touchscroll.js';
 import { openStream, post, REMOTE } from '/transport.js';
 import { attachBox } from '/attach.js';
+import { initDropZone } from '/dropzone.js';
 import { initSide } from '/side.js';
 import { openCopy, pasteInto } from '/termclip.js';
 import { initBuilt } from '/built.js';
@@ -56,6 +57,8 @@ import { initPalette } from '/palette.js';
 import { initFiles } from '/files.js';
 import { initUpdateView, updateHtml, updateWaits } from '/announce.js';
 import { morph } from '/morph.js';
+import { acceptanceRow, acceptanceWaits, initAcceptance } from '/acceptance.js';
+import { autoNeedHtml, autonomyNeeds, autonomyRow, initAutonomy } from '/autonomy.js';
 
 const $ = (sel) => document.querySelector(sel);
 const agents = new Map();
@@ -189,6 +192,12 @@ async function act(fn, okMsg) {
 }
 
 const reviewUi = initReview({ api, esc, toast, agents, $ });
+const acceptUi = initAcceptance({ dialog: $('#accept-dialog'), api, esc, toast, ago, agentOf: (id) => agents.get(id), upsert: (a) => upsert(a) });
+const autoUi = initAutonomy({ dialog: $('#auto-dialog'), api, esc, toast, ago, agentOf: (id) => agents.get(id), upsert: (a) => upsert(a) });
+// Past "Ask me", what done means is agreed first: that is what the answers given for you are checked against.
+$('#new-autonomy')?.addEventListener('change', (e) => {
+  if (['run', 'pr', 'merge'].includes(e.target.value) && e.target.form?.acceptance) e.target.form.acceptance.checked = true;
+});
 const triggersUi = initTriggers({ api, esc, toast, $ });
 initSpend({ api, esc, toast, $ });
 const goalsUi = initGoals({ api, esc, toast, $, ago: (t) => ago(t), getProjects: () => projectsState, rerender: () => renderBacklog() });
@@ -1074,6 +1083,7 @@ function resultsCard(a) {
   return `<div class="results ${r.outcome.replace(' ', '-')}">
     <h4>Results <span class="outcome">${icon} ${label}</span>${r.fromAgent ? '' : ' <span class="hint">(from what AI Agent Manager can see; the agent adds its own when it next updates its brief)</span>'}</h4>
     ${scoreStrip(a)}
+    ${r.confidence ? `<p class="own-conf"><span class="tag conf-${esc(r.confidence.level)}" title="The agent's own confidence in what it built, as it wrote it in its brief. The review scorecard is the separate check.">Its own confidence: ${r.confidence.percent}%</span> ${esc(r.confidence.why)}</p>` : r.fromAgent && ['done', 'partial'].includes(r.outcome) ? '<p class="hint own-conf">The agent has not said how confident it is in this.</p>' : ''}
     ${r.blockers.length ? `<ul class="blockers">${r.blockers.map((x) => item(x, 'blocker')).join('')}</ul>` : ''}
     ${r.delivered.length ? `<ul class="delivered">${r.delivered.map((x) => item(x, 'delivered')).join('')}</ul>` : '<p class="hint">Nothing delivered yet.</p>'}
     ${r.notes ? `<div class="md">${md(r.notes)}</div>` : ''}
@@ -1089,6 +1099,8 @@ function briefPanel(a) {
   if (!b) {
     return `<div class="card brief">
       <h3>Brief <span class="brief-actions">${ins.button} ${ex.button} ${rv.button}</span></h3>
+      ${noRepo(a) ? '' : acceptanceRow(a, esc)}
+      ${noRepo(a) ? '' : autonomyRow(a, esc)}
       ${planRow(a)}
       <div class="share-row"><span class="hint">Share for review:</span> ${docButtons(a)}</div>
       ${resultsCard(a)}
@@ -1107,6 +1119,8 @@ function briefPanel(a) {
     : '<p class="hint">No checks yet.</p>';
   return `<div class="card brief">
     <h3>Brief <span class="brief-actions"><span title="${esc(b.updatedAt)}">updated ${ago(b.updatedAt)}</span> ${ins.button} ${ex.button} ${rv.button}</span></h3>
+    ${noRepo(a) ? '' : acceptanceRow(a, esc)}
+    ${noRepo(a) ? '' : autonomyRow(a, esc)}
     ${planRow(a)}
     <div class="share-row"><span class="hint">Share for review:</span> ${docButtons(a)}</div>
     ${resultsCard(a)}
@@ -1568,17 +1582,19 @@ function loadLimitEngines() {
     })
     .catch(() => (limitEngines = null));
 }
-const NEED_ORDER = { approval: 0, prompt: 0, limit: 1, waiting: 1, plan: 1, question: 1, team: 1, rule: 2, review: 2, prereview: 2, autopilot: 2, stuck: 3, conflict: 4, reminder: 5, close: 5, repeat: 5, update: 4 };
+const NEED_ORDER = { approval: 0, prompt: 0, limit: 1, waiting: 1, plan: 1, acceptance: 1, question: 1, team: 1, rule: 2, auto: 2, review: 2, prereview: 2, autopilot: 2, stuck: 3, conflict: 4, reminder: 5, close: 5, repeat: 5, update: 4 };
 /** What an agent needs from the user. `both`: overlaps on both agents (detail), else only the one that should rebase (inbox). */
 function needsFor(a, { both = false } = {}) {
   const items = [];
   if (a.runtime.attention) items.push({ a, kind: 'prompt', key: `prompt:${a.id}` });
   if (a.runtime.limited) items.push({ a, kind: 'limit', key: `limit:${a.id}` });
   if (a.runtime.waiting) items.push({ a, kind: 'waiting', key: `waiting:${a.id}` });
+  if (acceptanceWaits(a)) items.push({ a, kind: 'acceptance', key: `acceptance:${a.id}` });
   if (a.planReview?.status === 'review') items.push({ a, kind: 'plan', key: `plan:${a.id}` });
   if (a.aiReview?.verdict && !a.aiReview.seen) items.push({ a, kind: 'review', key: `review:${a.id}` });
   if (['stalled', 'error'].includes(a.preReview?.status)) items.push({ a, kind: 'prereview', key: `prereview:${a.id}` });
   for (const q of a.questions ?? []) if (!q.answer) items.push({ a, kind: 'question', key: `q:${a.id}:${q.id}`, q });
+  items.push(...autonomyNeeds(a));
   for (const f of a.stuck ?? []) items.push({ a, kind: 'stuck', key: `stuck:${a.id}:${f.key}`, f });
   if (updateWaits(a)) items.push({ a, kind: 'update', key: `update:${a.id}` });
   if (a.followUp) items.push({ a, kind: a.followUp.kind === 'close' ? 'close' : 'reminder', key: `reminder:${a.id}`, r: a.followUp });
@@ -1617,7 +1633,7 @@ function inboxItems() {
     .sort((x, y) => NEED_ORDER[x.kind] - NEED_ORDER[y.kind] || (x.a.priority ?? 2) - (y.a.priority ?? 2));
 }
 
-const NEED_LABEL = { update: 'Update to send', limit: 'Limit', reminder: 'Follow up', close: 'Close session?', repeat: 'Make it a playbook?', autopilot: 'Autopilot held', rule: 'Always allow?', approval: 'Approval', team: 'Team', prompt: 'Needs input', waiting: 'Waiting on you', plan: 'Plan review', question: 'Question', review: 'AI review', prereview: 'Not approved', stuck: 'Stuck?', conflict: 'Overlap' };
+const NEED_LABEL = { update: 'Update to send', limit: 'Limit', reminder: 'Follow up', close: 'Close session?', repeat: 'Make it a playbook?', autopilot: 'Autopilot held', rule: 'Always allow?', approval: 'Approval', team: 'Team', prompt: 'Needs input', waiting: 'Waiting on you', acceptance: 'Done means', auto: 'Done for you', plan: 'Plan review', question: 'Question', review: 'AI review', prereview: 'Not approved', stuck: 'Stuck?', conflict: 'Overlap' };
 /** Why the AI judge thinks so, as a small tag. */
 const aiTag = (confidence, what = 'AI') => `<span class="tag ai" title="Judged by a model from the agent's activity; your reactions tune later calls">🤖 ${what}${confidence != null ? ` ${Math.round(confidence * 100)}%` : ''}</span>`;
 /** What a permission prompt asks about: the command, file or tool. */
@@ -1730,6 +1746,14 @@ function needCard(it, { inDetail = false } = {}) {
     body = `<p class="need-title">${t.stage === 'ready' ? `✓ The reviewer approved <b>${esc(t.name)}</b>${t.gaps ? ', with parts still missing: run a gap round?' : ''}` : `<b>${esc(t.name)}</b> needs a decision: ${esc(t.blocked?.reason ?? '')}`}</p>
       <p class="hint">${esc(t.intent.split('\n')[0].slice(0, 140))}</p>
       <div class="need-actions"><button class="small primary" data-ib="team-open" data-team="${t.id}">${t.stage !== 'ready' ? 'Decide' : t.gaps ? 'See the gaps' : 'Review and finalize'}</button></div>`;
+  } else if (it.kind === 'auto') {
+    body = autoNeedHtml(it, { esc, ago });
+  } else if (it.kind === 'acceptance') {
+    const pts = a.acceptance.points;
+    body = `<p class="need-title">What done means: ${pts.length} point${pts.length === 1 ? '' : 's'}</p>
+      <ol class="acc-need">${pts.map((p) => `<li>${esc(p.text)}</li>`).join('')}</ol>
+      <p class="hint">Written ${ago(a.acceptance.updatedAt)}. The agent changes nothing until you agree; its work is then checked against these.</p>
+      <div class="need-actions"><button class="small primary" data-ib="accept-open">Change points</button><button class="small" data-ib="accept-agree">Agree as written</button></div>`;
   } else if (it.kind === 'plan') {
     const title = a.planReview.markdown?.match(/^#\s+(.+)$/m)?.[1] ?? 'Implementation plan';
     body = `<p class="need-title">${esc(title)}</p>
@@ -1987,6 +2011,14 @@ async function onNeed(e) {
       return openTeam(el.dataset.team);
     case 'plan-open':
       return openPlan(id);
+    case 'accept-open':
+      return acceptUi.open(id);
+    case 'auto-ok':
+      return autoUi.ok(id, el.dataset.entry);
+    case 'auto-change':
+      return autoUi.change(id, el.dataset.entry);
+    case 'accept-agree':
+      return act(async () => upsert(await api('POST', `/agents/${id}/acceptance/agree`, {})), 'Agreed; the agent goes ahead');
     case 'plan-approve':
       return act(async () => upsert(await api('POST', `/agents/${id}/plan/approve`, {})), 'Approved; the agent is implementing it');
     case 'clash-dismiss':
@@ -3952,6 +3984,8 @@ function agentChanged(a) {
     loadSpec(a.id, docView.kind).then(renderDocDialog);
   }
   reviewUi.agentChanged(a);
+  acceptUi.agentChanged(a);
+  autoUi.agentChanged(a);
   sidePane?.agentChanged(a);
 }
 
@@ -4143,6 +4177,12 @@ $('#detail-body').addEventListener('click', async (e) => {
       return openEdit(a);
     case 'plan-open':
       return openPlan(a.id);
+    case 'accept-open':
+      return acceptUi.open(a.id);
+    case 'auto-open':
+      return autoUi.open(a.id);
+    case 'accept-skip':
+      return act(async () => upsert(await api('POST', `/agents/${a.id}/acceptance/skip`)), 'Not waiting; the agent goes ahead with its own criteria');
     case 'plan-on':
       return act(async () => upsert(await api('POST', `/agents/${a.id}/plan/review`, { on: true })), 'The agent will write a plan and wait for your review');
     case 'plan-skip':
@@ -4335,6 +4375,7 @@ function renderProjectOptions() {
 
 function openNewDialog(mode = 'now') {
   renderProjectOptions();
+  newDrop.reset();
   $('#new-error').hidden = true;
   dialog.querySelector(`input[name="when"][value="${mode}"]`).checked = true;
   restoreIntentSplit();
@@ -4399,6 +4440,20 @@ function syncIntentPlaceholder() {
   form.intents.placeholder = form.split.value === 'one' || ['race', 'team'].includes(form.when.value) ? WHOLE_PLACEHOLDER : LINES_PLACEHOLDER;
 }
 for (const r of dialog.querySelectorAll('input[name="when"]')) r.addEventListener('change', syncWhen);
+// Tickets, requirements, designs and files dropped on the page or on the form fill it in (dropzone.js).
+const newDrop = initDropZone({
+  form: $('#new-form'),
+  zone: $('#new-drop'),
+  overlay: $('#drop-overlay'),
+  attach: newFiles,
+  open: () => openNewDialog('now'),
+  isOpen: () => dialog.open,
+  sync: () => {
+    syncIntentPlaceholder();
+    syncIntentCount();
+  },
+  toast,
+});
 $('#new-btn').onclick = () => openNewDialog('now');
 $('#new-cancel').onclick = () => dialog.close();
 $('#new-form').addEventListener('submit', async (e) => {
@@ -4504,6 +4559,8 @@ $('#new-form').addEventListener('submit', async (e) => {
         ...containerChoice(e.target),
         plan: Boolean(f.get('plan')),
         planReview: Boolean(f.get('planReview')),
+        acceptance: Boolean(f.get('acceptance')),
+        autonomy: f.get('autonomy') || undefined,
         designDoc: Boolean(f.get('designDoc')),
       demoPage: Boolean(f.get('demoPage')),
       benchmarks: Boolean(f.get('benchmarks')),
@@ -4537,6 +4594,8 @@ $('#new-form').addEventListener('submit', async (e) => {
       project: f.get('project') || undefined,
       plan: Boolean(f.get('plan')),
       planReview: Boolean(f.get('planReview')),
+      acceptance: Boolean(f.get('acceptance')),
+      autonomy: f.get('autonomy') || undefined,
       designDoc: Boolean(f.get('designDoc')),
       start: Boolean(f.get('start')),
       ...containerChoice(e.target),

@@ -22,6 +22,7 @@ import { Screen } from './screen.js';
 import { Awake } from './awake.js';
 import { Files } from './files.js';
 import { Announcer } from './announce.js';
+import { Autonomy, LEVELS as AUTONOMY_LEVELS, parseLevel } from './autonomy.js';
 import { Autopilot } from './autopilot.js';
 import { Goals, goalMarkdown } from './goals.js';
 import { Budgets } from './budgets.js';
@@ -235,12 +236,20 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
     manager,
     config,
     ship: shipAgent,
-    managed: (id) => backlog.items().some((it) => it.agentId === id && ['active', 'review'].includes(it.status) && backlog.autopilotFor(it.projectKey) !== 'off'),
+    managed: (id) => backlog.items().some((it) => it.agentId === id && ['active', 'review'].includes(it.status) && backlog.levelFor(it) !== 'off'),
     log: (m) => console.log(`[agentmgr] ${m}`),
   });
   // Backlog work the scorecard calls ready goes on to a pull request (and merged) by itself.
   const autopilot = new Autopilot({ manager, store, backlog, review, landing, config });
   manager.inboxSources.push(() => autopilot.inbox());
+  // Agents that run without you (autonomy.js): routine questions answered from what is decided,
+  // nudges and follow-ups sent, and at "merge" the pull request merged when everything says ready.
+  const autonomy = new Autonomy({ manager, store, config, review, landing, backlog });
+  manager.inboxSources.push(() => autonomy.inbox());
+  // How far an agent goes without the person is the person's to set: never an agent's own call.
+  const yourLevel = (req) => {
+    if (req.headers['x-agentmgr-agent']) throw fail(403, 'How far an agent goes without the person is set by the person, not by an agent');
+  };
   // Daily or weekly goals across projects, planned into backlog tasks and seen through (goals.js).
   const goals = new Goals({ manager, store, backlog, config });
   // What agents got done, appended to a CSV for reviews (worklog.js).
@@ -357,7 +366,7 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
       return {
         working: views.filter((v) => ['planning', 'working', 'blocked'].includes(v.brief?.status) || (v.runtime.running && v.brief?.status !== 'done')),
         backlog: backlog.view().items.filter((it) => it.projectKey === p.key && ['queued', 'active', 'review', 'blocked'].includes(it.status)),
-        waiting: views.filter((v) => v.runtime.attention || v.runtime.waiting || v.planReview?.status === 'review' || (v.questions ?? []).some((q) => !q.answer)),
+        waiting: views.filter((v) => v.runtime.attention || v.runtime.waiting || v.planReview?.status === 'review' || (v.acceptance?.status === 'review' && v.acceptance.wait) || (v.questions ?? []).some((q) => !q.answer)),
         prs,
         failing: prs.filter((x) => x.checks?.state === 'failed'),
         bugs: openFindings(p).filter((f) => ['critical', 'high'].includes(f.severity)),
@@ -390,6 +399,11 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
     questions: (a) => (NO_REPO.has(a.kind) ? [] : loadQuestions(a.id)),
     bugs: (key) => hunts.list().findings.filter((f) => ['open', 'fixing', 'pr'].includes(f.status) && ['critical', 'high'].includes(f.severity) && manager.resolveProject(f.project)?.key === key).length,
     enabled: () => config.decide?.enabled !== false,
+    // Agents that run without you (autonomy.js): "most things" may be decided for them, never what cannot be taken back.
+    autonomous: (id) => autonomy.autonomous(id),
+    guard: (item) => (autonomy.autonomous(item.agentId) ? autonomy.guard(item) : null),
+    context: (item) => autonomy.briefContext(item),
+    onAuto: (h) => autonomy.decided(h),
     onChange: () => pushAdvisor(),
     notify: async (text, plain) => {
       const n = loadNotify();
@@ -586,6 +600,7 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
     wrap((req) => {
       const { intents, intent, startedBy, ...opts } = req.body ?? {};
       if (opts.kind === 'assistant') throw fail(400, 'Start the assistant with POST /assistant/start');
+      if (opts.autonomy) yourLevel(req);
       const list = (Array.isArray(intents) ? intents : [intent]).map((i) => String(i ?? '').trim()).filter(Boolean);
       // Agents the assistant's own session starts: its limits apply, and they are marked as its.
       const extra = assistant.admit(req.headers['x-agentmgr-agent'], list, opts);
@@ -673,6 +688,32 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
   api.post('/agents/:id/plan/approve', wrap((req) => manager.approvePlan(req.params.id, req.body?.note)));
   api.post('/agents/:id/plan/changes', wrap((req) => manager.requestPlanChanges(req.params.id, req.body?.note)));
   api.post('/agents/:id/plan/review', wrap((req) => manager.setPlanReview(req.params.id, req.body?.on === true)));
+  // Acceptance: what done means, agreed with the person; the scorecard checks each point (acceptance.js).
+  api.get('/agents/:id/acceptance', wrap((req) => manager.acceptanceOf(req.params.id)));
+  // The points are the person's to agree on: an agent's own calls can read them, not set or skip them.
+  const person = (req) => {
+    if (req.headers['x-agentmgr-agent']) throw fail(403, 'What done means is agreed by the person, not by an agent');
+  };
+  api.post('/agents/:id/acceptance/agree', wrap((req) => (person(req), manager.agreeAcceptance(req.params.id, req.body?.points))));
+  api.post('/agents/:id/acceptance/skip', wrap((req) => (person(req), manager.skipAcceptance(req.params.id))));
+  // Autonomy (autonomy.js): the default level and the models its calls run on; one agent's level;
+  // and what was done for the person: seen ("ack"), or an answer changed to their own ("correct").
+  api.get('/autonomy', wrap(() => autonomy.status()));
+  api.put('/autonomy', wrap((req) => {
+    yourLevel(req);
+    saveConfig({ autonomy: autonomy.change(req.body ?? {}) });
+    return autonomy.status();
+  }));
+  api.post('/agents/:id/autonomy', wrap((req) => (yourLevel(req), autonomy.setLevel(req.params.id, req.body?.level))));
+  api.post('/agents/:id/autonomy/ack', wrap((req) => (yourLevel(req), autonomy.ack(req.params.id, String(req.body?.entry ?? '')))));
+  api.post('/agents/:id/autonomy/correct', wrap((req) => (yourLevel(req), autonomy.correct(req.params.id, String(req.body?.entry ?? ''), req.body?.text))));
+  // Ground rules: the person's own rules for every session (groundrules.js). Agents can read them, not change them.
+  api.get('/ground-rules', wrap(() => manager.groundRules.view()));
+  api.put('/ground-rules', wrap((req) => {
+    if (req.headers['x-agentmgr-agent']) throw fail(403, 'Ground rules are set by the person, not by an agent');
+    const b = req.body ?? {};
+    return manager.setGroundRules(b.rules ?? b.text ?? '', { tell: b.tell === true });
+  }));
   api.post('/agents/:id/handoff', wrap((req) => manager.maybeHandoff(manager.mustGet(req.params.id).id, { force: true })));
   // ---------------------------------------------------------- studio: files and editor
   api.get('/agents/:id/files', wrap((req) => studio.list(req.params.id, req.query.dir ?? '')));
@@ -743,7 +784,10 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
       return agent;
     }),
   );
-  api.patch('/agents/:id', wrap((req) => manager.update(req.params.id, req.body ?? {})));
+  api.patch('/agents/:id', wrap((req) => {
+    if ('autonomy' in (req.body ?? {})) yourLevel(req);
+    return manager.update(req.params.id, req.body ?? {});
+  }));
   api.post('/agents/:id/browsers', wrap((req) => manager.addBrowser(req.params.id, req.body?.url, { mode: req.body?.mode })));
   api.patch(
     '/agents/:id/browsers/:n',
@@ -900,6 +944,11 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
     '/backlog',
     wrap((req) => {
       const { items, item, ...opts } = req.body ?? {};
+      if (opts.autonomy) {
+        yourLevel(req);
+        opts.autonomy = parseLevel(opts.autonomy);
+        if (!opts.autonomy) throw fail(400, `autonomy is one of ${AUTONOMY_LEVELS.join(', ')}`);
+      }
       const added = backlog.add(Array.isArray(items) ? items : [item], opts);
       repeats.record(added.map((it) => ({ text: it.title, projectKey: it.projectKey })));
       return added;
@@ -2018,6 +2067,7 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
     benches.close();
     evals.close();
     autopilot.close();
+    autonomy.close();
     goals.close();
     worklog.close();
     triggers.close();

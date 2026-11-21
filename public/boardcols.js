@@ -20,6 +20,7 @@ export function needOf(a) {
   if (a.status === 'error') return 'an error';
   if (rt.limited) return 'stopped at a limit';
   if (a.planReview?.status === 'review') return 'a plan to approve';
+  if (a.acceptance?.status === 'review' && a.acceptance.wait) return 'what done means, to agree';
   const q = (a.questions ?? []).filter((x) => !x.answer).length;
   if (q) return q === 1 ? 'a question' : `${q} questions`;
   if (rt.waiting) return rt.waiting.kind === 'error' ? 'an error on its screen' : 'a question on its screen';

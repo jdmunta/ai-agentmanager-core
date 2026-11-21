@@ -90,6 +90,10 @@ export function attachBox({ slot, form, paste, esc, toast }) {
   });
 
   return {
+    /** Attach these files (dropped somewhere else on the page). */
+    add,
+    /** Open the file picker. */
+    pick: () => input.click(),
     paths: () => items.filter((it) => it.path).map((it) => it.path),
     pending: () => items.some((it) => it.uploading),
     clear() {

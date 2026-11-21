@@ -257,6 +257,13 @@
           <label class="check" title="The whole text goes to one agent: a long description, a spec, pasted notes"><input type="radio" name="split" value="one" /> One agent for all of it</label>
           <span class="spacer"></span><span class="hint" id="intent-count"></span>
         </div>
+        <div id="new-drop" class="drop-zone">
+          <span class="drop-icon" aria-hidden="true">⤓</span>
+          <span class="drop-text"><b>Drop tickets, requirements and designs here</b>
+            <span class="hint">Jira or GitHub issue links, a PRD or design link, screenshots, documents: the form is filled in for you. <button type="button" class="link" data-drop-act="paste">Paste what you copied</button> · <button type="button" class="link" data-drop-act="pick">Choose files</button></span>
+            <span class="drop-added" role="status"></span>
+          </span>
+        </div>
         <label>
           <span class="sr-only">Intents</span>
           <textarea name="intents" rows="6" required placeholder="Add a dark mode toggle that remembers the user's choice&#10;Make search results show up as you type&#10;Find out why the dashboard takes 5 seconds to load and speed it up&#10;Add a one-click CSV export to the reports page"></textarea>
@@ -313,6 +320,20 @@
         <label class="check">
           <input type="checkbox" name="plan" checked />
           Plan with Claude while the repo clones <span class="hint">(repo URLs only; the session moves into the repo when it's ready)</span>
+        </label>
+        <label class="check">
+          <input type="checkbox" name="acceptance" />
+          Agree on what done means first <span class="hint">(the agent writes three to six points you can check and waits; you change them and agree, and its work is checked against them)</span>
+        </label>
+        <label>
+          Without you <span class="hint">how far each agent goes before it needs you; routine questions are answered from what is already decided, and each answer shows in your inbox</span>
+          <select name="autonomy" id="new-autonomy">
+            <option value="">The default</option>
+            <option value="ask">Ask me</option>
+            <option value="run">Agree, then run</option>
+            <option value="pr">Run to pull request</option>
+            <option value="merge">Run to merge</option>
+          </select>
         </label>
         <label class="check">
           <input type="checkbox" name="planReview" />
@@ -913,6 +934,22 @@
       </div>
     </dialog>
 
+    <dialog id="accept-dialog" class="update-dialog accept-dialog" aria-label="What done means">
+      <h2 id="acc-title">What done means</h2>
+      <div id="acc-body"></div>
+      <div class="dialog-actions" id="acc-actions"></div>
+    </dialog>
+
+    <div id="drop-overlay" class="drop-overlay" hidden aria-hidden="true">
+      <div class="drop-frame"><span class="drop-icon">⤓</span><b>Drop to start a new agent</b><span>Tickets, requirements, designs, screenshots or files: the form is filled in, and you start it.</span></div>
+    </div>
+
+    <dialog id="auto-dialog" class="update-dialog auto-dialog" aria-label="Without you">
+      <h2 id="auto-title">Without you</h2>
+      <div id="auto-body"></div>
+      <div class="dialog-actions"><button type="button" class="small primary" data-auto="close">Close</button></div>
+    </dialog>
+
     <dialog id="update-dialog" class="update-dialog" aria-label="Update">
       <h2 id="update-title">Update</h2>
       <div id="update-body"></div>
@@ -977,6 +1014,25 @@
           <p class="hint">When an agent says it is done, the critics (other models of the agent's own engine) read its changes, it fixes what they find, and they look again. Each round is one call per critic on your own plan. <span id="settings-review-state"></span></p>
           <label class="check"><input type="checkbox" name="judgeOn" /> AI judge: checks stuck agents, idle screens, finished work, overlaps, backlog order and alerts</label>
           <p class="hint">On your own Claude or Codex plan; without it, fixed rules only. <span id="settings-judge-state"></span></p>
+        </fieldset>
+        <fieldset id="settings-ground">
+          <legend>Ground rules</legend>
+          <p class="hint">Your own rules for every agent, in every repository, one per line. Agents get them with their instructions, next to what is in the repository's memory and its standards, and are told to stop and say so when a task cannot be done without breaking one.</p>
+          <textarea name="groundRules" rows="5" placeholder="Ask before adding a dependency&#10;Never force-push or rewrite history&#10;Say how sure you are of anything you build, and why" aria-label="Ground rules, one per line"></textarea>
+          <label class="check"><input type="checkbox" name="groundTell" /> Also tell the agents running now <span class="hint">(others get them when they start)</span></label>
+        </fieldset>
+        <fieldset id="settings-autonomy">
+          <legend>Without you</legend>
+          <label>New agents
+            <select name="autoLevel">
+              <option value="ask">Ask me</option>
+              <option value="run">Agree, then run</option>
+              <option value="pr">Run to pull request</option>
+              <option value="merge">Run to merge</option>
+            </select>
+          </label>
+          <label>Models, best first <input name="autoModels" placeholder="fable, opus, sonnet" autocomplete="off" autocapitalize="off" spellcheck="false" /></label>
+          <p class="hint">How far an agent goes when you name no level. Past "Ask me", routine questions are answered from what is already decided (your request, the agreed points, your ground rules, the repository's lessons), nudges are sent and quiet agents told to carry on. The first model answers; the next one is used when a call fails. Never answered for you: permission prompts, and questions about deleting, publishing, money, credentials or scope. <span id="settings-autonomy-state"></span></p>
         </fieldset>
         <fieldset class="local-only" id="settings-service">
           <legend>Start at login</legend>

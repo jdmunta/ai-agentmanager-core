@@ -261,9 +261,14 @@ export class PreReview {
     return Boolean(agent.kind === 'task' && agent.workdir && !agent.hunting && !agent.fixing && !agent.reviewing && !agent.team && !agent.builds && !agent.raceId && !this.skip(agent) && this.candidates(agent).length);
   }
 
+  /** Is its pull request opened on approval? The setting, or its own autonomy level saying so (autonomy.js). */
+  opensPr(agent) {
+    return this.settings.openPr || ['pr', 'merge'].includes(agent?.autonomy?.level);
+  }
+
   /** Told at launch that the pull request waits for the review? */
   instructs(agent) {
-    return this.applies(agent) && this.settings.openPr && !this.managed(agent.id);
+    return this.applies(agent) && this.opensPr(agent) && !this.managed(agent.id);
   }
 
   /**
@@ -402,7 +407,7 @@ export class PreReview {
     this.manager.patch(id, { preReview: state });
     this.log(`review rounds: ${this.manager.store.get(id)?.name ?? id} ${state.status === 'approved' ? 'approved' : 'not approved'} in round ${state.round} of ${state.max}`);
     await this.after(id);
-    if (state.status === 'approved' && this.settings.openPr && !state.forced && !this.managed(id)) await this.open(id).catch(() => {});
+    if (state.status === 'approved' && this.opensPr(this.manager.store.get(id)) && !state.forced && !this.managed(id)) await this.open(id).catch(() => {});
   }
 
   /** What waited for the rounds: the AI review, and the score (which goes in the pull request's description). */

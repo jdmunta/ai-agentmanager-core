@@ -83,7 +83,7 @@ before(async () => {
   const http = await import('node:http');
   notes = http.createServer((req, res) => res.end(req.url.endsWith('.ics') ? calIcs() : notesMd));
   await new Promise((r) => notes.listen(0, '127.0.0.1', r));
-  fs.writeFileSync(path.join(home, 'config.json'), JSON.stringify({ claudeBin: process.execPath, claudeArgs: [path.join(here, 'fake-claude.js')], updates: { check: false }, announce: { auto: false }, judge: { enabled: false }, localModels: { enabled: false }, preReview: { enabled: false }, shell: '/bin/sh', gitRefreshSec: 1, conflictRefreshSec: 0, engines: { codex: { bin: path.join(here, 'fake-codex.js') } }, news: { sources: [], custom: [{ id: 'local', lab: 'Anthropic', label: 'Local notes', url: `http://127.0.0.1:${notes.address().port}/notes.md` }] } }));
+  fs.writeFileSync(path.join(home, 'config.json'), JSON.stringify({ claudeBin: process.execPath, claudeArgs: [path.join(here, 'fake-claude.js')], updates: { check: false }, announce: { auto: false }, judge: { enabled: false, idleSec: 2, warmupSec: 0 }, localModels: { enabled: false }, preReview: { enabled: false }, shell: '/bin/sh', gitRefreshSec: 1, conflictRefreshSec: 0, engines: { codex: { bin: path.join(here, 'fake-codex.js') } }, news: { sources: [], custom: [{ id: 'local', lab: 'Anthropic', label: 'Local notes', url: `http://127.0.0.1:${notes.address().port}/notes.md` }] } }));
   // Quality: merged pull requests already looked at (GitHub is not asked in these tests).
   const mergedPr = (n, title, extra = {}) => [`https://github.com/acme/shop/pull/${n}`, { url: `https://github.com/acme/shop/pull/${n}`, number: n, title, repo: 'acme/shop', agentId: 'gone', agentName: `agent-${n}`, project: 'Shop', openedAt: new Date(Date.now() - 3 * 3_600_000 - 2000).toISOString(), mergedAt: new Date(Date.now() - 2000).toISOString(), facts: { mergeCommit: `sha${n}`, base: 'main', files: ['src/cache.js'], lines: 40 + n, changesRequested: n === 71 ? 2 : 0, reviews: 1 }, after: { reverted: null, fixes: [], checks: { state: 'passed', failed: [] } }, checkedAt: new Date().toISOString(), ...extra }];
   const qualityItems = Object.fromEntries([
@@ -1533,4 +1533,250 @@ test('Update: written when an agent finishes, a card in the inbox, the Slack mes
     await api('PUT', '/announce/slack', { webhookUrl: '' });
     hook.close();
   }
+});
+
+test('Without you and ground rules: the level on a new agent and on one that runs, your rules and the models in Settings, and the agent\'s own confidence in its results', { skip }, async () => {
+  // New agent: a level past "Ask me" also asks to agree on what done means first.
+  await js(`document.querySelector('#new-btn')?.click()`);
+  const sel = `document.querySelector('#new-dialog select[name="autonomy"]')`;
+  assert.deepEqual(await js(`[...${sel}.options].map((o) => o.textContent)`), ['The default', 'Ask me', 'Agree, then run', 'Run to pull request', 'Run to merge']);
+  assert.equal(await js(`document.querySelector('#new-dialog input[name="acceptance"]').checked`), false);
+  await js(`(() => { ${sel}.value = 'pr'; ${sel}.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+  assert.equal(await js(`document.querySelector('#new-dialog input[name="acceptance"]').checked`), true, 'what done means is agreed first');
+  await js(`(() => { ${sel}.value = ''; document.querySelector('#new-dialog input[name="acceptance"]').checked = false; document.querySelector('#new-dialog').close(); })()`);
+
+  // Settings: your ground rules, one per line, and the level and models for agents that run without you.
+  await js(`document.querySelector('#settings-btn').click()`);
+  const form = `document.querySelector('#settings-form')`;
+  await until(`document.querySelector('#settings-dialog').open && !document.querySelector('#settings-autonomy').hidden && ${form}.autoModels.value`, 'settings open');
+  assert.equal(await js(`${form}.autoModels.value`), 'fable, opus, sonnet');
+  assert.equal(await js(`${form}.autoLevel.value`), 'ask');
+  assert.match(await js(`document.querySelector('#settings-ground').textContent.replace(/\\s+/g, ' ')`), /Ground rules Your own rules for every agent, in every repository, one per line/);
+  await js(`(() => { ${form}.groundRules.value = '- Ask before adding a dependency\\nNever force-push'; ${form}.autoModels.value = 'opus, sonnet'; })()`);
+  await width(390);
+  assert.ok(await js(`['#settings-ground', '#settings-autonomy'].every((q) => document.querySelector(q).getBoundingClientRect().right <= 390 && document.querySelector(q).scrollWidth <= document.querySelector(q).clientWidth + 1)`), 'both fit a phone');
+  await width(1600);
+  await js(`${form}.requestSubmit()`);
+  await until(`!document.querySelector('#settings-dialog').open`, 'settings saved');
+  assert.deepEqual((await api('GET', '/ground-rules')).rules, ['Ask before adding a dependency', 'Never force-push']);
+  assert.deepEqual((await api('GET', '/autonomy')).models, ['opus', 'sonnet']);
+  await js(`document.querySelector('#settings-btn').click()`);
+  await until(`document.querySelector('#settings-dialog').open && ${form}.groundRules.value`, 'settings open again');
+  assert.equal(await js(`${form}.groundRules.value`), 'Ask before adding a dependency\nNever force-push');
+  assert.equal(await js(`${form}.autoModels.value`), 'opus, sonnet');
+  await js(`document.querySelector('#settings-cancel').click()`);
+
+  // An agent that runs without you: its row, and the dialog to change how far it goes.
+  const [a] = await api('POST', '/agents', { intents: ['Add a cache'], autonomy: 'merge', acceptance: false, start: false });
+  await js(`document.querySelector('[data-tab="agents"]').click()`);
+  await until(`document.querySelector('#agent-list li[data-id="${a.id}"]')`, 'the agent listed');
+  await js(`document.querySelector('#agent-list li[data-id="${a.id}"]').click()`);
+  const row = `document.querySelector('.auto-row')`;
+  await until(`${row} && /Run to merge/.test(${row}.textContent)`, 'its level on the agent');
+  await js(`${row}.querySelector('[data-act="auto-open"]').click()`);
+  const dlg = `document.querySelector('#auto-dialog')`;
+  await until(`${dlg}.open`, 'the dialog');
+  assert.match(await js(`${dlg}.textContent.replace(/\\s+/g, ' ')`), /^ ?Without you: .*How far it goes .*merged when its checks pass, the scorecard says ready and no high-risk path is touched\. Never done for you: answering a permission prompt, or a question about deleting, publishing, money, credentials or the scope of the task\. Nothing was done for you yet\./);
+  await js(`(() => { const s = ${dlg}.querySelector('[data-auto="level"]'); s.value = 'run'; s.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+  await until(`/Agree, then run/.test(${row}?.textContent ?? '')`, 'the level changed');
+  assert.equal((await api('GET', `/agents/${a.id}`)).autonomy.level, 'run');
+  await width(390);
+  assert.ok(await js(`${dlg}.getBoundingClientRect().width <= 390 && ${dlg}.scrollWidth <= ${dlg}.clientWidth + 1`), 'fits a phone');
+  await width(1600);
+  await js(`(() => { const s = ${dlg}.querySelector('[data-auto="level"]'); s.value = 'ask'; s.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+  await until(`!${row} && document.querySelector('[data-act="auto-open"]')?.textContent === 'Run without me…'`, 'asks you again: the way back in');
+  await js(`${dlg}.querySelector('[data-auto="close"]').click()`);
+
+  // Its own confidence in what it built, from its brief, beside the results.
+  const briefs = path.join(home, 'briefs', a.id);
+  fs.mkdirSync(briefs, { recursive: true });
+  await api('POST', `/agents/${a.id}/start`);
+  await until(`document.querySelector('#agent-list li[data-id="${a.id}"] .pill')?.textContent && true`, 'started');
+  for (let i = 0; i < 100 && (await api('GET', `/agents/${a.id}`)).status !== 'running'; i++) await sleep(200);
+  await sleep(1500); // the stand-in engine writes its own brief as it starts
+  fs.writeFileSync(path.join(briefs, 'BRIEF.md'), 'Status: done\n## Problem\nx\n## Solution\ny\n## Results\nOutcome: done\nConfidence: 60% - read the code, ran nothing <b>yet</b>\n- Delivered: a cache\n');
+  await until(`document.querySelector('.own-conf .tag')`, 'its confidence shown', 30_000);
+  assert.match(await js(`document.querySelector('.own-conf').textContent.replace(/\\s+/g, ' ')`), /Its own confidence: 60% read the code, ran nothing <b>yet<\/b>/);
+  assert.ok(await js(`document.querySelector('.own-conf .tag').classList.contains('conf-low')`));
+  assert.ok(await js(`document.documentElement.scrollWidth <= window.innerWidth`), 'no sideways scroll');
+
+  // A question it stops on is answered for you: a card in the inbox, seen with OK, and on its record.
+  await api('PUT', '/judge', { enabled: true });
+  try {
+    const [w] = await api('POST', '/agents', { intents: ['Add a cache #waiting'], autonomy: 'run', acceptance: false });
+    await js(`document.querySelector('[data-tab="inbox"]').click()`);
+    const card = `document.querySelector('#inbox-view [data-need^="auto:${w.id}:"]')`;
+    await until(card, 'answered for you, in the inbox', 90_000);
+    assert.match(await js(`${card}.textContent.replace(/\\s+/g, ' ')`), /Done for you.*Which database should I use\? Answered for you: SQLite From: routine detail, cheap to change; ground rules read · Claude Code opus, 90% sure/);
+    await width(390);
+    assert.ok(await js(`${card}.getBoundingClientRect().right <= 390 && document.documentElement.scrollWidth <= window.innerWidth`), 'the card fits a phone');
+    await width(1600);
+    await js(`${card}.querySelector('[data-ib="auto-ok"]').click()`);
+    await until(`!${card}`, 'seen: out of the inbox');
+    await js(`document.querySelector('[data-tab="agents"]').click()`);
+    await js(`document.querySelector('#agent-list li[data-id="${w.id}"]').click()`);
+    await until(`/1 answered/.test(${row}?.textContent ?? '')`, 'on the agent: 1 answered');
+    await js(`${row}.querySelector('[data-act="auto-open"]').click()`);
+    await until(`${dlg}.open && ${dlg}.querySelector('.auto-log li')`, 'its record');
+    assert.match(await js(`${dlg}.querySelector('.auto-log li').textContent.replace(/\\s+/g, ' ')`), /Answered .*Which database should I use\? → SQLite From: routine detail.*Change answer…/);
+    assert.equal(await js(`Boolean(${dlg}.querySelector('.auto-log [data-auto="ok"]'))`), false, 'already seen');
+    await js(`${dlg}.querySelector('[data-auto="close"]').click()`);
+    await api('DELETE', `/agents/${w.id}`).catch(() => {});
+  } finally {
+    await api('PUT', '/judge', { enabled: false });
+  }
+
+  await api('PUT', '/ground-rules', { text: '' });
+  await api('PUT', '/autonomy', { models: 'fable, opus, sonnet' });
+  await api('DELETE', `/agents/${a.id}`).catch(() => {});
+  assert.deepEqual(errors, [], 'no errors on the page');
+});
+
+test('Drop to start: a ticket, requirements and a design dropped on the page open New agents filled in; files attach; the form takes more', { skip }, async () => {
+  // What a drag from another window carries: links as a uri-list and as text, or files.
+  const drag = (type, target, { uris = '', text = '', file = null } = {}) =>
+    js(`(() => {
+      const dt = new DataTransfer();
+      if (${JSON.stringify(uris)}) dt.setData('text/uri-list', ${JSON.stringify(uris)});
+      if (${JSON.stringify(text)}) dt.setData('text/plain', ${JSON.stringify(text)});
+      if (${JSON.stringify(file)}) dt.items.add(new File(['# PRD\\nFast checkout'], ${JSON.stringify(file)}, { type: 'text/markdown' }));
+      const ev = new DragEvent(${JSON.stringify(type)}, { bubbles: true, cancelable: true, dataTransfer: dt });
+      document.querySelector(${JSON.stringify(target)}).dispatchEvent(ev);
+      return ev.defaultPrevented;
+    })()`);
+  const overlay = `document.querySelector('#drop-overlay')`;
+  const form = `document.querySelector('#new-form')`;
+  const ticket = 'https://acme.atlassian.net/browse/SHOP-142';
+  const links = `${ticket}\nhttps://docs.google.com/document/d/1abc/edit\nhttps://www.figma.com/file/abc/Checkout`;
+  await js(`document.querySelector('[data-tab="agents"]').click()`);
+  assert.equal(await js(`${overlay}.hidden`), true);
+
+  // Dragging over the page: the frame says what a drop does. Dropping opens the form, filled in.
+  assert.equal(await drag('dragover', 'main, body', { uris: links, text: links }), true, 'the page takes it');
+  assert.equal(await js(`${overlay}.hidden`), false);
+  assert.match(await js(`${overlay}.textContent.replace(/\\s+/g, ' ')`), /Drop to start a new agent ?Tickets, requirements, designs, screenshots or files/);
+  assert.equal(await js(`getComputedStyle(${overlay}).pointerEvents`), 'none', 'what is under it still gets the drop');
+  await drag('drop', 'main, body', { uris: links, text: links });
+  await until(`document.querySelector('#new-dialog').open`, 'New agents opened');
+  assert.equal(await js(`${overlay}.hidden`), true);
+  assert.equal(await js(`${form}.intents.value`), `${ticket}\n\nContext:\n- Requirements: https://docs.google.com/document/d/1abc/edit\n- Design: https://www.figma.com/file/abc/Checkout`);
+  assert.equal(await js(`${form}.split.value`), 'one', 'one agent for the ticket and its context');
+  assert.match(await js(`document.querySelector('#new-drop .drop-added').textContent`), /^Added: 1 ticket, 1 requirements link, 1 design\. Check the request below, then start\.$/);
+  assert.ok(await js(`document.querySelector('#new-drop').classList.contains('filled')`));
+  assert.match(await js(`document.querySelector('#new-dialog button[type=submit]').textContent`), /^Create agent$/);
+
+  // On the open form: a repository link fills the repository, a file attaches, and the page frame stays away.
+  assert.equal(await drag('dragover', '#new-drop', { uris: 'https://github.com/acme/web' }), true);
+  assert.ok(await js(`document.querySelector('#new-drop').classList.contains('over')`), 'the box lights up');
+  assert.equal(await js(`${overlay}.hidden`), true, 'a dialog is open: no page frame');
+  await drag('drop', '#new-drop', { uris: 'https://github.com/acme/web' });
+  assert.equal(await js(`${form}.repo.value`), 'https://github.com/acme/web.git');
+  assert.ok(!(await js(`document.querySelector('#new-drop').classList.contains('over')`)));
+  assert.equal(await js(`${form}.intents.value.split('\\n')[0]`), ticket, 'the request is left as it was');
+  await drag('drop', '#new-drop', { file: 'prd.md' });
+  await until(`/prd\\.md/.test(document.querySelector('#new-attach .attach-chips').textContent) && !/uploading/.test(document.querySelector('#new-attach .attach-chips').textContent)`, 'the file attached');
+  assert.match(await js(`document.querySelector('#new-drop .drop-added').textContent`), /^Added: 1 file\./);
+  // Text moved inside the page (a drag that started here) is left alone.
+  await js(`document.dispatchEvent(new DragEvent('dragstart', { bubbles: true }))`);
+  assert.equal(await drag('dragover', '#new-drop', { text: 'moved text' }), false);
+  await js(`document.dispatchEvent(new DragEvent('dragend', { bubbles: true }))`);
+  // On a phone the box fits, and offers to choose files.
+  await width(390);
+  assert.ok(await js(`(() => { const d = document.querySelector('#new-dialog').getBoundingClientRect(); return d.right <= 390 && [...document.querySelectorAll('#new-form > *')].every((el) => el.getBoundingClientRect().right <= d.right); })()`), 'fits a phone: nothing in the form is cut off');
+  assert.ok(await js(`Boolean(document.querySelector('#new-drop [data-drop-act="pick"]'))`));
+  await width(1600);
+
+  // Opened again: empty, nothing "added".
+  await js(`(() => { ${form}.intents.value = ''; ${form}.repo.value = ''; document.querySelector('#new-attach [data-drop]')?.click(); document.querySelector('#new-dialog').close(); })()`);
+  await js(`document.querySelector('#new-btn').click()`);
+  assert.equal(await js(`document.querySelector('#new-drop .drop-added').textContent`), '');
+  assert.ok(!(await js(`document.querySelector('#new-drop').classList.contains('filled')`)));
+  // Several tickets: one agent each.
+  await drag('drop', '#new-drop', { text: 'https://acme.atlassian.net/browse/SHOP-1 https://acme.atlassian.net/browse/SHOP-2' });
+  assert.equal(await js(`${form}.split.value`), 'lines');
+  assert.match(await js(`document.querySelector('#new-dialog button[type=submit]').textContent`), /^Create 2 agents$/);
+  await js(`(() => { ${form}.intents.value = ''; document.querySelector('#new-dialog').close(); })()`);
+  assert.deepEqual(errors, [], 'no errors on the page');
+});
+
+test('Acceptance: what done means waits in the inbox, the points changed and agreed, then each one with what the check found', { skip }, async () => {
+  const repo = path.join(home, 'accept-repo');
+  fs.mkdirSync(repo, { recursive: true });
+  const g = (...args) => execFileSync('git', ['-c', 'commit.gpgsign=false', '-c', 'user.email=t@t', '-c', 'user.name=t', ...args], { cwd: repo });
+  g('init', '-q');
+  fs.writeFileSync(path.join(repo, 'README.md'), '# x\n');
+  g('add', '.');
+  g('commit', '-q', '-m', 'first');
+  // Asked for in New agent.
+  await js(`document.querySelector('#new-btn')?.click()`);
+  assert.match(await js(`document.querySelector('#new-dialog input[name="acceptance"]').closest('label').textContent.replace(/\\s+/g, ' ')`), /Agree on what done means first/);
+  assert.equal(await js(`document.querySelector('#new-dialog input[name="acceptance"]').checked`), false, 'off unless asked for');
+  await js(`document.querySelector('#new-dialog').close()`);
+
+  const [a] = await api('POST', '/agents', { intents: ['Add a CSV export'], dir: repo, acceptance: true });
+  const row = `document.querySelector('.acc-row')`;
+  await js(`document.querySelector('[data-tab="agents"]').click()`);
+  await until(`document.querySelector('#agent-list li[data-id="${a.id}"]')`, 'the agent listed');
+  await js(`document.querySelector('#agent-list li[data-id="${a.id}"]').click()`);
+  await until(`${row} && /being written/.test(${row}.textContent)`, 'its points are being written');
+  assert.equal(await js(`${row}.querySelector('[data-act="accept-open"]').disabled`), true);
+
+  // The agent writes its spec: a card in the inbox with the points.
+  const briefs = path.join(home, 'briefs', a.id);
+  fs.mkdirSync(briefs, { recursive: true });
+  fs.writeFileSync(path.join(briefs, 'SPEC.md'), '# Spec: export\n## Acceptance criteria\n- GET /export.csv answers 200\n- The first row is the header\n- It is fast <b>enough</b>\n');
+  const card = `document.querySelector('#inbox-view [data-need="acceptance:${a.id}"]')`;
+  await js(`document.querySelector('[data-tab="inbox"]').click()`);
+  await until(card, 'its card in the inbox', 30_000);
+  assert.match(await js(`${card}.textContent.replace(/\\s+/g, ' ')`), /Done means.*What done means: 3 points.*GET \/export\.csv answers 200.*The first row is the header.*It is fast <b>enough<\/b>.*The agent changes nothing until you agree/);
+
+  // Change points: reword one, take one out, add one of your own; what is typed survives the page's updates.
+  await js(`${card}.querySelector('[data-ib="accept-open"]').click()`);
+  const dlg = `document.querySelector('#accept-dialog')`;
+  await until(`${dlg}.open && ${dlg}.querySelectorAll('[data-acc-point]').length === 3`, 'the points, to edit');
+  assert.match(await js(`${dlg}.querySelector('#acc-title').textContent`), /^What done means: /);
+  assert.match(await js(`${dlg}.querySelector('#acc-body .hint').textContent`), /changes nothing until you agree/);
+  await js(`(() => { const t = ${dlg}.querySelector('[data-acc-point="1"]'); t.value = 'The first row is the header, in table order #notmet'; })()`);
+  await js(`${dlg}.querySelector('[data-acc-remove="2"]').click()`);
+  await js(`${dlg}.querySelector('[data-acc="add"]').click()`);
+  assert.equal(await js(`document.activeElement === ${dlg}.querySelector('[data-acc-point="2"]')`), true, 'the new point has the cursor');
+  await js(`(() => { ${dlg}.querySelector('[data-acc-point="2"]').value = 'Dates are ISO 8601'; })()`);
+  await api('PATCH', `/agents/${a.id}`, { priority: 'P1' });
+  await sleep(400);
+  assert.deepEqual(await js(`[...${dlg}.querySelectorAll('[data-acc-point]')].map((t) => t.value)`), ['GET /export.csv answers 200', 'The first row is the header, in table order #notmet', 'Dates are ISO 8601'], 'not written over');
+  assert.match(await js(`${dlg}.querySelector('[data-acc="agree"]').textContent`), /^Agree and start$/);
+  await js(`${dlg}.querySelector('[data-acc="agree"]').click()`);
+  await until(`${dlg}.querySelectorAll('.acc-list li').length === 3`, 'agreed: the points, not checked yet');
+  assert.match(await js(`${dlg}.querySelector('#acc-body').textContent.replace(/\\s+/g, ' ')`), /Agreed .* Not checked yet: the work is scored against these when the agent says it is done\..*Not checked yet GET \/export\.csv answers 200.*table order #notmet \(yours\).*Dates are ISO 8601 \(yours\)/);
+  const got = (await api('GET', `/agents/${a.id}`)).acceptance;
+  assert.deepEqual(got.points.map((p) => p.from), ['agent', 'you', 'you']);
+  await until(`!${card}`, 'out of the inbox');
+
+  // Checked: each point with what was found and why; the one not met is plain to see, also on the agent.
+  fs.writeFileSync(path.join(repo, 'export.js'), 'export const csv = () => "a,b\\n";\n');
+  await js(`${dlg}.querySelector('[data-acc="check"]').click()`);
+  await until(`${dlg}.querySelector('.acc-chip.acc-not_met')`, 'checked', 30_000);
+  assert.deepEqual(await js(`[...${dlg}.querySelectorAll('.acc-list li .acc-chip')].map((c) => c.textContent)`), ['Met', 'Not met', 'Met']);
+  assert.match(await js(`${dlg}.querySelector('.acc-list li:nth-child(2) .acc-evidence').textContent`), /seen in H1/);
+  assert.match(await js(`${dlg}.querySelector('#acc-body .hint').textContent`), /^Agreed .*\. Checked /);
+  assert.equal(await js(`${dlg}.querySelector('[data-acc="check"]').textContent`), 'Check again');
+  assert.ok(await js(`document.documentElement.scrollWidth <= window.innerWidth`), 'no sideways scroll');
+  // On a phone: the dialog fits.
+  await width(390);
+  assert.ok(await js(`${dlg}.getBoundingClientRect().width <= 390 && ${dlg}.scrollWidth <= ${dlg}.clientWidth + 1`), 'fits a phone');
+  await width(1600);
+
+  // Change the points afterwards: back to editing, and cancel leaves them.
+  await js(`${dlg}.querySelector('[data-acc="edit"]').click()`);
+  await until(`${dlg}.querySelectorAll('[data-acc-point]').length === 3`, 'editing the agreed points');
+  assert.match(await js(`${dlg}.querySelector('[data-acc="agree"]').textContent`), /^Agree on these$/);
+  await js(`${dlg}.querySelector('[data-acc="cancel"]').click()`);
+  await until(`${dlg}.querySelectorAll('.acc-list li').length === 3`, 'back to the results');
+  await js(`${dlg}.querySelector('[data-acc="close"]').click()`);
+  await js(`document.querySelector('[data-tab="agents"]').click()`);
+  await js(`document.querySelector('#agent-list li[data-id="${a.id}"]').click()`);
+  await until(`${row} && /2 of 3 met, 1 not met/.test(${row}.textContent)`, 'on the agent: 2 of 3 met');
+  assert.ok(await js(`${row}.querySelector('.tag').classList.contains('acc-bad')`));
+  await api('DELETE', `/agents/${a.id}`).catch(() => {});
+  assert.deepEqual(errors, [], 'no errors on the page');
 });

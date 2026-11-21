@@ -10,6 +10,7 @@
 // and stops early once a round no longer raises the score. Anything else ("look at these first"
 // without a target, a failed step, a closed pull request) waits for you in the inbox, with Ship it to
 // go ahead anyway. An item whose pull request merges is done.
+import { autonomySettings } from './autonomy.js';
 import { landState } from './tracker.js';
 
 export const AUTOPILOT_LEVELS = ['off', 'pr', 'merge'];
@@ -90,7 +91,8 @@ export class Autopilot {
       this.backlog.accept(it.id);
       return;
     }
-    const level = this.backlog.autopilotFor(it.projectKey);
+    // Its own autonomy level when that says "pr" or "merge" (autonomy.js), else its project's.
+    const level = ['pr', 'merge'].includes(it.autonomy) ? it.autonomy : this.backlog.autopilotFor(it.projectKey);
     if (level === 'off' && !ap.ship) return;
     if (ap.state === 'held' && ap.round === it.reviewAt) return;
     if (this.manager.view(agent).runtime.busy) return;
@@ -167,6 +169,10 @@ export class Autopilot {
   async land(it, agent, pr) {
     const state = landState(pr);
     if (state === 'ready') {
+      // The agent's own confidence in what it built (its brief): a low one is yours to merge.
+      const own = this.manager.view(agent).results?.confidence;
+      const min = autonomySettings(this.config).minBuildConfidence;
+      if (own && own.percent < min) return this.hold(it, `The agent's own confidence in this is ${own.percent}%${own.why ? `: ${own.why}` : ''}. Its pull request is open; merging it is yours.`);
       this.note(it, { state: 'merging' });
       await this.landing.merge(agent.id, { url: pr.url });
       this.log(`autopilot: merged ${pr.url}`);

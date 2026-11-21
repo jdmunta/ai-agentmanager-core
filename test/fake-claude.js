@@ -189,6 +189,14 @@ if (args.includes('--input-format') && args.includes('stream-json')) {
         nudge: 'The 401 means the test client sends no token. Check the auth fixture before rerunning npm test.',
       });
     }
+    if (input.startsWith('You stand in for a person who is away')) {
+      // Autonomy: one question the agent stopped on. "#nofable": that model is not there, so the next
+      // one answers; "#unsure": nothing decides it, so it is left for the person.
+      const model = args.includes('--model') ? args[args.indexOf('--model') + 1] : '';
+      if (input.includes('#nofable') && model === 'fable') return process.stderr.write('There is an issue with the selected model (fable)', () => process.exit(1));
+      if (input.includes('#unsure')) return json({ ask: true, answer: '', basis: 'Nothing the person wrote decides it', confidence: 0.4 });
+      return json({ ask: false, answer: 'SQLite', basis: `routine detail, cheap to change${input.includes('<ground_rules>') ? '; ground rules read' : ''}`, confidence: 0.9 });
+    }
     if (input.startsWith('You supervise an AI coding agent running in a terminal.')) {
       const screen = section('terminal_screen');
       if (screen.includes('Which database')) return json({ state: 'question', confidence: 0.85, summary: 'Asks which database to use', question: 'Which database should I use?', choices: ['Postgres', 'SQLite'] });
@@ -270,7 +278,12 @@ if (args.includes('--input-format') && args.includes('stream-json')) {
       return json({
         summary: `Scored: ${section('intent').split('\n').find((l) => l.startsWith('# ')) ?? 'no intent file'}`,
         scores: { intent: { score: 88, why: 'Does what was asked' }, scope: { score: 92, why: 'On task' }, plan: { score: 80, why: 'As planned' }, tests: { score: 90, why: 'Tested' }, safety: { score: 85, why: 'Nothing risky' } },
-        criteria: [],
+        // Points agreed with the person: met, unless the point's text says otherwise (#notmet, #unverified; #skip leaves it out).
+        criteria: input.includes('<agreed_acceptance>')
+          ? [...section('agreed_acceptance').matchAll(/^(A\d+): (.*)$/gm)]
+              .filter((m) => !m[2].includes('#skip'))
+              .map((m) => ({ id: m[1], criterion: m[2], status: m[2].includes('#notmet') ? 'not_met' : m[2].includes('#unverified') ? 'unverified' : 'met', evidence: `seen in ${ids[0] ?? 'the diff'}` }))
+          : [],
         look: ids.slice(0, 1).map((id) => ({ id, reason: 'The core change' })),
         // Lessons of the repository: one whose text says #broken is found broken in the diff.
         ...(input.includes('<lessons>') ? { lessons: [...section('lessons').matchAll(/^(L\d+): (.*)$/gm)].map((m) => ({ id: m[1], status: m[2].includes('#broken') ? 'broken' : 'followed', evidence: `seen in ${ids[0] ?? 'the diff'}` })) } : {}),

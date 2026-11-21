@@ -28,6 +28,7 @@ export function needsOf(v) {
   if (rt.attention) out.push({ kind: 'prompt', text: clip(rt.prompt?.tool?.text ? `${rt.prompt.tool.name} ${rt.prompt.tool.text}` : rt.prompt?.question || rt.attention) });
   if (rt.waiting) out.push({ kind: 'waiting', text: clip(rt.waiting.summary) });
   if (v.planReview?.status === 'review') out.push({ kind: 'plan', text: 'its plan is waiting for your review' });
+  if (v.acceptance?.status === 'review' && v.acceptance.wait) out.push({ kind: 'acceptance', text: 'what done means is waiting for you to agree' });
   for (const q of v.questions ?? []) if (!q.answer) out.push({ kind: 'question', text: clip(q.question) });
   for (const f of v.stuck ?? []) out.push({ kind: 'stuck', text: clip(f.title) });
   for (const g of v.conflicts ?? []) if (g.mergeFirst !== v.id) out.push({ kind: 'conflict', text: `changes the same files as ${g.agent?.name ?? 'another agent'}` });

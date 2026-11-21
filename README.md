@@ -76,6 +76,7 @@ Run one background [Claude Code](https://claude.com/claude-code) agent per inten
 - **As an app.** In Chrome or Edge, click the install icon in the address bar (or ⋮ → Cast, save and share → Install page as app). AI Agent Manager then opens in its own window with its own Dock or taskbar icon, and the daemon keeps running as before.
 - **About.** The version next to the title opens the About box: release date, author, license, links, and how this daemon runs (data folder, port, Node.js, which `claude`). **Check for updates** asks npm for the newest version. In a terminal: `agentmgr about` (`--check` for updates).
 - **General sessions.** **Ask Agent** starts a session with no repo, folder or intent, for questions, on Claude Code or any other engine you have (Codex, Antigravity, Muse Code). It is tracked and resumable like any other agent.
+- **Drop to start.** Drag tickets, requirements and designs onto the page: a frame says **Drop to start a new agent**, and New agents opens filled in. A Jira, GitHub or Linear issue link becomes the request (the agent is named after the issue and tracks it); a link to a document (Google Docs, Confluence, Notion, a PDF) is listed under it as **Requirements** and a design link (Figma, Miro, an image) as **Design**; a repository link fills the repository; text becomes the request; files are attached. Several tickets give one agent each. The box at the top of the form takes the same drops and says what was added; nothing starts until you press the button. Without a mouse, **Paste what you copied** reads links from the clipboard and **Choose files** opens the picker.
 - **Attachments.** **📎 Attach files** in New agents and Ask Agent (or drop files on the dialog, or paste a screenshot into the text box) adds a screenshot, a log or a document to the request. Each agent gets its own copy in `~/.agentmanager/uploads/<agent>/`, listed in its request, and Claude Code and Codex can read that folder without asking. From the CLI: `agentmgr add … --file-attach error.log` and `agentmgr ask … --file-attach shot.png`.
 
 New in 0.2, for running many agents at once:
@@ -440,6 +441,97 @@ Tick **Review the implementation plan first** in New agent (or the backlog), or 
 - **Skip review** stops waiting.
 - **After approval**, edits to the plan count as progress updates and don't ask again. A restarted agent is told its plan was approved.
 - **Default.** Set `"planReview": true` in config.json to turn it on for every new agent.
+
+## Acceptance: agree on what done means
+
+An agent can finish a correct change to the wrong target. Acceptance settles the target first: a short list of points you would check when the work is done, agreed between you and the agent, and then checked one by one.
+
+- **Ask for it.** Tick **Agree on what done means first** in New agent (or the backlog), or start with `agentmgr add --acceptance`. The agent reads the code, writes three to six points under "Acceptance criteria" in its `SPEC.md`, and stops. It changes nothing in the repository until you agree.
+- **Where it shows.** In the inbox as **Done means**, with the points, a notification, and a row in the agent's Brief panel.
+- **Change points** opens them to reword, remove or add your own. **Agree and start** sends the agent ahead with the list as you left it; **Agree as written** takes the agent's list. **Skip** stops waiting and keeps nothing.
+- **From then on the points are yours.** They are kept by the app, not in a file the agent can edit, and an agent's own calls to agree or skip are refused. The agent is told them word for word, a restarted agent is told them again, and the agreement is in the decision log (Plan, Decisions).
+- **Checked one by one.** The [review scorecard](#review-changes) reports each agreed point as **Met**, **Not met** or **Not verified**, with the evidence, in your wording and your order. A point the model does not answer counts as not verified. One point not met makes the work **Not ready**, so autopilot sends it back and does not ship it.
+- **Without asking first.** Every agent with a spec has **What done means** in its Brief panel: the points it wrote for itself. Change them and agree at any time, also after the work is done; a running agent is told to check its work against them, and work already scored is scored again (for a running agent, when it next says it is done).
+- **With plan review.** The points come first, then the plan.
+- **Default.** Set `"acceptance": true` in config.json to ask for it on every new agent.
+
+```bash
+agentmgr add "Add a CSV export" --repo <url> --acceptance
+agentmgr acceptance add-a-csv-export                  # the points, and what was found for each
+agentmgr acceptance add-a-csv-export --agree          # as the agent wrote them
+agentmgr acceptance add-a-csv-export --set "2=The first row is the header" --remove 3 --add "Dates are ISO 8601"
+agentmgr acceptance add-a-csv-export --check          # score the work against them now
+agentmgr acceptance add-a-csv-export --skip
+```
+
+Changing points with `--set`, `--remove` or `--add` agrees on the result. The command exits with 1 when an agreed point is not met.
+
+**Limits.** Met, not met and not verified are a model's reading of the changes, not a test run by the app; the evidence it names is there to check. The agent waiting is an instruction it follows, as with plan review, not a lock on the repository. At most 12 points of 300 characters.
+
+## Without you: how far an agent goes on its own
+
+Each agent has a level for how far it goes before it needs you. Choose it in New agent (**Without you**), on a running agent (**Run without me…** in its Brief panel), with `agentmgr add --autonomy <level>`, or set the default for new agents in Settings.
+
+| Level | What happens without you |
+| --- | --- |
+| **Ask me** (`ask`, the default) | Nothing: questions, stuck findings and follow-ups wait in the inbox, as before. |
+| **Agree, then run** (`run`) | You [agree on what done means](#acceptance-agree-on-what-done-means) first. After that the middle is handled for you (below). |
+| **Run to pull request** (`pr`) | The same, and its pull request is opened when the [review rounds](#review-rounds-before-a-pull-request) approve the work, also when "Open the pull request when the critics approve" is turned off. Review rounds themselves have to be on (the default). |
+| **Run to merge** (`merge`) | The same, and the pull request is merged when its checks pass and everything else says ready (below). |
+
+**What is handled for you, from "Agree, then run" up:**
+
+- **A question it asks without stopping, or a plan waiting for review**, is decided by [Decide](#decide) at its "Most things; ask when unsure" level, whatever the project's own level is: carried out when the recommendation is at least 70% sure and easy to undo. Its recommendation now also knows the agreed points, your ground rules and the repository's lessons.
+- **A question it stopped on in its terminal** (read from its screen by the AI judge) is answered from what is already decided: your request, the agreed points, your ground rules, the repository's lessons and your earlier answers, or the agent's own default when it is a routine detail that is cheap to change. The agent is told the answer came from the app while you were away, and to note it as an assumption.
+- **A stuck agent** gets the judge's nudge when the judge is at least 70% sure, three times at most.
+- **A quiet, unfinished agent** is told to carry on, twice at most, unless it is blocked on you.
+- **At "Run to merge"**, its pull request is merged when the checks pass, the review rounds (when they ran) approved it, the scorecard says "Ready to approve", no high-risk path is touched, and the agent's own confidence is not low. Otherwise it is held, and the inbox says why. (A backlog item is shipped by [autopilot](#autopilot) at the item's level.)
+
+**You see all of it.** An answer given for you is in the inbox as **Done for you**, with the question, the answer, what it was based on and how sure the model was: **OK**, or **Change answer…** to give your own, which the agent is told to apply. The agent's **Without you** dialog lists everything that was answered, sent, decided, merged or left for you, and `agentmgr autonomy <agent>` prints it.
+
+**Never done for you:**
+
+- A permission prompt is never answered by a model (your [approval rules](#decision-inbox) still apply).
+- A question about deleting or overwriting, rewriting history, publishing, deploying or merging, credentials, money or licences, personal data, messages to other people, or the scope of the task is left for you whatever a model would say.
+- An agent cannot set or raise its own level, and cannot change your ground rules: its own calls are refused.
+
+**The models.** What is decided in your place runs on a list of models, best first: `fable`, then `opus`, then `sonnet`. The first one answers; when a call on it fails (the model is not on your plan, a limit, a timeout), the next one is used, and the one that failed is skipped for 15 minutes. Change the list in Settings or with `agentmgr autonomy --models opus,sonnet`. The AI judge's other calls (reading a screen, alerts) stay on its own fast model.
+
+```bash
+agentmgr add "Add a CSV export" --repo <url> --autonomy pr
+agentmgr autonomy                         # the default level, the models, today's calls
+agentmgr autonomy --default run --models fable,opus,sonnet
+agentmgr autonomy add-a-csv-export        # its level and what was done for you
+agentmgr autonomy add-a-csv-export merge  # set its level
+agentmgr autonomy add-a-csv-export --change 3fa2c1d0="Use Postgres"
+```
+
+In config.json: `"autonomy": { "level": "ask", "models": ["fable", "opus", "sonnet"], "answers": true, "nudges": true, "followUps": true, "minConfidence": 0.7, "minBuildConfidence": 70, "maxAnswers": 12, "maxNudges": 3, "maxFollowUps": 2, "dailyCalls": 80 }`.
+
+**Limits.** It needs the AI judge on (it reads the screen and finds stuck agents) and Decide on (for questions and plans). An answer is a model's reading of what you decided before, and can be wrong: that is why each one is shown to you. The level does not change the permission mode, so an agent can still stop at a permission prompt. Each answer, nudge and judgment is a model call on your own plan.
+
+## Ground rules: your own rules for every agent
+
+**Settings → Ground rules** (or `agentmgr ground-rules`) holds your own rules for how agents work: one per line, for every agent, in every repository and on every engine. "Ask before adding a dependency." "Never force-push or rewrite history." "Say what you did not do."
+
+- **Next to memory, not instead of it.** [Repo memory](#repo-memory) is what agents learned in one repository, and [Standards](#standards-what-every-change-in-a-repository-has-to-meet) are lessons per repository. Ground rules are yours and apply everywhere; agents are told they come before what the memory suggests.
+- **How agents get them.** With their instructions at every start. They are told to stop and say which rule is in the way when a task cannot be done without breaking one. Tick **Also tell the agents running now** (or `--tell`) to send a change to the sessions that are open.
+- **Only you set them.** An agent's own calls to change them are refused. They are in `~/.agentmanager/ground-rules.md`, which you can also edit by hand.
+- **Used when deciding for you.** Answers given for an agent that runs [without you](#without-you-how-far-an-agent-goes-on-its-own), and Decide's recommendations for it, are given the rules.
+
+```bash
+agentmgr ground-rules                                   # show them
+agentmgr ground-rules --add "Ask before adding a dependency" --tell
+agentmgr ground-rules --remove 2
+```
+
+At most 40 rules of 400 characters. A rule is an instruction the agent follows, not a lock: the review scorecard does not check ground rules (it checks a repository's lessons).
+
+## Confidence: how sure the agent is of what it built
+
+Every agent now ends its Results with its own confidence: `Confidence: 85% - what it verified, and the one thing it is least sure about`. It is asked to count only what it ran and saw working, and to lower the number for anything it did not do. The Brief panel shows it beside the results (high from 85%, medium from 65%, low under that), next to the review scorecard, which is the separate check by another model. At "Run to merge" and on autopilot's Merge level, work whose agent is under 70% sure of it is not merged without you.
+
+The number is the agent's own statement, not a measurement.
 
 ## Insights
 
