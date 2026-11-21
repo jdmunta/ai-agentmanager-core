@@ -362,8 +362,15 @@ Some notes.
     delivered: ['PR https://github.com/a/b/pull/9', 'design doc'],
     blockers: ['QA environment (needs: QE)'],
     filed: [],
+    confidence: null,
     notes: 'Some notes.',
   });
+  // The agent's own confidence in what it built: a number and why, kept out of the notes.
+  const c = parseBrief('## Results\nOutcome: done\nConfidence: 85% - ran the suite and the page by hand; least sure about Safari\n- Delivered: x\nA note.\n').results;
+  assert.deepEqual(c.confidence, { percent: 85, why: 'ran the suite and the page by hand; least sure about Safari', level: 'high' });
+  assert.equal(c.notes, 'A note.');
+  assert.deepEqual(parseBrief('## Results\nOutcome: partial\n- **Confidence:** 60 — only read the code\n').results.confidence, { percent: 60, why: 'only read the code', level: 'low' });
+  assert.equal(parseBrief('## Results\nOutcome: done\nConfidence: 140%\n').results.confidence.percent, 100);
 });
 
 // ------------------------------------------------------------------ v0.2: conflicts, stuck, inbox
@@ -5709,4 +5716,480 @@ test('claims check: the particulars of a text, the quotes and statements the app
   assert.match(claimsNote({ docs: { claims: { pending: true } } }, 'brief', 't1', esc), /Checking its statements/);
   const fine = { docs: { claims: { data: { texts: [{ key: 'update', at: 't', claims: [], counts: { backed: 2, said: 0, not_backed: 0, contradicted: 0, opinion: 0 }, missing: [] }] } } } };
   assert.match(claimsNote(fine, 'update', 't', esc), /^<p class="cl-note ">Checked against the work: .*2 backed/);
+});
+
+test('acceptance: points read from a spec, cleaned and numbered, the messages to the agent, and the scorecard held to the agreed points', async () => {
+  const acc = await import('../src/acceptance.js');
+  const { acceptanceRow, acceptanceSummary, acceptanceWaits } = await import('../public/acceptance.js');
+  const { facts, combine, scorecardPrompt } = await import('../src/scorecard.js');
+  const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;');
+
+  // Read from the spec: list items of that section only, wrapped lines joined, ticks and numbers dropped.
+  const spec = '# Spec\n## Requirements\n- not this\n## Acceptance criteria\nHow it is checked:\n- [x] `npm test` passes\n* The page\n  loads under 2 s\n3) Old links   still work\n-  \n\nA paragraph.\n## Out of scope\n- nor this\n';
+  assert.deepEqual(acc.parseCriteria(spec), ['`npm test` passes', 'The page loads under 2 s', 'Old links still work']);
+  assert.deepEqual(acc.parseCriteria('# Spec\n## Requirements\n- r\n'), []);
+  assert.deepEqual(acc.parseCriteria(null), []);
+  assert.equal(acc.parseCriteria(`## Acceptance criteria\n${Array.from({ length: 20 }, (_, i) => `- point ${i}`).join('\n')}`).length, acc.MAX_POINTS);
+
+  // Cleaned: empty and repeated ones dropped, numbered in order, yours told from the agent's.
+  const pts = acc.cleanPoints(['  The page loads under 2 s ', { text: 'Exports have a header' }, '', 'exports have a header!', '`npm test` passes'], acc.parseCriteria(spec));
+  assert.deepEqual(pts, [
+    { id: 'A1', text: 'The page loads under 2 s', from: 'agent' },
+    { id: 'A2', text: 'Exports have a header', from: 'you' },
+    { id: 'A3', text: '`npm test` passes', from: 'agent' },
+  ]);
+  for (const bad of [[], [' '], 'text', ['x'.repeat(acc.MAX_POINT_CHARS + 1)], Array.from({ length: acc.MAX_POINTS + 1 }, (_, i) => `p${i}`)]) {
+    assert.throws(() => acc.cleanPoints(bad), (e) => e.status === 400, JSON.stringify(bad).slice(0, 40));
+  }
+
+  // The agent: waits for the points first (the plan after them), then is told them as written.
+  assert.match(acc.acceptancePrompt('/b/SPEC.md'), /write \/b\/SPEC\.md with three to six points.*Until a message starting with "Acceptance agreed" or "Acceptance review skipped" arrives, do not edit/s);
+  assert.ok(!acc.acceptancePrompt('/b/SPEC.md').includes('implementation plan'));
+  assert.match(acc.acceptancePrompt('/b/SPEC.md', { planReview: true }), /do not write your implementation plan yet/);
+  assert.match(acc.agreedMessage(pts, { waiting: true }), /^Acceptance agreed\. [\s\S]*\nA1: The page loads under 2 s\nA2: Exports have a header\nA3: `npm test` passes\n[\s\S]*Go ahead with the work\.$/);
+  assert.match(acc.agreedMessage(pts, { waiting: true, planNext: true }), /^Acceptance agreed\.[\s\S]*Now write your implementation plan and wait for its approval, as instructed\.$/);
+  assert.match(acc.agreedMessage(pts, {}), /^Acceptance agreed\.[\s\S]*Check the work you have done against them/);
+  assert.match(acc.agreedMessage(pts, { changed: true }), /^Acceptance agreed again: the user changed the points\./);
+  assert.match(acc.SKIPPED_MESSAGE, /^Acceptance review skipped/);
+  assert.match(acc.acceptanceAgreedPrompt(pts), /A2: Exports have a header\n.*you cannot change them/s);
+
+  // The scorecard: asked about the agreed points by id, and held to them whatever the model lists.
+  const f = facts({ files: [{ path: 'src/a.js' }, { path: 'test/a.test.js' }], prs: [{ state: 'OPEN', checks: { state: 'passed' } }], spec, agreed: pts });
+  assert.deepEqual(f.agreed, pts.map(({ id, text }) => ({ id, text })));
+  const prompt = scorecardPrompt({ intent: 'x', status: 's', hunks: [], facts: f });
+  assert.match(prompt, /"criteria": \[\{"id": "A1"/);
+  assert.match(prompt, /one entry per point in AGREED_ACCEPTANCE/);
+  assert.match(prompt, /<agreed_acceptance>\nA1: The page loads under 2 s\nA2: Exports have a header\nA3: `npm test` passes\n<\/agreed_acceptance>/);
+  assert.match(prompt, /acceptance agreed with the person: 3 points/);
+  assert.ok(!scorecardPrompt({ intent: 'x', status: 's', hunks: [], facts: facts({ spec }) }).includes('agreed_acceptance'));
+  const scores = { intent: { score: 95 }, scope: { score: 95 }, plan: { score: 95 }, tests: { score: 95 }, safety: { score: 95 } };
+  const reply = { scores, criteria: [{ id: 'a2', criterion: 'reworded by the model', status: 'not_met', evidence: 'no header in export.js' }, { criterion: 'the page LOADS under 2 s.', status: 'met', evidence: 'bench' }, { id: 'A9', criterion: 'made up', status: 'met' }, { criterion: 'Old links still work', status: 'met' }] };
+  const sc = combine(reply, f, []);
+  assert.deepEqual(sc.criteria, [
+    { id: 'A1', criterion: 'The page loads under 2 s', status: 'met', evidence: 'bench', agreed: true },
+    { id: 'A2', criterion: 'Exports have a header', status: 'not_met', evidence: 'no header in export.js', agreed: true },
+    { id: 'A3', criterion: '`npm test` passes', status: 'unverified', evidence: '', agreed: true },
+  ], 'your wording, your order; matched by id or by its text; the rest left out; one not answered is not verified');
+  assert.equal(sc.scores.spec.score, 50, 'met 1 + unverified ½ + not met 0, of 3');
+  assert.deepEqual(sc.scores.spec.notes, ['the points agreed with the person']);
+  assert.equal(sc.recommendation, 'not_ready');
+  assert.deepEqual(sc.reasons, ['1 acceptance criterion not met']);
+  // No answer at all: every point not verified (never passed by default); no spec file is needed.
+  const silent = combine({ scores }, facts({ files: [{ path: 'src/a.js' }, { path: 'test/a.test.js' }], prs: [{ state: 'OPEN', checks: { state: 'passed' } }], agreed: pts }), []);
+  assert.deepEqual(silent.criteria.map((c) => c.status), ['unverified', 'unverified', 'unverified']);
+  assert.equal(silent.scores.spec.score, 50);
+  assert.equal(silent.recommendation, 'look', 'not ready to approve on points nobody verified');
+  // Nothing agreed: as before, the criteria the model read in the spec.
+  const plain = combine({ scores, criteria: [{ id: 'A1', criterion: 'returns 200', status: 'met' }] }, facts({ spec }), []);
+  assert.deepEqual(plain.criteria, [{ criterion: 'returns 200', status: 'met', evidence: '' }]);
+
+  // Results for the person: the scorecard's answers on the points; not checked yet without one.
+  const res = acc.results(pts, sc.criteria);
+  assert.deepEqual(res.map((r) => [r.id, r.status, r.from]), [['A1', 'met', 'agent'], ['A2', 'not_met', 'you'], ['A3', 'unverified', 'agent']]);
+  assert.deepEqual(acc.counts(res), { total: 3, met: 1, notMet: 1, unverified: 1, unchecked: 0 });
+  assert.equal(acc.countsLine(acc.counts(res)), '1 of 3 met, 1 not met, 1 not verified');
+  assert.equal(acc.countsLine(acc.counts(acc.results(pts, null))), '3 points, not checked yet');
+  const view = { status: 'agreed', agreedAt: '2026-11-21T10:00:00Z', results: res, counts: acc.counts(res), stale: false };
+  assert.match(acc.acceptanceMarkdown(view, 'export'), /^# What done means: export\n\nAgreed 2026-11-21T10:00:00Z: 1 of 3 met, 1 not met, 1 not verified\n\n- ✅ \*\*A1\*\* The page loads under 2 s\n {2}Met: bench\n- ❌ \*\*A2\*\* Exports have a header _\(yours\)_\n {2}Not met: no header in export\.js\n- ❔ \*\*A3\*\*/);
+  assert.match(acc.acceptanceMarkdown({ status: 'review', draft: ['One', 'Two'] }, 'x'), /Waiting for you\.[\s\S]*1\. One\n2\. Two/);
+  assert.match(acc.acceptanceMarkdown({ status: 'none', draft: [] }, 'x'), /Not agreed, and the agent wrote no acceptance criteria/);
+
+  // On the page: the row in the brief card, and what counts as waiting for you.
+  const agreed = { acceptance: { status: 'agreed', wait: false, points: pts, agreedAt: 't1' }, docs: { scorecard: { data: sc, acceptanceAt: 't1' } } };
+  assert.deepEqual(acceptanceSummary(agreed), { text: '1 of 3 met, 1 not met, 1 not verified', notMet: 1, checked: true });
+  assert.match(acceptanceRow(agreed, esc), /<b>Done means<\/b> <span class="tag acc-agreed acc-bad">1 of 3 met, 1 not met, 1 not verified<\/span>[\s\S]*data-act="accept-open" >Open/);
+  assert.equal(acceptanceSummary({ ...agreed, docs: { scorecard: { data: sc, acceptanceAt: 't0' } } }).text, '3 points, not checked yet', 'scored against other points');
+  const waiting = { acceptance: { status: 'review', wait: true, points: pts } };
+  assert.ok(acceptanceWaits(waiting) && !acceptanceWaits(agreed) && !acceptanceWaits({ acceptance: null }) && !acceptanceWaits({ acceptance: { status: 'writing', wait: true } }));
+  assert.match(acceptanceRow(waiting, esc), /acc-review">waiting for you<[\s\S]*class="small primary" data-act="accept-open" >Review points<[\s\S]*data-act="accept-skip"/);
+  assert.match(acceptanceRow({ acceptance: { status: 'writing', wait: true, points: [] } }, esc), /being written<[\s\S]*data-act="accept-open" disabled/);
+  assert.equal(acceptanceRow({ acceptance: null, specDocs: {} }, esc), '');
+  assert.match(acceptanceRow({ acceptance: null, specDocs: { spec: 't' } }, esc), /data-act="accept-open"[^>]*>What done means</);
+});
+
+test('ground rules: one per line, cleaned, capped, given to every session and read again when the file changes', async () => {
+  const gr = await import('../src/groundrules.js');
+  assert.deepEqual(gr.parseRules('# Mine\n- Ask before adding a dependency\n2) Never  force-push\n\n* ask before adding a dependency\n   \nPlain line'), ['Ask before adding a dependency', 'Never force-push', 'Plain line']);
+  assert.deepEqual(gr.cleanRules(['One', ' - Two ', 'one']), ['One', 'Two']);
+  assert.throws(() => gr.cleanRules('x'.repeat(gr.MAX_RULE_CHARS + 1)), (e) => e.status === 400 && /one short line/.test(e.message));
+  assert.throws(() => gr.cleanRules(Array.from({ length: gr.MAX_RULES + 1 }, (_, i) => `Rule ${i}`)), (e) => e.status === 400 && /At most 40/.test(e.message));
+  assert.equal(gr.groundRulesPrompt([]), '');
+  assert.match(gr.groundRulesPrompt(['Ask first']), /^Ground rules from the user, for everything you do in this session\.[\s\S]*stop and say which and why[\s\S]*\n- Ask first$/);
+  assert.match(gr.groundRulesMessage(['A', 'B']), /changed their ground rules[\s\S]*\n- A\n- B$/);
+  assert.match(gr.groundRulesMessage([]), /removed their ground rules/);
+
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'ground-')), 'ground-rules.md');
+  const g = new gr.GroundRules({ file });
+  assert.deepEqual(g.list(), []);
+  assert.equal(g.prompt(), '');
+  const set = g.set('Ask before adding a dependency\nNever force-push');
+  assert.deepEqual([set.changed, set.rules.length, set.text], [true, 2, 'Ask before adding a dependency\nNever force-push']);
+  assert.equal(fs.readFileSync(file, 'utf8'), '- Ask before adding a dependency\n- Never force-push\n');
+  assert.equal(g.set(['Ask before adding a dependency', 'Never force-push']).changed, false);
+  // Edited by hand: read again.
+  fs.writeFileSync(file, '- Only this\n');
+  fs.utimesSync(file, new Date(Date.now() + 5000), new Date(Date.now() + 5000));
+  assert.deepEqual(g.list(), ['Only this']);
+  assert.match(g.prompt(), /- Only this$/);
+  assert.deepEqual(g.set('').rules, []);
+  assert.equal(fs.readFileSync(file, 'utf8'), '');
+});
+
+test('autonomy: levels, the models in order, what is never answered for you, and an agent run without you (answers, nudges, follow-ups, a merge made or held)', async () => {
+  const au = await import('../src/autonomy.js');
+  const { autonomyNeeds, autonomyRow, autoNeedHtml, logLine } = await import('../public/autonomy.js');
+  const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;');
+
+  // Levels and settings.
+  assert.deepEqual(['pr', 'Run to merge', 'off', 'on', 'fast', ''].map(au.parseLevel), ['pr', 'merge', 'ask', 'run', null, null]);
+  assert.equal(au.levelOf({ autonomy: { level: 'merge' } }), 'merge');
+  assert.equal(au.levelOf({ autonomy: { level: 'bogus' } }), 'ask');
+  assert.equal(au.levelOf({}), 'ask');
+  const d = au.autonomySettings({});
+  assert.deepEqual([d.level, d.models, d.minConfidence, d.maxNudges], ['ask', ['fable', 'opus', 'sonnet'], 0.7, 3]);
+  const s = au.autonomySettings({ autonomy: { level: 'pr', models: 'opus > sonnet, opus', minConfidence: 0.2, nudges: false, maxFollowUps: 0 } });
+  assert.deepEqual([s.level, s.models, s.minConfidence, s.nudges, s.maxFollowUps], ['pr', ['opus', 'sonnet'], 0.5, false, 0]);
+  assert.deepEqual(au.cleanModels(['fable', { engine: 'codex', model: 'gpt-5' }, '', 'bad name!', 'fable']), ['fable', { engine: 'codex', model: 'gpt-5' }]);
+  assert.ok(au.eligible({ kind: 'task' }) && !au.eligible({ kind: 'general' }) && !au.eligible({ kind: 'task', team: {} }) && !au.eligible({ kind: 'task', raceId: 'r' }) && !au.eligible({ kind: 'task', fixing: {} }));
+
+  // The models, best first: the next one when a call fails; one that failed is tried last for a while.
+  const down = new Map();
+  const calls = [];
+  const flaky = async (m) => {
+    calls.push(m);
+    if (m === 'fable') throw new Error('no such model');
+    return `by ${m}`;
+  };
+  let r = await au.callLadder(['fable', 'opus', 'sonnet'], flaky, { down });
+  assert.deepEqual([r.text, r.model, r.tried.map((t) => t.model), calls], ['by opus', 'opus', ['fable'], ['fable', 'opus']]);
+  calls.length = 0;
+  r = await au.callLadder(['fable', 'opus', 'sonnet'], flaky, { down });
+  assert.deepEqual(calls, ['opus'], 'the one that failed is skipped for now');
+  calls.length = 0;
+  r = await au.callLadder(['fable', 'opus', 'sonnet'], async (m) => (calls.push(m), `by ${m}`), { down, retryMs: 0 });
+  assert.deepEqual([r.model, calls, down.size], ['fable', ['fable'], 0], 'and tried first again later');
+  await assert.rejects(() => au.callLadder(['fable', 'opus'], async () => Promise.reject(new Error('limit')), {}), /No model answered \(fable, opus\): limit/);
+
+  // What is the person's whatever a model says.
+  for (const [q, why] of [
+    ['Should I delete the old migrations?', 'deleting or overwriting'],
+    ['OK to force-push the branch?', 'rewriting history'],
+    ['Deploy to production now?', 'publishing, deploying or merging'],
+    ['Where do I get the API key?', 'credentials'],
+    ['Should we buy the paid plan?', 'money, licences or legal matters'],
+    ['Is it fine to drop the requirement for CSV?', 'the scope of the task'],
+  ]) assert.equal(au.sensitive(q), why, q);
+  assert.equal(au.sensitive('Tabs or spaces in the new file? Should the helper live in utils?'), null);
+
+  // The call that stands in for the person, and its reply.
+  const prompt = au.answerPrompt({ question: 'Postgres or SQLite?', options: ['Postgres', 'SQLite'], default: 'SQLite', intent: 'Add a cache', points: [{ id: 'A1', text: 'No new services' }], groundRules: ['Ask before adding a dependency'], lessons: ['Exports are paged'], answers: [{ question: 'Which port?', answer: '8080' }], past: [{ question: 'Name?', answer: 'cache.js', outcome: 'kept it' }] });
+  assert.match(prompt, /^You stand in for a person who is away, for ONE question/);
+  assert.match(prompt, /<question>\nPostgres or SQLite\?\nOptions: Postgres \| SQLite\nThe agent's default until answered: SQLite\n<\/question>/);
+  assert.match(prompt, /<agreed_points_for_done>\nA1: No new services\n[\s\S]*<ground_rules>\n- Ask before adding a dependency\n[\s\S]*<lessons_of_the_repository>\n- Exports are paged\n[\s\S]*Q: Which port\?\n {2}A: 8080[\s\S]*the person kept it/);
+  assert.ok(!au.answerPrompt({ question: 'x' }).includes('<ground_rules>'), 'empty parts are left out');
+  assert.deepEqual(au.parseAnswer('Sure:\n{"ask": false, "answer": "SQLite", "basis": "A1", "confidence": 1.4}'), { ask: false, answer: 'SQLite', basis: 'A1', confidence: 1 });
+  assert.equal(au.parseAnswer('{"ask": false, "answer": "", "confidence": 0.9}').ask, true, 'no answer is a question for you');
+  assert.equal(au.parseAnswer('no json'), null);
+  assert.equal(au.parseAnswer('{"answer": "x"}'), null);
+  assert.match(au.autoAnswerMessage('Which?', { answer: 'SQLite', basis: 'A1' }), /^Answer to your question "Which\?": SQLite\n\(Given for the user by AI Agent Manager while they are away, from what is already decided: A1\./);
+
+  // An agent run without the person, with a manager that answers from a script.
+  const agents = new Map();
+  const store = { data: {}, save() {}, list: () => [...agents.values()], get: (id) => agents.get(id) ?? null };
+  const told = [];
+  const views = {};
+  const script = { shot: null, risk: [], merged: [], scored: 0 };
+  const manager = {
+    on() {},
+    off() {},
+    runtimes: new Map(),
+    groundRules: { list: () => ['Ask before adding a dependency'] },
+    standards: { forAgent: () => ({ lessons: [{ text: 'Exports are paged' }] }), riskIn: () => script.risk },
+    mustGet: (id) => agents.get(id) ?? assert.fail(`no agent ${id}`),
+    view: (a) => ({ ...a, runtime: { waiting: manager.runtimes.get(a.id)?.waiting ?? null }, stuck: [], questions: [], followUp: null, results: null, ...views[a.id] }),
+    patch: (id, f) => Object.assign(agents.get(id), f),
+    tell: (id, text, o) => (told.push([id, text, o?.source]), agents.get(id)),
+    dismissStuck: (id, key, o) => told.push([id, `dismiss ${key}`, o.feedback]),
+    acceptanceWaits: () => false,
+    questionsView: () => [],
+    ladderShot: async (agent, p) => {
+      if (!script.shot) throw new Error('No model answered');
+      return { text: JSON.stringify(script.shot(p)), by: 'Claude Code fable' };
+    },
+    summarize: async () => void script.scored++,
+  };
+  const landing = { openPrs: (a) => Object.values(a.prs ?? {}).filter((p) => p.state === 'OPEN'), merge: async (id, { url }) => void script.merged.push(url), updateBranch: async () => {} };
+  const config = { memory: false, autonomy: { maxNudges: 1, maxFollowUps: 1 } };
+  const auto = new au.Autonomy({ manager, store, config, landing, review: { get: async () => ({ files: [{ file: 'a.js' }], diffHash: 'h1' }) }, backlog: { items: () => [{ agentId: 'bk' }] }, log() {} });
+  const agent = (id, extra = {}) => (agents.set(id, { id, name: id, kind: 'task', intent: 'Add a cache', autonomy: { level: 'run', log: [], seen: {} }, ...extra }), agents.get(id));
+  const log = (id) => agents.get(id).autonomy.log;
+  try {
+    // A question it stopped on: answered from what is decided, recorded, in the inbox until seen.
+    agent('a1');
+    manager.runtimes.set('a1', { waiting: { state: 'question', question: 'Postgres or SQLite?', choices: ['Postgres', 'SQLite'] } });
+    script.shot = (p) => (assert.match(p, /<ground_rules>\n- Ask before adding a dependency/), { ask: false, answer: 'SQLite', basis: 'routine detail', confidence: 0.9 });
+    await auto.tick();
+    assert.deepEqual(log('a1').map((e) => [e.kind, e.question, e.answer, e.model, e.ack]), [['answer', 'Postgres or SQLite?', 'SQLite', 'Claude Code fable', false]]);
+    assert.equal(manager.runtimes.get('a1').waiting, null);
+    assert.deepEqual([told[0][0], told[0][2]], ['a1', 'autonomy']);
+    assert.match(told[0][1], /^Answer to your question "Postgres or SQLite\?": SQLite\n\(Given for the user/);
+    assert.deepEqual(auto.inbox().map((i) => [i.kind, i.title]), [['auto', 'Answered for you: Postgres or SQLite?']]);
+    await auto.tick();
+    assert.equal(log('a1').length, 1, 'not asked twice');
+    // On the page: the same item, the row, and what the card says.
+    const need = autonomyNeeds(agents.get('a1'));
+    assert.deepEqual(need.map((n) => [n.kind, n.key]), [['auto', `auto:a1:${log('a1')[0].id}`]]);
+    assert.match(autoNeedHtml(need[0], { esc, ago: () => 'just now' }), /Postgres or SQLite\?[\s\S]*<b>Answered for you:<\/b> SQLite[\s\S]*From: routine detail · Claude Code fable, 90% sure[\s\S]*data-ib="auto-ok"[\s\S]*data-ib="auto-change"/);
+    assert.match(autonomyRow(agents.get('a1'), esc), /<b>Without you<\/b> <span class="tag auto-on">Agree, then run<\/span> <span class="hint">1 answered<\/span>[\s\S]*data-act="auto-open"/);
+    assert.match(autonomyRow({ autonomy: null }, esc), /data-act="auto-open"[^>]*>Run without me…</);
+    assert.equal(autonomyRow({ autonomy: null, team: { id: 't' } }, esc), '');
+    assert.equal(logLine([{ kind: 'answer' }, { kind: 'nudge' }, { kind: 'nudge' }, { kind: 'left' }]), '1 answered, 2 nudges, 1 left for you');
+    // Seen, or changed to your own answer.
+    const first = log('a1')[0].id;
+    auto.ack('a1', first);
+    assert.equal(auto.inbox().length, 0);
+    auto.correct('a1', first, 'Postgres');
+    assert.equal(log('a1')[0].corrected, 'Postgres');
+    assert.match(told.at(-1)[1], /^Correction from the user: your question "Postgres or SQLite\?" was answered for them with "SQLite"\. Their own answer is: Postgres/);
+    assert.throws(() => auto.correct('a1', 'nope', 'x'), (e) => e.status === 404);
+
+    // Left for the person: about what cannot be taken back (no model is asked), not sure enough, or no model.
+    let shots = 0;
+    script.shot = () => (shots++, { ask: false, answer: 'Yes', basis: 'x', confidence: 0.6 });
+    manager.runtimes.set('a1', { waiting: { state: 'question', question: 'Should I delete the old cache table?' } });
+    await auto.tick();
+    assert.deepEqual([shots, log('a1').at(-1).kind, log('a1').at(-1).why], [0, 'left', 'It is about deleting or overwriting: yours to answer.']);
+    assert.ok(manager.runtimes.get('a1').waiting, 'still waiting on you');
+    manager.runtimes.set('a1', { waiting: { state: 'question', question: 'Tabs or spaces?' } });
+    await auto.tick();
+    assert.deepEqual([shots, log('a1').at(-1).why], [1, 'Not sure enough (60%).']);
+    script.shot = null;
+    manager.runtimes.set('a1', { waiting: { state: 'question', question: 'Which folder?' } });
+    await auto.tick();
+    assert.equal(log('a1').at(-1).why, 'No model could be reached to look at it.');
+    manager.runtimes.set('a1', { waiting: { state: 'error', summary: 'Crashed' } });
+    const before = log('a1').length;
+    await auto.tick();
+    assert.equal(log('a1').length, before, 'an error on its screen is not a question');
+    manager.runtimes.delete('a1');
+
+    // Stuck: a nudge the judge is sure of is sent, once, and only so many times.
+    agent('a2');
+    const finding = (since, confidence = 0.9) => ({ key: 'repeat:npm test', since, title: 'Stuck on the 401', nudge: 'Check the fixture.', ai: { verdict: 'stuck', confidence } });
+    views.a2 = { stuck: [finding('t1', 0.6)] };
+    await auto.tick();
+    assert.equal(log('a2').length, 0, 'not sure enough: it waits in the inbox');
+    views.a2 = { stuck: [finding('t1')] };
+    await auto.tick();
+    assert.deepEqual(log('a2').map((e) => [e.kind, e.title]), [['nudge', 'Stuck on the 401']]);
+    assert.match(told.findLast((t) => t[2] === 'autonomy')[1], /^Check the fixture\.\n\(Sent by AI Agent Manager while the user is away/);
+    assert.deepEqual(told.at(-1), ['a2', 'dismiss repeat:npm test', null]);
+    views.a2 = { stuck: [finding('t2')] };
+    await auto.tick();
+    assert.equal(log('a2').length, 1, 'one nudge at most here: the next finding is yours');
+
+    // Quiet and not finished: told to carry on, unless it waits on you.
+    views.a2 = { followUp: { kind: 'followup', title: 'Quiet for 3 hours and not finished', detail: '2 files changed, not committed', since: 's1' } };
+    await auto.tick();
+    assert.deepEqual(log('a2').at(-1).kind, 'followup');
+    assert.match(told.at(-1)[1], /^You have been quiet for a while and the task is not finished \(2 files changed, not committed\)\. Carry on/);
+    views.a2 = { followUp: { kind: 'followup', title: 'Quiet again', since: 's2' } };
+    await auto.tick();
+    assert.equal(log('a2').filter((e) => e.kind === 'followup').length, 1, 'one follow-up at most here');
+    agent('a3');
+    views.a3 = { followUp: { kind: 'followup', title: 'Quiet', since: 's1' }, results: { outcome: 'blocked' } };
+    await auto.tick();
+    assert.equal(log('a3').length, 0, 'blocked on you: no nudge helps');
+    views.a3 = { followUp: { kind: 'close', title: 'Done', since: 's1' } };
+    await auto.tick();
+    assert.equal(log('a3').length, 0);
+
+    // "Run to merge": merged when its checks pass, the scorecard says ready and nothing says no.
+    const pr = { url: 'https://github.com/a/b/pull/7', state: 'OPEN', head: 'abc', mergeState: 'CLEAN', checks: { state: 'passed' } };
+    const ready = { data: { recommendation: 'ready', overall: 91, reasons: [] }, diffHash: 'h1' };
+    agent('m1', { autonomy: { level: 'merge', log: [], seen: {} }, prs: { 7: { ...pr } } });
+    await auto.tick();
+    assert.equal(script.scored, 1, 'not scored yet: scored first');
+    assert.deepEqual(script.merged, []);
+    agents.get('m1').docs = { scorecard: ready };
+    await auto.tick();
+    assert.deepEqual(script.merged, [pr.url]);
+    assert.deepEqual(log('m1').map((e) => [e.kind, e.url]), [['merge', pr.url]]);
+    await auto.tick();
+    assert.equal(script.merged.length, 1, 'once');
+    // Held, each with its reason, and shown once in the inbox.
+    const held = async (id, extra, view = {}) => {
+      agent(id, { autonomy: { level: 'merge', log: [], seen: {} }, prs: { 7: { ...pr, url: `https://github.com/a/b/pull/${id}` } }, docs: { scorecard: ready }, ...extra });
+      views[id] = view;
+      await auto.tick();
+      return agents.get(id).autonomy.hold?.note;
+    };
+    assert.match(await held('m2', { docs: { scorecard: { data: { recommendation: 'not_ready', overall: 55, reasons: ['A2 is not met'] }, diffHash: 'h1' } } }), /^The review scorecard says it is not ready \(55\/100\): A2 is not met\.$/);
+    assert.match(await held('m3', { preReview: { status: 'stalled', round: 4 } }), /^The review rounds did not approve its changes \(4 rounds\)\.$/);
+    assert.match(await held('m4', {}, { results: { confidence: { percent: 55, why: 'only read the code' } } }), /^The agent's own confidence in this is 55%: only read the code\.$/);
+    script.risk = [{ path: 'src/auth/login.js' }];
+    assert.match(await held('m5', {}), /^It changes high-risk paths \(src\/auth\/login\.js\): yours to merge\.$/);
+    script.risk = [];
+    assert.equal(script.merged.length, 1, 'none of those was merged');
+    assert.deepEqual(auto.inbox().filter((i) => i.entry.kind === 'hold').map((i) => i.agentId), ['m2', 'm3', 'm4', 'm5']);
+    assert.match(auto.inbox().find((i) => i.agentId === 'm5').title, /^Not merged: It changes high-risk paths/);
+    auto.ack('m5', 'hold');
+    assert.ok(!auto.inbox().some((i) => i.agentId === 'm5'));
+    assert.match(autoNeedHtml(autonomyNeeds(agents.get('m2'))[0], { esc, ago: () => 'now' }), /Not merged: The review scorecard says it is not ready[\s\S]*data-ib="ap-review"[\s\S]*data-ib="auto-ok" data-entry="hold"/);
+    // Not ready to look at: checks still running, review rounds under way, a backlog item (autopilot's), or "pr".
+    assert.equal(await held('m6', { prs: { 7: { ...pr, mergeState: 'BLOCKED', checks: { state: 'running' } } } }), undefined);
+    assert.equal(await held('m7', { preReview: { status: 'reviewing' } }), undefined);
+    assert.equal(await held('bk', {}), undefined);
+    assert.equal(await held('m8', { autonomy: { level: 'pr', log: [], seen: {} } }), undefined);
+    assert.equal(script.merged.length, 1);
+
+    // With Decide: its agents are autonomous, the guard, the context of a brief, and what Decide did goes on the record.
+    assert.ok(auto.autonomous('a1') && !auto.autonomous('nope'));
+    agent('g1', { kind: 'general' });
+    assert.equal(auto.autonomous('g1'), false);
+    assert.equal(auto.guard({ question: 'Publish the package?', options: ['Yes', 'No'] }), 'publishing, deploying or merging');
+    assert.equal(auto.guard({ question: 'Which helper?', options: ['a', 'b'] }), null);
+    agents.get('a1').acceptance = { status: 'agreed', points: [{ id: 'A1', text: 'No new services' }] };
+    assert.deepEqual(auto.briefContext({ agentId: 'a1' }), { points: [{ id: 'A1', text: 'No new services' }], groundRules: ['Ask before adding a dependency'], repoLessons: ['Exports are paged'] });
+    auto.decided({ agentId: 'a1', action: 'answer', qid: 'q9', title: 'Which helper?', text: 'The existing one', why: 'It is there', confidence: 0.8 });
+    assert.deepEqual([log('a1').at(-1).kind, log('a1').at(-1).via, log('a1').at(-1).qid, log('a1').at(-1).answer], ['answer', 'decide', 'q9', 'The existing one']);
+    auto.correct('a1', log('a1').at(-1).id, 'A new one');
+    assert.equal(agents.get('a1').answers.q9.text, 'A new one', 'your answer replaces it');
+    auto.decided({ agentId: 'a1', action: 'approve', did: 'Approved the plan', why: 'Sound' });
+    assert.deepEqual([log('a1').at(-1).kind, log('a1').at(-1).title], ['plan', 'Approved the plan']);
+
+    // The level of one agent, and the settings.
+    assert.throws(() => auto.setLevel('g1', 'run'), (e) => e.status === 400 && /Only a task agent/.test(e.message));
+    assert.throws(() => auto.setLevel('a1', 'fast'), (e) => e.status === 400);
+    assert.equal(auto.setLevel('a1', 'ask').autonomy.level, 'ask');
+    assert.ok(log('a1').length > 0, 'what was done for you is kept');
+    assert.equal(auto.autonomous('a1'), false);
+    agent('a9', { autonomy: null });
+    assert.deepEqual(auto.setLevel('a9', 'pr').autonomy, { log: [], seen: {}, level: 'pr', hold: null });
+    assert.equal(auto.setLevel('a9', 'ask').autonomy, null, 'nothing was done: nothing to keep');
+    assert.deepEqual(auto.change({ level: 'Run to pull request', models: 'opus, sonnet', nudges: false, maxAnswers: 5 }), { maxNudges: 1, maxFollowUps: 1, level: 'pr', models: ['opus', 'sonnet'], nudges: false, maxAnswers: 5 });
+    assert.throws(() => auto.change({ models: ' ' }), /at least one model/);
+    assert.throws(() => auto.change({ dailyCalls: -1 }), /must be a number/);
+    const status = auto.status();
+    assert.deepEqual([status.level, status.models, status.calls > 0, status.lastModel], ['pr', ['opus', 'sonnet'], true, 'Claude Code fable']);
+  } finally {
+    auto.close();
+  }
+});
+
+test('Decide for an agent that runs without you: "most things" whatever the project says, on a brief written for it, never past the guard', async () => {
+  const { sensitive } = await import('../src/autonomy.js');
+  const { Decisions } = await import('../src/decisions.js');
+  const data = {};
+  const agents = new Map();
+  const store = { data, save() {}, list: () => [...agents.values()], get: (id) => agents.get(id) ?? null };
+  const project = { key: 'repo:p', shortcut: 'p', name: 'Proj' };
+  const questions = {
+    a1: [{ id: 'q1', question: 'Which helper for dates?', context: '', options: ['dayjs', 'the built-in'], default: 'the built-in' }],
+    a2: [{ id: 'q2', question: 'Which helper for dates?', context: '', options: ['dayjs', 'the built-in'], default: 'the built-in' }],
+    a3: [{ id: 'q3', question: 'Should I delete the legacy exporter?', context: '', options: ['Yes', 'No'], default: 'No' }],
+  };
+  const told = [];
+  const prompts = [];
+  const judge = {
+    enabled: true,
+    usage: () => ({ calls: 0, cap: 300 }),
+    feedback() {},
+    ask: async (key, agent, prompt) => (prompts.push([key, prompt]), { options: [{ label: 'Built-in', action: 'answer', text: 'the built-in' }, { label: 'dayjs', action: 'answer', text: 'dayjs' }], recommend: 0, why: 'No new dependency.', evidence: [], risk: '', undo: 'easy', confidence: 0.8 }),
+  };
+  const manager = { judge, listProjects: () => [project], answerQuestion: (id, qid, text) => (told.push([id, qid, text]), (agents.get(id).answers = { ...agents.get(id).answers, [qid]: { text, at: 't' } })) };
+  const decisions = new Decisions({ store, agents: () => store.list(), projectOf: () => project, questions: (a) => questions[a.id] ?? [], timer: false });
+  const auto = [];
+  const adv = new Advisor({
+    store, manager, decisions, backlog: { items: () => [] }, milestones: { stages: () => [] }, races: {}, questions: (a) => questions[a.id] ?? [], projectOf: () => project, log() {}, timer: false,
+    autonomous: (id) => agents.get(id)?.auto === true,
+    guard: (item) => (agents.get(item.agentId)?.auto ? sensitive(item.question) : null),
+    context: (item) => (agents.get(item.agentId)?.auto ? { points: [{ id: 'A1', text: 'No new services' }], groundRules: ['Ask before adding a dependency'], repoLessons: ['Dates are UTC'] } : {}),
+    onAuto: (h) => auto.push(h),
+  });
+  agents.set('a1', { id: 'a1', name: 'asks', intent: 'Format dates' });
+  agents.set('a2', { id: 'a2', name: 'runs', intent: 'Format dates', auto: true });
+  agents.set('a3', { id: 'a3', name: 'deletes', intent: 'Tidy up', auto: true });
+  await adv.tick();
+  // Only the agent that runs without you had its question answered; the project's level (standing) holds for the other.
+  assert.deepEqual(told, [['a2', 'q2', 'the built-in']]);
+  assert.deepEqual(auto.map((h) => [h.agentId, h.action, h.qid, h.text, h.why]), [['a2', 'answer', 'q2', 'the built-in', 'No new dependency.']]);
+  assert.deepEqual([adv.levelOfItem({ agentId: 'a1', projectKey: 'repo:p' }), adv.levelOfItem({ agentId: 'a2', projectKey: 'repo:p' })], ['standing', 'most']);
+  // Its brief knew what was agreed and the ground rules; the other's did not.
+  const of = (id) => prompts.find(([k]) => k.startsWith(`advise:q:${id}:`))[1];
+  assert.match(of('a2'), /What done means for this task, as agreed with the person[\s\S]*- A1: No new services\n\nThe person's ground rules for every agent \(never recommend breaking one\):\n- Ask before adding a dependency\n\nLessons of this repository:\n- Dates are UTC/);
+  assert.ok(!of('a1').includes('ground rules'));
+  // The guard: about deleting, so it waits for you whatever was recommended.
+  assert.equal(adv.view().briefs.find((b) => b.agentId === 'a3').status, 'open');
+  assert.equal(adv.mayActOn({ agentId: 'a3', projectKey: 'repo:p', question: 'Should I delete the legacy exporter?' }, adv.view().briefs.find((b) => b.agentId === 'a3')), false);
+  // Set to run without you afterwards: the brief written before is written again for it, then acted on.
+  const before = prompts.length;
+  agents.get('a1').auto = true;
+  await adv.tick();
+  assert.equal(prompts.length, before + 1, 'written again, on the models chosen for it');
+  assert.deepEqual(told.at(-1), ['a1', 'q1', 'the built-in']);
+  await adv.tick();
+  assert.equal(prompts.length, before + 1);
+  // A project set higher than "most" is not there; one set to "ask" still gives way to the agent's own level.
+  adv.setAutonomy('repo:p', 'ask');
+  assert.equal(adv.levelOfItem({ agentId: 'a2', projectKey: 'repo:p' }), 'most');
+  assert.equal(adv.levelOfItem({ agentId: 'zz', projectKey: 'repo:p' }), 'ask');
+});
+
+test('drop to start: links told apart (ticket, repository, requirements, design), and the request they make', async () => {
+  const { classifyUrl, composeIntents, dropSummary, isEmptyDrop, readDrop } = await import('../public/dropzone.js');
+  const kind = (u) => {
+    const c = classifyUrl(u);
+    return c && [c.kind, c.label];
+  };
+  assert.deepEqual(kind('https://acme.atlassian.net/browse/SHOP-142'), ['ticket', 'SHOP-142']);
+  assert.deepEqual(kind('https://acme.atlassian.net/jira/software/projects/SHOP/boards/3?selectedIssue=shop-9'), ['ticket', 'SHOP-9']);
+  assert.deepEqual(kind('https://github.com/acme/web/issues/12'), ['ticket', 'web#12']);
+  assert.equal(classifyUrl('https://github.com/acme/web/issues/12').repo, 'https://github.com/acme/web.git');
+  assert.deepEqual(kind('https://linear.app/acme/issue/ENG-7/fix-login'), ['ticket', 'ENG-7']);
+  assert.deepEqual(kind('https://github.com/acme/web'), ['repo', 'acme/web']);
+  assert.equal(classifyUrl('https://github.com/acme/web/').url, 'https://github.com/acme/web.git');
+  assert.deepEqual(kind('https://git.acme.dev/team/api.git'), ['repo', 'team/api']);
+  assert.deepEqual(kind('https://www.figma.com/file/abc/Checkout'), ['design', 'figma.com']);
+  assert.deepEqual(kind('https://cdn.acme.dev/mock/checkout.png?v=2'), ['design', 'cdn.acme.dev']);
+  assert.deepEqual(kind('https://docs.google.com/document/d/1abc/edit'), ['doc', 'docs.google.com']);
+  assert.deepEqual(kind('https://acme.atlassian.net/wiki/spaces/ENG/pages/1/PRD'), ['doc', 'acme.atlassian.net']);
+  assert.deepEqual(kind('https://acme.dev/specs/checkout.pdf'), ['doc', 'acme.dev']);
+  assert.deepEqual(kind('https://github.com/acme/web/pull/5'), ['link', 'github.com']);
+  assert.deepEqual(kind('https://example.com/thread/9'), ['link', 'example.com']);
+  assert.equal(classifyUrl('not a link'), null);
+  assert.equal(classifyUrl('javascript:alert(1)'), null);
+  assert.equal(classifyUrl('file:///etc/passwd'), null);
+
+  // A dragged link comes as a uri-list and as the same text: once.
+  const one = readDrop({ uris: '# comment\r\nhttps://acme.atlassian.net/browse/SHOP-142\r\n', text: 'https://acme.atlassian.net/browse/SHOP-142' });
+  assert.deepEqual([one.tickets.map((t) => t.label), one.text, isEmptyDrop(one)], [['SHOP-142'], '', false]);
+  assert.deepEqual(composeIntents('', one, 'lines'), { text: 'https://acme.atlassian.net/browse/SHOP-142', split: 'lines' }, 'one ticket: one line, the mode as it was');
+  // Several links pasted together: sorted; a GitHub issue brings its repository.
+  const mix = readDrop({ text: 'https://github.com/acme/web/issues/12\nhttps://docs.google.com/document/d/1abc/edit https://www.figma.com/file/abc/Checkout https://example.com/thread/9' });
+  assert.deepEqual([mix.tickets.length, mix.docs.length, mix.designs.length, mix.links.length, mix.repo.url, mix.repo.implied], [1, 1, 1, 1, 'https://github.com/acme/web.git', true]);
+  assert.equal(dropSummary(mix, 2), '1 ticket, 1 requirements link, 1 design, 1 link, the repository, 2 files');
+  // One ticket with context: one request, the ticket first (the agent is named after it), the context under it.
+  assert.deepEqual(composeIntents('', mix, 'lines'), {
+    text: 'https://github.com/acme/web/issues/12\n\nContext:\n- Requirements: https://docs.google.com/document/d/1abc/edit\n- Design: https://www.figma.com/file/abc/Checkout\n- Link: https://example.com/thread/9',
+    split: 'one',
+  });
+  // Lines already there, each its own agent: they stay that way, and the context rides on the ticket's line.
+  assert.deepEqual(composeIntents('Fix the footer\n', mix, 'lines'), {
+    text: 'Fix the footer\nhttps://github.com/acme/web/issues/12 (context: https://docs.google.com/document/d/1abc/edit https://www.figma.com/file/abc/Checkout https://example.com/thread/9)',
+    split: 'lines',
+  });
+  // Several tickets: one agent each.
+  const two = readDrop({ text: 'https://acme.atlassian.net/browse/SHOP-1 https://acme.atlassian.net/browse/SHOP-2 https://docs.google.com/document/d/1abc/edit' });
+  assert.deepEqual(composeIntents('', two, 'one'), { text: 'https://acme.atlassian.net/browse/SHOP-1 (context: https://docs.google.com/document/d/1abc/edit)\nhttps://acme.atlassian.net/browse/SHOP-2 (context: https://docs.google.com/document/d/1abc/edit)', split: 'lines' });
+  // Text that is not only links is the request, as written; added under what a whole request already says.
+  const text = readDrop({ text: 'Make checkout faster.\nSee https://example.com/thread/9 for the numbers.' });
+  assert.deepEqual([text.links.length, text.text], [0, 'Make checkout faster.\nSee https://example.com/thread/9 for the numbers.']);
+  assert.deepEqual(composeIntents('', text, 'lines'), { text: 'Make checkout faster.\nSee https://example.com/thread/9 for the numbers.', split: 'one' });
+  assert.deepEqual(composeIntents('Speed work', readDrop({ text: 'https://www.figma.com/file/abc/Checkout' }), 'one'), { text: 'Speed work\n\nContext:\n- Design: https://www.figma.com/file/abc/Checkout', split: 'one' });
+  // Only a repository: nothing for the request.
+  const repo = readDrop({ uris: 'https://github.com/acme/web' });
+  assert.deepEqual([repo.repo.url, composeIntents('Keep', repo, 'one').text, dropSummary(repo)], ['https://github.com/acme/web.git', 'Keep', 'the repository']);
+  assert.ok(isEmptyDrop(readDrop({})) && isEmptyDrop(readDrop({ text: '  ' })));
+  assert.equal(dropSummary(readDrop({}), 1), '1 file');
 });

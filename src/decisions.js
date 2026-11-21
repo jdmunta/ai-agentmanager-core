@@ -7,7 +7,7 @@
 import crypto from 'node:crypto';
 
 const MAX = 2000;
-export const DECISION_KINDS = { plan: 'Plan review', answer: 'Your answer', design: 'Design', tradeoff: 'Trade-off', manual: 'Added by you' };
+export const DECISION_KINDS = { plan: 'Plan review', acceptance: 'What done means', answer: 'Your answer', design: 'Design', tradeoff: 'Trade-off', manual: 'Added by you' };
 const err = (status, message) => Object.assign(new Error(message), { status });
 const clip = (s, n) => {
   const t = String(s ?? '').replace(/\s+/g, ' ').trim();
@@ -93,6 +93,10 @@ export class Decisions {
       const pr = a.planReview;
       if (pr?.decidedAt && ['approved', 'changes'].includes(pr.status)) {
         put(`plan:${a.id}:${pr.decidedAt}`, { ...base, kind: 'plan', at: pr.decidedAt, title: `Plan for ${a.name}`, decision: pr.status === 'approved' ? 'Approved' : 'Sent back for changes', why: clip(pr.note, 1000) || null });
+      }
+      const acc = a.acceptance;
+      if (acc?.status === 'agreed') {
+        put(`acceptance:${a.id}:${acc.agreedAt}`, { ...base, kind: 'acceptance', at: acc.agreedAt, title: `What done means for ${a.name}`, decision: `Agreed on ${acc.points.length} point${acc.points.length === 1 ? '' : 's'}${acc.yours ? ` (${acc.yours} yours)` : ''}`, why: clip(acc.points.map((p) => `${p.id}: ${p.text}`).join('\n'), 1000) || null });
       }
       const answers = a.answers ?? {};
       if (Object.keys(answers).length) {

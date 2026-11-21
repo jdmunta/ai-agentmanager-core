@@ -532,6 +532,7 @@ export class BugHunts {
           name: `fix-${f.title}`.toLowerCase().replace(/[^a-z0-9-]+/g, '-').slice(0, 40),
           worktree: true,
           planReview: false,
+          acceptance: false,
           designDoc: false,
           demoPage: false,
           benchmarks: false,

@@ -1366,6 +1366,121 @@ test('plan review: the agent writes a plan and waits; approve or send it back fr
   await call('DELETE', `/agents/${b.id}`);
 });
 
+test('acceptance: the agent writes what done means and waits; you change the points and agree; the scorecard checks each one', async () => {
+  const { told, restore } = recordTold();
+  const { acceptanceAgreedPrompt, SKIPPED_MESSAGE } = await import('../src/acceptance.js');
+  const origin = makeOrigin('accept');
+  const [a] = (await call('POST', '/agents', { intent: 'Add a CSV export', repo: `file://${origin}`, acceptance: true })).body;
+  assert.deepEqual(a.acceptance, { status: 'writing', wait: true, points: [] });
+  const launch = await waitFor(() => launches().find((l) => l.args.includes(a.sessionId) && l.args.includes('--append-system-prompt')), 20000, 'launch');
+  const sys = launch.args[launch.args.indexOf('--append-system-prompt') + 1];
+  const specFile = path.join(fs.realpathSync(path.join(home, 'briefs', a.id)), 'SPEC.md');
+  assert.ok(sys.includes(`then write ${specFile} with three to six points`) && sys.includes('Until a message starting with "Acceptance agreed"'), sys);
+  assert.ok(!sys.includes('Do not stop to wait for approval'), 'the spec instructions no longer say to carry on');
+  assert.equal((await call('GET', `/agents/${a.id}/acceptance`)).body.status, 'writing');
+  const none = await call('POST', `/agents/${a.id}/acceptance/agree`, {});
+  assert.equal(none.status, 400, 'no points yet');
+  assert.match(none.body.error, /at least one point/);
+
+  // The agent writes its spec: its points wait for you (inbox, alert).
+  fs.writeFileSync(specFile, '# Spec: export\n## Requirements\n- An export\n## Acceptance criteria\n- [ ] `GET /export.csv` answers 200 with text/csv\n- The first row is\n  the header\n3. An empty table gives only the header\n## Out of scope\n- Excel\n');
+  const ready = await waitFor(async () => ((await agentNow(a.id)).acceptance.status === 'review' ? agentNow(a.id) : null), 8000, 'points to agree on');
+  assert.deepEqual(ready.acceptance.points.map((p) => [p.id, p.text, p.from]), [
+    ['A1', '`GET /export.csv` answers 200 with text/csv', 'agent'],
+    ['A2', 'The first row is the header', 'agent'],
+    ['A3', 'An empty table gives only the header', 'agent'],
+  ]);
+  const draft = (await call('GET', `/agents/${a.id}/acceptance`)).body;
+  assert.equal(draft.status, 'review');
+  assert.equal(draft.wait, true);
+  assert.equal(draft.draft.length, 3);
+
+  // Not the agent's to agree on or skip: its own calls are refused.
+  for (const route of ['agree', 'skip']) {
+    assert.equal((await call('POST', `/agents/${a.id}/acceptance/${route}`, {}, { 'x-agentmgr': '1', 'x-agentmgr-agent': a.id })).status, 403, route);
+  }
+  assert.equal((await agentNow(a.id)).acceptance.status, 'review');
+  // Agree, with one point reworded and one of your own: the agent is told them and goes ahead.
+  assert.equal((await call('POST', `/agents/${a.id}/acceptance/agree`, { points: [' ', ''] })).status, 400);
+  assert.equal((await call('POST', `/agents/${a.id}/acceptance/agree`, { points: ['x'.repeat(301)] })).status, 400);
+  const points = [draft.draft[0], 'The first row is the header, in the column order of the table #notmet', draft.draft[2], 'Dates are ISO 8601', 'dates are ISO 8601.'];
+  const ok = await call('POST', `/agents/${a.id}/acceptance/agree`, { points });
+  assert.equal(ok.status, 200, JSON.stringify(ok.body));
+  const acc = ok.body.acceptance;
+  assert.equal(acc.status, 'agreed');
+  assert.deepEqual(acc.points.map((p) => [p.id, p.from]), [['A1', 'agent'], ['A2', 'you'], ['A3', 'agent'], ['A4', 'you']], 'the repeat is dropped');
+  assert.equal(acc.yours, 2);
+  assert.match(told.at(-1), /^Acceptance agreed\. The work is done when all of these are true[\s\S]*\nA2: The first row is the header, in the column order of the table #notmet\n[\s\S]*word for word\. Go ahead with the work\.$/);
+  assert.equal((await call('POST', `/agents/${a.id}/acceptance/skip`)).status, 409, 'not waiting any more');
+  // A session started later is told the points; the agent rewriting its spec does not change them.
+  assert.ok(manager.launchOptions(manager.get(a.id)).instructions.includes(acceptanceAgreedPrompt(acc.points)));
+  fs.writeFileSync(specFile, '# Spec: export\n## Acceptance criteria\n- It works\n');
+  await new Promise((r) => setTimeout(r, 1500));
+  assert.equal((await agentNow(a.id)).acceptance.points.length, 4);
+  let v = (await call('GET', `/agents/${a.id}/acceptance`)).body;
+  assert.deepEqual([v.status, v.counts.unchecked, v.checkedAt, v.stale], ['agreed', 4, null, false]);
+  // In the decision log.
+  const logged = (await call('GET', '/decisions')).body.items.find((d) => d.kind === 'acceptance' && d.agentId === a.id);
+  assert.match(logged?.decision ?? '', /^Agreed on 4 points \(2 yours\)$/);
+
+  // Scored: one entry per agreed point, in your words; the one not met holds the work back.
+  const workdir = (await waitFor(async () => ((await agentNow(a.id)).workdir ? agentNow(a.id) : null), 20000, 'workdir')).workdir;
+  fs.writeFileSync(path.join(workdir, 'export.js'), 'export const csv = () => "a,b\\n";\n');
+  const res = await call('POST', `/agents/${a.id}/docs/scorecard`);
+  assert.equal(res.status, 200, JSON.stringify(res.body));
+  const sc = res.body.docs.scorecard;
+  assert.deepEqual(sc.data.criteria.map((c) => [c.id, c.status, c.agreed]), [['A1', 'met', true], ['A2', 'not_met', true], ['A3', 'met', true], ['A4', 'met', true]]);
+  assert.equal(sc.data.criteria[1].criterion, acc.points[1].text);
+  assert.equal(sc.acceptanceAt, acc.agreedAt);
+  assert.equal(sc.data.scores.spec.score, 75);
+  assert.equal(sc.data.recommendation, 'not_ready');
+  assert.ok(sc.data.reasons.includes('1 acceptance criterion not met'), JSON.stringify(sc.data.reasons));
+  v = (await call('GET', `/agents/${a.id}/acceptance`)).body;
+  assert.deepEqual(v.results.map((r) => r.status), ['met', 'not_met', 'met', 'met']);
+  assert.deepEqual(v.counts, { total: 4, met: 3, notMet: 1, unverified: 0, unchecked: 0 });
+  assert.equal(v.checkedAt, sc.at);
+  assert.match(v.results[1].evidence, /seen in H1/);
+
+  // Change the points: the agent is told again, the old result no longer counts, and a point the model skips is not verified.
+  const same = await call('POST', `/agents/${a.id}/acceptance/agree`, { points: acc.points.map((p) => p.text) });
+  assert.equal(same.body.acceptance.agreedAt, acc.agreedAt, 'the same points: nothing changes');
+  const again = await call('POST', `/agents/${a.id}/acceptance/agree`, { points: [acc.points[0].text, 'The export streams #skip'] });
+  assert.equal(again.body.acceptance.rounds, 2);
+  assert.deepEqual(again.body.acceptance.points.map((p) => p.from), ['agent', 'you']);
+  assert.match(told.at(-1), /^Acceptance agreed again: the user changed the points\.[\s\S]*Check the work you have done against them/);
+  v = (await call('GET', `/agents/${a.id}/acceptance`)).body;
+  assert.deepEqual([v.counts.unchecked, v.stale, v.checkedAt], [2, true, null]);
+  const sc2 = (await call('POST', `/agents/${a.id}/docs/scorecard`)).body.docs.scorecard;
+  assert.deepEqual(sc2.data.criteria.map((c) => [c.id, c.status]), [['A1', 'met'], ['A2', 'unverified']]);
+  assert.equal(sc2.data.scores.spec.score, 75);
+
+  // Skip: the agent goes ahead with its own criteria, and nothing is kept.
+  const [b] = (await call('POST', '/agents', { intent: 'Skip the points', acceptance: true, planReview: true })).body;
+  const lb = await waitFor(() => launches().find((l) => l.args.includes(b.sessionId) && l.args.includes('--append-system-prompt')), 8000, 'launch b');
+  assert.ok(lb.args[lb.args.indexOf('--append-system-prompt') + 1].includes('do not write your implementation plan yet'), 'with plan review: the points come first');
+  const skipped = await call('POST', `/agents/${b.id}/acceptance/skip`);
+  assert.equal(skipped.body.acceptance, null);
+  assert.equal(told.at(-1), SKIPPED_MESSAGE);
+
+  // Not asked for: the points in the spec can still be agreed on; an agent that is not running is not started for it.
+  const [c] = (await call('POST', '/agents', { intent: 'Quiet one', start: false })).body;
+  await waitFor(async () => (await agentNow(c.id)).status === 'stopped', 8000, 'ready');
+  assert.equal(c.acceptance, null);
+  let cv = (await call('GET', `/agents/${c.id}/acceptance`)).body;
+  assert.deepEqual([cv.status, cv.draft], ['none', []]);
+  fs.mkdirSync(path.join(home, 'briefs', c.id), { recursive: true });
+  fs.writeFileSync(path.join(home, 'briefs', c.id, 'SPEC.md'), '## Acceptance criteria\n- One thing holds\n');
+  cv = (await call('GET', `/agents/${c.id}/acceptance`)).body;
+  assert.deepEqual([cv.status, cv.wait, cv.draft], ['none', false, ['One thing holds']]);
+  const n = told.length;
+  const quiet = await call('POST', `/agents/${c.id}/acceptance/agree`, {});
+  assert.deepEqual(quiet.body.acceptance.points, [{ id: 'A1', text: 'One thing holds', from: 'agent' }]);
+  assert.equal(told.length, n, 'not told: it reads them when it next starts');
+  assert.equal((await agentNow(c.id)).runtime.running, false);
+  restore();
+  for (const x of [a, b, c]) await call('DELETE', `/agents/${x.id}`);
+});
+
 test("Explain summarizes the agent's live session in a separate tool-less Claude call", async () => {
   const [a] = (await call('POST', '/agents', { intent: 'Explain me please' })).body;
   await waitFor(() => launches().some((l) => l.args.includes(a.sessionId)), 8000, 'launch');
@@ -1391,6 +1506,132 @@ test("Explain summarizes the agent's live session in a separate tool-less Claude
   const ins = (await call('POST', `/agents/${a.id}/insights`)).body;
   assert.match(ins.insights.markdown, /^### Why\n- Safe call: Explain me please[\s\S]*### Now\n- saw agent text: true/);
   assert.match(ins.explanation.markdown, /^### The ask/, 'explanation kept');
+});
+
+test('autonomy and ground rules: your rules reach every agent; an agent that runs without you has its question answered on the models in order and its nudge sent; its own calls are refused', async () => {
+  const asAgent = (id) => ({ 'x-agentmgr': '1', 'x-agentmgr-agent': id });
+  const { told, restore } = recordTold();
+  manager.config.judge = { enabled: true, idleSec: 1, warmupSec: 0 };
+  try {
+    // Ground rules: yours to set, one per line, list marks and repeats dropped.
+    assert.deepEqual((await call('GET', '/ground-rules')).body.rules, []);
+    const g = (await call('PUT', '/ground-rules', { text: '- Ask before adding a dependency\n2. Never force-push or rewrite history\n\nask before adding a dependency\n' })).body;
+    assert.deepEqual(g.rules, ['Ask before adding a dependency', 'Never force-push or rewrite history']);
+    assert.equal(g.changed, true);
+    assert.equal(fs.readFileSync(path.join(home, 'ground-rules.md'), 'utf8'), '- Ask before adding a dependency\n- Never force-push or rewrite history\n');
+    assert.equal((await call('PUT', '/ground-rules', { rules: g.rules })).body.changed, false);
+    const long = await call('PUT', '/ground-rules', { text: 'x'.repeat(401) });
+    assert.equal(long.status, 400);
+    assert.match(long.body.error, /one short line/);
+
+    // An agent that runs without you. A level is the person's to set: not through an agent's own call.
+    const refused = await call('POST', '/agents', { intent: 'Sneaky', autonomy: 'merge' }, asAgent('abc123'));
+    assert.equal(refused.status, 403);
+    assert.equal((await call('POST', '/agents', { intent: 'x', autonomy: 'fast' })).status, 400);
+    const [a] = (await call('POST', '/agents', { intent: 'Add a cache #waiting #nofable', autonomy: 'run', acceptance: false })).body;
+    assert.deepEqual(a.autonomy, { level: 'run', log: [], seen: {} });
+    assert.equal(a.acceptance, null, 'asked not to agree on what done means first');
+    const launch = await waitFor(() => launches().find((l) => l.args.includes(a.sessionId) && l.args.includes('--append-system-prompt')), 20000, 'launch');
+    const sys = launch.args[launch.args.indexOf('--append-system-prompt') + 1];
+    assert.match(sys, /Ground rules from the user[\s\S]*- Ask before adding a dependency\n- Never force-push or rewrite history/);
+    assert.equal((await call('PUT', '/ground-rules', { text: 'Do as you like' }, asAgent(a.id))).status, 403, 'an agent cannot change the rules it works under');
+
+    // It stops on a question in its terminal: the judge reads it, and it is answered for you. The
+    // first model is not there, so the next one answers.
+    const answered = await waitFor(async () => {
+      const v = await agentNow(a.id);
+      return v.autonomy.log.some((e) => e.kind === 'answer') ? v : null;
+    }, 30000, 'the question answered for you');
+    const e = answered.autonomy.log.find((x) => x.kind === 'answer');
+    assert.equal(e.question, 'Which database should I use?');
+    assert.equal(e.answer, 'SQLite');
+    assert.equal(e.model, 'Claude Code opus', 'fable failed, opus answered');
+    assert.match(e.basis, /routine detail, cheap to change; ground rules read/);
+    assert.equal(answered.runtime.waiting, null, 'no longer waiting on you');
+    assert.ok(told.some((t) => t.startsWith('Answer to your question "Which database should I use?": SQLite\n(Given for the user by AI Agent Manager')), told.join('\n---\n'));
+    const st = (await call('GET', '/autonomy')).body;
+    assert.equal(st.lastModel, 'Claude Code opus');
+    assert.deepEqual(st.models, ['fable', 'opus', 'sonnet']);
+    assert.ok(st.calls >= 1 && st.agents >= 1);
+    const item = (await call('GET', '/inbox')).body.find((i) => i.kind === 'auto' && i.agentId === a.id);
+    assert.equal(item.title, 'Answered for you: Which database should I use?');
+
+    // Your own answer instead: the agent is told to apply it, and the item leaves the inbox.
+    assert.equal((await call('POST', `/agents/${a.id}/autonomy/correct`, { entry: e.id, text: 'Postgres' }, asAgent(a.id))).status, 403);
+    assert.equal((await call('POST', `/agents/${a.id}/autonomy/correct`, { entry: e.id, text: ' ' })).status, 400);
+    const fixed = (await call('POST', `/agents/${a.id}/autonomy/correct`, { entry: e.id, text: 'Postgres' })).body;
+    assert.deepEqual([fixed.autonomy.log.find((x) => x.id === e.id).corrected, fixed.autonomy.log.find((x) => x.id === e.id).ack], ['Postgres', true]);
+    assert.ok(told.some((t) => t.startsWith('Correction from the user: your question "Which database should I use?" was answered for them with "SQLite". Their own answer is: Postgres')));
+    assert.ok(!(await call('GET', '/inbox')).body.some((i) => i.kind === 'auto' && i.agentId === a.id));
+
+    // The level: an agent cannot raise its own; you can, and "ask" keeps what was done for you.
+    assert.equal((await call('POST', `/agents/${a.id}/autonomy`, { level: 'merge' }, asAgent(a.id))).status, 403);
+    assert.equal((await call('PATCH', `/agents/${a.id}`, { autonomy: 'merge' }, asAgent(a.id))).status, 403);
+    assert.equal((await call('POST', `/agents/${a.id}/autonomy`, { level: 'pr' })).body.autonomy.level, 'pr');
+    const asks = (await call('PATCH', `/agents/${a.id}`, { autonomy: 'ask' })).body;
+    assert.equal(asks.autonomy.level, 'ask');
+    assert.equal(asks.autonomy.log.length, answered.autonomy.log.length, 'the record is kept');
+    await call('POST', `/agents/${a.id}/stop`);
+
+    // A question about what cannot be taken back is yours, whatever a model would say.
+    const { sensitive } = await import('../src/autonomy.js');
+    assert.equal(sensitive('Should I delete the old migrations?'), 'deleting or overwriting');
+
+    // Stuck: the judge's nudge (judged on the same models) is sent without you, and the finding is closed.
+    const [b] = (await call('POST', '/agents', { intent: 'Fix auth #stuck', autonomy: 'run', acceptance: false })).body;
+    const nudged = await waitFor(async () => {
+      const v = await agentNow(b.id);
+      return v.autonomy?.log.some((x) => x.kind === 'nudge') ? v : null;
+    }, 30000, 'the nudge sent for you');
+    assert.equal(nudged.autonomy.log.find((x) => x.kind === 'nudge').title, 'Stuck on the 401 in auth tests');
+    assert.equal(nudged.stuck.length, 0);
+    assert.ok(told.some((t) => t.startsWith('The 401 means the test client sends no token.') && t.includes('Sent by AI Agent Manager while the user is away')));
+    assert.equal(manager.judge.examples('stuck').some((x) => x.outcome === null), false, 'not recorded as a reaction of yours');
+    await call('POST', `/agents/${b.id}/stop`);
+
+    // A question it asks without stopping (QUESTIONS.md) is Decide's: decided for it at "most things",
+    // whatever its project's level, and put on the agent's record, where you can change the answer.
+    manager.config.decide = { enabled: true };
+    const [q] = (await call('POST', '/agents', { intent: 'Pick a store #question', autonomy: 'run', acceptance: false })).body;
+    const decided = await waitFor(async () => {
+      const v = await agentNow(q.id);
+      return v.autonomy?.log.some((x) => x.kind === 'answer') ? v : null;
+    }, 45000, 'the question decided for you');
+    const de = decided.autonomy.log.find((x) => x.kind === 'answer');
+    assert.deepEqual([de.via, de.question, de.answer, de.ack], ['decide', 'Postgres or SQLite for the cache?', 'Postgres', false]);
+    assert.equal(decided.questions[0].answer.text, 'Postgres');
+    assert.ok((await call('GET', '/inbox')).body.some((i) => i.kind === 'auto' && i.agentId === q.id));
+    assert.ok((await call('GET', '/advisor')).body.handled.some((h) => h.agentId === q.id && h.did === 'Answered: Postgres'));
+    const mine = (await call('POST', `/agents/${q.id}/autonomy/correct`, { entry: de.id, text: 'SQLite' })).body;
+    assert.equal(mine.questions[0].answer.text, 'SQLite');
+    await call('POST', `/agents/${q.id}/stop`);
+
+    // An agent at "ask" is left alone: its question waits for you as before.
+    const [c] = (await call('POST', '/agents', { intent: 'Add a cache #waiting' })).body;
+    assert.equal(c.autonomy, null);
+    const waiting = await waitFor(async () => (await agentNow(c.id)).runtime.waiting, 20000, 'judged question');
+    assert.equal(waiting.question, 'Which database should I use?');
+    await new Promise((r) => setTimeout(r, 1500));
+    assert.ok((await agentNow(c.id)).runtime.waiting, 'still waiting on you');
+    await call('POST', `/agents/${c.id}/stop`);
+
+    // The default level and the models, kept in config.json.
+    assert.equal((await call('PUT', '/autonomy', { models: 'opus, sonnet' }, asAgent(a.id))).status, 403);
+    const set = (await call('PUT', '/autonomy', { level: 'run', models: 'opus, sonnet' })).body;
+    assert.deepEqual([set.level, set.models], ['run', ['opus', 'sonnet']]);
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(home, 'config.json'), 'utf8')).autonomy.models, ['opus', 'sonnet']);
+    const [d] = (await call('POST', '/agents', { intent: 'By default', start: false })).body;
+    assert.equal(d.autonomy.level, 'run');
+    assert.equal(d.acceptance.status, 'writing', 'past "ask", what done means is agreed first');
+    assert.equal((await call('PUT', '/autonomy', { models: '' })).status, 400);
+    assert.equal((await call('PUT', '/autonomy', { level: 'everything' })).status, 400);
+  } finally {
+    restore();
+    manager.config.judge = { enabled: false };
+    manager.config.decide = { enabled: false };
+    await call('PUT', '/autonomy', { level: 'ask', models: 'fable, opus, sonnet' });
+    await call('PUT', '/ground-rules', { text: '' });
+  }
 });
 
 test('backlog: per-project limit, done → review frees a slot, accept, reopen, pause, priority', async () => {

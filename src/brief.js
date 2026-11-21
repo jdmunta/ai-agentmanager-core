@@ -29,6 +29,9 @@ export const briefPrompt = (file) =>
   '"- Delivered: ..." for each concrete result (PR or commit links, files, documents, answers), and\n' +
   '"- Blocked by: ... (needs: who or what)" for anything blocking progress, and\n' +
   '"- Filed: <issue link> <title>" for each bug or issue you opened (GitHub, Jira, ...). Keep it current; it is what reviewers read first.\n' +
+  'Whenever the outcome is partial or done, add one more line under it: "Confidence: <0-100>% - <what you verified that makes you sure, ' +
+  'and the one thing you are least sure about>". Give the number honestly: what you ran and saw working counts, what you only read or ' +
+  'assumed does not, and anything in the request you did not do lowers it. Update it when you learn more.\n' +
   'Add a fifth section only when the task links Jira issues (or other tickets):\n' +
   '## References\nLook each linked issue up (use your Jira / Atlassian tools if you have them) and list the ' +
   'documents its fields point to, above all its PRD and Tech Spec fields, plus design docs or Confluence pages. ' +
@@ -73,6 +76,19 @@ function sectionKey(heading) {
 const CHECK_STATES = { ' ': 'pending', '~': 'running', x: 'passed', X: 'passed', '!': 'failed' };
 
 /** Parse the brief Markdown into its four sections. Unknown sections are ignored. */
+const CONFIDENCE_LINE = /^\s*(?:[-*]\s+)?\**\s*confidence\s*\**\s*:\s*\**\s*(\d{1,3})\s*%?\s*\**\s*(?:[-–—:,;.]\s*)?(.*)$/i;
+
+/** The agent's own confidence in what it built, from its Results: { percent, why, level } or null. */
+export function parseConfidence(body) {
+  for (const line of String(body ?? '').split('\n')) {
+    const m = CONFIDENCE_LINE.exec(line);
+    if (!m) continue;
+    const percent = Math.max(0, Math.min(100, Number(m[1])));
+    return { percent, why: m[2].trim().slice(0, 400), level: percent >= 85 ? 'high' : percent >= 65 ? 'medium' : 'low' };
+  }
+  return null;
+}
+
 export function parseBrief(markdown) {
   const out = { status: null, problem: '', solution: '', diagram: null, diagramNotes: '', checks: [], references: [], results: null };
   const st = markdown.split(/^##\s/m)[0].match(/^\s*\**status\**\s*:\s*\**\s*(planning|working|blocked|done)\b/im);
@@ -96,8 +112,10 @@ export function parseBrief(markdown) {
         delivered: pick(/^\s*[-*]\s+\**\s*delivered\s*\**\s*:\s*\**\s*(.+)$/i),
         blockers: pick(/^\s*[-*]\s+\**\s*blocked by\s*\**\s*:\s*\**\s*(.+)$/i),
         filed: pick(/^\s*[-*]\s+\**\s*filed\s*\**\s*:\s*\**\s*(.+)$/i),
+        // "Confidence: 85% - why": the agent's own, in what it built (null until it says).
+        confidence: parseConfidence(body),
         notes: lines
-          .filter((l) => !/^\s*\**\s*outcome\s*\**\s*:/i.test(l) && !/^\s*[-*]\s+\**\s*(delivered|blocked by|filed)\s*\**\s*:/i.test(l))
+          .filter((l) => !/^\s*\**\s*outcome\s*\**\s*:/i.test(l) && !CONFIDENCE_LINE.test(l) && !/^\s*[-*]\s+\**\s*(delivered|blocked by|filed)\s*\**\s*:/i.test(l))
           .join('\n')
           .trim(),
       };
@@ -953,14 +971,14 @@ export function intentMarkdown(agent) {
 }
 
 /** The agent's instructions for SPEC.md and PLAN.md (the plan only when the plan review isn't on). */
-export const specPrompt = (specFile, planFile, { withPlan = true } = {}) =>
+export const specPrompt = (specFile, planFile, { withPlan = true, wait = false } = {}) =>
   `Before you change any code, write a short spec of the task to ${specFile} (Markdown), so reviewers (people and other agents) ` +
   'can check the work against it:\n# Spec: <short name>\n## Requirements\nWhat must be true when it is done, as a list.\n' +
   '## Acceptance criteria\nHow each requirement is checked: a command, a test or an observable behavior.\n## Out of scope\n## Open questions\n' +
   (withPlan
     ? `Then write your plan to ${planFile}: "# Plan: <short name>", then "## Steps" as a task list ("- [ ]" to do, "- [x]" done), ` +
       'small enough to check, and "## Files to change". Keep both current: tick steps as you finish them, and update the spec ' +
-      'if the requirements change (say why). Do not stop to wait for approval; carry on with the work. '
+      `if the requirements change (say why). ${wait ? '' : 'Do not stop to wait for approval; carry on with the work. '}`
     : 'Keep it current if the requirements change (say why). ') +
   'Both files are outside the repository: never copy them into the repo or commit them.';
 

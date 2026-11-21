@@ -57,7 +57,7 @@ const pastLines = (past) =>
 const lessonLines = (lessons) => (lessons.length ? `What earlier decisions taught:\n${lessons.map((l) => `- ${clip(l, 200)}`).join('\n')}` : '');
 
 /** The prompt for one thing waiting on the person: a plan to review, or an agent's question. */
-export function briefPrompt(item, { standing = [], past = [], lessons = [], dates = '' } = {}) {
+export function briefPrompt(item, { standing = [], past = [], lessons = [], dates = '', points = [], groundRules = [], repoLessons = [] } = {}) {
   const head =
     'You advise a senior engineer who supervises AI coding agents. Something waits for their decision. ' +
     'Lay out the real options, recommend one, and say why in terms of this project. Be concrete and brief; do not flatter; when the evidence is thin, say so with a low confidence.';
@@ -73,6 +73,9 @@ export function briefPrompt(item, { standing = [], past = [], lessons = [], date
     head,
     `Project: ${item.project}.${dates ? ` ${dates}` : ''}`,
     body,
+    points.length ? `What done means for this task, as agreed with the person (a recommendation must serve these):\n${points.map((p) => `- ${p.id ? `${p.id}: ` : ''}${clip(p.text ?? p, 300)}`).join('\n')}` : '',
+    groundRules.length ? `The person's ground rules for every agent (never recommend breaking one):\n${groundRules.map((r) => `- ${clip(r, 300)}`).join('\n')}` : '',
+    repoLessons.length ? `Lessons of this repository:\n${repoLessons.map((r) => `- ${clip(r, 240)}`).join('\n')}` : '',
     standingLines(standing),
     pastLines(past),
     lessonLines(lessons),
@@ -257,8 +260,11 @@ export class Advisor {
    * backlog, milestones, decisions, races: the other parts it reads and acts through;
    * questions(agent): its questions; projectOf(agent): its project.
    */
-  constructor({ store, manager, backlog, milestones, decisions, races, questions, projectOf, bugs = () => 0, enabled = () => true, notify = null, onChange = () => {}, now = () => Date.now(), log = (m) => console.log(`[agentmgr] ${m}`), timer = true }) {
-    Object.assign(this, { store, manager, backlog, milestones, decisions, races, questions, projectOf, bugs, enabled, notify, onChange, now, log });
+  constructor({ store, manager, backlog, milestones, decisions, races, questions, projectOf, bugs = () => 0, enabled = () => true, notify = null, onChange = () => {}, now = () => Date.now(), log = (m) => console.log(`[agentmgr] ${m}`), timer = true, autonomous = () => false, guard = () => null, context = () => ({}), onAuto = null }) {
+    // autonomous(agentId): the agent runs without the person (autonomy.js), so "most" may be decided for it.
+    // guard(item): why an item is the person's whatever the recommendation (deleting, publishing, money...), or null.
+    // context(item): { points, groundRules, repoLessons } for its brief. onAuto(handled): told what was decided for the person.
+    Object.assign(this, { store, manager, backlog, milestones, decisions, races, questions, projectOf, bugs, enabled, notify, onChange, now, log, autonomous, guard, context, onAuto });
     this.pending = new Set();
     if (timer) {
       this.timer = setInterval(() => this.tick().catch(() => {}), 20_000);
@@ -294,6 +300,17 @@ export class Advisor {
 
   levelFor(projectKey) {
     return this.state.autonomy[projectKey] ?? 'standing';
+  }
+
+  /** How much may be decided for one item: its project's level, or "most" when its agent runs without the person. */
+  levelOfItem(item) {
+    const p = this.levelFor(item.projectKey);
+    return this.autonomous(item.agentId) && LEVELS.indexOf(p) < LEVELS.indexOf('most') ? 'most' : p;
+  }
+
+  /** May this brief be carried out without asking? Never when the item is about what cannot be taken back. */
+  mayActOn(item, b) {
+    return mayAct(this.levelOfItem(item), b) && !this.guard(item);
   }
 
   setAutonomy(projectKey, level) {
@@ -357,8 +374,9 @@ export class Advisor {
     const jobs = [];
     for (const item of items) {
       const have = st.briefs[item.key];
-      if (have?.hash === item.hash && have.status !== 'stale') {
-        if (have.status === 'open' && mayAct(this.levelFor(item.projectKey), have)) jobs.push(this.apply(item.key, have.recommend, { by: 'auto' }).catch((e) => this.log(`decide: ${e.message}`)));
+      // A brief written before its agent was set to run without the person is written again, on the models chosen for that.
+      if (have?.hash === item.hash && have.status !== 'stale' && !(have.status === 'open' && this.autonomous(item.agentId) && !have.own)) {
+        if (have.status === 'open' && this.mayActOn(item, have)) jobs.push(this.apply(item.key, have.recommend, { by: 'auto' }).catch((e) => this.log(`decide: ${e.message}`)));
         continue;
       }
       if (this.pending.has(item.key)) continue;
@@ -372,17 +390,18 @@ export class Advisor {
   async write(item) {
     const standing = this.rulesFor(item);
     const past = this.state.history.filter((h) => h.kind === item.kind).slice(-6);
-    const prompt = briefPrompt(item, { standing, past, lessons: this.state.lessons.slice(-5), dates: this.datesFor(item.projectKey).words });
+    const own = Boolean(this.autonomous(item.agentId));
+    const prompt = briefPrompt(item, { standing, past, lessons: this.state.lessons.slice(-5), dates: this.datesFor(item.projectKey).words, ...this.context(item) });
     const agent = this.store.get(item.agentId) ?? null;
     const d = normalizeBrief(await this.judge.ask(`advise:${item.key}:${item.hash}`, agent, prompt, (x) => Array.isArray(x.options)), item, standing);
     const still = this.waiting().find((i) => i.key === item.key);
     if (!still || still.hash !== item.hash) return;
-    const base = { key: item.key, kind: item.kind, agentId: item.agentId, agentName: item.agentName, project: item.project, projectKey: item.projectKey, title: clip(item.title, 300), qid: item.qid ?? null, hash: item.hash, at: this.iso(), status: 'open' };
+    const base = { key: item.key, kind: item.kind, agentId: item.agentId, agentName: item.agentName, project: item.project, projectKey: item.projectKey, title: clip(item.title, 300), qid: item.qid ?? null, hash: item.hash, at: this.iso(), status: 'open', ...(own ? { own: true } : {}) };
     // No judge (off, over budget, or no usable reply): the card says so instead of guessing.
     this.state.briefs[item.key] = d ? { ...base, ...d } : { ...base, options: [], recommend: null, why: '', evidence: [], risk: '', undo: 'easy', confidence: 0, standing: null, none: this.judge.enabled ? 'No recommendation could be written (the AI judge gave no usable answer, or is over its daily budget).' : 'The AI judge is off, so there is no recommendation.' };
     this.save();
     const b = this.state.briefs[item.key];
-    if (mayAct(this.levelFor(item.projectKey), b)) await this.apply(item.key, b.recommend, { by: 'auto' }).catch((e) => this.log(`decide: ${e.message}`));
+    if (this.mayActOn(item, b)) await this.apply(item.key, b.recommend, { by: 'auto' }).catch((e) => this.log(`decide: ${e.message}`));
   }
 
   /** Ask for the brief again (the judge was off, or you want a second look). */
@@ -413,6 +432,9 @@ export class Advisor {
       this.state.handled.push({ at: b.decidedAt, key, kind: b.kind, agentId: b.agentId, agentName: b.agentName, project: b.project, projectKey: b.projectKey, title: b.title, did: opt.action === 'answer' ? `Answered: ${clip(say, 200)}` : opt.action === 'approve' ? 'Approved the plan' : `Sent the plan back: ${clip(say, 200)}`, why: b.why, standing: b.standing, standingWhen: rule?.when ?? null, confidence: b.confidence });
       if (this.state.handled.length > 200) this.state.handled.splice(0, this.state.handled.length - 200);
       if (rule) Object.assign(rule, { uses: (rule.uses ?? 0) + 1, lastUsedAt: b.decidedAt });
+      try {
+        this.onAuto?.({ ...this.state.handled.at(-1), qid: b.qid ?? null, action: opt.action, text: say });
+      } catch {}
       this.notify?.(`Decided for you on *${b.project}*: ${clip(b.title, 120)} → ${this.state.handled.at(-1).did}`, `Decided for you on ${b.project}: ${clip(b.title, 120)}: ${this.state.handled.at(-1).did}`)?.catch?.(() => {});
     }
     this.log2decisions(b, { by, followed });

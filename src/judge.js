@@ -259,7 +259,7 @@ export class Judge {
         const u = this.usage();
         if (u.calls >= u.cap) return null;
         this.state.calls++;
-        const data = parseJsonReply(await this.call(agent, prompt, { timeoutMs: this.settings.timeoutSec * 1000 }));
+        const data = parseJsonReply(await this.call(agent, prompt, { timeoutMs: this.settings.timeoutSec * 1000, kind: key.split(':')[0] }));
         if (!validate(data)) throw new Error('reply did not have the expected shape');
         data.confidence = Math.max(0, Math.min(1, Number(data.confidence) || 0));
         return data;

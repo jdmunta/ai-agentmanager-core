@@ -85,6 +85,9 @@ const DEFAULTS = {
   // Local models: servers on this computer (Ollama, LM Studio, llama.cpp, MLX) and their models, for the
   // "Local model" engine; `context` is the room Ollama gives a model for an agent (localmodels.js).
   localModels: { enabled: true, context: 32768 },
+  // How far agents go without you (autonomy.js): `level` for new agents (ask, run, pr, merge) and the
+  // `models` its decisions run on, best first: { level: 'ask', models: ['fable', 'opus', 'sonnet'] }.
+  // Your own rules for every agent are in ~/.agentmanager/ground-rules.md (groundrules.js).
   // Review rounds before a pull request (prereview.js): critics on other models, until they approve.
   preReview: { enabled: true, rounds: 4, critics: 2, openPr: true },
   // Screen (screen.js): this computer's screen in the page, through its own screen sharing on this port.

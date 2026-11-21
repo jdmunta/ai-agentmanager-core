@@ -350,6 +350,8 @@ export async function main(argv) {
     .option('--no-container', 'run on this computer even if containers are the default')
     .option('--plan', 'while a repo URL clones, plan the task with Claude (moves into the repo when ready)')
     .option('--no-design-doc', 'no design doc for this agent (on by default: "designDoc" in config.json)')
+    .option('--acceptance', 'agree on what done means first: the agent writes its points and waits for "agentmgr acceptance <agent> --agree"')
+    .option('--autonomy <level>', 'how far it goes without you: ask (the default), run (you agree on what done means, then routine questions are answered and nudges sent for you), pr (and its pull request is opened), merge (and merged when everything says ready)')
     .option('--demo-page', 'make a sample demo page of the change, published as an Artifact')
     .option('--benchmarks', 'micro benchmarks of the changed code, before and after')
     .option('--no-start', 'create without launching')
@@ -379,6 +381,8 @@ export async function main(argv) {
         start: opts.start,
         plan: opts.plan,
         designDoc: cmd.getOptionValueSource('designDoc') === 'cli' ? opts.designDoc : undefined,
+        acceptance: opts.acceptance || undefined,
+        autonomy: opts.autonomy || undefined,
         demoPage: opts.demoPage || undefined,
         benchmarks: opts.benchmarks || undefined,
       });
@@ -576,6 +580,61 @@ export async function main(argv) {
       else process.stdout.write(`${d.markdown}\n${dim(`Checked by ${d.writer}`)}\n`);
       // For scripts: something a source contradicts.
       if (d.data.verdict === 'wrong') process.exitCode = 1;
+    });
+
+  program
+    .command('acceptance')
+    .description('What done means for an agent: the points its work is checked against. The agent drafts them in its spec; you edit and agree; the review scorecard then reports each one as met, not met or not verified')
+    .argument('<agent>')
+    .option('--agree', 'agree on the points (as the agent wrote them, or as changed by the options below)')
+    .option('--add <text>', 'add a point; repeat for more', collect)
+    .option('--remove <n>', 'take out point n; repeat for more', collect)
+    .option('--set <n=text>', 'reword point n; repeat for more', collect)
+    .option('--skip', 'stop waiting: the agent goes ahead with the criteria in its own spec')
+    .option('--check', 'score the work against the agreed points now (a separate model call)')
+    .option('--json', 'print it as JSON')
+    .action(async (ref, opts) => {
+      await daemon();
+      const a = await resolveAgent(ref);
+      let v = await api('GET', `/agents/${a.id}/acceptance`);
+      const edits = opts.add?.length || opts.remove?.length || opts.set?.length;
+      if (opts.skip) {
+        await api('POST', `/agents/${a.id}/acceptance/skip`);
+        return console.log(`${green('✓')} Not waiting any more; ${bold(a.name)} goes ahead with its own criteria`);
+      }
+      if (edits || opts.agree) {
+        const points = (v.status === 'agreed' ? v.points.map((p) => p.text) : v.draft).slice();
+        const at = (n) => {
+          const i = Number(n) - 1;
+          if (!Number.isInteger(i) || i < 0 || i >= points.length) throw new Error(`There is no point ${n} (there are ${points.length})`);
+          return i;
+        };
+        for (const s of opts.set ?? []) {
+          const m = /^(\d+)=(.+)$/s.exec(s);
+          if (!m) throw new Error('--set takes n=text, e.g. --set "2=The export has a header row"');
+          points[at(m[1])] = m[2];
+        }
+        // Highest first, so the numbers the person gave stay right.
+        for (const i of [...new Set((opts.remove ?? []).map(at))].sort((x, y) => y - x)) points.splice(i, 1);
+        points.push(...(opts.add ?? []));
+        await api('POST', `/agents/${a.id}/acceptance/agree`, { points });
+        v = await api('GET', `/agents/${a.id}/acceptance`);
+        console.error(`${green('✓')} Agreed on ${v.points.length} point${v.points.length === 1 ? '' : 's'} for ${bold(a.name)}`);
+      }
+      if (opts.check) {
+        if (v.status !== 'agreed') throw new Error('Agree on the points first: agentmgr acceptance <agent> --agree');
+        process.stderr.write(dim('Checking… (a separate model call; the agent is not interrupted)\n'));
+        await api('POST', `/agents/${a.id}/docs/scorecard`);
+        v = await api('GET', `/agents/${a.id}/acceptance`);
+      }
+      if (opts.json) console.log(JSON.stringify(v, null, 2));
+      else {
+        const { acceptanceMarkdown } = await import('./acceptance.js');
+        process.stdout.write(`${acceptanceMarkdown(v, a.name)}\n`);
+        if (v.status === 'review' || (v.status === 'none' && v.draft.length)) console.log(dim(`Agree: agentmgr acceptance ${a.slug ?? a.id} --agree   (change them with --set n=text, --remove n, --add text)`));
+      }
+      // For scripts: an agreed point the work does not meet.
+      if (v.counts.notMet) process.exitCode = 1;
     });
 
   program
@@ -1698,6 +1757,79 @@ export async function main(argv) {
       const r = o.clear ? await api('PUT', `/agents/${a.id}/memory`, { text: '' }) : await api('GET', `/agents/${a.id}/memory`);
       console.log(dim(`${r.file} · ${r.entries} learnings · ${r.bytes} of ${r.max} bytes`));
       if (r.text) console.log(r.text.trimEnd());
+    });
+
+  program
+    .command('autonomy')
+    .description('How far agents go without you. Without an agent: the default level and the models used. With one: its level and what was answered, sent or merged for you')
+    .argument('[agent]')
+    .argument('[level]', 'ask, run, pr or merge: set it for this agent')
+    .option('--default <level>', 'the level new agents get when none is named')
+    .option('--models <list>', 'the models its calls run on, best first; the next one is used when a call fails (default: fable,opus,sonnet)')
+    .option('--ok <entry>', 'you have seen an answer given for you (its id from the list; "hold" for a held merge)')
+    .option('--change <entry=answer>', 'your own answer to a question that was answered for you; the agent is told to apply it')
+    .option('--json', 'print as JSON')
+    .action(async (ref, level, o) => {
+      await daemon();
+      const { LEVEL_LABEL, logLine } = await import('./autonomy.js');
+      if (!ref) {
+        const patch = { ...(o.default ? { level: o.default } : {}), ...(o.models ? { models: o.models } : {}) };
+        const s = Object.keys(patch).length ? await api('PUT', '/autonomy', patch) : await api('GET', '/autonomy');
+        if (o.json) return console.log(JSON.stringify(s, null, 2));
+        console.log(`${bold('New agents:')} ${LEVEL_LABEL[s.level]} ${dim(`(${s.level})`)}`);
+        console.log(`${bold('Models, best first:')} ${s.models.map((m) => (typeof m === 'string' ? m : `${m.engine ?? 'claude'}:${m.model}`)).join(' → ')}`);
+        console.log(dim(`${s.agents} agent${s.agents === 1 ? '' : 's'} running without you · ${s.calls} of ${s.dailyCalls} calls today${s.lastModel ? ` · last answered by ${s.lastModel}` : ''}`));
+        if (s.lastError) console.log(dim(`Last failure ${s.lastError.at}: ${s.lastError.message}`));
+        return;
+      }
+      const a = await resolveAgent(ref);
+      let v = a;
+      if (level) v = await api('POST', `/agents/${a.id}/autonomy`, { level });
+      if (o.ok) v = await api('POST', `/agents/${a.id}/autonomy/ack`, { entry: o.ok });
+      if (o.change) {
+        const i = o.change.indexOf('=');
+        if (i < 1 || !o.change.slice(i + 1).trim()) throw new Error('--change takes <entry>=<your answer>');
+        v = await api('POST', `/agents/${a.id}/autonomy/correct`, { entry: o.change.slice(0, i).trim(), text: o.change.slice(i + 1).trim() });
+      }
+      const st = v.autonomy;
+      if (o.json) return console.log(JSON.stringify(st ?? { level: 'ask', log: [] }, null, 2));
+      console.log(`${bold(v.name)}: ${LEVEL_LABEL[st?.level ?? 'ask']} ${dim(`(${st?.level ?? 'ask'})`)}${st?.log?.length ? dim(` · ${logLine(st.log)}`) : ''}`);
+      if (st?.hold && !st.hold.ack) console.log(`  ${bold('Not merged:')} ${st.hold.note} ${dim('(--ok hold)')}`);
+      for (const e of st?.log ?? []) {
+        const when = dim(e.at.slice(0, 16).replace('T', ' '));
+        if (e.kind === 'answer') console.log(`  ${when} ${dim(e.id)} ${bold('Answered:')} ${e.question}\n      → ${e.corrected ? `${dim(e.answer)} → yours: ${e.corrected}` : e.answer}${e.basis ? dim(`\n      from: ${e.basis}`) : ''}${dim(` (${e.model ?? (e.via === 'decide' ? 'Decide' : 'model')}, ${Math.round((e.confidence ?? 0) * 100)}%)`)}${e.ack ? '' : dim(' · not seen')}`);
+        else if (e.kind === 'left') console.log(`  ${when} ${bold('Left for you:')} ${e.question}${e.why ? dim(`\n      ${e.why}`) : ''}`);
+        else console.log(`  ${when} ${bold(e.kind === 'nudge' ? 'Nudged:' : e.kind === 'followup' ? 'Told to carry on:' : e.kind === 'plan' ? 'Plan:' : 'Merged:')} ${e.title ?? ''}${e.text ? dim(`\n      ${e.text}`) : ''}`);
+      }
+    });
+
+  program
+    .command('ground-rules')
+    .description('Your own rules for every agent, in every repository, next to what is in memory: show them, or change them')
+    .option('--add <rule>', 'add a rule, one short line (repeatable)', collect, [])
+    .option('--remove <n>', 'take out rule n (repeatable)', collect, [])
+    .option('--clear', 'remove them all')
+    .option('--tell', 'also tell the agents running now (others get them when they start)')
+    .option('--json', 'print as JSON')
+    .action(async (o) => {
+      await daemon();
+      let v = await api('GET', '/ground-rules');
+      if (o.clear || o.add.length || o.remove.length) {
+        let rules = o.clear ? [] : v.rules.slice();
+        const drop = new Set();
+        for (const raw of o.remove) {
+          const n = Number(raw);
+          if (!Number.isInteger(n) || n < 1 || n > rules.length) throw new Error(`There is no rule ${raw}: there ${rules.length === 1 ? 'is 1 rule' : `are ${rules.length} rules`}`);
+          drop.add(n - 1);
+        }
+        rules = [...rules.filter((_, i) => !drop.has(i)), ...o.add];
+        v = await api('PUT', '/ground-rules', { rules, tell: Boolean(o.tell) });
+        if (!o.json) console.log(v.changed ? `${green('✓')} ${v.rules.length} ground rule${v.rules.length === 1 ? '' : 's'}; agents get them when they start${v.told ? `, and ${v.told} running now ${v.told === 1 ? 'was' : 'were'} told` : ''}` : dim('Nothing changed.'));
+      }
+      if (o.json) return console.log(JSON.stringify(v, null, 2));
+      if (!v.rules.length) return console.log(dim('No ground rules yet: agentmgr ground-rules --add "Ask before adding a dependency"'));
+      v.rules.forEach((r, i) => console.log(`${dim(`${i + 1}.`)} ${r}`));
+      console.log(dim(v.file));
     });
 
   const pb = program.command('playbook').description('Saved requests you run again, in several projects, by hand or on a schedule');

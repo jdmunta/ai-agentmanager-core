@@ -61,6 +61,9 @@ export function initMenu({ api, esc, toast, $ }) {
   let features = null; // what you use, and who you are, as the dialog opened
   let rounds = null; // review rounds as the dialog opened
   let judge = null; // the AI judge as the dialog opened
+  let ground = null; // your ground rules as the dialog opened
+  let autonomy = null; // the autonomy settings as the dialog opened
+  const modelList = (a) => (a?.models ?? []).map((m) => (typeof m === 'string' ? m : m.model)).join(', ');
   const FEATURE_KEYS = ['jira', 'slack', 'gemini'];
   function showContainers() {
     const c = containers;
@@ -118,6 +121,15 @@ export function initMenu({ api, esc, toast, $ }) {
       form.judgeOn.closest('label').hidden = !judge;
       form.judgeOn.checked = Boolean(judge?.enabled);
       $('#settings-judge-state').textContent = judge?.enabled ? `${judge.calls} of ${judge.cap} calls today.` : '';
+      ground = await api('GET', '/ground-rules').catch(() => null);
+      $('#settings-ground').hidden = !ground;
+      form.groundRules.value = ground?.text ?? '';
+      form.groundTell.checked = false;
+      autonomy = await api('GET', '/autonomy').catch(() => null);
+      $('#settings-autonomy').hidden = !autonomy;
+      form.autoLevel.value = autonomy?.level ?? 'ask';
+      form.autoModels.value = modelList(autonomy);
+      $('#settings-autonomy-state').textContent = autonomy ? `${autonomy.agents} agent${autonomy.agents === 1 ? '' : 's'} running without you now; ${autonomy.calls} of ${autonomy.dailyCalls} calls today${autonomy.lastModel ? `, last answered by ${autonomy.lastModel}` : ''}.` : '';
       const u = await api('GET', '/update').catch(() => null);
       form.updateCheck.checked = u?.check !== false;
       if (!remote()) {
@@ -209,6 +221,14 @@ export function initMenu({ api, esc, toast, $ }) {
         if (Object.keys(changed).length) rounds = await api('PUT', '/prereview', changed);
       }
       if (judge && form.judgeOn.checked !== Boolean(judge.enabled)) judge = await api('PUT', '/judge', { enabled: form.judgeOn.checked });
+      if (ground && form.groundRules.value.trim() !== ground.text.trim()) {
+        const g = await api('PUT', '/ground-rules', { text: form.groundRules.value, tell: form.groundTell.checked });
+        toast(`${g.rules.length} ground rule${g.rules.length === 1 ? '' : 's'}: agents get them when they start${g.told ? `, and ${g.told} running now ${g.told === 1 ? 'was' : 'were'} told` : ''}`, 5000);
+      }
+      if (autonomy) {
+        const want = { ...(form.autoLevel.value !== autonomy.level ? { level: form.autoLevel.value } : {}), ...(form.autoModels.value.trim() && form.autoModels.value.trim() !== modelList(autonomy) ? { models: form.autoModels.value } : {}) };
+        if (Object.keys(want).length) autonomy = await api('PUT', '/autonomy', want);
+      }
       document.dispatchEvent(new CustomEvent('agentmgr:review-settings'));
       if (!remote() && jira && (form.jiraSite.value.trim() !== (jira.site ?? '') || form.jiraEmail.value.trim() !== (jira.email ?? '') || form.jiraToken.value.trim())) {
         const j = await api('PUT', '/jira', { site: form.jiraSite.value.trim(), email: form.jiraEmail.value.trim(), token: form.jiraToken.value.trim() || undefined });

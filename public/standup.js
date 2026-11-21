@@ -165,6 +165,7 @@ export function initStandup({ api, $, esc, agents, needsFor, needCard, onNeed, t
     }
     if (need.kind === 'question') return { label: `answer “${t}”`, run: () => api('POST', `/agents/${a.id}/answer`, { question: need.q.id, text: t }) };
     if (need.kind === 'waiting') return { label: `reply “${t}”`, run: () => api('POST', `/agents/${a.id}/waiting/answer`, { text: t }) };
+    if (need.kind === 'acceptance' && /\b(agree|agreed|approve|looks good|go ahead)\b/i.test(t)) return { label: 'agree on its points as written', run: () => api('POST', `/agents/${a.id}/acceptance/agree`, {}) };
     if (need.kind === 'plan' && /\b(approve|looks good|go ahead|ship it)\b/i.test(t)) return { label: 'approve its plan', run: () => api('POST', `/agents/${a.id}/plan/approve`, {}) };
     return { label: `tell it “${t}”`, run: () => api('POST', `/agents/${a.id}/tell`, { text: t }) };
   }

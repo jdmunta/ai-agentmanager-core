@@ -252,7 +252,23 @@ export class Notifier {
         this.send('question', a, `asks: ${q.question}`);
       }
     }
+    for (const e of a.autonomy?.log ?? []) {
+      const k = `auto:${e.id}`;
+      // A question it stopped on, answered for you (autonomy.js); what Decide handled is alerted by Decide.
+      if (e.kind === 'answer' && e.via !== 'decide' && !e.ack && !s.sent.has(k)) {
+        s.sent.add(k);
+        this.send('decided', a, `asked: ${e.question} It was answered for you: ${e.answer}`);
+      }
+    }
     // A plan waiting for review is an inbox decision too (same switch as questions).
+    // So are its points for what done means, when it waits for them to be agreed.
+    if (a.acceptance?.status === 'review' && a.acceptance.wait) {
+      const k = `acceptance:${a.acceptance.updatedAt}`;
+      if (!s.sent.has(k)) {
+        s.sent.add(k);
+        this.send('question', a, `wrote what done means (${a.acceptance.points.length} point${a.acceptance.points.length === 1 ? '' : 's'}); agree on it before it starts`);
+      }
+    }
     if (a.planReview?.status === 'review') {
       const k = `plan:${a.planReview.updatedAt}`;
       if (!s.sent.has(k)) {

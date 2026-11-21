@@ -47,6 +47,14 @@ export class Backlog extends EventEmitter {
     return AUTOPILOT_LEVELS.includes(level) ? level : 'off';
   }
 
+  /**
+   * Autopilot for one item: its own autonomy level when that says "pr" or "merge" (autonomy.js),
+   * else its project's.
+   */
+  levelFor(it) {
+    return ['pr', 'merge'].includes(it?.autonomy) ? it.autonomy : this.autopilotFor(it?.projectKey);
+  }
+
   /** The score autopilot ships at (50-100), or null: whenever the scorecard says ready. */
   targetFor(projectKey) {
     const n = Number(this.data.targets[projectKey] ?? this.config.autopilot?.target);
@@ -104,7 +112,7 @@ export class Backlog extends EventEmitter {
   // ------------------------------------------------------------ editing
 
   /** Queue one item per title. Options are what an agent would take (repo, dir, base, project, ...). */
-  add(titles, { repo, dir, base, project, worktree, permissionMode, model, plan, planReview, designDoc, demoPage, benchmarks, engine, attachments, isolation, priority = 2 } = {}) {
+  add(titles, { repo, dir, base, project, worktree, permissionMode, model, plan, planReview, acceptance, autonomy, designDoc, demoPage, benchmarks, engine, attachments, isolation, priority = 2 } = {}) {
     const list = titles.map((t) => String(t ?? '').trim()).filter(Boolean);
     if (!list.length) throw err(400, 'At least one item is required');
     const pr = parsePriority(priority);
@@ -141,6 +149,9 @@ export class Backlog extends EventEmitter {
         isolation: isolation === undefined ? undefined : isolation || '',
         plan: Boolean(plan),
         planReview: planReview ?? null,
+        acceptance: acceptance ?? null,
+        // How far its agent goes without you (autonomy.js): null = the default.
+        autonomy: autonomy || null,
         designDoc: designDoc ?? null,
         demoPage: demoPage ?? null,
         benchmarks: benchmarks ?? null,
@@ -266,6 +277,8 @@ export class Backlog extends EventEmitter {
       isolation: it.isolation,
       plan: it.plan,
       planReview: it.planReview ?? undefined,
+      acceptance: it.acceptance ?? undefined,
+      autonomy: it.autonomy ?? undefined,
       designDoc: it.designDoc ?? undefined,
       demoPage: it.demoPage ?? undefined,
       benchmarks: it.benchmarks ?? undefined,
@@ -416,8 +429,8 @@ export class Backlog extends EventEmitter {
     if (it.status !== 'queued') throw err(409, 'Only queued items can be split');
     const titles = (Array.isArray(parts) ? parts : it.aiSplit?.parts ?? []).map((t) => String(t).trim()).filter(Boolean);
     if (titles.length < 2) throw err(400, 'Give at least two parts');
-    const { repo, dir, base, project, worktree, permissionMode, model, plan, planReview, designDoc, demoPage, benchmarks, engine, priority } = it;
-    const added = this.add(titles, { repo, dir, base, project, worktree, permissionMode, model, plan, planReview, designDoc, demoPage, benchmarks, engine, priority });
+    const { repo, dir, base, project, worktree, permissionMode, model, plan, planReview, acceptance, autonomy, designDoc, demoPage, benchmarks, engine, priority } = it;
+    const added = this.add(titles, { repo, dir, base, project, worktree, permissionMode, model, plan, planReview, acceptance, autonomy, designDoc, demoPage, benchmarks, engine, priority });
     this.manager.judge?.feedback('dispatch', { summary: `split "${it.title}"`, verdict: it.aiSplit ? 'split suggested' : 'not suggested', outcome: 'split it' });
     delete this.data.items[id];
     this.changed();

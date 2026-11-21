@@ -131,10 +131,13 @@ import { reviewPath, reviewerPrompt } from './reviews.js';
 import { findingsPath, fixPath, fixerPrompt, hunterPrompt } from './bughunt.js';
 import { reminderFor, reminderSettings } from './reminders.js';
 import { combine, factLines, facts as scoreFacts, improveMessage, scorecardMarkdown, scorecardPrompt } from './scorecard.js';
+import { acceptanceAgreedPrompt, acceptancePrompt, agreedMessage, cleanPoints, counts as acceptanceCounts, parseCriteria, results as acceptanceResults, SKIPPED_MESSAGE } from './acceptance.js';
 import { CLAIM_TEXTS, claimsMarkdown, claimsPrompt, combineClaims, parseClaims, totals as claimTotals } from './claims.js';
 import { CONTAINER_ENGINES, claudeToken, containerName, containerRunning, engineMounts, gitCommonDir, removeContainer, runArgs, stopContainer } from './container.js';
 import { conflictMessage, findConflicts, related, repoKey, summarize as summarizeConflicts } from './conflicts.js';
 import { answerMessage, loadQuestions, questionsPath, questionsPrompt } from './inbox.js';
+import { GroundRules, groundRulesMessage } from './groundrules.js';
+import { autonomySettings, callLadder, eligible as autonomyEligible, levelOf, modelName, parseLevel } from './autonomy.js';
 import { STUCK_DEFAULTS, detectStuck } from './stuck.js';
 import { Judge, clashPrompt, finishMessage, hash, reviewPrompt, screenPrompt, stripChrome, stuckPrompt } from './judge.js';
 import { findLocalUrls, findSignInLinks, parseCallback, parseUrl } from './preview.js';
@@ -325,7 +328,16 @@ export class AgentManager extends EventEmitter {
     // The AI judge: rules decide when to look, a model decides what is going on (see judge.js).
     this.rules = new Rules({ suggestAfter: config.rules?.suggestAfter, readOnly: config.rules?.readOnly });
     this.inboxSources = [];
-    this.judge = new Judge({ config, call: (agent, prompt, { timeoutMs }) => this.oneShot(agent, prompt, { ...this.judgeModel(agent), timeoutMs }) });
+    this.groundRules = new GroundRules(); // the person's own rules for every session (groundrules.js)
+    // For an agent that runs without the person (autonomy.js), what is decided in their place (is it
+    // stuck and what nudge, what to answer or approve) is judged on the autonomy models, best first:
+    // what comes out is acted on without anyone reading it first.
+    this.judge = new Judge({
+      config,
+      call: (agent, prompt, { timeoutMs, kind }) =>
+        ['stuck', 'advise'].includes(kind) && agent && levelOf(agent) !== 'ask' ? this.ladderShot(agent, prompt, { timeoutMs }).then((r) => r.text) : this.oneShot(agent, prompt, { ...this.judgeModel(agent), timeoutMs }),
+    });
+    this.modelsDown = new Map(); // model name -> when a call on it last failed (autonomy's list of models)
     this.stuckVerdicts = new Map(); // agent id -> Map(finding key -> { at, since, data })
     this.signIns = new Map(); // agent id -> { url, port, callback, terminal, at, finished } from a CLI's sign-in link
     this.seenLinks = new Map(); // agent id -> Set of sign-in links already raised
@@ -470,7 +482,7 @@ export class AgentManager extends EventEmitter {
       else if (agent.brief?.status || rt?.pty || agent.status === 'preparing') outcome = 'in progress';
     }
     if (!outcome && !delivered.length && !blockers.length) return null;
-    return { outcome: outcome ?? 'in progress', delivered, blockers, notes: r?.notes ?? '', fromAgent: Boolean(r) };
+    return { outcome: outcome ?? 'in progress', delivered, blockers, notes: r?.notes ?? '', confidence: r?.confidence ?? null, fromAgent: Boolean(r) };
   }
 
   changed(agent) {
@@ -636,6 +648,8 @@ export class AgentManager extends EventEmitter {
     start = true,
     plan = false,
     planReview,
+    acceptance,
+    autonomy,
     designDoc,
     demoPage,
     benchmarks,
@@ -702,6 +716,11 @@ export class AgentManager extends EventEmitter {
     // Attached files (a screenshot, a log) go in the agent's own uploads folder, listed in its request.
     if (staged.length) intent = [intent, attachmentNote(copyAttachments(staged, id))].filter(Boolean).join('\n\n');
 
+    // How far it goes without you (autonomy.js): "ask" (as before) unless a level is named or set as the default.
+    const plainTask = !general && !team && !builds && !reviewing && !hunting && !fixing && !race;
+    const asked = autonomy === undefined || autonomy === null || autonomy === '' ? null : parseLevel(autonomy);
+    if (autonomy && !asked) throw Object.assign(new Error('autonomy is one of ask, run, pr, merge'), { status: 400 });
+    const level = plainTask ? asked ?? autonomySettings(this.config).level : 'ask';
     const agent = {
       id,
       kind: general ? kind : 'task',
@@ -736,6 +755,10 @@ export class AgentManager extends EventEmitter {
       // Review the implementation plan before the agent implements it: null = no review.
       // Team members get their review from the team instead.
       planReview: !general && !team && !builds && !reviewing && !hunting && (planReview ?? this.config.planReview ?? false) ? { status: 'writing' } : null,
+      // Agree on what done means first (acceptance.js): the agent drafts the points and waits. null = not asked.
+      acceptance: !general && !team && !builds && !reviewing && !hunting && (acceptance ?? (level !== 'ask' ? true : this.config.acceptance) ?? false) ? { status: 'writing', wait: true, points: [] } : null,
+      // Runs without you past that point: { level, log, seen } (autonomy.js). null = asks, as before.
+      autonomy: level !== 'ask' ? { level, log: [], seen: {} } : null,
       // Write and publish a design doc (Google Doc + Artifact) after the plan, updated at the end.
       designDoc: !general && !team && !builds && !reviewing && !hunting && Boolean(designDoc ?? this.config.designDoc ?? true),
       demoPage: !general && !team && !builds && !reviewing && !hunting && Boolean(demoPage ?? this.config.demoPage ?? false),
@@ -1379,7 +1402,15 @@ export class AgentManager extends EventEmitter {
       fs.mkdirSync(briefDir(agent.id), { recursive: true });
       const dir = fs.realpathSync(briefDir(agent.id));
       writableDir ??= dir;
-      prompts.push(specPrompt(path.join(dir, path.basename(specPath(agent.id))), path.join(dir, path.basename(planPath(agent.id))), { withPlan: !agent.planReview }));
+      prompts.push(specPrompt(path.join(dir, path.basename(specPath(agent.id))), path.join(dir, path.basename(planPath(agent.id))), { withPlan: !agent.planReview, wait: this.acceptanceWaits(agent) }));
+    }
+    // What done means: drafted and waiting for the person, or agreed (then the points are the app's, as written).
+    if (agent.acceptance && task) {
+      fs.mkdirSync(briefDir(agent.id), { recursive: true });
+      const file = path.join(fs.realpathSync(briefDir(agent.id)), path.basename(specPath(agent.id)));
+      writableDir ??= path.dirname(file);
+      if (agent.acceptance.status === 'agreed') prompts.push(acceptanceAgreedPrompt(agent.acceptance.points));
+      else if (this.acceptanceWaits(agent)) prompts.push(acceptancePrompt(file, { planReview: Boolean(agent.planReview) && agent.planReview.status !== 'approved' }));
     }
     // Its changes are reviewed in rounds before a pull request (prereview.js): it leaves opening one to that.
     if (withBrief && !planning && this.preReview?.instructs(agent)) prompts.push(preReviewPrompt());
@@ -1439,6 +1470,9 @@ export class AgentManager extends EventEmitter {
     // The repository's standards (standards.js): lessons to follow and the parts marked high risk.
     const standards = task ? this.standards?.prompt(agent) : '';
     if (standards) prompts.push(standards);
+    // The person's own ground rules, for every session in every repository (groundrules.js).
+    const ground = this.groundRules.prompt();
+    if (ground) prompts.push(ground);
     // Commands you chose to always allow in this repo.
     const ruled = agent.workdir ? this.rules.allowed(memoryKey(agent)) : [];
     if (ruled.length) allowedTools = [...(allowedTools ?? []), ...ruled];
@@ -1930,6 +1964,14 @@ export class AgentManager extends EventEmitter {
     if ('model' in fields) {
       allowed.model = String(fields.model ?? '').trim() || null;
       if (engineOf(agent).checkModel) allowed.model = engineOf(agent).checkModel(allowed.model, this.config);
+    }
+    // How far it goes without you (autonomy.js); what was done for you so far is kept.
+    if ('autonomy' in fields) {
+      const level = parseLevel(fields.autonomy);
+      if (!level) throw bad('autonomy is one of ask, run, pr, merge');
+      if (level !== 'ask' && !autonomyEligible(agent)) throw bad('Only a task agent with changes of its own can run without you');
+      const cur = agent.autonomy;
+      if (level !== levelOf(agent)) allowed.autonomy = level === 'ask' && !cur?.log?.length ? null : { log: [], seen: {}, ...cur, level, hold: null };
     }
     // Keep: clean up never closes or deletes it.
     if ('keep' in fields) allowed.keep = Boolean(fields.keep);
@@ -2508,7 +2550,21 @@ export class AgentManager extends EventEmitter {
       if (finished && !rounds && !NO_REPO.has(agent.kind) && this.changesSource) this.standards?.finished(agent).catch((e) => this.log?.(`standards: ${e.message}`));
       if (finished && this.judge.enabled && !rounds) this.requestReview(id, { trigger: 'brief' }).catch(() => {});
       // ...and score it for the reviewer ("scorecard": { "auto": false } in config.json turns this off).
-      if ((improved || (finished && this.config.scorecard?.auto !== false && !rounds)) && !NO_REPO.has(agent.kind) && this.changesSource) this.summarize(id, 'scorecard').catch(() => {});
+      // The points were agreed (or changed) after the last score: the brief saying done again is checked against them.
+      const reagreed = brief.status === 'done' && agent.acceptance?.status === 'agreed' && agent.docs?.scorecard?.data && agent.docs.scorecard.acceptanceAt !== agent.acceptance.agreedAt;
+      if ((improved || reagreed || (finished && this.config.scorecard?.auto !== false && !rounds)) && !NO_REPO.has(agent.kind) && this.changesSource) this.summarize(id, 'scorecard').catch(() => {});
+    }
+    // Its points for what done means, written or revised in the spec: they wait for the person.
+    if (this.acceptanceWaits(agent)) {
+      let at = null;
+      try {
+        at = fs.statSync(specPath(id)).mtime.toISOString();
+      } catch {}
+      if (at && at !== agent.acceptance.specAt) {
+        const points = parseCriteria(readSpecDoc(id, 'spec')?.markdown);
+        const cur = this.store.get(id).acceptance;
+        this.patch(id, { acceptance: { ...cur, specAt: at, ...(points.length ? { status: 'review', points: points.map((text, i) => ({ id: `A${i + 1}`, text, from: 'agent' })), updatedAt: at } : {}) } });
+      }
     }
     if (agent.planReview) {
       const file = loadPlanFile(id, agent.planReview);
@@ -2558,6 +2614,97 @@ export class AgentManager extends EventEmitter {
     if (!note?.trim()) throw Object.assign(new Error('Say what should change'), { status: 400 });
     this.patch(agent.id, { planReview: { ...agent.planReview, status: 'changes', decidedAt: now(), note: note.trim() } });
     return this.tell(agent.id, `Plan changes requested. Revise the plan file and wait for approval again:\n${note.trim()}`);
+  }
+
+  // ------------------------------------------------------------ ground rules
+
+  /**
+   * Replace the person's ground rules. Sessions started from now on get them with their
+   * instructions; with `tell`, the ones running now are told too. Returns the rules and how many
+   * sessions were told.
+   */
+  setGroundRules(input, { tell = false } = {}) {
+    const r = this.groundRules.set(input);
+    let told = 0;
+    if (tell && r.changed) {
+      for (const [id, rt] of this.runtimes) {
+        const agent = this.store.get(id);
+        if (!rt.pty || !agent) continue;
+        try {
+          this.tell(id, groundRulesMessage(r.rules), { source: 'ground-rules' });
+          told++;
+        } catch {}
+      }
+    }
+    return { ...r, told };
+  }
+
+  // -------------------------------------------------------------- acceptance
+
+  /** Whether the agent is stopped until the person agrees on what done means. */
+  acceptanceWaits(agent) {
+    return Boolean(agent.acceptance?.wait) && ['writing', 'review'].includes(agent.acceptance.status);
+  }
+
+  /**
+   * What done means for an agent: the agreed points with what the last scorecard found for each,
+   * or (not agreed) the points its spec has now. `stale`: agreed or changed since they were checked.
+   */
+  acceptanceOf(ref) {
+    const agent = this.mustGet(ref);
+    const acc = agent.acceptance;
+    const draft = acc?.status === 'agreed' ? [] : parseCriteria(readSpecDoc(agent.id, 'spec')?.markdown);
+    if (acc?.status !== 'agreed') {
+      const status = !acc ? 'none' : draft.length ? 'review' : 'writing';
+      return { id: agent.id, name: agent.name, status, wait: this.acceptanceWaits(agent), draft, points: [], results: [], counts: acceptanceCounts([]), agreedAt: null, checkedAt: null, stale: false };
+    }
+    const sc = agent.docs?.scorecard;
+    const current = Boolean(sc?.data) && sc.acceptanceAt === acc.agreedAt;
+    const res = acceptanceResults(acc.points, current ? sc.data.criteria : null);
+    return {
+      id: agent.id,
+      name: agent.name,
+      status: 'agreed',
+      wait: false,
+      draft: [],
+      points: acc.points,
+      results: res,
+      counts: acceptanceCounts(res),
+      agreedAt: acc.agreedAt,
+      checkedAt: current ? sc.at : null,
+      // Checked against other points, or the brief moved on since: the result is not of the work as it is.
+      stale: Boolean(sc?.data) && (!current || (sc.briefUpdatedAt ?? null) !== (agent.brief?.updatedAt ?? null)),
+      scoring: Boolean(sc?.pending),
+    };
+  }
+
+  /**
+   * Agree on the points (as the agent wrote them, or as the person edited them). From here they
+   * are kept by the app; an agent that is running is told them, one that was waiting goes ahead.
+   */
+  agreeAcceptance(ref, list) {
+    const agent = this.mustGet(ref);
+    if (NO_REPO.has(agent.kind)) throw Object.assign(new Error('Acceptance is for agents that work on a task'), { status: 400 });
+    const prev = agent.acceptance;
+    const draft = prev?.status === 'agreed' ? prev.points.filter((p) => p.from === 'agent').map((p) => p.text) : parseCriteria(readSpecDoc(agent.id, 'spec')?.markdown);
+    const points = cleanPoints(list ?? draft, draft);
+    const waiting = this.acceptanceWaits(agent);
+    const changed = prev?.status === 'agreed';
+    if (changed && prev.points.length === points.length && prev.points.every((p, i) => p.text === points[i].text)) return this.view(agent);
+    this.patch(agent.id, { acceptance: { status: 'agreed', wait: false, points, agreedAt: now(), rounds: (prev?.rounds ?? 0) + 1, yours: points.filter((p) => p.from === 'you').length } });
+    // A session at work hears now; one that isn't running reads them when it next starts (its work is scored against them either way).
+    if (waiting || this.runtimes.get(agent.id)?.pty) return this.tell(agent.id, agreedMessage(points, { waiting, changed, planNext: Boolean(agent.planReview) && agent.planReview.status !== 'approved' }));
+    // Already scored against other criteria: score it against these.
+    if (agent.docs?.scorecard?.data && this.changesSource) this.summarize(agent.id, 'scorecard').catch(() => {});
+    return this.view(this.store.get(agent.id));
+  }
+
+  /** Stop waiting for the person: the agent goes ahead with the criteria in its own spec. */
+  skipAcceptance(ref) {
+    const agent = this.mustGet(ref);
+    if (!this.acceptanceWaits(agent)) throw Object.assign(new Error('The agent is not waiting for the acceptance points'), { status: 409 });
+    this.patch(agent.id, { acceptance: null });
+    return this.tell(agent.id, SKIPPED_MESSAGE);
   }
 
   /** Turn plan review on (before the agent has implemented anything) or off (no longer waits). */
@@ -2811,7 +2958,7 @@ export class AgentManager extends EventEmitter {
     const doc = (n) => readSpecDoc(agent.id, n)?.markdown ?? '';
     // The repository's standards: its bar is run here, by the app, before the model is asked.
     const standards = (await this.standards?.assess(agent.id, data)) ?? null;
-    const f = scoreFacts({ files: data.files, prs: Object.values(cur0.prs ?? {}), brief: cur0.brief, plan: doc('plan'), spec: doc('spec'), standards });
+    const f = scoreFacts({ files: data.files, prs: Object.values(cur0.prs ?? {}), brief: cur0.brief, plan: doc('plan'), spec: doc('spec'), standards, agreed: cur0.acceptance?.status === 'agreed' ? cur0.acceptance.points : null });
     const writer = this.writerFor(agent);
     const prompt = scorecardPrompt({ ...ctx, briefMarkdown: this.briefFile(agent.id).markdown ?? '', intentDoc: doc('intent'), specDoc: doc('spec'), planDoc: doc('plan'), hunks, facts: f, lessons: standards?.lessons ?? [] });
     const sc = combine(parseJsonReply(await this.oneShot(agent, prompt, writer)), f, hunks, { lessons: standards?.lessons ?? [], bar: standards?.bar ?? null });
@@ -2830,6 +2977,8 @@ export class AgentManager extends EventEmitter {
           improvedFrom: cur.improving ? cur.improving.from : null,
           at: now(),
           briefUpdatedAt: cur.brief?.updatedAt ?? null,
+          // The agreed points it was checked against (acceptance.js); null when none were agreed then.
+          acceptanceAt: f.agreed ? cur0.acceptance.agreedAt : null,
           pending: false,
           error: null,
         }),
@@ -3533,6 +3682,26 @@ export class AgentManager extends EventEmitter {
     if (s.engine && usable(ENGINES[s.engine])) return { engine: ENGINES[s.engine], model: s.model ?? undefined };
     if (usable(ENGINES[DEFAULT_ENGINE])) return { engine: ENGINES[DEFAULT_ENGINE], model: s.model ?? 'haiku' };
     return this.writerFor(agent);
+  }
+
+  /** The models autonomy's own calls run on, best first: config `autonomy.models` on Claude Code, else the summary writer. */
+  ladderModels(agent) {
+    const usable = (e) => e?.supports.oneShot && installed(e, this.config);
+    const out = [];
+    for (const m of autonomySettings(this.config).models) {
+      const engine = ENGINES[typeof m === 'string' ? DEFAULT_ENGINE : m.engine ?? DEFAULT_ENGINE];
+      if (usable(engine)) out.push({ engine, model: typeof m === 'string' ? m : m.model });
+    }
+    return out.length ? out : [this.writerFor(agent)];
+  }
+
+  /**
+   * One call for an agent that runs without the person: on the first of the models that answers.
+   * Resolves to { text, by } (`by`: the model that answered); rejects when none did.
+   */
+  async ladderShot(agent, prompt, { timeoutMs = 120_000 } = {}) {
+    const r = await callLadder(this.ladderModels(agent), (m) => this.oneShot(agent, prompt, { ...m, timeoutMs }), { down: this.modelsDown, retryMs: autonomySettings(this.config).retryMin * 60_000 });
+    return { text: r.text, by: modelName(r.model), tried: r.tried };
   }
 
   /** The end of the terminal screen as text: cursor moves become spaces or line breaks. */

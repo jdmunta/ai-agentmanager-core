@@ -16,7 +16,7 @@ const WEIGHTS = { intent: 25, spec: 20, tests: 20, safety: 15, scope: 10, plan: 
 const TEST_FILE = /(^|\/)(tests?|__tests__|spec|specs)\/|[._-](test|spec)\.[a-z]+$|_test\.go$|Test\.java$/i;
 
 /** Facts the app knows without a model: CI, test files touched, the agent's checks, plan and spec progress. */
-export function facts({ files = [], prs = [], brief = null, plan = '', spec = '', standards = null }) {
+export function facts({ files = [], prs = [], brief = null, plan = '', spec = '', standards = null, agreed = null }) {
   const paths = files.map((f) => f.path);
   const tests = paths.filter((p) => TEST_FILE.test(p));
   const code = paths.filter((p) => !TEST_FILE.test(p) && !/\.(md|txt|rst|adoc)$/i.test(p) && !/(^|\/)docs?\//i.test(p));
@@ -37,6 +37,8 @@ export function facts({ files = [], prs = [], brief = null, plan = '', spec = ''
     plan: steps.length ? { steps: steps.length, done: steps.filter((s) => s === 'x').length } : null,
     criteria: criteriaBlock.split('\n').filter((l) => /^\s*[-*\d]/.test(l) && /\w/.test(l)).length,
     hasSpec: Boolean(String(spec).trim()),
+    // What done means, agreed with the person (acceptance.js): these are checked, whatever the spec says now.
+    agreed: agreed?.length ? agreed.map((p) => ({ id: p.id, text: p.text })) : null,
     // The repository's standards (standards.js): high-risk files touched, and the bar the app ran.
     risk: (standards?.risk ?? []).map((r) => r.path),
     bar: standards?.bar ? { passed: standards.bar.results.filter((r) => r.ok).length, failed: standards.bar.results.filter((r) => !r.ok).map((r) => r.name) } : null,
@@ -50,6 +52,7 @@ export const factLines = (f) =>
     `the agent's own checks (from its brief): ${f.checks.passed} passed, ${f.checks.failed} failed, ${f.checks.pending} pending`,
     `plan: ${f.plan ? `${f.plan.done} of ${f.plan.steps} steps ticked` : 'no plan written'}`,
     `spec: ${f.hasSpec ? `${f.criteria} acceptance criteria` : 'no spec written'}`,
+    ...(f.agreed ? [`acceptance agreed with the person: ${f.agreed.length} point${f.agreed.length === 1 ? '' : 's'}`] : []),
     ...(f.bar ? [`the repository's quality bar, run by the app: ${f.bar.passed} passed, ${f.bar.failed.length} failed${f.bar.failed.length ? ` (${f.bar.failed.join(', ')})` : ''}`] : []),
     ...(f.risk?.length ? [`files under paths the person marked high risk: ${f.risk.join(', ')}`] : []),
   ].join('\n');
@@ -62,7 +65,9 @@ export function scorecardPrompt({ intent, status, digest, briefMarkdown, intentD
     'Reply with one JSON object only:',
     '{"summary": "<two sentences: what the change does and how sure you are>",',
     ' "scores": {"intent": {"score": 0-100, "why": "<one sentence>"}, "scope": {...}, "plan": {...}, "tests": {...}, "safety": {...}},',
-    ' "criteria": [{"criterion": "<an acceptance criterion from the spec>", "status": "met|not_met|unverified", "evidence": "<where: file, test, check>"}],',
+    f.agreed
+      ? ' "criteria": [{"id": "A1", "criterion": "<the point, as written>", "status": "met|not_met|unverified", "evidence": "<where: file, test, check>"}],'
+      : ' "criteria": [{"criterion": "<an acceptance criterion from the spec>", "status": "met|not_met|unverified", "evidence": "<where: file, test, check>"}],',
     ` "look": [{"id": "H3", "reason": "<why a person should read this hunk>"}]${lessons.length ? ',' : '}'}`,
     ...(lessons.length ? [' "lessons": [{"id": "L1", "status": "followed|broken|not_applicable", "evidence": "<where in the diff>"}]}'] : []),
     '',
@@ -72,7 +77,9 @@ export function scorecardPrompt({ intent, status, digest, briefMarkdown, intentD
     '- plan: how closely the change follows PLAN (steps done, departures explained). Without a plan, judge whether the work is coherent.',
     '- tests: whether the changed behavior is verified: tests added or updated for it, CI, checks the agent ran. Code changes with no tests and no passing checks score low.',
     '- safety: 100 when nothing risky is touched or risks are handled; lower for security, auth, data loss, migrations, concurrency, money, new dependencies or public API changes without care.',
-    '- criteria: one entry per acceptance criterion in SPEC, in its order; leave the list empty if there is no spec.',
+    f.agreed
+      ? '- criteria: one entry per point in AGREED_ACCEPTANCE, with its id, in its order. The person agreed on these with the agent, so judge the work against them as written, not against the criteria in SPEC. "met" only when the diff, a test or a check shows it; "not_met" when the change does not do it or goes against it; otherwise "unverified".'
+      : '- criteria: one entry per acceptance criterion in SPEC, in its order; leave the list empty if there is no spec.',
     '- look: at most 5 hunks a person must read (the risky, subtle or unverified ones), most important first. Not the obvious ones.',
     ...(lessons.length ? ['- lessons: one entry per lesson in LESSONS. "broken" only when the diff shows the change going against it; "not_applicable" when the change has nothing to do with it.'] : []),
     '',
@@ -85,6 +92,7 @@ export function scorecardPrompt({ intent, status, digest, briefMarkdown, intentD
     '<spec>',
     specDoc || '(no spec written)',
     '</spec>',
+    ...(f.agreed ? ['<agreed_acceptance>', ...f.agreed.map((p) => `${p.id}: ${p.text}`), '</agreed_acceptance>'] : []),
     '<plan>',
     planDoc || '(no plan written)',
     '</plan>',
@@ -105,6 +113,8 @@ export function scorecardPrompt({ intent, status, digest, briefMarkdown, intentD
 }
 
 const clamp = (n) => Math.max(0, Math.min(100, Math.round(Number(n) || 0)));
+const plain = (s) => String(s ?? '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+const sameText = (a, b) => plain(a) === plain(b);
 
 /**
  * The scorecard from the model's reply and the facts: scores capped by what was measured, the spec
@@ -131,16 +141,23 @@ export function combine(reply, f, hunks, { lessons = [], bar = null } = {}) {
   if (f.plan && out.plan) cap('plan', Math.round(40 + (60 * f.plan.done) / f.plan.steps), `${f.plan.done} of ${f.plan.steps} plan steps ticked`);
   if (!f.plan && out.plan) out.plan.notes.push('no plan written');
   // Spec: computed from the criteria (met 1, unverified ½, not met 0); none without a spec.
-  const criteria = (Array.isArray(reply?.criteria) ? reply.criteria : [])
-    .filter((c) => c?.criterion)
+  const told = (Array.isArray(reply?.criteria) ? reply.criteria : [])
+    .filter((c) => c?.criterion || c?.id)
     .slice(0, 20)
-    .map((c) => ({ criterion: String(c.criterion).slice(0, 300), status: ['met', 'not_met', 'unverified'].includes(c.status) ? c.status : 'unverified', evidence: String(c.evidence ?? '').slice(0, 300) }));
+    .map((c) => ({ id: String(c.id ?? '').trim().toUpperCase(), criterion: String(c.criterion ?? '').slice(0, 300), status: ['met', 'not_met', 'unverified'].includes(c.status) ? c.status : 'unverified', evidence: String(c.evidence ?? '').slice(0, 300) }));
+  // Points agreed with the person: exactly those, in their words; one the model skipped is unverified.
+  const criteria = f.agreed
+    ? f.agreed.map((p) => {
+        const c = told.find((t) => t.id === p.id) ?? told.find((t) => !t.id && sameText(t.criterion, p.text));
+        return { id: p.id, criterion: p.text, status: c?.status ?? 'unverified', evidence: c?.evidence ?? '', agreed: true };
+      })
+    : told.filter((c) => c.criterion).map(({ id, ...c }) => c);
   // A spec with criteria the model didn't assess: they count as unverified, not as passed.
-  if (f.hasSpec && f.criteria && !criteria.length) out.spec = { score: 50, why: `${f.criteria} acceptance criteri${f.criteria === 1 ? 'on' : 'a'} not assessed`, notes: ['treated as unverified'] };
-  if (f.hasSpec && criteria.length) {
+  if (!f.agreed && f.hasSpec && f.criteria && !criteria.length) out.spec = { score: 50, why: `${f.criteria} acceptance criteri${f.criteria === 1 ? 'on' : 'a'} not assessed`, notes: ['treated as unverified'] };
+  if ((f.hasSpec || f.agreed) && criteria.length) {
     const pts = criteria.reduce((n, c) => n + (c.status === 'met' ? 1 : c.status === 'unverified' ? 0.5 : 0), 0);
     const met = criteria.filter((c) => c.status === 'met').length;
-    out.spec = { score: clamp((100 * pts) / criteria.length), why: `${met} of ${criteria.length} acceptance criteri${criteria.length === 1 ? 'on' : 'a'} met${criteria.some((c) => c.status === 'not_met') ? ', some not met' : ''}`, notes: [] };
+    out.spec = { score: clamp((100 * pts) / criteria.length), why: `${met} of ${criteria.length} acceptance criteri${criteria.length === 1 ? 'on' : 'a'} met${criteria.some((c) => c.status === 'not_met') ? ', some not met' : ''}`, notes: f.agreed ? ['the points agreed with the person'] : [] };
   }
   // Overall: weighted over the scores there are.
   const have = Object.entries(WEIGHTS).filter(([k]) => out[k]);
