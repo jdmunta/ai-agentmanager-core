@@ -64,6 +64,54 @@ export function loadQuestions(agentId) {
 
 export const answerMessage = (q, text) => `Answer to your question "${q.question}": ${text}`;
 
+/** Menu entries that are not an answer: free text, or talking it over. */
+export const FREE_CHOICE = /^(?:type something|chat about this|other)\b/i;
+
+/**
+ * Claude Code's question menu (the agent asking the person to pick): the question, its numbered
+ * options with the line under each, and which one is highlighted. Text sent to the terminal while
+ * it is open is not read as a message (Enter picks the highlighted option), so it counts as a
+ * prompt. Returns { question, choices: [{ key, label, hint }], selected, multi } or null.
+ */
+export function questionMenu(screen) {
+  const text = String(screen ?? '')
+    .replace(/\x1b\[(\d*)C/g, (_, n) => ' '.repeat(Math.min(Number(n || 1), 8)))
+    .replace(/\x1b\[\d*G/g, ' ')
+    .replace(/\x1b\[[0-9;]*[ABEFHJf]/g, '\n')
+    .replace(/\x1b\[[0-9;?<>=]*[ -\/]*[@-~]|\x1b\][^\x07\x1b]*(\x07|\x1b\\)/g, '')
+    .replace(/\r/g, '\n');
+  const lines = text.split('\n').map((l) => l.replace(/\s+/g, ' ').trim());
+  const end = lines.findLastIndex((l) => /Enter to select/i.test(l));
+  if (end < 0) return null;
+  const choices = [];
+  let hint = [];
+  let selected = null;
+  let multi = false;
+  let top = -1;
+  for (let i = end - 1; i >= 0 && top < 0; i--) {
+    const l = lines[i];
+    if (!l || /^[─━╌-]+$/.test(l)) continue;
+    const m = /^([❯>›]\s*)?(\[[ x✔✓]?\]\s*|[☐☑◻◼]\s*)?(\d)[.)]\s+(.{1,120})$/.exec(l);
+    if (!m) {
+      if (choices.length) hint.unshift(l);
+      else if (!/^(?:\d[.)])?$/.test(l)) hint = [];
+      continue;
+    }
+    if (choices.some((c) => c.key === m[3])) break; // an older menu above this one
+    choices.unshift({ key: m[3], label: m[4].trim(), hint: hint.join(' ').slice(0, 200) });
+    hint = [];
+    if (m[1]) selected = m[3];
+    if (m[2]) multi = true;
+    if (m[3] === '1') top = i;
+  }
+  if (top < 0 || choices.length < 2) return null;
+  let question = '';
+  for (let i = top - 1; i >= 0 && !question; i--) {
+    if (lines[i] && !/^[─━╌-]+$/.test(lines[i])) question = lines[i].slice(0, 300);
+  }
+  return { question, choices, selected, multi };
+}
+
 /**
  * Answer choices visible in a live prompt: numbered menu lines ("❯ 1. Yes", "2. No").
  * `screen` is recent terminal output; cursor moves become spaces before matching.

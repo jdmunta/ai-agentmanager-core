@@ -483,6 +483,7 @@ Each agent has a level for how far it goes before it needs you. Choose it in New
 
 - **A question it asks without stopping, or a plan waiting for review**, is decided by [Decide](#decide) at its "Most things; ask when unsure" level, whatever the project's own level is: carried out when the recommendation is at least 70% sure and easy to undo. Its recommendation now also knows the agreed points, your ground rules and the repository's lessons.
 - **A question it stopped on in its terminal** (read from its screen by the AI judge) is answered from what is already decided: your request, the agreed points, your ground rules, the repository's lessons and your earlier answers, or the agent's own default when it is a routine detail that is cheap to change. The agent is told the answer came from the app while you were away, and to note it as an assumption.
+- **A question it shows as a menu** (Claude Code's own question menu) is answered the same way, by picking one of its options with its key. A menu where several options can be ticked, and one where none of the options is right, is left for you.
 - **A stuck agent** gets the judge's nudge when the judge is at least 70% sure, three times at most.
 - **A quiet, unfinished agent** is told to carry on, twice at most, unless it is blocked on you.
 - **At "Run to merge"**, its pull request is merged when the checks pass, the review rounds (when they ran) approved it, the scorecard says "Ready to approve", no high-risk path is touched, and the agent's own confidence is not low. Otherwise it is held, and the inbox says why. (A backlog item is shipped by [autopilot](#autopilot) at the item's level.)
@@ -491,7 +492,9 @@ Each agent has a level for how far it goes before it needs you. Choose it in New
 
 **Never done for you:**
 
-- A permission prompt is never answered by a model (your [approval rules](#decision-inbox) still apply).
+- A permission prompt is never answered by a model (your [approval rules](#decision-inbox) still apply). This is checked by the app, not left to the model: a prompt the screen reader took for a question is left for you without asking one.
+- While what done means, or a plan, waits for your agreement, nothing is answered or nudged for you.
+- A choice your request says to ask you about: the answering model is told to leave it for you (in the trial it did, each time).
 - A question about deleting or overwriting, rewriting history, publishing, deploying or merging, credentials, money or licences, personal data, messages to other people, or the scope of the task is left for you whatever a model would say.
 - An agent cannot set or raise its own level, and cannot change your ground rules: its own calls are refused.
 
@@ -508,7 +511,7 @@ agentmgr autonomy add-a-csv-export --change 3fa2c1d0="Use Postgres"
 
 In config.json: `"autonomy": { "level": "ask", "models": ["fable", "opus", "sonnet"], "answers": true, "nudges": true, "followUps": true, "minConfidence": 0.7, "minBuildConfidence": 70, "maxAnswers": 12, "maxNudges": 3, "maxFollowUps": 2, "dailyCalls": 80 }`.
 
-**Limits.** It needs the AI judge on (it reads the screen and finds stuck agents) and Decide on (for questions and plans). An answer is a model's reading of what you decided before, and can be wrong: that is why each one is shown to you. The level does not change the permission mode, so an agent can still stop at a permission prompt. Each answer, nudge and judgment is a model call on your own plan.
+**Limits.** It needs the AI judge on (it reads the screen and finds stuck agents) and Decide on (for questions and plans). An answer is a model's reading of what you decided before, and can be wrong: that is why each one is shown to you. The level does not change the permission mode, so in the default mode an agent stops at each permission prompt (running a command, reading outside the project) and waits for you. New agent says so and offers Permission mode **Auto**, where Claude Code approves what it judges safe; `agentmgr add --autonomy run -p auto` does the same. Each answer, nudge and judgment is a model call on your own plan.
 
 ## Ground rules: your own rules for every agent
 
@@ -532,6 +535,20 @@ At most 40 rules of 400 characters. A rule is an instruction the agent follows, 
 Every agent now ends its Results with its own confidence: `Confidence: 85% - what it verified, and the one thing it is least sure about`. It is asked to count only what it ran and saw working, and to lower the number for anything it did not do. The Brief panel shows it beside the results (high from 85%, medium from 65%, low under that), next to the review scorecard, which is the separate check by another model. At "Run to merge" and on autopilot's Merge level, work whose agent is under 70% sure of it is not merged without you.
 
 The number is the agent's own statement, not a measurement.
+
+## Proof: what it ran, and what it did not do
+
+"All checks pass" in a brief is the agent's word. With proof, you can check it.
+
+- **What it ran.** Next to its brief the agent keeps `PROOF.md`: for each check it ticked, and each agreed point of [what done means](#acceptance-agree-on-what-done-means), the exact command, its exit code and the last lines of real output. A check it made by reading says so.
+- **What it did not do.** Under Results the agent lists each thing the request asked or implied that it skipped, stubbed, left untested or only assumed, as **Not done**, or says there is nothing. A finished agent that has not said is shown as such.
+- **Where you see it.** The agent's Results show **Not done** and a **Proof** row ("3 recorded runs, 1 by reading"). **Open** lists each check with its command and output. `agentmgr proof <agent>` prints the same.
+- **Run it again.** **Run these again here** (or `agentmgr proof <agent> --run`) runs the recorded commands in the agent's folder, one after the other, and marks each **Same result** or **Different result** by its exit code. The command exits with 1 when one differs. If the agent changes its proof afterwards, the earlier run no longer counts.
+- **What it feeds.** The review scorecard and the review when an agent finishes are given the proof as the agent's own record, and what the app saw when it ran the commands. A command that gave a different result caps the scorecard's tests score at 40. At "Run to merge" and on autopilot, a merge is left to you when the agent lists something as not done, or a recorded command gave a different result.
+
+**What is not run again:** a command that changes things: deleting or moving files, committing or pushing, installing or publishing, deploying, reaching the network, writing to a file, or running as administrator. It is listed as "Not run again" with the reason. At most 12 commands are run, each for two minutes at most.
+
+**Limits.** The record is written by the agent: until you run the commands again, it is still its word, now in a form you can check. Running them again happens on your computer with your rights and without the agent's permission prompts, which is why only you can ask for it (an agent's own call is refused) and why the commands are shown first; the list of what is not run is a filter on the command's text, not a sandbox, so read the commands. The same exit code does not prove the same output (durations and dates differ between runs; the page says when the last recorded line was not printed). An agent in a container cannot be run again from here. `"proof": false` in `config.json` stops asking agents for it.
 
 ## Insights
 

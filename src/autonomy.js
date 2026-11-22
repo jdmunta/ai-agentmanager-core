@@ -21,6 +21,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { parseJsonReply, specPath } from './brief.js';
+import { FREE_CHOICE } from './inbox.js';
 import { memoryKey, memoryText } from './memory.js';
 import { landState } from './tracker.js';
 
@@ -147,6 +148,21 @@ export function sensitive(text) {
   return SENSITIVE.find(([re]) => re.test(t))?.[1] ?? null;
 }
 
+const PERMISSION_ASK = /\bdo you want to (?:proceed|allow|make this edit|create|run|overwrite)\b|\b(?:allow|grant|approve)\b.{0,60}\b(?:access|permission|command|tool|edit|read|write)|\bpermission (?:prompt|request|to)\b|\bwaiting for (?:approval|permission)\b|\btrust (?:the files in )?this folder\b/i;
+const PERMISSION_CHOICE = /don'?t ask again|switch to auto mode|\ballow (?:reading|writing|all edits|this|it)\b|\balways allow\b|\bfor this (?:session|project)\b/i;
+
+/**
+ * Whether what the screen judge read as a question is the engine's own permission prompt (run this
+ * command? allow this read?). Those are never answered for the person, and no model is asked: a
+ * numbered Yes/No menu counts, so does the wording of the prompt or of what the judge saw.
+ */
+export function permissionPrompt({ question, options = [], summary } = {}) {
+  const opts = options.map((o) => String(o).replace(/^\s*\d+[.)]\s*/, ''));
+  if (opts.some((o) => /^yes\b/i.test(o)) && opts.some((o) => /^no\b/i.test(o))) return true;
+  if (opts.some((o) => PERMISSION_CHOICE.test(o))) return true;
+  return PERMISSION_ASK.test(`${question ?? ''}\n${summary ?? ''}`);
+}
+
 const block = (tag, body) => (String(body ?? '').trim() ? [`<${tag}>`, String(body).trim(), `</${tag}>`] : []);
 
 /**
@@ -161,14 +177,16 @@ export function answerPrompt(ctx) {
     '- the answer is already decided by what the person wrote or agreed: the request, the agreed points for what done means, their ground rules, the lessons of the repository, or an earlier answer of theirs;',
     '- it is a routine implementation detail the request leaves to the implementer and that is cheap to change later (a name, where a file goes, which existing helper to use, a default the agent itself proposes).',
     'Leave it for the person ("ask": true) when it changes what is built or how much; when it trades off cost, security, privacy, data or compatibility;',
-    'when it would delete, overwrite, publish, deploy, merge, spend money, touch credentials or reach outside the repository; when the sources disagree or do not cover it; or when you are not sure.',
+    'when it would delete, overwrite, publish, deploy, merge, spend money, touch credentials or reach outside the repository; when the request itself says to ask the person about this choice;',
+    'when the sources disagree or do not cover it; or when you are not sure.',
     'Never invent a preference the person has not shown. When nothing decides it and the choice is cheap to change, the agent\'s own stated default is the answer.',
     'Reply with one JSON object only, no prose around it. confidence is a number from 0 to 1.',
     'Shape: {"ask": true|false, "answer": "what to tell the agent, one to three sentences, or empty", "basis": "the source that decides it, quoted briefly, or: routine detail, cheap to change", "confidence": 0.0}',
     '',
     '<question>',
     ctx.question,
-    ctx.options?.length ? `Options: ${ctx.options.join(' | ')}` : '',
+    ctx.menu?.length ? `The agent shows a menu and takes one of these, by its number:\n${ctx.menu.map((c) => `${c.key}. ${c.label}${c.hint ? ` (${c.hint})` : ''}`).join('\n')}` : ctx.options?.length ? `Options: ${ctx.options.join(' | ')}` : '',
+    ctx.menu?.length ? 'When you answer, add "option": the number of the one to pick, and give its label as the answer. If none of them is right, leave it for the person.' : '',
     ctx.default ? `The agent's default until answered: ${ctx.default}` : '',
     ctx.context ? `Context from the agent: ${ctx.context}` : '',
     '</question>',
@@ -197,7 +215,8 @@ export function parseAnswer(text) {
   }
   if (!d || typeof d !== 'object' || typeof d.ask !== 'boolean') return null;
   const answer = clip(d.answer, 600);
-  return { ask: d.ask || !answer, answer, basis: clip(d.basis, 300), confidence: Math.max(0, Math.min(1, Number(d.confidence) || 0)) };
+  const option = /^\d$/.test(String(d.option ?? '')) ? String(d.option) : null;
+  return { ask: d.ask || !answer, answer, option, basis: clip(d.basis, 300), confidence: Math.max(0, Math.min(1, Number(d.confidence) || 0)) };
 }
 
 /** What the agent is told: the answer, and that it was given for the person, not by them. */
@@ -227,6 +246,26 @@ export function logLine(log = []) {
 }
 
 /** An agent this can work for: a task with changes of its own, not a team member, reviewer, hunter or builder. */
+/**
+ * The agent's own question shown as a menu (not a permission prompt, not one that takes several
+ * ticks): { key, question, options, menu: [{ key, label, hint }] }, or null.
+ */
+export function menuOf(view) {
+  const p = view?.runtime?.attention === 'Question' ? view.runtime.prompt : null;
+  const menu = (p?.choices ?? []).filter((c) => !FREE_CHOICE.test(c.label));
+  if (!p?.question || menu.length < 2 || p.multi) return null;
+  return { key: `m:${hash(`${p.question}\n${menu.map((c) => c.label).join('\n')}`)}`, question: p.question, options: menu.map((c) => c.label), menu };
+}
+
+/** Why a merge is the person's: the agent says it left something out, or its proof did not hold when run again. */
+export function leftOut(agent, view) {
+  const nd = view?.results?.notDone ?? [];
+  if (nd.length) return `The agent lists as not done: ${clip(nd.join('; '), 240)}.`;
+  const rerun = agent.proof && agent.proof.proofAt === (agent.proofDoc?.updatedAt ?? null) ? agent.proof.results.filter((r) => r.status === 'differs') : [];
+  if (rerun.length) return `${rerun.length} of its recorded commands gave a different result when run again: ${clip(rerun.map((r) => r.title).join('; '), 200)}.`;
+  return null;
+}
+
 export const eligible = (agent) => agent?.kind === 'task' && !agent.team && !agent.builds && !agent.reviewing && !agent.hunting && !agent.fixing && !agent.raceId;
 
 export class Autonomy {
@@ -366,15 +405,23 @@ export class Autonomy {
     const v = this.manager.view(agent);
     const st = this.state(agent);
     const count = (k) => st.log.filter((e) => e.kind === k).length;
+    // While what done means or the plan waits for the person, the agent is asking for exactly that:
+    // nothing is answered or nudged for them.
+    const theirs = this.manager.acceptanceWaits(agent) || Boolean(agent.planReview && agent.planReview.status !== 'approved');
 
-    if (s.answers) {
+    if (s.answers && !theirs) {
       // Questions in QUESTIONS.md and plans are Decide's (advisor.js); the one it stopped on in its terminal is ours.
       const w = v.runtime?.waiting;
       const asked = w?.state === 'question' ? w.question || w.summary : null;
-      if (asked && !st.seen[`w:${hash(asked)}`]) return this.answer(agent, { key: `w:${hash(asked)}`, question: asked, options: w.choices ?? [] });
+      // A permission prompt the app itself sees is in the inbox already, as a prompt.
+      const prompted = v.runtime?.prompt || v.runtime?.attention;
+      if (asked && !prompted && !st.seen[`w:${hash(asked)}`]) return this.answer(agent, { key: `w:${hash(asked)}`, question: asked, options: w.choices ?? [], summary: w.summary });
+      // Its question as a menu: one option is picked by its key (a typed message would not be read).
+      const menu = menuOf(v);
+      if (menu && !st.seen[menu.key]) return this.answer(agent, menu);
     }
 
-    if (s.nudges) {
+    if (s.nudges && !theirs) {
       for (const f of v.stuck ?? []) {
         const key = `s:${f.key}:${f.since}`;
         if (st.seen[key] || f.ai?.verdict !== 'stuck' || !(f.ai.confidence >= s.minConfidence) || !f.nudge) continue;
@@ -393,7 +440,7 @@ export class Autonomy {
 
     const fu = v.followUp;
     if (s.followUps && fu?.kind === 'followup' && !st.seen[`f:${fu.since}`]) {
-      const waitsOnPerson = this.manager.acceptanceWaits(agent) || (agent.planReview && agent.planReview.status !== 'approved') || v.results?.outcome === 'blocked';
+      const waitsOnPerson = theirs || v.results?.outcome === 'blocked';
       if (!waitsOnPerson) {
         this.put(id, (x) => (x.seen[`f:${fu.since}`] = now()));
         if (count('followup') < s.maxFollowUps) {
@@ -451,6 +498,7 @@ export class Autonomy {
       this.put(id, (x) => (x.seen[q.key] = now()));
       this.record(id, { kind: 'left', key: q.key, question: clip(q.question, 300), why });
     };
+    if (permissionPrompt(q)) return left('It is a permission prompt: only you answer those.');
     const touchy = sensitive([q.question, ...(q.options ?? []), q.default, q.context].filter(Boolean).join('\n'));
     if (touchy) return left(`It is about ${touchy}: yours to answer.`);
     if (st.log.filter((e) => e.kind === 'answer').length >= s.maxAnswers) return left(`${s.maxAnswers} questions were already answered for you on this agent.`);
@@ -481,6 +529,16 @@ export class Autonomy {
     if (q.qid) {
       if (cur.answers?.[q.qid]) return;
       this.manager.patch(id, { answers: { ...cur.answers, [q.qid]: { text: d.answer, at: now(), by: 'autonomy', model: r.by, basis: d.basis } } });
+    } else if (q.menu) {
+      const c = q.menu.find((x) => x.key === d.option);
+      if (!c || menuOf(this.manager.view(cur))?.key !== q.key) {
+        if (!c) this.record(id, { kind: 'left', key: q.key, question: clip(q.question, 300), why: 'The reply did not pick one of the choices.' });
+        return; // or the menu was answered, or changed, meanwhile
+      }
+      const e = this.record(id, { kind: 'answer', key: q.key, qid: null, question: clip(q.question, 300), answer: c.label, basis: d.basis, confidence: d.confidence, model: r.by, ack: false });
+      this.manager.answerPrompt(id, c.key);
+      this.log(`autonomy: picked "${c.label}" for ${agent.name} (${r.by}): ${clip(q.question, 80)}`);
+      return e;
     } else {
       const rt = this.manager.runtimes.get(id);
       const w = rt?.waiting;
@@ -581,6 +639,8 @@ export class Autonomy {
       if (this.manager.acceptanceWaits(agent)) return this.hold(id, key, 'What done means is not agreed yet.');
       const own = v.results?.confidence;
       if (own && own.percent < s.minBuildConfidence) return this.hold(id, key, `The agent's own confidence in this is ${own.percent}%${own.why ? `: ${own.why}` : ''}.`);
+      const left = leftOut(agent, v);
+      if (left) return this.hold(id, key, left);
       const changes = this.review ? await this.review.get(id) : null;
       const risk = changes ? this.manager.standards?.riskIn(agent, changes.files ?? []) ?? [] : [];
       if (risk.length) return this.hold(id, key, `It changes high-risk paths (${risk.slice(0, 3).map((r) => r.path).join(', ')}${risk.length > 3 ? ` and ${risk.length - 3} more` : ''}): yours to merge.`);

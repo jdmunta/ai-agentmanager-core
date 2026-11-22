@@ -4,6 +4,7 @@
 import { openStream } from '/transport.js';
 import { openCopy, pasteInto } from '/termclip.js';
 import { termFont } from '/termfont.js';
+import { touchScroll } from '/touchscroll.js';
 
 const MACHINE = '__machine__';
 
@@ -22,6 +23,7 @@ export function initMachine({ api, esc, toast, $, Terminal, FitAddon }) {
     fit = new FitAddon();
     xterm.loadAddon(fit);
     xterm.open($('#machine-term'));
+    touchScroll($('#machine-term'), xterm);
     // Answers xterm gives to queries in the replayed backlog are stale; don't send them as typing.
     xterm.onData((d) => !replaying && conn?.send({ t: 'i', d }));
     xterm.onResize(({ cols, rows }) => conn?.send({ t: 'r', cols, rows }));

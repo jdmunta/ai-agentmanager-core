@@ -4,6 +4,8 @@
 // plan ticks, the spec's criteria) cap and correct it, and the recommendation follows fixed rules,
 // so a confident-sounding model can't talk a change into "ready".
 
+import { proofFacts } from './proof.js';
+
 export const DIMENSIONS = [
   ['intent', 'Intent', 'Does it do what was asked?'],
   ['spec', 'Spec', 'Are the acceptance criteria met?'],
@@ -16,7 +18,7 @@ const WEIGHTS = { intent: 25, spec: 20, tests: 20, safety: 15, scope: 10, plan: 
 const TEST_FILE = /(^|\/)(tests?|__tests__|spec|specs)\/|[._-](test|spec)\.[a-z]+$|_test\.go$|Test\.java$/i;
 
 /** Facts the app knows without a model: CI, test files touched, the agent's checks, plan and spec progress. */
-export function facts({ files = [], prs = [], brief = null, plan = '', spec = '', standards = null, agreed = null }) {
+export function facts({ files = [], prs = [], brief = null, plan = '', spec = '', standards = null, agreed = null, proof = null }) {
   const paths = files.map((f) => f.path);
   const tests = paths.filter((p) => TEST_FILE.test(p));
   const code = paths.filter((p) => !TEST_FILE.test(p) && !/\.(md|txt|rst|adoc)$/i.test(p) && !/(^|\/)docs?\//i.test(p));
@@ -37,6 +39,9 @@ export function facts({ files = [], prs = [], brief = null, plan = '', spec = ''
     plan: steps.length ? { steps: steps.length, done: steps.filter((s) => s === 'x').length } : null,
     criteria: criteriaBlock.split('\n').filter((l) => /^\s*[-*\d]/.test(l) && /\w/.test(l)).length,
     hasSpec: Boolean(String(spec).trim()),
+    // Its proof (proof.js): what it recorded, what the app ran again, and what it says it left out.
+    proof: proof ? { doc: proof.doc, rerun: proof.rerun ?? null } : null,
+    notDone: brief?.results?.notDone ?? [],
     // What done means, agreed with the person (acceptance.js): these are checked, whatever the spec says now.
     agreed: agreed?.length ? agreed.map((p) => ({ id: p.id, text: p.text })) : null,
     // The repository's standards (standards.js): high-risk files touched, and the bar the app ran.
@@ -55,9 +60,11 @@ export const factLines = (f) =>
     ...(f.agreed ? [`acceptance agreed with the person: ${f.agreed.length} point${f.agreed.length === 1 ? '' : 's'}`] : []),
     ...(f.bar ? [`the repository's quality bar, run by the app: ${f.bar.passed} passed, ${f.bar.failed.length} failed${f.bar.failed.length ? ` (${f.bar.failed.join(', ')})` : ''}`] : []),
     ...(f.risk?.length ? [`files under paths the person marked high risk: ${f.risk.join(', ')}`] : []),
+    ...(f.proof ? proofFacts(f.proof.doc, f.proof.rerun) : []),
+    ...(f.notDone?.length ? [`the agent lists as not done: ${f.notDone.join('; ')}`] : []),
   ].join('\n');
 
-export function scorecardPrompt({ intent, status, digest, briefMarkdown, intentDoc, specDoc, planDoc, hunks, facts: f, lessons = [] }) {
+export function scorecardPrompt({ intent, status, digest, briefMarkdown, intentDoc, specDoc, planDoc, proofDoc = '', hunks, facts: f, lessons = [] }) {
   return [
     "You score an AI coding agent's changes for a reviewer who wants to approve with confidence and read as little as possible.",
     'Be skeptical: a claim without evidence in the diff, the tests or the checks counts as unverified. Base everything on the material below.',
@@ -106,6 +113,8 @@ export function scorecardPrompt({ intent, status, digest, briefMarkdown, intentD
     '<brief>',
     briefMarkdown || '(none)',
     '</brief>',
+    // Its own record of what it ran: evidence for a check when the output shown fits the claim, but not run by the app unless the facts say so.
+    ...(proofDoc ? ['<proof_recorded_by_the_agent>', proofDoc, '</proof_recorded_by_the_agent>'] : []),
     '<hunks>',
     ...hunks.map((h) => `<hunk id="${h.id}" file="${h.file}">\n${h.head}\n${h.text}\n</hunk>`),
     '</hunks>',
@@ -137,6 +146,10 @@ export function combine(reply, f, hunks, { lessons = [], bar = null } = {}) {
   // The repository's quality bar, run by the app: a failed check is not verified, whatever else passed.
   const barFailed = (bar?.results ?? []).filter((r) => !r.ok);
   if (barFailed.length) cap('tests', 30, `the quality bar is not met (${barFailed.map((r) => r.name).join(', ')})`);
+  // Its recorded commands, run again by the app at the person's request: one that now gives another result is not verified.
+  const differs = f.proof?.rerun && !f.proof.rerun.stale ? f.proof.rerun.results.filter((r) => r.status === 'differs') : [];
+  if (differs.length) cap('tests', 40, `${differs.length} of its recorded commands gave a different result when run again (${differs.map((r) => r.title).join('; ').slice(0, 200)})`);
+  if (f.notDone?.length && out.intent) out.intent.notes.push(`the agent lists ${f.notDone.length} thing${f.notDone.length === 1 ? '' : 's'} as not done`);
   // Plan: bounded by the steps ticked.
   if (f.plan && out.plan) cap('plan', Math.round(40 + (60 * f.plan.done) / f.plan.steps), `${f.plan.done} of ${f.plan.steps} plan steps ticked`);
   if (!f.plan && out.plan) out.plan.notes.push('no plan written');

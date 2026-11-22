@@ -388,6 +388,9 @@ export async function main(argv) {
       });
       for (const a of created) console.log(`${green('+')} ${bold(a.name)} ${dim(a.id)}  session ${cyan(a.sessionId)}`);
       console.log(dim(`Workspace setup and launch continue in the background. "agentmgr ls" shows status.`));
+      if (created.some((a) => a.autonomy && !['auto', 'bypassPermissions'].includes(a.permissionMode ?? ''))) {
+        console.log(dim('Without you: it still stops at each permission prompt, which is never answered for you ("agentmgr inbox"). With -p auto, Claude Code approves what it judges safe.'));
+      }
       if (opts.attach && created.length === 1) {
         let a = created[0];
         for (let i = 0; i < 600 && a.status === 'preparing' && !a.runtime.running; i++) {
@@ -580,6 +583,31 @@ export async function main(argv) {
       else process.stdout.write(`${d.markdown}\n${dim(`Checked by ${d.writer}`)}\n`);
       // For scripts: something a source contradicts.
       if (d.data.verdict === 'wrong') process.exitCode = 1;
+    });
+
+  program
+    .command('proof')
+    .description('What an agent ran to verify its work: each check with its command, exit code and output, as the agent recorded them, and what it says it did not do. --run runs the commands again here and says which gave the same result (exit 1 when one differs).')
+    .argument('<agent>')
+    .option('--run', 'run the recorded commands again in the agent\'s folder (ones that change things are not run)')
+    .option('--json', 'print it as JSON')
+    .action(async (ref, opts) => {
+      await daemon();
+      const a = await resolveAgent(ref);
+      let v = await api('GET', `/agents/${a.id}/proof`);
+      if (opts.run) {
+        const n = v.entries.filter((e) => e.runnable).length;
+        process.stderr.write(dim(`Running ${n} command${n === 1 ? '' : 's'} again in ${a.workdir ?? 'its folder'}…\n`));
+        v = await api('POST', `/agents/${a.id}/proof/run`);
+      }
+      if (opts.json) console.log(JSON.stringify(v, null, 2));
+      else {
+        console.log((await api('GET', `/agents/${a.id}/proof?format=md`)).markdown);
+        if (v.notDone.length) console.log(`${bold('Not done, as the agent says:')}\n${v.notDone.map((t) => `- ${t}`).join('\n')}\n`);
+        if (v.rerun && !v.rerun.stale) console.log(`Run again ${v.rerun.at}: ${green(`${v.rerun.same} same`)}${v.rerun.differs ? `, ${red(`${v.rerun.differs} different`)}` : ''}${v.rerun.skipped ? dim(`, ${v.rerun.skipped} not run`) : ''}`);
+        else if (v.counts.commands) console.log(dim(`Run them again: agentmgr proof ${a.id} --run${v.rerun?.stale ? '  (the last run was before the agent changed its proof)' : ''}`));
+      }
+      if (v.rerun && !v.rerun.stale && v.rerun.differs) process.exitCode = 1;
     });
 
   program
@@ -2057,7 +2085,13 @@ export async function main(argv) {
           console.log(dim('    agentmgr rules'));
           continue;
         }
-        console.log(`${label[it.kind]}  ${bold(it.agentName)} ${dim(it.agentId)}  ${it.title}`);
+        if (it.kind === 'auto') {
+          console.log(`${cyan('done for you')}  ${bold(it.agentName)} ${dim(it.agentId)}  ${it.title}`);
+          if (it.entry?.answer) console.log(dim(`    → ${it.entry.answer}\n    agentmgr autonomy ${it.agentId} --ok  ·  agentmgr autonomy ${it.agentId} --change ${it.entry.id}="your answer"`));
+          else console.log(dim(`    agentmgr autonomy ${it.agentId} --ok`));
+          continue;
+        }
+        console.log(`${label[it.kind] ?? cyan(it.kind)}  ${bold(it.agentName)} ${dim(it.agentId)}  ${(it.kind === 'prompt' && it.title === 'Question' && it.prompt?.question) || it.title}`);
         if (it.kind === 'prompt') console.log(dim(`    ${(it.prompt?.choices ?? []).map((c) => `${c.key}. ${c.label}`).join('   ')}  → agentmgr attach ${it.agentId}`));
         if (it.kind === 'question') {
           if (it.question.options.length) console.log(dim(`    options: ${it.question.options.join(' | ')}`));
@@ -3627,7 +3661,9 @@ export async function main(argv) {
         if (!gone) throw new Error(`The daemon (pid ${before.pid}) is still shutting down after 5 minutes; check the log`);
       }
       const st = await svc.status();
-      if (st.loaded) await svc.kickstart();
+      // The login service starts its own daemon: for another home or port, this one is started here.
+      const viaService = st.loaded && st.ours;
+      if (viaService) await svc.kickstart();
       else await ensureDaemon({ quiet: true });
       const back = async () => {
         const h = await health();
@@ -3636,7 +3672,7 @@ export async function main(argv) {
       for (let i = 0; i < 150 && !(await back()); i++) await new Promise((res) => setTimeout(res, 200));
       if (!(await back())) throw new Error('Daemon did not come back; check the log');
       const agents = await api('GET', '/agents');
-      console.log(`${green('✓')} restarted${st.loaded ? ' (login service)' : ''}; ${agents.filter((a) => a.desired === 'running').length} agents set to resume`);
+      console.log(`${green('✓')} restarted${viaService ? ' (login service)' : ''}; ${agents.filter((a) => a.desired === 'running').length} agents set to resume`);
     });
 
   program

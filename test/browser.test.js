@@ -1276,6 +1276,39 @@ test('Files: a folder on this computer listed, a file sent into it, a folder ope
   assert.deepEqual(errors, [], 'no errors on the page');
 });
 
+test('Open Terminal on a phone: a swipe scrolls back through what was printed, and forward again', { skip }, async () => {
+  await width(390, 800);
+  await js(`document.querySelector('#machine-btn').click()`);
+  const rows = `(document.querySelector('#machine-term .xterm-rows')?.textContent ?? '')`;
+  await until(`document.querySelector('#machine-dialog').open && document.querySelector('#machine-term .xterm-rows')`, 'the terminal');
+  await sleep(1500);
+  await js(`document.querySelector('#machine-term textarea').focus()`);
+  await send('Input.insertText', { text: `printf 'L%s-\\n' $(seq 1 300)` });
+  await key('Enter', 'Enter', 13);
+  await until(`${rows}.includes('L300-')`, 'the lines printed', 15_000);
+  const at = await js(`(() => { const r = document.querySelector('#machine-term').getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 3 }; })()`);
+  const swipe = async (dy) => {
+    await send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: at.x, y: at.y }] });
+    for (let i = 1; i <= 8; i++) {
+      await send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: at.x, y: at.y + (dy * i) / 8 }] });
+      await sleep(20);
+    }
+    await sleep(150); // a pause: no flick
+    await send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  };
+  await send('Emulation.setTouchEmulationEnabled', { enabled: true });
+  await swipe(240);
+  await until(`!${rows}.includes('L300-') && /L2\\d\\d-/.test(${rows})`, 'earlier lines after a swipe down');
+  await swipe(-240);
+  await until(`${rows}.includes('L300-')`, 'the end again after a swipe up');
+  await send('Emulation.setTouchEmulationEnabled', { enabled: false });
+  const n = await js(`Number(document.querySelector('#machine-tabs .term-tab.active').dataset.n)`);
+  await js(`document.querySelector('#machine-close').click()`);
+  await api('POST', '/machine/shell/drop', { n });
+  await width(1600);
+  assert.deepEqual(errors, [], 'no errors on the page');
+});
+
 test('Inbox, one at a time: a single card with the next after it, stepped through with ‹ › and a swipe; Show all brings the list back', { skip }, async () => {
   const made = await api('POST', '/agents', { intents: ['First, please #ask me', 'Second, please #ask me'], workdir: home });
   await js(`document.querySelector('[data-tab="inbox"]').click()`);
@@ -1543,7 +1576,16 @@ test('Without you and ground rules: the level on a new agent and on one that run
   assert.equal(await js(`document.querySelector('#new-dialog input[name="acceptance"]').checked`), false);
   await js(`(() => { ${sel}.value = 'pr'; ${sel}.dispatchEvent(new Event('change', { bubbles: true })); })()`);
   assert.equal(await js(`document.querySelector('#new-dialog input[name="acceptance"]').checked`), true, 'what done means is agreed first');
-  await js(`(() => { ${sel}.value = ''; document.querySelector('#new-dialog input[name="acceptance"]').checked = false; document.querySelector('#new-dialog').close(); })()`);
+  // It says that permission prompts still stop it, until the mode is one that does not ask for each.
+  const perm = `document.querySelector('#new-autonomy-perm')`;
+  assert.equal(await js(`${perm}.hidden`), false);
+  assert.match(await js(`${perm}.textContent`), /still stops at each permission prompt.*never answered for you/);
+  await js(`document.querySelector('#new-autonomy-auto').click()`);
+  assert.deepEqual(await js(`[${perm}.hidden, document.querySelector('#new-dialog select[name="permissionMode"]').value]`), [true, 'auto']);
+  await js(`(() => { const m = document.querySelector('#new-dialog select[name="permissionMode"]'); m.value = ''; m.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+  assert.equal(await js(`${perm}.hidden`), false);
+  await js(`(() => { ${sel}.value = ''; ${sel}.dispatchEvent(new Event('change', { bubbles: true })); document.querySelector('#new-dialog input[name="acceptance"]').checked = false; document.querySelector('#new-dialog').close(); })()`);
+  assert.equal(await js(`${perm}.hidden`), true);
 
   // Settings: your ground rules, one per line, and the level and models for agents that run without you.
   await js(`document.querySelector('#settings-btn').click()`);
@@ -1576,7 +1618,7 @@ test('Without you and ground rules: the level on a new agent and on one that run
   await js(`${row}.querySelector('[data-act="auto-open"]').click()`);
   const dlg = `document.querySelector('#auto-dialog')`;
   await until(`${dlg}.open`, 'the dialog');
-  assert.match(await js(`${dlg}.textContent.replace(/\\s+/g, ' ')`), /^ ?Without you: .*How far it goes .*merged when its checks pass, the scorecard says ready and no high-risk path is touched\. Never done for you: answering a permission prompt, or a question about deleting, publishing, money, credentials or the scope of the task\. Nothing was done for you yet\./);
+  assert.match(await js(`${dlg}.textContent.replace(/\\s+/g, ' ')`), /^ ?Without you: .*How far it goes .*merged when its checks pass, the scorecard says ready and no high-risk path is touched\. Never done for you: answering a permission prompt, or a question about deleting, publishing, money, credentials or the scope of the task\. It still stops at each permission prompt, and waits for you in the inbox\. .*Nothing was done for you yet\./);
   await js(`(() => { const s = ${dlg}.querySelector('[data-auto="level"]'); s.value = 'run'; s.dispatchEvent(new Event('change', { bubbles: true })); })()`);
   await until(`/Agree, then run/.test(${row}?.textContent ?? '')`, 'the level changed');
   assert.equal((await api('GET', `/agents/${a.id}`)).autonomy.level, 'run');
@@ -1594,11 +1636,32 @@ test('Without you and ground rules: the level on a new agent and on one that run
   await until(`document.querySelector('#agent-list li[data-id="${a.id}"] .pill')?.textContent && true`, 'started');
   for (let i = 0; i < 100 && (await api('GET', `/agents/${a.id}`)).status !== 'running'; i++) await sleep(200);
   await sleep(1500); // the stand-in engine writes its own brief as it starts
-  fs.writeFileSync(path.join(briefs, 'BRIEF.md'), 'Status: done\n## Problem\nx\n## Solution\ny\n## Results\nOutcome: done\nConfidence: 60% - read the code, ran nothing <b>yet</b>\n- Delivered: a cache\n');
+  fs.writeFileSync(path.join(briefs, 'PROOF.md'), '## The cache answers\nCommand: `echo ok`\nExit: 0\n```\nok\n```\n## The suite passes\nCommand: false\nExit: 0\n```\n12 passed\n```\n## Saved the log\nCommand: echo hi > log.txt\nExit: 0\n## Read the config\nCommand: none\nLooked at <config>.\n');
+  fs.writeFileSync(path.join(briefs, 'BRIEF.md'), 'Status: done\n## Problem\nx\n## Solution\ny\n## Checks\n- [x] the cache answers\n- [x] the suite passes\n## Results\nOutcome: done\nConfidence: 60% - read the code, ran nothing <b>yet</b>\n- Delivered: a cache\n- Not done: eviction when <full>\n');
   await until(`document.querySelector('.own-conf .tag')`, 'its confidence shown', 30_000);
   assert.match(await js(`document.querySelector('.own-conf').textContent.replace(/\\s+/g, ' ')`), /Its own confidence: 60% read the code, ran nothing <b>yet<\/b>/);
   assert.ok(await js(`document.querySelector('.own-conf .tag').classList.contains('conf-low')`));
   assert.ok(await js(`document.documentElement.scrollWidth <= window.innerWidth`), 'no sideways scroll');
+
+  // What it left out, and the proof of its checks: its record, and the commands run again here when you ask.
+  await until(`document.querySelector('.results .proof-row [data-act="proof-open"]')`, 'the proof row');
+  assert.match(await js(`document.querySelector('.results .not-done').textContent.replace(/\\s+/g, ' ')`), /Not done, as the agent says ?eviction when <full>/);
+  assert.match(await js(`document.querySelector('.results .proof-row').textContent.replace(/\\s+/g, ' ')`), /Proof 3 recorded runs, 1 by reading Open/);
+  await js(`document.querySelector('.results [data-act="proof-open"]').click()`);
+  const pd = `document.querySelector('#proof-dialog')`;
+  await until(`${pd}.open && ${pd}.querySelectorAll('.proof-list li').length === 4`, 'the proof opens');
+  assert.match(await js(`${pd}.textContent.replace(/\\s+/g, ' ')`), /Proof: .*The agent's own record of what it ran\. Its brief ticks 2 checks as passed; 3 have a command and output here\..*Not done, as the agent says ?eviction when <full>.*The cache answers ?echo ok exit 0 ?ok.*Saved the log ?echo hi > log\.txt exit 0 ?Not run again by the app: it writes to a file\..*Read the config ?Verified by reading: Looked at <config>\./);
+  assert.equal(await js(`${pd}.querySelector('[data-proof="run"]').textContent`), 'Run these 2 again here');
+  await js(`${pd}.querySelector('[data-proof="run"]').click()`);
+  await until(`${pd}.querySelectorAll('.proof-list .tag').length === 3`, 'run again', 30_000);
+  assert.deepEqual(await js(`[...${pd}.querySelectorAll('.proof-list .tag')].map((t) => t.textContent)`), ['Same result', 'Different result', 'Not run again']);
+  assert.match(await js(`${pd}.textContent.replace(/\\s+/g, ' ')`), /Run again: exit 1, and its last recorded line was not printed.*Run again here .*: 1 same, 1 different, 1 not run\./);
+  await width(390);
+  assert.ok(await js(`${pd}.getBoundingClientRect().right <= 390 && ${pd}.scrollWidth <= ${pd}.clientWidth + 1 && [...${pd}.querySelectorAll('.proof-list li')].every((li) => li.getBoundingClientRect().right <= 390)`), 'the proof fits a phone');
+  await width(1600);
+  await js(`${pd}.querySelector('[data-proof="close"]').click()`);
+  await until(`/1 different when run again/.test(document.querySelector('.results .proof-row .tag')?.textContent ?? '')`, 'the result beside the results');
+  assert.ok(!fs.existsSync(path.join((await api('GET', `/agents/${a.id}`)).workdir, 'log.txt')), 'the command that writes a file was not run');
 
   // A question it stops on is answered for you: a card in the inbox, seen with OK, and on its record.
   await api('PUT', '/judge', { enabled: true });

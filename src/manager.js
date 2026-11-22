@@ -136,6 +136,7 @@ import { CLAIM_TEXTS, claimsMarkdown, claimsPrompt, combineClaims, parseClaims, 
 import { CONTAINER_ENGINES, claudeToken, containerName, containerRunning, engineMounts, gitCommonDir, removeContainer, runArgs, stopContainer } from './container.js';
 import { conflictMessage, findConflicts, related, repoKey, summarize as summarizeConflicts } from './conflicts.js';
 import { answerMessage, loadQuestions, questionsPath, questionsPrompt } from './inbox.js';
+import { PROOF_FILE, proofBlock, proofFacts, proofPrompt } from './proof.js';
 import { GroundRules, groundRulesMessage } from './groundrules.js';
 import { autonomySettings, callLadder, eligible as autonomyEligible, levelOf, modelName, parseLevel } from './autonomy.js';
 import { STUCK_DEFAULTS, detectStuck } from './stuck.js';
@@ -482,7 +483,7 @@ export class AgentManager extends EventEmitter {
       else if (agent.brief?.status || rt?.pty || agent.status === 'preparing') outcome = 'in progress';
     }
     if (!outcome && !delivered.length && !blockers.length) return null;
-    return { outcome: outcome ?? 'in progress', delivered, blockers, notes: r?.notes ?? '', confidence: r?.confidence ?? null, fromAgent: Boolean(r) };
+    return { outcome: outcome ?? 'in progress', delivered, blockers, notes: r?.notes ?? '', confidence: r?.confidence ?? null, notDone: r?.notDone ?? [], notDoneSaid: Boolean(r?.notDoneSaid), fromAgent: Boolean(r) };
   }
 
   changed(agent) {
@@ -1394,6 +1395,8 @@ export class AgentManager extends EventEmitter {
       const dir = fs.realpathSync(briefDir(agent.id));
       writableDir = dir;
       prompts.push(briefPrompt(path.join(dir, path.basename(briefPath(agent.id)))));
+      // What it ran to verify, kept so it can be checked, and what it left out (proof.js).
+      if (this.config.proof !== false) prompts.push(proofPrompt(path.join(dir, PROOF_FILE)));
       if (this.config.inbox !== false) prompts.push(questionsPrompt(path.join(dir, path.basename(questionsPath(agent.id)))));
     }
     // SPEC.md before changing code, and PLAN.md kept as it goes (unless the plan review asks for the plan).
@@ -2534,6 +2537,7 @@ export class AgentManager extends EventEmitter {
     const agent = this.store.get(id);
     if (!agent) return;
     const before = agent.brief; // patch() below changes agent.brief in place
+    this.proof?.reload(id);
     const brief = loadBrief(id, before);
     if (brief) {
       this.patch(id, { brief });
@@ -2845,6 +2849,9 @@ export class AgentManager extends EventEmitter {
     }
     // The spec and plan go along with the brief: what done means, and how it gets there.
     const extra = ['spec', 'plan'].map((n) => readSpecDoc(agent.id, n)?.markdown.trim()).filter(Boolean);
+    // And its proof (proof.js): what it recorded of its checks, and what the app saw when it ran them again.
+    const proof = this.proof?.forScore(agent);
+    if (proof?.entries.length) extra.push(['# Proof of its checks, as the agent recorded it', ...proofFacts(proof.doc, proof.rerun), '', proofBlock(proof.entries, 4000)].join('\n'));
     return { intent: agent.intent, status, digest, repo, briefMarkdown: [briefMarkdown, ...extra].filter(Boolean).join('\n\n') };
   }
 
@@ -2958,9 +2965,10 @@ export class AgentManager extends EventEmitter {
     const doc = (n) => readSpecDoc(agent.id, n)?.markdown ?? '';
     // The repository's standards: its bar is run here, by the app, before the model is asked.
     const standards = (await this.standards?.assess(agent.id, data)) ?? null;
-    const f = scoreFacts({ files: data.files, prs: Object.values(cur0.prs ?? {}), brief: cur0.brief, plan: doc('plan'), spec: doc('spec'), standards, agreed: cur0.acceptance?.status === 'agreed' ? cur0.acceptance.points : null });
+    const proof = this.proof?.forScore(cur0) ?? null;
+    const f = scoreFacts({ files: data.files, prs: Object.values(cur0.prs ?? {}), brief: cur0.brief, plan: doc('plan'), spec: doc('spec'), standards, agreed: cur0.acceptance?.status === 'agreed' ? cur0.acceptance.points : null, proof });
     const writer = this.writerFor(agent);
-    const prompt = scorecardPrompt({ ...ctx, briefMarkdown: this.briefFile(agent.id).markdown ?? '', intentDoc: doc('intent'), specDoc: doc('spec'), planDoc: doc('plan'), hunks, facts: f, lessons: standards?.lessons ?? [] });
+    const prompt = scorecardPrompt({ ...ctx, briefMarkdown: this.briefFile(agent.id).markdown ?? '', intentDoc: doc('intent'), specDoc: doc('spec'), planDoc: doc('plan'), proofDoc: proof?.entries?.length ? proofBlock(proof.entries) : '', hunks, facts: f, lessons: standards?.lessons ?? [] });
     const sc = combine(parseJsonReply(await this.oneShot(agent, prompt, writer)), f, hunks, { lessons: standards?.lessons ?? [], bar: standards?.bar ?? null });
     const cur = this.store.get(agent.id);
     if (!cur) return null;
@@ -3884,7 +3892,7 @@ export class AgentManager extends EventEmitter {
 
   /** A live prompt's question and choices, and the tool call it asks about when the transcript says. */
   promptView(agent, rt) {
-    const p = engineOf(agent).promptChoices(rt.tail);
+    const p = engineOf(agent).promptChoices(rt.tail, rt.attention);
     const call = rt.attention === PERMISSION ? this.pendingCall(agent) : null;
     return call ? { ...p, tool: describeTool(call) } : p;
   }

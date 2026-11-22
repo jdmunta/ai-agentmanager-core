@@ -43,6 +43,19 @@ export function passEnv(source = process.env) {
   return env;
 }
 
+/**
+ * Whether the service file's daemon is the one this process talks to: the same home and port. A
+ * second daemon (another home or port, as in a trial or a test) is not the login service's.
+ */
+export function serviceIsOurs(text, source = process.env) {
+  const of = (key) => new RegExp(`<key>${key}</key><string>([^<]*)</string>|^Environment=${key}=(.*)$`, 'm').exec(String(text ?? ''));
+  const unxml = (v) => v.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+  return ['AGENTMGR_HOME', 'AGENTMGR_PORT'].every((key) => {
+    const m = of(key);
+    return (m ? unxml(m[1] ?? m[2]) : '') === (source[key] ?? '');
+  });
+}
+
 const xml = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
 export function plist() {
@@ -128,18 +141,26 @@ export async function uninstall() {
   throw new Error(`Login service is not supported on ${process.platform}`);
 }
 
+const ours = (file) => {
+  try {
+    return serviceIsOurs(fs.readFileSync(file, 'utf8'));
+  } catch {
+    return true; // loaded without a file we can read: as before
+  }
+};
+
 export async function status() {
   if (process.platform === 'darwin') {
     const installed = fs.existsSync(PLIST);
     const loaded = await run('launchctl', ['print', `gui/${uid()}/${LABEL}`]).then(() => true, () => false);
-    return { installed, loaded, file: PLIST };
+    return { installed, loaded, ours: ours(PLIST), file: PLIST };
   }
   if (process.platform === 'linux') {
     const installed = fs.existsSync(UNIT);
     const loaded = await run('systemctl', ['--user', 'is-active', UNIT_NAME]).then(() => true, () => false);
-    return { installed, loaded, file: UNIT };
+    return { installed, loaded, ours: ours(UNIT), file: UNIT };
   }
-  return { installed: false, loaded: false, file: null };
+  return { installed: false, loaded: false, ours: false, file: null };
 }
 
 /** Start the service-managed daemon now (after "agentmgr shutdown", launchd won't on its own). */

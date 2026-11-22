@@ -12,6 +12,9 @@ export const LEVEL_HINT = {
 };
 const KIND = { answer: 'Answered', left: 'Left for you', nudge: 'Nudged', followup: 'Told to carry on', plan: 'Plan decided', merge: 'Merged' };
 
+/** Whether to say that permission prompts still stop it: past "Ask me", in a mode that asks for each one. */
+export const needsPermissionHint = (level, mode) => ['run', 'pr', 'merge'].includes(level) && !['auto', 'bypassPermissions'].includes(mode || '');
+
 export const levelOf = (a) => (LEVELS.includes(a.autonomy?.level) ? a.autonomy.level : 'ask');
 
 /** "2 answered, 1 nudge, 1 left for you". */
@@ -85,6 +88,7 @@ export function initAutonomy({ dialog, api, esc, toast, ago, agentOf, upsert }) 
       </label>
       <p class="hint">${LEVEL_HINT[level]}</p>
       <p class="hint">Never done for you: answering a permission prompt, or a question about deleting, publishing, money, credentials or the scope of the task.</p>
+      ${needsPermissionHint(level, a.permissionMode) ? '<p class="hint auto-perm">It still stops at each permission prompt, and waits for you in the inbox. To be stopped less, set its Permission mode to Auto (Edit agent; from its next launch), where Claude Code approves what it judges safe.</p>' : ''}
       ${st.hold && !st.hold.ack && level === 'merge' ? `<p class="auto-hold"><b>Not merged:</b> ${esc(st.hold.note)} <button type="button" class="small" data-auto="ok" data-entry="hold">OK</button></p>` : ''}
       ${log.length ? `<h4>Done for you</h4><ul class="auto-log">${log.map(entry).join('')}</ul>` : level === 'ask' ? '' : '<p class="hint">Nothing was done for you yet.</p>'}`;
   }

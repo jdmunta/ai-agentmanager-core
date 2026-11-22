@@ -1634,6 +1634,56 @@ test('autonomy and ground rules: your rules reach every agent; an agent that run
   }
 });
 
+test('proof: the agent is told to record it; what it recorded is shown with what it left out; the commands are run again when you ask, not when the agent does', async () => {
+  const origin = makeOrigin('proof');
+  const [a] = (await call('POST', '/agents', { intent: 'Add a version file', repo: `file://${origin}` })).body;
+  const launch = await waitFor(() => launches().find((l) => l.args.includes(a.sessionId) && l.args.includes('--append-system-prompt')), 20000, 'launch');
+  const sys = launch.args[launch.args.indexOf('--append-system-prompt') + 1];
+  const dir = fs.realpathSync(path.join(home, 'briefs', a.id));
+  assert.ok(sys.includes(`Keep the proof of your checks in ${path.join(dir, 'PROOF.md')}`) && sys.includes('"- Not done: nothing" when there is none'), sys);
+  const ready = await waitFor(async () => {
+    const v = await agentNow(a.id);
+    return v.workdir && v.status === 'running' ? v : null;
+  }, 20000, 'the agent running in its worktree');
+  assert.deepEqual((await call('GET', `/agents/${a.id}/proof`)).body.entries, []);
+  assert.equal((await call('POST', `/agents/${a.id}/proof/run`)).status, 400, 'nothing recorded to run');
+
+  // The agent writes its brief and its proof (after the stand-in engine wrote its own brief).
+  fs.writeFileSync(path.join(ready.workdir, 'VERSION'), '1.2.3\n');
+  await waitFor(() => fs.existsSync(path.join(dir, 'BRIEF.md')), 15000, "the stand-in's brief");
+  await new Promise((r) => setTimeout(r, 300));
+  fs.writeFileSync(path.join(dir, 'BRIEF.md'), 'Status: done\n## Checks\n- [x] the file holds the version\n- [x] the old file is gone\n## Results\nOutcome: done\n- Delivered: VERSION\n- Not done: the changelog entry\nConfidence: 80% - read it back\n');
+  fs.writeFileSync(
+    path.join(dir, 'PROOF.md'),
+    ['## The file holds the version', 'Command: `cat VERSION`', 'Exit: 0', '```', '1.2.3', '```', '## The old file is gone', 'Command: cat version.txt', 'Exit: 0', '```', '(nothing)', '```', '## Cleaned up', 'Command: rm -f VERSION.bak', 'Exit: 0', '## Read the docs', 'Command: none', 'Looked at README.md.'].join('\n'),
+  );
+  manager.reloadBrief(a.id);
+  const v = await agentNow(a.id);
+  assert.deepEqual([v.proofDoc.entries, v.proofDoc.commands, v.results.notDone, v.results.notDoneSaid], [4, 3, ['the changelog entry'], true]);
+  const shown = (await call('GET', `/agents/${a.id}/proof`)).body;
+  assert.deepEqual(shown.entries.map((e) => [e.title, e.command, e.runnable]), [['The file holds the version', 'cat VERSION', true], ['The old file is gone', 'cat version.txt', true], ['Cleaned up', 'rm -f VERSION.bak', false], ['Read the docs', null, false]]);
+  assert.deepEqual([shown.passed, shown.notDone, shown.rerun, shown.canRun], [2, ['the changelog entry'], null, true]);
+
+  // Run again: yours to ask. The command that changes things is not run; one result is not what it wrote.
+  const refused = await call('POST', `/agents/${a.id}/proof/run`, {}, { 'x-agentmgr': '1', 'x-agentmgr-agent': a.id });
+  assert.equal(refused.status, 403);
+  assert.match(refused.body.error, /asked by the person, not by an agent/);
+  const ran = (await call('POST', `/agents/${a.id}/proof/run`)).body;
+  assert.deepEqual(ran.entries.map((e) => [e.rerun?.status ?? null, e.rerun?.code ?? null]), [['same', 0], ['differs', 1], ['skipped', null], [null, null]]);
+  assert.deepEqual([ran.rerun.same, ran.rerun.differs, ran.rerun.skipped, ran.rerun.stale], [1, 1, 1, false]);
+  assert.match(ran.entries[1].rerun.tail, /No such file/);
+  assert.equal((await agentNow(a.id)).proof.results.length, 3);
+  assert.match((await call('GET', `/agents/${a.id}/proof?format=md`)).body.markdown, /## The old file is gone\n\nCommand: `cat version\.txt` \(exit 0\)[\s\S]*❌ a different result when run again: exit 1/);
+  // The agent corrects its proof: the earlier run no longer speaks for it.
+  await new Promise((r) => setTimeout(r, 20));
+  fs.writeFileSync(path.join(dir, 'PROOF.md'), '## The file holds the version\nCommand: cat VERSION\nExit: 0\n```\n1.2.3\n```\n');
+  manager.reloadBrief(a.id);
+  const again = (await call('GET', `/agents/${a.id}/proof`)).body;
+  assert.deepEqual([again.entries.length, again.rerun.stale, again.entries[0].rerun], [1, true, null]);
+  await call('POST', `/agents/${a.id}/stop`);
+  await call('DELETE', `/agents/${a.id}`);
+});
+
 test('backlog: per-project limit, done → review frees a slot, accept, reopen, pause, priority', async () => {
   const bl = async () => (await call('GET', '/backlog')).body;
   const item = async (id) => (await bl()).items.find((i) => i.id === id);

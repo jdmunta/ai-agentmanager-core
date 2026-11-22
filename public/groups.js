@@ -7,6 +7,7 @@
 // The layout and what each group shows are kept per browser.
 
 import { termFont } from '/termfont.js';
+import { touchScroll } from '/touchscroll.js';
 
 const SAVED = 'agentmgr.groups';
 const MAX_GROUPS = 6;
@@ -157,6 +158,7 @@ export function initGroups({ $, esc, agents, Terminal, FitAddon, openStream, api
     if (!p.el.isConnected) return;
     if (!p.opened) {
       p.xterm.open(p.el.querySelector('.gterm'));
+      touchScroll(p.el.querySelector('.gterm'), p.xterm);
       p.opened = true;
     }
     p.failed = false;

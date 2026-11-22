@@ -14,7 +14,7 @@ import { budgetSettings, costOf, dayKey } from '../src/budgets.js';
 import { sourceOf, stats } from '../src/stats.js';
 import { cleanSchedule, nextRun, placeholders, render } from '../src/playbooks.js';
 import { cleanLearning, memoryKey, memoryPrompt } from '../src/memory.js';
-import { passEnv, plist, unit } from '../src/service.js';
+import { passEnv, plist, serviceIsOurs, unit } from '../src/service.js';
 import { stripChrome } from '../src/judge.js';
 import claude from '../src/engines/claude.js';
 import { notInstalled } from '../src/engines/index.js';
@@ -362,9 +362,16 @@ Some notes.
     delivered: ['PR https://github.com/a/b/pull/9', 'design doc'],
     blockers: ['QA environment (needs: QE)'],
     filed: [],
+    notDone: [],
+    notDoneSaid: false,
     confidence: null,
     notes: 'Some notes.',
   });
+  // What it says it left out: listed, kept out of the notes; "nothing" is said, and is none.
+  const nd = parseBrief('## Results\nOutcome: done\n- Delivered: x\n- Not done: the Windows path\n- **Not done:** tests for the empty file\nA note.\n').results;
+  assert.deepEqual([nd.notDone, nd.notDoneSaid, nd.notes], [['the Windows path', 'tests for the empty file'], true, 'A note.']);
+  const none = parseBrief('## Results\nOutcome: done\n- Not done: nothing\n').results;
+  assert.deepEqual([none.notDone, none.notDoneSaid], [[], true]);
   // The agent's own confidence in what it built: a number and why, kept out of the notes.
   const c = parseBrief('## Results\nOutcome: done\nConfidence: 85% - ran the suite and the page by hand; least sure about Safari\n- Delivered: x\nA note.\n').results;
   assert.deepEqual(c.confidence, { percent: 85, why: 'ran the suite and the page by hand; least sure about Safari', level: 'high' });
@@ -425,6 +432,31 @@ test('inbox: QUESTIONS.md parsing and menu choices from terminal output', async 
   assert.equal(p.question, 'Do you want to make this edit?');
   assert.deepEqual(p.choices.map((c) => c.key), ['1', '2', '3']);
   assert.equal(p.choices[1].label, 'Yes, allow all edits');
+
+  // Claude Code's question menu, as it drew one (words placed by column, a line under each option).
+  const { questionMenu, FREE_CHOICE } = await import('../src/inbox.js');
+  const { default: claudeEngine } = await import('../src/engines/claude.js');
+  const g = '\x1b[38;2;153;153;153m';
+  const menu =
+    `────────\r\x1b[1B\x1b[48;2;177;185;249m ☐ Structure \x1b[49m\x1b[K\r\x1b[2B\x1b[1mShould shout.js share code with greet.js or stand alone?\x1b[22m\x1b[K\r\x1b[1B\x1b[K\r\x1b[1B❯\x1b[39m ${g}1.\x1b[39m Stand alone\x1b[K` +
+    `\r\x1b[2C\x1b[1B   ${g}A self-contained copy; greet.js is untouched.\x1b[39m\x1b[K\r\x1b[2C\x1b[1B${g}2.\x1b[39m Share code\x1b[K\r\r\n\x1b[6G${g}Extract\x1b[14Gthe\x1b[18Ggreeting\x1b[27Glogic.\x1b[39m\r\r\n` +
+    `\x1b[3G${g}3.\x1b[6GType\x1b[11Gsomething.\x1b[39m\r\r\n${g}────────\x1b[39m\r\r\n\x1b[3G4.\x1b[6GChat\x1b[11Gabout\x1b[17Gthis\r\r\n\r\r\n${g}Enter\x1b[7Gto\x1b[10Gselect\x1b[17G·\x1b[19G↑/↓\x1b[23Gto\x1b[26Gnavigate\x1b[35G·\x1b[37GEsc\x1b[41Gto\x1b[44Gcancel\x1b[39m`;
+  const qm = questionMenu(menu);
+  assert.equal(qm.question, 'Should shout.js share code with greet.js or stand alone?');
+  assert.deepEqual(qm.choices.map((c) => [c.key, c.label, c.hint]), [
+    ['1', 'Stand alone', 'A self-contained copy; greet.js is untouched.'],
+    ['2', 'Share code', 'Extract the greeting logic.'],
+    ['3', 'Type something.', ''],
+    ['4', 'Chat about this', ''],
+  ]);
+  assert.deepEqual([qm.selected, qm.multi, qm.choices.filter((c) => !FREE_CHOICE.test(c.label)).length], ['1', false, 2]);
+  assert.equal(questionMenu('Do you want to proceed?\r\n❯ 1. Yes\r\n  2. No\r\nEsc to cancel'), null, 'a permission prompt is not one');
+  // It counts as a prompt (a message typed now would pick the highlighted option), and its choices are read as a menu.
+  const flat = (t) => t.replace(/\x1b\[[0-9;?]*[ -\/]*[@-~]/g, '').replace(/\s+/g, '');
+  const label = (t) => claudeEngine.attention.find(([re]) => re.test(flat(t)))?.[1] ?? null;
+  assert.deepEqual([label(menu), label('Do you want to proceed?\n❯ 1. Yes\n 2. No\nEsc to cancel'), label('All done.')], ['Question', 'Permission prompt', null]);
+  assert.equal(claudeEngine.promptChoices(menu, 'Question').choices[1].hint, 'Extract the greeting logic.');
+  assert.equal(claudeEngine.promptChoices('Do you want to proceed?\r\n❯ 1. Yes\r\n  2. No\r\n', 'Permission prompt').choices.length, 2);
 });
 
 test('fleet views carry only whitelisted fields, trimmed, and honor the project filter', async () => {
@@ -668,6 +700,12 @@ test('login service carries the home, port and plugin settings', () => {
   try {
     assert.match(plist(), /<key>AGENTMGR_PLUGINS<\/key><string>\/opt\/ent\/daemon\.js<\/string>/);
     assert.match(unit(), /^Environment=AGENTMGR_PLUGINS=\/opt\/ent\/daemon\.js$/m);
+    // "restart" goes through the service only for the service's own daemon: the same home and port.
+    assert.equal(serviceIsOurs(plist(), process.env), true);
+    assert.equal(serviceIsOurs(unit(), process.env), true);
+    assert.equal(serviceIsOurs(plist(), { ...process.env, AGENTMGR_PORT: '47392' }), false, 'a trial daemon on another port');
+    assert.equal(serviceIsOurs(unit(), { ...process.env, AGENTMGR_HOME: '/tmp/other' }), false);
+    assert.equal(serviceIsOurs('<key>AGENTMGR_PORT</key><string>4800</string>', { AGENTMGR_PORT: '4800' }), true);
   } finally {
     if (saved === undefined) delete process.env.AGENTMGR_PLUGINS;
     else process.env.AGENTMGR_PLUGINS = saved;
@@ -1971,6 +2009,107 @@ test('scorecard: Improve tells the agent its low scores (lowest first), the crit
   // Nothing low: no empty sections.
   const clean = improveMessage({ overall: 92, recommendation: 'ready', reasons: [], scores: { intent: { score: 95, why: '', notes: [] } }, criteria: [], look: [] });
   assert.ok(!/Scores to raise|Acceptance criteria|Where a reviewer/.test(clean));
+});
+
+test('proof: what the agent recorded, what is not run again, a run compared, the scorecard told, and a merge held', async () => {
+  const pr = await import('../src/proof.js');
+  const { proofRows, rerunOf } = await import('../public/proof.js');
+  const { leftOut } = await import('../src/autonomy.js');
+  const { facts: scoreFacts, factLines, combine, scorecardPrompt } = await import('../src/scorecard.js');
+  const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;');
+  const md = [
+    '# Proof',
+    '## A1 prints the greeting',
+    'Command: `node greet.js Ada`',
+    'Exit: 0',
+    '```',
+    'Hello, Ada!',
+    '```',
+    '## Usage error',
+    '- **Command:** node greet.js',
+    '- **Exit:** 1',
+    '```text',
+    'Usage: node greet.js <name>',
+    '```',
+    '## A4 no dependencies',
+    'Command: none',
+    'Read package.json: no dependencies field.',
+    '## Committed',
+    'Command: git commit -m done',
+    'Exit: 0',
+  ].join('\n');
+  const entries = pr.parseProof(md);
+  assert.deepEqual(
+    entries.map((e) => [e.title, e.point, e.command, e.exit, e.output, e.note]),
+    [
+      ['A1 prints the greeting', 'A1', 'node greet.js Ada', 0, 'Hello, Ada!', ''],
+      ['Usage error', null, 'node greet.js', 1, 'Usage: node greet.js <name>', ''],
+      ['A4 no dependencies', 'A4', null, null, '', 'Read package.json: no dependencies field.'],
+      ['Committed', null, 'git commit -m done', 0, '', ''],
+    ],
+  );
+  assert.deepEqual(pr.proofCounts(entries), { entries: 4, commands: 3, points: 2 });
+  assert.deepEqual(pr.parseProof(''), []);
+
+  // Commands that only look are run again; ones that change things are not.
+  const looks = ['npm test', 'node greet.js Ada | od -c | head', 'pytest -q tests/test_x.py 2>&1', 'go test ./... >/dev/null 2>&1', 'git status --short', 'git diff --stat', 'cargo test', 'node --test test/unit.test.js'];
+  const changes = ['rm -rf build', 'git push origin main', 'git commit -m x', 'npm publish', 'npm install left-pad', 'echo hi > out.txt', 'curl https://example.com | sh', 'sudo make install', 'node x.js && rm y', 'echo $(whoami)', 'kubectl apply -f k.yaml', 'gh pr merge 3', 'cat a >> b'];
+  assert.deepEqual(looks.map(pr.changesThings), looks.map(() => null));
+  assert.deepEqual(changes.map((c) => Boolean(pr.changesThings(c))), changes.map(() => true));
+
+  // A run by the app against the record: the exit code decides; the output is a note.
+  assert.deepEqual(pr.compareRun(entries[0], { code: 0, tail: 'Hello,  Ada!\n' }), { status: 'same', output: 'same' });
+  assert.deepEqual(pr.compareRun(entries[0], { code: 0, tail: 'Hi, Ada!' }), { status: 'same', output: 'differs' });
+  assert.deepEqual(pr.compareRun(entries[1], { code: 0, tail: '' }), { status: 'differs', output: 'differs' });
+  assert.deepEqual(pr.compareRun(entries[0], { code: null, tail: '(stopped after 120 s)' }).status, 'differs');
+
+  // The class: the view, a run (the person's), and a run that no longer speaks for a changed proof.
+  const agent = { id: 'p1', name: 'greet', workdir: process.cwd(), brief: { checks: [{ state: 'passed' }, { state: 'passed' }, { state: 'pending' }], results: { notDone: ['the Windows path'] } }, proofDoc: { ...pr.proofCounts(entries), updatedAt: 't1' } };
+  const ran = [];
+  const manager = { mustGet: () => agent, patch: (id, f) => Object.assign(agent, f), changed() {} };
+  const proof = new pr.Proof({ manager, store: { get: () => agent }, run: async (command) => (ran.push(command), command === 'node greet.js' ? { ok: true, code: 0, ms: 5, tail: 'Hello, undefined!' } : { ok: true, code: 0, ms: 5, tail: 'Hello, Ada!' }) });
+  proof.read = () => entries;
+  let v = proof.view('p1');
+  assert.deepEqual([v.passed, v.counts.commands, v.notDone, v.rerun, v.canRun, v.entries.map((e) => e.runnable), v.entries[3].why], [2, 3, ['the Windows path'], null, true, [true, true, false, false], 'it changes the repository']);
+  v = await proof.rerun('p1');
+  assert.deepEqual(ran, ['node greet.js Ada', 'node greet.js'], 'the commit is not run again');
+  assert.deepEqual(v.entries.map((e) => e.rerun?.status ?? null), ['same', 'differs', null, 'skipped']);
+  assert.deepEqual(v.rerun, { at: agent.proof.at, stale: false, same: 1, differs: 1, skipped: 1 });
+  assert.match(pr.proofMarkdown(v), /## Usage error\n\nCommand: `node greet\.js` \(exit 1\)[\s\S]*❌ a different result when run again: exit 0/);
+  assert.equal(new pr.Proof({ manager: { mustGet: () => ({ ...agent, container: true }) }, store: {} }).cannotRun({ container: true }), 'It works in a container: its commands are not run on this computer.');
+  await assert.rejects(new pr.Proof({ manager: { mustGet: () => ({ id: 'x', workdir: '/nope/nowhere' }) }, store: {} }).rerun('x'), /not on this computer/);
+
+  // The scorecard: told what was recorded and what the app ran; a different result caps the tests score.
+  const forScore = proof.forScore(agent);
+  const f = scoreFacts({ files: [{ path: 'greet.js', added: 8, removed: 0 }], brief: agent.brief, proof: forScore });
+  assert.match(factLines(f), /the agent's proof of its checks \(its own record, not run by the app\): 3 with a command and output, 1 verified by reading\nthose commands run again by the app, at the person's request: 1 gave the recorded exit code, 1 did not \(Usage error\), 1 not run \(they change things\)\nthe agent lists as not done: the Windows path/);
+  const sc = combine({ scores: { intent: { score: 90 }, scope: { score: 90 }, tests: { score: 90 }, safety: { score: 90 } } }, f, []);
+  assert.equal(sc.scores.tests.score, 40);
+  assert.match(sc.scores.tests.notes.join(' '), /1 of its recorded commands gave a different result when run again \(Usage error\)/);
+  assert.match(sc.scores.intent.notes.join(' '), /lists 1 thing as not done/);
+  assert.match(scorecardPrompt({ intent: 'x', status: '', digest: '', briefMarkdown: '', hunks: [], facts: f, proofDoc: pr.proofBlock(entries) }), /<proof_recorded_by_the_agent>\n## A1 prints the greeting\nCommand: node greet\.js Ada\nExit: 0\nHello, Ada!/);
+  assert.match(factLines(scoreFacts({ files: [], proof: { doc: pr.proofCounts([]), rerun: null } })), /proof of its checks: none recorded/);
+  // The agent changed its proof after the run: the run no longer counts.
+  agent.proofDoc.updatedAt = 't2';
+  assert.equal(proof.view('p1').rerun.stale, true);
+  assert.equal(combine({ scores: { tests: { score: 90 } } }, scoreFacts({ files: [], brief: { checks: [] }, proof: proof.forScore(agent) }), []).scores.tests.score, 90);
+
+  // A merge made without the person is held for what was left out, or a proof that did not hold.
+  assert.match(leftOut(agent, { results: { notDone: ['the Windows path'] } }), /^The agent lists as not done: the Windows path\.$/);
+  assert.equal(leftOut(agent, { results: { notDone: [] } }), null, 'the run is stale');
+  agent.proofDoc.updatedAt = 't1';
+  assert.match(leftOut(agent, { results: { notDone: [] } }), /^1 of its recorded commands gave a different result when run again: Usage error\.$/);
+  assert.equal(leftOut({}, { results: {} }), null);
+
+  // The page: what was left out and the proof in the results card.
+  const card = proofRows({ ...agent, results: { fromAgent: true, outcome: 'done', notDone: ['the <b> path'], notDoneSaid: true } }, esc);
+  assert.match(card, /Not done, as the agent says<\/b><ul><li>the &lt;b> path<\/li>/);
+  assert.match(card, /<b>Proof<\/b> <span class="hint">3 recorded runs, 1 by reading<\/span> <span class="tag proof-bad"[^>]*>1 different when run again<\/span> <button class="small" data-act="proof-open">Open<\/button>/);
+  assert.deepEqual(rerunOf({ proof: agent.proof, proofDoc: { updatedAt: 't9' } }), null);
+  assert.match(proofRows({ brief: { checks: [{ state: 'passed' }] }, results: { fromAgent: true, outcome: 'done', notDone: [], notDoneSaid: false } }, esc), /has not said what it left out.*No proof recorded for its 1 passed check: they are its word\./s);
+  assert.equal(proofRows({ results: { fromAgent: true, outcome: 'in progress', notDone: [], notDoneSaid: false } }, esc), '');
+  assert.equal(proofRows({ results: { fromAgent: false, outcome: 'done' } }, esc), '');
+  assert.match(pr.proofPrompt('/b/PROOF.md'), /Keep the proof of your checks in \/b\/PROOF\.md[\s\S]*Not done: nothing/);
 });
 
 test('scorecard: facts measured, scores capped by them, spec scored from the criteria, recommendation by rule', async () => {
@@ -5887,7 +6026,8 @@ test('autonomy: levels, the models in order, what is never answered for you, and
   assert.match(prompt, /<question>\nPostgres or SQLite\?\nOptions: Postgres \| SQLite\nThe agent's default until answered: SQLite\n<\/question>/);
   assert.match(prompt, /<agreed_points_for_done>\nA1: No new services\n[\s\S]*<ground_rules>\n- Ask before adding a dependency\n[\s\S]*<lessons_of_the_repository>\n- Exports are paged\n[\s\S]*Q: Which port\?\n {2}A: 8080[\s\S]*the person kept it/);
   assert.ok(!au.answerPrompt({ question: 'x' }).includes('<ground_rules>'), 'empty parts are left out');
-  assert.deepEqual(au.parseAnswer('Sure:\n{"ask": false, "answer": "SQLite", "basis": "A1", "confidence": 1.4}'), { ask: false, answer: 'SQLite', basis: 'A1', confidence: 1 });
+  assert.deepEqual(au.parseAnswer('Sure:\n{"ask": false, "answer": "SQLite", "basis": "A1", "confidence": 1.4}'), { ask: false, answer: 'SQLite', option: null, basis: 'A1', confidence: 1 });
+  assert.equal(au.parseAnswer('{"ask": false, "answer": "Share code", "option": 2, "confidence": 0.9}').option, '2');
   assert.equal(au.parseAnswer('{"ask": false, "answer": "", "confidence": 0.9}').ask, true, 'no answer is a question for you');
   assert.equal(au.parseAnswer('no json'), null);
   assert.equal(au.parseAnswer('{"answer": "x"}'), null);
@@ -5906,11 +6046,12 @@ test('autonomy: levels, the models in order, what is never answered for you, and
     groundRules: { list: () => ['Ask before adding a dependency'] },
     standards: { forAgent: () => ({ lessons: [{ text: 'Exports are paged' }] }), riskIn: () => script.risk },
     mustGet: (id) => agents.get(id) ?? assert.fail(`no agent ${id}`),
-    view: (a) => ({ ...a, runtime: { waiting: manager.runtimes.get(a.id)?.waiting ?? null }, stuck: [], questions: [], followUp: null, results: null, ...views[a.id] }),
+    view: (a) => ({ ...a, runtime: { waiting: manager.runtimes.get(a.id)?.waiting ?? null, attention: manager.runtimes.get(a.id)?.attention ?? null, prompt: manager.runtimes.get(a.id)?.prompt ?? null }, stuck: [], questions: [], followUp: null, results: null, ...views[a.id] }),
+    answerPrompt: (id, key) => told.push([id, `key ${key}`, 'autonomy']),
     patch: (id, f) => Object.assign(agents.get(id), f),
     tell: (id, text, o) => (told.push([id, text, o?.source]), agents.get(id)),
     dismissStuck: (id, key, o) => told.push([id, `dismiss ${key}`, o.feedback]),
-    acceptanceWaits: () => false,
+    acceptanceWaits: (a) => Boolean(a.waitsAcc),
     questionsView: () => [],
     ladderShot: async (agent, p) => {
       if (!script.shot) throw new Error('No model answered');
@@ -5967,6 +6108,48 @@ test('autonomy: levels, the models in order, what is never answered for you, and
     manager.runtimes.set('a1', { waiting: { state: 'question', question: 'Which folder?' } });
     await auto.tick();
     assert.equal(log('a1').at(-1).why, 'No model could be reached to look at it.');
+    // A permission prompt the screen judge read as a question: left for the person, no model asked.
+    script.shot = () => assert.fail('a model was asked about a permission prompt');
+    manager.runtimes.set('a1', { waiting: { state: 'question', question: 'Do you want to proceed?', summary: 'Agent is waiting for approval to run a shell command', choices: ['1. Yes', '2. Yes, and switch to auto mode', '3. No'] } });
+    await auto.tick();
+    assert.equal(log('a1').at(-1).why, 'It is a permission prompt: only you answer those.');
+    assert.deepEqual(
+      [
+        { question: 'Do you want to proceed?' },
+        { question: 'Run it?', options: ['1. Yes', '2. No'] },
+        { question: 'Which one?', options: ['Yes, allow reading from ~/.claude from this project', 'Skip'] },
+        { question: 'Edit file?', summary: 'The agent is waiting for permission to edit a.js' },
+        { question: 'Postgres or SQLite?', options: ['Postgres', 'SQLite'] },
+        { question: 'Should the export allow empty rows?' },
+      ].map(au.permissionPrompt),
+      [true, true, true, true, false, false],
+    );
+    script.shot = null;
+    // Its question as a menu: the option is picked by its key, not typed; free text is not an option to pick.
+    agent('menu');
+    const shown = { question: 'Share code or stand alone?', choices: [{ key: '1', label: 'Stand alone', hint: 'a copy' }, { key: '2', label: 'Share code', hint: '' }, { key: '3', label: 'Type something.' }, { key: '4', label: 'Chat about this' }] };
+    manager.runtimes.set('menu', { attention: 'Question', prompt: shown });
+    assert.deepEqual(au.menuOf(manager.view(agents.get('menu'))).options, ['Stand alone', 'Share code']);
+    assert.equal(au.menuOf({ runtime: { attention: 'Permission prompt', prompt: shown } }), null);
+    assert.equal(au.menuOf({ runtime: { attention: 'Question', prompt: { ...shown, multi: true } } }), null);
+    script.shot = (p) => (assert.match(p, /takes one of these, by its number:\n1\. Stand alone \(a copy\)\n2\. Share code\n/), assert.doesNotMatch(p, /Type something/), { ask: false, option: 2, answer: 'Share code', basis: 'A4: one shared module', confidence: 0.9 });
+    await auto.tick();
+    assert.deepEqual(log('menu').map((e) => [e.kind, e.answer, e.basis]), [['answer', 'Share code', 'A4: one shared module']]);
+    assert.deepEqual(told.at(-1), ['menu', 'key 2', 'autonomy']);
+    // A reply that names no option of the menu is not typed in: left for the person.
+    manager.runtimes.set('menu', { attention: 'Question', prompt: { ...shown, question: 'Which name?' } });
+    script.shot = () => ({ ask: false, answer: 'Either is fine', basis: 'routine detail', confidence: 0.9 });
+    await auto.tick();
+    assert.deepEqual([log('menu').at(-1).kind, log('menu').at(-1).why, told.at(-1)[1]], ['left', 'The reply did not pick one of the choices.', 'key 2']);
+    manager.runtimes.delete('menu');
+    script.shot = null;
+    // While what done means waits for the person, the agent's question is that one: no model is asked.
+    agent('acc', { waitsAcc: true });
+    manager.runtimes.set('acc', { waiting: { state: 'question', question: 'Do these points look right?' } });
+    script.shot = () => assert.fail('a model was asked while the points wait for the person');
+    await auto.tick();
+    assert.equal(log('acc').length, 0);
+    script.shot = null;
     manager.runtimes.set('a1', { waiting: { state: 'error', summary: 'Crashed' } });
     const before = log('a1').length;
     await auto.tick();
