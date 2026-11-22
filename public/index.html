@@ -335,6 +335,7 @@
             <option value="merge">Run to merge</option>
           </select>
         </label>
+        <p class="hint auto-perm" id="new-autonomy-perm" hidden>It still stops at each permission prompt (running a command, reading outside the project): those are never answered for you. To be stopped less, choose Permission mode <b>Auto</b> under More options, where Claude Code approves what it judges safe. <button type="button" class="small" id="new-autonomy-auto">Use Auto</button></p>
         <label class="check">
           <input type="checkbox" name="planReview" />
           Review the implementation plan first <span class="hint">(the agent writes a plan and waits for your approval before changing anything)</span>
@@ -948,6 +949,12 @@
       <h2 id="auto-title">Without you</h2>
       <div id="auto-body"></div>
       <div class="dialog-actions"><button type="button" class="small primary" data-auto="close">Close</button></div>
+    </dialog>
+
+    <dialog id="proof-dialog" class="update-dialog proof-dialog" aria-label="Proof">
+      <h2 id="proof-title">Proof</h2>
+      <div id="proof-body"></div>
+      <div class="dialog-actions"><button type="button" class="small" data-proof="run" hidden>Run again here</button><span class="spacer"></span><button type="button" class="small primary" data-proof="close">Close</button></div>
     </dialog>
 
     <dialog id="update-dialog" class="update-dialog" aria-label="Update">

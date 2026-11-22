@@ -2,7 +2,7 @@
 // and how to read them. Other engines implement the same shape (see docs/engines.md).
 import fs from 'node:fs';
 import path from 'node:path';
-import { promptChoices } from '../inbox.js';
+import { promptChoices, questionMenu } from '../inbox.js';
 import { scanActivity } from '../stuck.js';
 import { recentSessionFiles, scanTranscript, sessionDigest, subagentTranscripts, transcriptPath } from '../tracker.js';
 import { trustFolder } from '../trust.js';
@@ -107,8 +107,10 @@ export default {
   attention: [
     [/trustthisfolder/i, 'Folder trust prompt'],
     [/Doyouwantto(proceed|make|create|allow|run|overwrite)/i, 'Permission prompt'],
+    // The agent's own question, as a menu: a message typed now would pick the highlighted option.
+    [/Entertoselect.{0,40}Esctocancel/i, 'Question'],
   ],
-  promptChoices: (screen) => promptChoices(screen),
+  promptChoices: (screen, attention) => (attention === 'Question' && questionMenu(screen)) || promptChoices(screen),
 
   /** Lines of Claude Code's own frame (input box, mode and status bar): never a question to the person. */
   screenChrome: [

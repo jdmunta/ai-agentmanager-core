@@ -444,7 +444,7 @@ body.term-max .term-agent, .term-wrap:fullscreen .term-agent { display: inline-b
 .browser-frames { flex: 1; min-height: 0; position: relative; }
 .browser-frame { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: #fff; }
 /* Swipes scroll the terminal (handled in app.js), not the page. */
-.terminal .xterm { touch-action: none; }
+.terminal .xterm, .gterm .xterm { touch-action: none; }
 .term-overlay {
   position: absolute; inset: 36px 0 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
   gap: 8px; background: rgba(15, 17, 23, .78); color: #e5e8ef;
@@ -1929,6 +1929,19 @@ table.eval-items tr.eval-na td { color: var(--muted); }
 .tag.auto-on { border-color: var(--accent, #4c8dff); color: var(--accent, #4c8dff); }
 .auto-answer { margin: 4px 0; font-size: 14px; overflow-wrap: anywhere; }
 .auto-hold { margin: 8px 0; font-size: 13px; }
+.auto-perm { margin: 4px 0 8px; }
+.auto-perm button { margin-left: 4px; }
+.not-done { margin: 6px 0; padding: 6px 10px; border-left: 3px solid var(--warn, #d9a441); font-size: 13px; overflow-wrap: anywhere; }
+.not-done ul { margin: 4px 0 0; padding-left: 18px; }
+.proof-row { margin: 6px 0; font-size: 13px; }
+.tag.proof-ok { color: var(--green); }
+.tag.proof-bad { color: var(--red); font-weight: 600; }
+.proof-list { list-style: none; margin: 8px 0; padding: 0; }
+.proof-list li { margin: 0 0 10px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; font-size: 13px; overflow-wrap: anywhere; }
+.proof-title { font-weight: 600; margin-bottom: 4px; }
+.proof-cmd { display: inline-block; max-width: 100%; white-space: pre-wrap; overflow-wrap: anywhere; }
+.proof-out { margin: 6px 0 0; padding: 6px 8px; max-height: 180px; overflow: auto; font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; background: var(--bg-2, rgba(127, 127, 127, 0.12)); border-radius: 6px; }
+.proof-out.bad { border: 1px solid var(--danger, #d9534f); }
 .auto-log { list-style: none; margin: 8px 0; padding: 0; }
 .auto-log li { margin: 0 0 10px; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; font-size: 13px; overflow-wrap: anywhere; }
 .auto-dialog select, #settings-autonomy select, #settings-autonomy input, #settings-ground textarea, #new-autonomy { width: 100%; font: inherit; font-size: 16px; }

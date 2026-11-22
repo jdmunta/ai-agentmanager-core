@@ -58,7 +58,8 @@ import { initFiles } from '/files.js';
 import { initUpdateView, updateHtml, updateWaits } from '/announce.js';
 import { morph } from '/morph.js';
 import { acceptanceRow, acceptanceWaits, initAcceptance } from '/acceptance.js';
-import { autoNeedHtml, autonomyNeeds, autonomyRow, initAutonomy } from '/autonomy.js';
+import { autoNeedHtml, autonomyNeeds, autonomyRow, initAutonomy, needsPermissionHint } from '/autonomy.js';
+import { initProof, proofRows } from '/proof.js';
 
 const $ = (sel) => document.querySelector(sel);
 const agents = new Map();
@@ -193,10 +194,27 @@ async function act(fn, okMsg) {
 
 const reviewUi = initReview({ api, esc, toast, agents, $ });
 const acceptUi = initAcceptance({ dialog: $('#accept-dialog'), api, esc, toast, ago, agentOf: (id) => agents.get(id), upsert: (a) => upsert(a) });
+const proofUi = initProof({ dialog: $('#proof-dialog'), api, esc, toast, ago, agentOf: (id) => agents.get(id) });
 const autoUi = initAutonomy({ dialog: $('#auto-dialog'), api, esc, toast, ago, agentOf: (id) => agents.get(id), upsert: (a) => upsert(a) });
 // Past "Ask me", what done means is agreed first: that is what the answers given for you are checked against.
+// And a permission prompt is never answered for you: say so where the mode would stop it at each one.
+function syncAutonomyPerm() {
+  const f = $('#new-autonomy')?.form;
+  const hint = $('#new-autonomy-perm');
+  if (!f || !hint) return;
+  hint.hidden = !needsPermissionHint(f.autonomy.value, f.permissionMode?.value);
+}
 $('#new-autonomy')?.addEventListener('change', (e) => {
   if (['run', 'pr', 'merge'].includes(e.target.value) && e.target.form?.acceptance) e.target.form.acceptance.checked = true;
+  syncAutonomyPerm();
+});
+$('#new-autonomy')?.form?.permissionMode?.addEventListener('change', syncAutonomyPerm);
+$('#new-autonomy')?.form?.addEventListener('reset', () => setTimeout(syncAutonomyPerm));
+$('#new-autonomy-auto')?.addEventListener('click', () => {
+  const f = $('#new-autonomy').form;
+  f.permissionMode.value = 'auto';
+  syncAutonomyPerm();
+  toast('Permission mode: Auto');
 });
 const triggersUi = initTriggers({ api, esc, toast, $ });
 initSpend({ api, esc, toast, $ });
@@ -1085,6 +1103,7 @@ function resultsCard(a) {
     ${scoreStrip(a)}
     ${r.confidence ? `<p class="own-conf"><span class="tag conf-${esc(r.confidence.level)}" title="The agent's own confidence in what it built, as it wrote it in its brief. The review scorecard is the separate check.">Its own confidence: ${r.confidence.percent}%</span> ${esc(r.confidence.why)}</p>` : r.fromAgent && ['done', 'partial'].includes(r.outcome) ? '<p class="hint own-conf">The agent has not said how confident it is in this.</p>' : ''}
     ${r.blockers.length ? `<ul class="blockers">${r.blockers.map((x) => item(x, 'blocker')).join('')}</ul>` : ''}
+    ${proofRows(a, esc)}
     ${r.delivered.length ? `<ul class="delivered">${r.delivered.map((x) => item(x, 'delivered')).join('')}</ul>` : '<p class="hint">Nothing delivered yet.</p>'}
     ${r.notes ? `<div class="md">${md(r.notes)}</div>` : ''}
   </div>`;
@@ -1698,7 +1717,7 @@ function needCard(it, { inDetail = false } = {}) {
     const p = a.runtime.prompt;
     body = `${p?.tool ? `<p class="need-title">${toolLine(p.tool)}</p><p class="hint">${esc(p.question || a.runtime.attention)}</p>` : `<p class="need-title">${esc(p?.question || a.runtime.attention)}</p>`}
       <div class="need-actions">
-        ${(p?.choices ?? []).map((c) => `<button class="small ${c.key === '1' ? 'primary' : ''}" data-ib="key" data-key="${c.key}">${c.key}. ${esc(c.label)}</button>`).join('')}
+        ${(p?.choices ?? []).map((c) => `<button class="small ${c.key === '1' ? 'primary' : ''}" data-ib="key" data-key="${c.key}"${c.hint ? ` title="${esc(c.hint)}"` : ''}>${c.key}. ${esc(c.label)}</button>`).join('')}
         <button class="small" data-ib="key" data-key="esc" title="Escape">Esc</button>
         <button class="small ghost" data-ib="terminal">Open terminal</button>
       </div>`;
@@ -3986,6 +4005,7 @@ function agentChanged(a) {
   reviewUi.agentChanged(a);
   acceptUi.agentChanged(a);
   autoUi.agentChanged(a);
+  proofUi.agentChanged(a);
   sidePane?.agentChanged(a);
 }
 
@@ -4179,6 +4199,8 @@ $('#detail-body').addEventListener('click', async (e) => {
       return openPlan(a.id);
     case 'accept-open':
       return acceptUi.open(a.id);
+    case 'proof-open':
+      return proofUi.open(a.id);
     case 'auto-open':
       return autoUi.open(a.id);
     case 'accept-skip':

@@ -1,5 +1,24 @@
 # Changelog
 
+## 1.64.0 (2026-11-22)
+
+- **Proof: what the agent ran, kept so you can check it.** Next to its brief each agent keeps `PROOF.md`: for every check it ticked and every agreed point of what done means, the exact command, its exit code and the last lines of real output. The agent's Results show a **Proof** row; **Open** lists each check with its command and output. `agentmgr proof <agent>` prints it.
+- **Run it again.** **Run these again here**, or `agentmgr proof <agent> --run`, runs the recorded commands in the agent's folder and marks each "Same result" or "Different result" by its exit code (the command exits with 1 when one differs). Only you can ask for it; an agent's own call is refused. A command that changes things (deleting, committing, pushing, installing, publishing, deploying, reaching the network, writing to a file) is not run and is listed with the reason.
+- **Not done: what the agent left out.** Under Results the agent lists what the request asked or implied that it skipped, stubbed, left untested or only assumed, or says there is nothing. It is shown above what was delivered.
+- **Reviews use it.** The scorecard and the review when an agent finishes are given the proof and what the app saw when it ran the commands again. A command that gave a different result caps the tests score at 40. A merge without you (Run to merge, autopilot) is left to you when something is listed as not done or a recorded command gave a different result.
+- **Limits.** The record is the agent's own until you run it again. Running again uses your rights on your computer, without the agent's permission prompts; the list of what is not run is a filter on the command's text, not a sandbox. `"proof": false` in config.json turns the instructions off.
+
+Found by running real agents at "Agree, then run":
+
+- **A message sent while the agent shows a question menu is no longer lost.** Claude Code's current question menu was not recognised as a prompt, so text sent to the agent (your agreement on what done means, an answer, a nudge) was typed into the menu and Enter picked its highlighted option. The menu now counts as **Needs input**: the inbox shows the question with its options as buttons, and messages wait until it is answered.
+- **Without you: a menu question is answered by picking an option.** For an agent that runs without you, the option is chosen from what is already decided and picked with its key. A menu where several can be ticked, or where no option is right, is left for you.
+- **Without you: a permission prompt is never sent to a model.** When the screen reader took a permission prompt for a question, the answering model was asked about it (it left it for you, but that was its judgment). The app now recognises these itself and leaves them for you without asking.
+- **Without you: nothing is answered while your agreement is pending.** While what done means or a plan waited for you, the agent's "do these look right?" was looked at by a model twice and listed as "left for you". It is now skipped.
+- **Without you: permission prompts still stop it, and the app says so.** New agent shows a hint with **Use Auto** when a level past "Ask me" is chosen in a mode that asks for each command; the agent's "Without you" dialog and `agentmgr add --autonomy` say the same.
+- **`agentmgr restart` with a second daemon.** For a daemon on another home or port than the login service's (a trial, a test), restart asked the login service to start it and then reported "Daemon did not come back". It now starts that daemon itself.
+- **`agentmgr inbox`** labels answers given for you as "done for you" with the answer and the commands to accept or change it (it printed "undefined"), and shows a menu's question instead of the word "Question".
+- **Open Terminal on a phone: a swipe scrolls.** The terminal on this computer (Open Terminal) and the terminals in groups did not move under a finger, so what had scrolled off could not be read from a phone or tablet. They now scroll like an agent's terminal: a swipe moves through what was printed, a flick keeps going, and in a full-screen program the swipe scrolls the program.
+
 ## 1.63.0 (2026-11-21)
 
 - **Acceptance: agree on what done means.** Tick **Agree on what done means first** in New agent or the backlog (or `agentmgr add --acceptance`). The agent reads the code, writes three to six points you could check, and stops before changing anything. The points wait in the inbox as **Done means**, with a notification.

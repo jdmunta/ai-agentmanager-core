@@ -57,7 +57,8 @@ import { Builder } from './builder.js';
 import { Standup } from './standup.js';
 import { Value, valueSlack } from './value.js';
 import { Quality } from './quality.js';
-import { Standards } from './standards.js';
+import { Standards, runCheck } from './standards.js';
+import { Proof, proofMarkdown } from './proof.js';
 import { News } from './news.js';
 import { System } from './system.js';
 import { Advisor } from './advisor.js';
@@ -245,6 +246,7 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
   // Agents that run without you (autonomy.js): routine questions answered from what is decided,
   // nudges and follow-ups sent, and at "merge" the pull request merged when everything says ready.
   const autonomy = new Autonomy({ manager, store, config, review, landing, backlog });
+  manager.proof = new Proof({ manager, store, run: runCheck, log: (m) => console.log(`[agentmgr] ${m}`) });
   manager.inboxSources.push(() => autonomy.inbox());
   // How far an agent goes without the person is the person's to set: never an agent's own call.
   const yourLevel = (req) => {
@@ -696,6 +698,16 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
   };
   api.post('/agents/:id/acceptance/agree', wrap((req) => (person(req), manager.agreeAcceptance(req.params.id, req.body?.points))));
   api.post('/agents/:id/acceptance/skip', wrap((req) => (person(req), manager.skipAcceptance(req.params.id))));
+  // Proof (proof.js): what the agent recorded of its checks. Running the commands again is the
+  // person's call: they were written by the agent, and here they run without its permission prompts.
+  api.get('/agents/:id/proof', wrap((req) => {
+    const v = manager.proof.view(req.params.id);
+    return req.query.format === 'md' ? { markdown: proofMarkdown(v) } : v;
+  }));
+  api.post('/agents/:id/proof/run', wrap((req) => {
+    if (req.headers['x-agentmgr-agent']) throw fail(403, 'Running the proof again is asked by the person, not by an agent');
+    return manager.proof.rerun(req.params.id);
+  }));
   // Autonomy (autonomy.js): the default level and the models its calls run on; one agent's level;
   // and what was done for the person: seen ("ack"), or an answer changed to their own ("correct").
   api.get('/autonomy', wrap(() => autonomy.status()));

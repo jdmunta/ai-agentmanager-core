@@ -51,6 +51,8 @@ const DEFAULTS = {
   flushSec: 30,
   // Ask task agents to keep a brief (Problem / Solution / Diagram / Checks) for the UI.
   brief: true,
+  // With the brief: ask for the proof of its checks (PROOF.md: command, exit code, output) and what it did not do.
+  proof: true,
   // Backlog: items worked on at once per project (overridable per project), and overall.
   backlogParallel: 2,
   backlogMaxActive: 4,

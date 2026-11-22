@@ -112,10 +112,13 @@ export function parseBrief(markdown) {
         delivered: pick(/^\s*[-*]\s+\**\s*delivered\s*\**\s*:\s*\**\s*(.+)$/i),
         blockers: pick(/^\s*[-*]\s+\**\s*blocked by\s*\**\s*:\s*\**\s*(.+)$/i),
         filed: pick(/^\s*[-*]\s+\**\s*filed\s*\**\s*:\s*\**\s*(.+)$/i),
+        // "- Not done: ..." (proof.js): what the request asked that the agent says it left out. "nothing" is none.
+        notDone: pick(/^\s*[-*]\s+\**\s*not done\s*\**\s*:\s*\**\s*(.+)$/i).filter((t) => !/^(nothing|none|n\/a|-)\b\.?\**$/i.test(t)),
+        notDoneSaid: lines.some((l) => /^\s*[-*]\s+\**\s*not done\s*\**\s*:/i.test(l)),
         // "Confidence: 85% - why": the agent's own, in what it built (null until it says).
         confidence: parseConfidence(body),
         notes: lines
-          .filter((l) => !/^\s*\**\s*outcome\s*\**\s*:/i.test(l) && !CONFIDENCE_LINE.test(l) && !/^\s*[-*]\s+\**\s*(delivered|blocked by|filed)\s*\**\s*:/i.test(l))
+          .filter((l) => !/^\s*\**\s*outcome\s*\**\s*:/i.test(l) && !CONFIDENCE_LINE.test(l) && !/^\s*[-*]\s+\**\s*(delivered|blocked by|filed|not done)\s*\**\s*:/i.test(l))
           .join('\n')
           .trim(),
       };
