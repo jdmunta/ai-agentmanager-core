@@ -25,7 +25,8 @@ export function initQuality({ api, $, esc, toast, ago, openAgent }) {
   let selected = null; // a period key; null is the current one
   let only = false; // only the ones that did not hold up
   let again = null;
-  let mode = 'after'; // or 'standards': what every change in a repository has to meet (standards.js)
+  let mode = 'after'; // or 'standards': what every change in a repository has to meet (standards.js); or 'record': what was said against what held (record.js)
+  let record = null;
   const std = initStandards({
     api,
     esc,
@@ -38,6 +39,15 @@ export function initQuality({ api, $, esc, toast, ago, openAgent }) {
   try {
     period = localStorage.getItem(SAVED) || 'week';
   } catch {}
+
+  async function loadRecord() {
+    try {
+      record = await api('GET', '/quality/record');
+    } catch (e) {
+      toast?.(e.message, 5000);
+    }
+    render();
+  }
 
   async function load() {
     try {
@@ -106,6 +116,41 @@ export function initQuality({ api, $, esc, toast, ago, openAgent }) {
       </tr>`;
   }
 
+  /** Track record: what was said at the merge against what held up. */
+  function recordHtml() {
+    const r = record;
+    if (!r) return '<p class="hint">Loading…</p>';
+    const LEVEL = { ask: 'Ask me', run: 'Agree, then run', pr: 'Run to pull request', merge: 'Run to merge' };
+    const intro = '<p class="hint">Was the confidence right? For each merged pull request the app keeps what was said about it as it merged, and compares that with what happened after: held up, or reverted, fixed afterwards, failed its checks. One counts once it is settled.</p>';
+    if (!r.settled) return `${intro}<p class="hint issues-empty">No merged pull request is settled yet${r.open ? ` (${r.open} still watched or not looked at)` : ''}. The record fills as the watch days pass.</p>`;
+    const cls = (x) => (x.read === 'said more than held up' ? 'rec-bad' : x.read === 'about right' || x.read === 'held up better than said' ? 'rec-ok' : '');
+    const rows = (list, said) => list.map((x) => `<tr><td>${esc(x.label)}</td><td class="num">${x.held} of ${x.n}</td><td class="num">${x.heldPct}%</td>${said ? `<td class="num">${x.said == null ? '—' : `${x.said}%`}</td>` : ''}<td class="${cls(x)}">${esc(x.read)}</td></tr>`).join('');
+    const table = (title, hint, list, said = false) =>
+      list.length
+        ? `<h3 class="rec-head">${title}</h3><p class="hint">${hint}</p><div class="issues-scroll"><table class="issues rec-table"><thead><tr><th></th><th class="num">Held up</th><th class="num">Share</th>${said ? '<th class="num">Said, on average</th>' : ''}<th></th></tr></thead><tbody>${rows(list, said)}</tbody></table></div>`
+        : '';
+    const project = (p) => `<tr>
+        <td>${esc(p.label)}</td><td class="num">${p.held} of ${p.n}</td><td class="num">${p.heldPct}%</td>
+        <td>${LEVEL[p.current]}${p.level ? '' : ' <span class="hint">(the default)</span>'}</td>
+        <td>${p.suggestion ? `<span class="${p.suggestion.direction === 'up' ? 'rec-ok' : 'rec-bad'}">The record supports <b>${LEVEL[p.suggestion.level]}</b></span><div class="hint">${esc(p.suggestion.why)}</div>` : `<span class="hint">${p.n < 5 ? 'too few to say' : 'keep it'}</span>`}</td>
+        <td class="nowrap">${p.suggestion ? `<button class="small" data-record-level="${p.suggestion.level}" data-project="${esc(p.label)}" title="New agents in this project get this level when none is named. Agents that run now keep theirs.">Set ${LEVEL[p.suggestion.level]}</button>` : ''}${p.level ? ` <button class="link" data-record-level="default" data-project="${esc(p.label)}" title="Back to the level every other project gets">Use the default</button>` : ''}</td>
+      </tr>`;
+    return `${intro}
+      <div class="value-cards">
+        ${card('Held up', `${r.heldPct}%`, `${r.held} of ${r.settled} settled pull requests`, null)}
+        ${r.confidence ? card('Said by the agents', `${r.confidence.said}%`, `their own confidence, on average; ${r.confidence.heldPct}% of those held up`, null) : ''}
+        ${card('Not settled yet', String(r.open), 'still watched, or not looked at', null)}
+      </div>
+      ${table("The agent's own confidence", `What the agent wrote as its confidence, against the share that held up.${r.noConfidence ? ` ${r.noConfidence} had none written.` : ''}`, [...(r.confidence ? [r.confidence] : []), ...r.bands], true)}
+      ${table('The review scorecard', 'What the scorecard recommended as it merged.', r.scorecard)}
+      ${table('Tests tested', 'Whether the tests were tested before the merge (Test the tests), and how that went.', r.tests)}
+      ${table('Model', 'The engine and model that did the work.', r.models)}
+      ${table('Without you', 'How far the agent ran without you.', r.levels)}
+      <h3 class="rec-head">Projects: the level the record supports</h3>
+      <p class="hint">Up one step after at least 5 settled pull requests with 9 in 10 held up and none of the last 5 a problem (10, and all of the last 10, before Run to merge). Down one step when one of the last 3 did not hold up. It is a suggestion: the level changes only when you set it.</p>
+      <div class="issues-scroll"><table class="issues rec-table"><thead><tr><th>Project</th><th class="num">Held up</th><th class="num">Share</th><th>New agents</th><th>Record</th><th></th></tr></thead><tbody>${r.projects.map(project).join('')}</tbody></table></div>`;
+  }
+
   function render() {
     if (!dialog.open) return;
     if (!data) {
@@ -117,6 +162,7 @@ export function initQuality({ api, $, esc, toast, ago, openAgent }) {
     const modes = `<div class="chips" role="tablist" aria-label="Quality">
         <button class="chip ${mode === 'after' ? 'active' : ''}" role="tab" aria-selected="${mode === 'after'}" data-quality-mode="after">After the merge</button>
         <button class="chip ${mode === 'standards' ? 'active' : ''}" role="tab" aria-selected="${mode === 'standards'}" data-quality-mode="standards" title="What every change in a repository has to meet: lessons from what went wrong, high-risk paths, and the checks the app runs itself">Standards${n ? ` <span class="badge">${n}</span>` : ''}</button>
+        <button class="chip ${mode === 'record' ? 'active' : ''}" role="tab" aria-selected="${mode === 'record'}" data-quality-mode="record" title="What was said when each pull request merged, against what held up; and the level of Without you each project's record supports">Track record</button>
       </div>`;
     if (mode === 'standards') {
       body.innerHTML = `
@@ -128,6 +174,19 @@ export function initQuality({ api, $, esc, toast, ago, openAgent }) {
         <button class="small" data-quality="close" title="Close (Esc)">Close</button>
       </div>
       ${std.html()}`;
+      return;
+    }
+    if (mode === 'record') {
+      body.innerHTML = `
+      <div class="issues-head">
+        <h2>Quality</h2>
+        ${modes}
+        <span class="spacer"></span>
+        <button class="small" data-quality="copy-record" title="Copy the track record as Markdown">Copy</button>
+        ${expandButton(dialog)}
+        <button class="small" data-quality="close" title="Close (Esc)">Close</button>
+      </div>
+      ${recordHtml()}`;
       return;
     }
     const ps = data.periods;
@@ -181,9 +240,28 @@ export function initQuality({ api, $, esc, toast, ago, openAgent }) {
     if (m) {
       mode = m.dataset.qualityMode;
       render();
-      return mode === 'standards' ? std.load() : load();
+      return mode === 'standards' ? std.load() : mode === 'record' ? loadRecord() : load();
     }
     if (mode === 'standards' && std.click(e)) return;
+    const lvl = e.target.closest('[data-record-level]');
+    if (lvl) {
+      try {
+        await api('PUT', '/autonomy', { project: lvl.dataset.project, level: lvl.dataset.recordLevel });
+        toast?.(lvl.dataset.recordLevel === 'default' ? `${lvl.dataset.project}: new agents get the default again` : `${lvl.dataset.project}: set for its new agents`);
+      } catch (err) {
+        toast?.(err.message, 6000);
+      }
+      return loadRecord();
+    }
+    if (e.target.closest('[data-quality="copy-record"]')) {
+      try {
+        await navigator.clipboard.writeText((await api('GET', '/quality/record?format=md')).markdown);
+        toast?.('Copied the track record');
+      } catch (err) {
+        toast?.(err.message, 6000);
+      }
+      return;
+    }
     const per = e.target.closest('[data-quality-period]');
     if (per) {
       period = per.dataset.qualityPeriod;
@@ -266,7 +344,7 @@ export function initQuality({ api, $, esc, toast, ago, openAgent }) {
   function changed() {
     if (!dialog.open) return;
     clearTimeout(again);
-    again = setTimeout(() => (load(), std.load()), 800);
+    again = setTimeout(() => (load(), std.load(), mode === 'record' && loadRecord()), 800);
   }
 
   expandable(dialog, render);

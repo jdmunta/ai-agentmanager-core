@@ -2011,6 +2011,389 @@ test('scorecard: Improve tells the agent its low scores (lowest first), the crit
   assert.ok(!/Scores to raise|Acceptance criteria|Where a reviewer/.test(clean));
 });
 
+test('kept private: work read as possibly patentable is held from every way out until the person allows it', async () => {
+  const pv = await import('../src/private.js');
+  const { privateRow } = await import('../public/valuelens.js');
+  const { leftOut } = await import('../src/autonomy.js');
+  const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;');
+  const patent = { insights: { markdown: '### Why\n- x\n### Kind\n- Kind: patentable idea\n- New: an index keyed by intent\n- Next: talk to an attorney\n### Paths\n1. A: b' } };
+  const paper = { insights: { markdown: '### Kind\n- Kind: white paper\n- New: a write-up' } };
+  const fromAgent = { brief: { options: { paths: [], new: 'a cache keyed by intent' } } };
+
+  // What makes it private, and whose word wins.
+  assert.equal(pv.keptPrivate({}), null);
+  assert.equal(pv.keptPrivate(paper), null, 'a white paper is not held');
+  assert.deepEqual(pv.keptPrivate(patent), { from: 'insights', why: 'Insights reads it as possibly patentable: an index keyed by intent' });
+  assert.deepEqual(pv.keptPrivate(fromAgent), { from: 'agent', why: 'The agent says part of its design may be new: a cache keyed by intent' });
+  assert.deepEqual(pv.keptPrivate({ idea: { private: true, note: 'filing next month' } }), { from: 'you', why: 'You marked it private: filing next month' });
+  assert.equal(pv.keptPrivate({ ...patent, ...fromAgent, idea: { allowed: true } }), null, 'you allowed sharing');
+  assert.equal(pv.keptPrivate({ ...patent, idea: { toldAt: 't' } }).from, 'insights', 'having told the agent changes nothing');
+  assert.equal(pv.insightsKind(patent).kind, 'patent');
+  assert.equal(pv.insightsKind({}), null);
+
+  // The guard, with what to do about it.
+  assert.doesNotThrow(() => pv.mustBeShareable({ id: 'a1' }, 'Publishing to Google Drive'));
+  assert.throws(() => pv.mustBeShareable({ id: 'a1', ...patent }, 'Publishing to Google Drive'), (e) => e.status === 409 && e.keptPrivate && /Publishing to Google Drive is held: this work is kept private\. Insights reads it as possibly patentable.*can cost the right to a patent.*agentmgr private a1 --allow/.test(e.message));
+
+  // The person's word: keep, allow, or back to what was read (what the agent was told is remembered).
+  assert.deepEqual(Object.keys(pv.ideaPatch({}, { private: true, note: 'n' }).idea).sort(), ['at', 'note', 'private']);
+  assert.equal(pv.ideaPatch({}, { private: false }).idea.allowed, true);
+  assert.deepEqual([pv.ideaPatch({}, {}).idea, pv.ideaPatch({ idea: { allowed: true, toldAt: 't' } }, { private: null }).idea], [null, { toldAt: 't' }]);
+  assert.match(pv.PRIVATE_MESSAGE, /do not publish any of it outside this repository[\s\S]*do not open or update a pull request/);
+
+  // A merge without you is left to you.
+  assert.match(leftOut({ ...fromAgent }, { results: {} }), /^It is kept private: The agent says part of its design may be new/);
+  assert.equal(leftOut({ ...fromAgent, idea: { allowed: true } }, { results: {} }), null);
+
+  // On the page.
+  assert.match(privateRow({ keptPrivate: { why: 'Insights reads it as <new>' } }, esc), /🔒 Kept private<\/b> <span>Insights reads it as &lt;new>\.<\/span>[\s\S]*data-act="idea-allow"/);
+  assert.match(privateRow({ idea: { allowed: true } }, esc), /Sharing allowed by you\. <button class="link" data-act="idea-reset">Undo/);
+  assert.equal(privateRow({}, esc), '');
+});
+
+test('prompt choices: a permission prompt that lost letters to a redraw (Claude Code draws only changed cells) is still seen and read', async () => {
+  const { promptChoices } = await import('../src/inbox.js');
+  const { claude } = await import('../src/engines/index.js').then((m) => ({ claude: m.engineOf({ engine: 'claude' }) }));
+  // As it came from a real session: "pro" + a jump + "eed?", and "❯ 1" + a jump + "Yes" (no dot).
+  const raw =
+    'Gpath\u001b[97Gresolution\u001b[108Gbypass\r\u001b[1C\u001b[1B\u001b[K\r\u001b[1C\u001b[1BDo you want to pro\u001b[21Geed?\u001b[26G\u001b[K\r\u001b[1C\u001b[1B\u001b[38;2;177;185;249m❯\u001b[4G\u001b[38;2;153;153;153m1\u001b[7G\u001b[38;2;177;185;249mYes\r\u001b[3C\u001b[1B\u001b[38;2;153;153;153m2. \u001b[39mYes,\u001b[12Gand\u001b[16Gswitch\u001b[23Gto\u001b[26Gauto\u001b[31Gmode\u001b[38;2;153;153;153m · auto mode handles these prompts for you\r\u001b[1C\u001b[1B\u001b[39m  \u001b[38;2;153;153;153m3. \u001b[39mNo\u001b[K\r\r\n\r\r\n\u001b[2G\u001b[38;2;153;153;153mEsc\u001b[6Gto\u001b[9Gcancel\u001b[16G·\u001b[18GTab\u001b[22Gto\u001b[25Gamend\u001b[39m\r\r\n\u001b[1C\u001b[5A';
+  const p = promptChoices(raw);
+  assert.deepEqual(p.choices, [{ key: '1', label: 'Yes' }, { key: '2', label: 'Yes, and switch to auto mode' }, { key: '3', label: 'No' }]);
+  assert.match(p.question, /Do you want to pro eed\?$/);
+  const screen = (t) => t.replace(/\x1b\[[0-9;?<>=]*[ -/]*[@-~]/g, '').replace(/\s+/g, '');
+  const seen = (t) => claude.attention.find(([re]) => re.test(screen(t)))?.[1] ?? null;
+  assert.equal(seen(raw), 'Permission prompt');
+  assert.equal(seen('Do you want to proceed?\n❯ 1. Yes\n  2. No\nEsc to cancel'), 'Permission prompt');
+  assert.equal(seen('Which one?\n❯ 1. Yes please\n  2. No thanks\nEnter to select · Esc to cancel'), 'Question', 'a question menu is not a permission prompt');
+  assert.equal(seen('I ran step 1. Yes, it passed. Nothing else to do.'), null);
+});
+
+test('value and paths: worth now against later, the kind of idea and the ways ranked are read from Insights and from a brief', async () => {
+  const vl = await import('../public/valuelens.js');
+  const { parseBrief, insightsPrompt, OPTIONS_PROMPT } = await import('../src/brief.js');
+  const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;');
+
+  // Value: a level and a reason for now and for later, what waiting costs, and which should drive the design.
+  const value = vl.parseValue('- Now: **High** - support stops answering this by hand\n- Later: medium: serves two planned features\n- Waiting: three hours a week\n- Weighs: later - the cheap way closes the door');
+  assert.deepEqual(value, { now: { level: 'high', why: 'support stops answering this by hand' }, later: { level: 'medium', why: 'serves two planned features' }, waiting: 'three hours a week', weighs: { side: 'later', why: 'the cheap way closes the door' } });
+  assert.equal(vl.parseValue('- Unclear yet'), null);
+  assert.deepEqual(vl.parseValue('- Now: Unclear yet\n- Later: low').now, { level: null, why: 'Unclear yet' });
+  const vh = vl.valueHtml(value, esc);
+  assert.match(vh, /<b>Now<\/b> <span class="vl-meter vl-high"[^>]*>.*<span class="vl-word">High<\/span><div class="hint">support stops answering this by hand<\/div>/);
+  assert.match(vh, /<b>Waiting costs<\/b> three hours a week.*<b>Design for later<\/b> the cheap way closes the door/s);
+
+  // Kind: a task, worth a white paper, or possibly patentable (with the caution).
+  assert.deepEqual(vl.parseKind('- Kind: task\n- New: nothing new\n- Next: build it'), { kind: 'task', new: 'nothing new', next: 'build it' });
+  assert.equal(vl.parseKind('- Kind: White paper').kind, 'paper');
+  assert.equal(vl.parseKind('- **Kind:** patentable idea').kind, 'patent');
+  assert.equal(vl.parseKind('nothing'), null);
+  assert.match(vl.kindHtml(vl.parseKind('- Kind: patentable idea\n- New: a <new> index\n- Next: talk to an attorney'), esc), /vl-kind-patent">Possibly patentable<.*<b>New<\/b> a &lt;new> index.*not legal advice\. Publishing before filing can cost the right to a patent/s);
+  assert.ok(!/legal advice/.test(vl.kindHtml(vl.parseKind('- Kind: white paper'), esc)));
+
+  // Paths: one line each, preferred first by its number.
+  const md = '2. Shared cache: a service every server reads | now: medium | later: high | cost: large | risk: medium | when: a second server is planned\n1. Cache in memory: one process | now: high | later: low | cost: small | risk: low | when: one server is enough\nsome text\n- Preferred: 1, because it ships this week\n- New: caching by intent';
+  const p = vl.parsePaths(md);
+  assert.deepEqual(p.paths.map((x) => [x.rank, x.name, x.what, x.now, x.later, x.cost, x.risk, x.when]), [[1, 'Cache in memory', 'one process', 'high', 'low', 'small', 'low', 'one server is enough'], [2, 'Shared cache', 'a service every server reads', 'medium', 'high', 'large', 'medium', 'a second server is planned']]);
+  assert.deepEqual([p.preferred, p.new], ['it ships this week', 'caching by intent']);
+  assert.deepEqual(vl.parsePathLine('3) Do nothing'), { rank: 3, name: 'Do nothing', what: '', now: null, later: null, cost: null, risk: null, when: '' });
+  assert.equal(vl.parsePathLine('- a bullet'), null);
+  const ph = vl.pathsHtml(p, esc);
+  assert.match(ph, /<li class="vl-first">\s*<div class="vl-name"><span class="tag vl-pick">Preferred<\/span> <b>Cache in memory<\/b>/);
+  assert.match(ph, /vl-good">now high<.*vl-poor">later low<.*vl-good">cost small<.*vl-good">risk low</s);
+  assert.match(ph, /<b>Shared cache<\/b>.*<span class="vl-chip ">now medium<.*vl-poor">cost large<.*Pick when: a second server is planned.*<b>Why the first<\/b> it ships this week/s);
+  assert.equal(vl.pathsHtml(vl.parsePaths('no paths'), esc), '');
+
+  // The agent's brief: "## Options", and something new it noticed; nothing without the section.
+  const brief = parseBrief(`Status: working\n## Problem\nx\n## Options\n${md}\n## Checks\n- [ ] a`);
+  assert.deepEqual([brief.options.paths.length, brief.options.paths[0].name, brief.options.new, brief.checks.length], [2, 'Cache in memory', 'caching by intent', 1]);
+  assert.equal(parseBrief('## Problem\nx').options, null);
+  assert.equal(parseBrief('## Options\nonly one way').options, null);
+  const rows = vl.optionsRows({ brief }, esc);
+  assert.match(rows, /<details class="vl-options" open><summary><b>Paths it weighed<\/b> <span class="hint">2, preferred first: Cache in memory<\/span>/);
+  assert.match(rows, /Possibly new<\/span> caching by intent .*yours to decide/);
+  assert.equal(vl.optionsRows({ brief: { options: null } }, esc), '');
+
+  // What is asked: of the agent, and of the Insights call.
+  assert.match(OPTIONS_PROMPT, /"1\. <name>: <what it is> \| now: high\/medium\/low \| later: high\/medium\/low \| cost: small\/medium\/large \| risk: low\/medium\/high \| when: /);
+  assert.match(OPTIONS_PROMPT, /most work is just a task[\s\S]*do not publish it outside this repository/);
+  const ip = insightsPrompt({ intent: 'x', status: 's', digest: '', repo: '', briefMarkdown: '' });
+  assert.match(ip, /### Now[\s\S]*### Value[\s\S]*- Now: high, medium or low[\s\S]*### Kind[\s\S]*- Kind: task, white paper or patentable idea[\s\S]*### Paths[\s\S]*- Preferred: /);
+  assert.match(ip, /not legal advice, and you have not searched for prior art: when unsure between two kinds, give the lower one/);
+});
+
+test('pre-mortem: the risks an agent names before starting are read from its brief, shown with how each ended, and told to the scorecard', async () => {
+  const { parseBrief, riskCounts, RISKS_PROMPT } = await import('../src/brief.js');
+  const { riskRows, proofRows } = await import('../public/proof.js');
+  const { facts: scoreFacts, factLines, combine } = await import('../src/scorecard.js');
+  const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;');
+  assert.match(RISKS_PROMPT, /Before you change anything, add a section "## Risks"/);
+  const md = ['Status: done', '## Problem', 'x', '## Risks', '- [x] An empty cart divides by zero: avoided, test "empty cart" passes', '- [!] The old API still calls v1: happened, kept a shim <for> it', '- [ ] Two tabs save at once', '* [~] Slow on 10k rows', 'not a risk line', '## Checks', '- [x] tests pass', '## Results', 'Outcome: done'].join('\n');
+  const brief = parseBrief(md);
+  assert.deepEqual(brief.risks.map((r) => [r.state, r.text.slice(0, 22)]), [['avoided', 'An empty cart divides '], ['happened', 'The old API still call'], ['open', 'Two tabs save at once'], ['open', 'Slow on 10k rows']]);
+  assert.deepEqual(riskCounts(brief.risks), { total: 4, avoided: 1, happened: 1, open: 2 });
+  assert.deepEqual([brief.checks.length, parseBrief('## Problem\nx').risks, parseBrief('## What could go wrong\n- [ ] a').risks.length], [1, [], 1], 'checks are not risks; none without the section');
+
+  // On the results card: counted when finished, open while it works; what it wrote is escaped.
+  const done = riskRows({ brief }, esc, true);
+  assert.match(done, /<details class="risks" open><summary><b>Risks it named before starting<\/b> <span class="hint">1 avoided, 1 happened, 2 not checked<\/span>/);
+  assert.match(done, /<span class="tag proof-bad">Happened<\/span> The old API still calls v1: happened, kept a shim &lt;for> it/);
+  assert.match(done, /<span class="tag ">Not checked<\/span> Two tabs save at once/);
+  const working = riskRows({ brief: { risks: [{ state: 'open', text: 'a' }, { state: 'open', text: 'b' }] } }, esc, false);
+  assert.match(working, /<details class="risks"><summary>.*<span class="hint">2 named<\/span>.*>Open<\/span> a/);
+  assert.equal(riskRows({ brief: { risks: [] } }, esc, true), '');
+  assert.match(riskRows({ brief: { risks: [{ state: 'avoided', text: 'a' }] } }, esc, true), /<details class="risks"><summary>.*1 avoided<\/span>/, 'closed when all were avoided');
+  assert.ok(proofRows({ results: { fromAgent: true, outcome: 'done', notDoneSaid: true }, brief }, esc).includes('Risks it named before starting'));
+
+  // The scorecard is told, and notes what was not checked and what happened.
+  const f = scoreFacts({ files: [{ path: 'cart.js', added: 5 }, { path: 'cart.test.js', added: 5 }], brief });
+  assert.match(factLines(f), /risks the agent named before starting: 4; it marks 1 avoided, 1 happened, 2 not checked \(happened: The old API still calls v1[^;]*; not checked: Two tabs save at once; not checked: Slow on 10k rows\)\. Check the ones not marked avoided against the changes\./);
+  const sc = combine({ scores: { tests: { score: 90, why: 'ok' }, safety: { score: 90, why: 'ok' } } }, f, []);
+  assert.deepEqual([sc.scores.tests.score, sc.scores.tests.notes, sc.scores.safety.notes.length], [90, ['2 of the 4 risks it named before starting were not checked'], 1]);
+  assert.match(sc.scores.safety.notes[0], /1 of the risks it named happened: The old API still calls v1/);
+  assert.ok(!/risks the agent named/.test(factLines(scoreFacts({ files: [], brief: parseBrief('## Problem\nx') }))));
+});
+
+test('track record: what was said at the merge against what held, and the level a project\'s record supports', async () => {
+  const rec = await import('../src/record.js');
+  const { autonomySettings, Autonomy } = await import('../src/autonomy.js');
+  const { Quality, verdictOf } = await import('../src/quality.js');
+
+  // What is said about an agent's work as it merges.
+  const agent = { id: 'a1', name: 'cache', kind: 'task', engine: 'claude', model: 'opus', autonomy: { level: 'pr' }, brief: { results: { confidence: { percent: 85 }, notDone: ['docs'] } }, docs: { scorecard: { data: { overall: 82, recommendation: 'ready' } } }, breaks: { baseline: { ok: true }, breaks: [{ status: 'caught' }, { status: 'missed' }, { status: 'skipped' }] } };
+  assert.deepEqual(rec.saidOf(agent), { confidence: 85, score: 82, recommendation: 'ready', breaks: { caught: 1, tried: 2 }, notDone: 1, engine: 'claude', model: 'opus', level: 'pr' });
+  assert.deepEqual(rec.saidOf({ id: 'a2' }), { confidence: null, score: null, recommendation: null, breaks: null, notDone: 0, engine: 'claude', model: null, level: 'ask' });
+  assert.equal(rec.saidOf({ breaks: { baseline: { ok: false }, breaks: [] } }).breaks, null);
+
+  // Items as Quality keeps them: settled ones count, watched ones do not.
+  let day = 0;
+  const item = (project, verdict, said = {}) => ({ url: `u${++day}`, project, mergedAt: new Date(Date.UTC(2026, 0, day)).toISOString(), verdict, said: { engine: 'claude', model: 'opus', level: 'ask', ...said } });
+  const items = [
+    ...[1, 2, 3, 4, 5, 6].map(() => item('shop', 'clean', { confidence: 90, recommendation: 'ready', breaks: { caught: 3, tried: 3 } })),
+    ...[1, 2, 3, 4].map(() => item('api', 'fixed', { confidence: 95, recommendation: 'ready' })),
+    ...[1, 2].map(() => item('api', 'clean', { confidence: 60, recommendation: 'look', breaks: { caught: 1, tried: 3 }, model: 'sonnet' })),
+    item('api', 'reverted', { level: 'pr' }),
+    item('shop', 'watching', { confidence: 99 }),
+    item('shop', 'unchecked'),
+  ];
+  const r = rec.trackRecord(items, (it) => it.verdict, { levels: { default: 'ask', projects: { api: 'pr' } } });
+  assert.deepEqual([r.settled, r.open, r.held, r.heldPct, r.noConfidence], [13, 2, 8, 62, 1]);
+  assert.deepEqual(r.confidence, { key: 'all', label: 'all with a confidence', n: 12, held: 8, heldPct: 67, said: 87, read: 'said more than held up' });
+  assert.deepEqual(r.bands.map((b) => [b.key, b.n, b.held, b.heldPct, b.said, b.read]), [['90', 10, 6, 60, 92, 'said more than held up'], ['50', 2, 2, 100, 60, 'too few to say']]);
+  assert.deepEqual(r.scorecard.map((b) => [b.key, b.n, b.held]), [['ready', 10, 6], ['look', 2, 2], ['none', 1, 0]]);
+  assert.deepEqual(r.tests.map((b) => [b.key, b.n, b.held]), [['all', 6, 6], ['some', 2, 2], ['none', 5, 0]]);
+  assert.deepEqual(r.models.map((b) => [b.label, b.n, b.held]), [['claude · opus', 11, 6], ['claude · sonnet', 2, 2]]);
+  assert.deepEqual(r.levels.map((b) => [b.key, b.n]), [['ask', 12], ['pr', 1]]);
+  // Projects: shop earned a step up; api, at "Run to pull request", goes a step down after a problem.
+  assert.deepEqual(r.projects.map((p) => [p.label, p.n, p.held, p.level, p.current, p.suggestion?.level ?? null, p.suggestion?.direction ?? null]), [['api', 7, 2, 'pr', 'pr', 'run', 'down'], ['shop', 6, 6, null, 'ask', 'run', 'up']]);
+  assert.match(r.projects[0].suggestion.why, /1 of its last 3 merged pull requests did not hold up/);
+  assert.match(r.projects[1].suggestion.why, /6 of 6 held up, and all of the last 5/);
+
+  // The level the record supports: one step at a time.
+  const run = (...held) => held.map((h, i) => ({ held: Boolean(h), mergedAt: String(100 - i) }));
+  const lvl = (list, cur) => rec.suggestLevel(list, cur)?.level ?? null;
+  assert.equal(lvl(run(1, 1, 1, 1), 'ask'), null, 'too few');
+  assert.equal(lvl(run(1, 1, 1, 1, 1), 'ask'), 'run');
+  assert.equal(lvl(run(1, 1, 1, 1, 1), 'run'), 'pr');
+  assert.equal(lvl(run(1, 1, 1, 1, 1), 'pr'), null, 'Run to merge needs ten');
+  assert.equal(lvl(run(1, 1, 1, 1, 1, 1, 1, 1, 1, 1), 'pr'), 'merge');
+  assert.equal(lvl(run(1, 1, 1, 1, 1, 1, 1, 1, 1, 1), 'merge'), null);
+  assert.equal(lvl(run(1, 1, 1, 1, 1, 0, 1, 1, 1, 1), 'pr'), null, 'a problem among the last ten');
+  assert.equal(lvl(run(1, 1, 1, 1, 0, 1, 1, 1, 1, 1), 'ask'), null, 'a problem among the last five');
+  assert.equal(lvl(run(1, 1, 1, 1, 1, 0, 0), 'ask'), null, 'under 9 in 10');
+  assert.equal(lvl(run(1, 0, 1, 1, 1, 1), 'merge'), 'pr');
+  assert.equal(lvl(run(0), 'run'), 'ask');
+  assert.equal(lvl(run(0, 0, 0), 'ask'), null, 'nothing below Ask me');
+  assert.equal(lvl(run(1, 1, 1, 0, 1, 1, 1), 'pr'), null, 'an older problem keeps the level');
+
+  const md = rec.recordMarkdown(r);
+  assert.match(md, /8 of 13 merged pull requests held up \(62%\)\. 2 more are still watched or not looked at\./);
+  assert.match(md, /- 90 to 100%: 6 of 10 held up \(60%\), said 92% on average: said more than held up/);
+  assert.match(md, /- shop: 6 of 6 held up \(100%\), said 90% on average: about right\. New agents: Ask me \(the default\)\. The record supports \*\*Agree, then run\*\*/);
+  assert.match(rec.recordMarkdown(rec.trackRecord([item('x', 'watching')], (it) => it.verdict)), /No merged pull request is settled yet \(1 still watched/);
+
+  // Quality keeps what was said when it first sees the merge; an older item gets it late.
+  const store = { data: { quality: { items: { old: { url: 'old', mergedAt: '2026-01-01T00:00:00.000Z' } } } }, list: () => [{ ...agent, prs: { p1: { url: 'https://github.com/acme/shop/pull/5', state: 'MERGED', mergedAt: new Date().toISOString(), title: 'Cache' }, old: { url: 'old', state: 'MERGED', mergedAt: '2026-01-01T00:00:00.000Z' } } }], get: () => null, save() {} };
+  const config = { autonomy: { level: 'run', projects: { shop: 'pr', bad: 'nonsense' } }, qualityFirstMs: 1e9 };
+  const q = new Quality({ manager: { view: () => ({ projectInfo: { name: 'shop' } }) }, store, config });
+  q.scan();
+  q.close();
+  const kept = store.data.quality.items;
+  assert.deepEqual([kept['https://github.com/acme/shop/pull/5'].said.confidence, kept['https://github.com/acme/shop/pull/5'].said.late ?? false, kept.old.said.late], [85, false, true]);
+  const viaQuality = q.record();
+  assert.deepEqual([viaQuality.defaultLevel, viaQuality.settled, viaQuality.open], ['run', 0, 2], 'one not looked at yet, one still watched');
+  assert.equal(verdictOf(kept.old), 'unchecked');
+  kept.old.after = { fixes: [], checks: { state: 'passed' } };
+  assert.deepEqual(q.record().projects.map((p) => [p.label, p.current, p.level]), [['shop', 'pr', 'pr']]);
+
+  // A level for one project: set, read, and taken away again; an agent's own call never reaches this.
+  assert.deepEqual(autonomySettings(config).projects, { shop: 'pr' });
+  const au = new Autonomy({ manager: { on() {}, off() {} }, store: { data: {}, list: () => [] }, config });
+  assert.deepEqual(au.change({ project: 'api', level: 'run' }).projects, { shop: 'pr', bad: 'nonsense', api: 'run' });
+  assert.deepEqual([config.autonomy.level, autonomySettings(config).projects], ['run', { shop: 'pr', api: 'run' }]);
+  au.change({ project: 'shop', level: 'default' });
+  assert.deepEqual(autonomySettings(config).projects, { api: 'run' });
+  assert.throws(() => au.change({ project: 'api', level: 'everything' }), /level is one of/);
+  assert.throws(() => au.change({ level: 'default' }), /level is one of/);
+  au.close?.();
+});
+
+test('test the tests: changed lines broken one at a time, put back, counted, the scorecard told, the agent told', async () => {
+  const mu = await import('../src/mutate.js');
+  const { proofRows } = await import('../public/proof.js');
+  const { facts: scoreFacts, factLines, combine } = await import('../src/scorecard.js');
+  const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;');
+
+  // The lines a diff adds, with their numbers in the file as it is now.
+  const diff = ['diff --git a/calc.js b/calc.js', 'new file mode 100644', '--- /dev/null', '+++ b/calc.js', '@@ -0,0 +1,3 @@', '+a', '+b', '+c', 'diff --git a/old.js b/old.js', '--- a/old.js', '+++ b/old.js', '@@ -4,3 +4,4 @@ function x() {', ' keep', '-gone', '+new1', '+new2', ' keep', 'diff --git a/del.js b/del.js', '--- a/del.js', '+++ /dev/null', '@@ -1 +0,0 @@', '-x'].join('\n');
+  assert.deepEqual([...mu.addedLines(diff)], [['calc.js', [{ line: 1, text: 'a' }, { line: 2, text: 'b' }, { line: 3, text: 'c' }]], ['old.js', [{ line: 5, text: 'new1' }, { line: 6, text: 'new2' }]]]);
+
+  // Small breaks, in code only: not in strings, comments, imports or logging.
+  const kinds = (t, f = 'x.js') => mu.breaksOf(t, f).map((b) => `${b.kind}:${b.from}>${b.to}`);
+  assert.deepEqual(kinds('  if (a === b && c > 3) return true;'), ['equal:===>!==', 'compare:>><=', 'logic:&&>||', 'truth:true>false', 'number:3>4']);
+  assert.equal(mu.breaksOf('  if (a !== b) x();', 'x.js')[0].text, '  if (a === b) x();');
+  assert.deepEqual(kinds('const f = (a) => a.map((x) => x);'), [], 'an arrow is not a comparison');
+  assert.deepEqual(kinds('const s = "a === b"; // c > 1'), []);
+  assert.deepEqual(kinds("import { a } from './a.js';"), []);
+  assert.deepEqual(kinds('  console.log(a === b);'), []);
+  assert.deepEqual(kinds('    if a == 1 and b:  # c or d', 'x.py'), ['equal:==>!=', 'logic:and>or', 'number:1>2']);
+  assert.deepEqual(kinds('const and = or + 1;'), ['arithmetic:+>-', 'number:1>2'], 'and/or are words only in Python');
+  assert.deepEqual(kinds('total += n - 1;'), ['arithmetic:->+', 'number:1>2']);
+  assert.deepEqual(kinds('const v = 1.5 + x2;'), ['arithmetic:+>-'], 'not inside a decimal or a name');
+  assert.deepEqual([...mu.insideBlocks('a\n/* x\n y */\nconst t = `q\n w`;\nz', 'x.js')], [3, 5]);
+  assert.deepEqual([...mu.insideBlocks('def f():\n    """doc\n    a == b\n    """\n    return 1', 'x.py')], [3, 4]);
+  assert.deepEqual([...mu.insideBlocks("const a = 'it''s';\nconst b = 1; // don't\nconst c = 2;", 'x.js')], []);
+
+  // Which to try: source files only, lines still as the diff says, spread over lines and kinds.
+  const src = ['export function price(n, member) {', '  if (n <= 0) return 0;', '  const base = n * 5;', '  return member && n >= 10 ? base - 2 : base;', '}', "export const label = (n) => (n === 1 ? 'item' : 'items');", '/* was:', '  n === 2', '*/'];
+  const changes = new Map([
+    ['calc.js', src.map((text, i) => ({ line: i + 1, text }))],
+    ['calc.test.js', [{ line: 1, text: 'assert.equal(price(2) === 10, true);' }]],
+    ['README.md', [{ line: 1, text: 'a === b' }]],
+    ['gone.js', [{ line: 1, text: 'a === b' }]],
+  ]);
+  const files = { 'calc.js': src.join('\n'), 'calc.test.js': 'assert.equal(price(2) === 10, true);', 'README.md': 'a === b' };
+  const read = (f) => files[f] ?? null;
+  const picked = mu.pickBreaks(changes, { read });
+  assert.deepEqual(picked.map((b) => [b.file, b.line, b.kind, b.from, b.to]), [['calc.js', 2, 'compare', '<=', '>'], ['calc.js', 3, 'number', '5', '6'], ['calc.js', 4, 'logic', '&&', '||'], ['calc.js', 6, 'equal', '===', '!==']]);
+  assert.deepEqual(mu.pickBreaks(changes, { read, max: 2 }).map((b) => b.line), [2, 4]);
+  assert.deepEqual(mu.pickBreaks(changes, { read: (f) => (f === 'calc.js' ? src.join('\n').replace('n * 5', 'n * 7') : null) }).map((b) => b.line), [2, 4, 6], 'a line edited since is left alone');
+
+  // The class, on real files: the tests here are a function that reads calc.js as it is at that moment.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'am-breaks-'));
+  const notes = (id) => path.join(dir, 'notes', id); // where a broken line is written down, kept out of the real home
+  const file = path.join(dir, 'calc.js');
+  fs.writeFileSync(file, src.join('\n'));
+  const agent = { id: 'mu1', name: 'calc', workdir: dir };
+  const told = [];
+  const rt = { busy: false };
+  const manager = { mustGet: () => agent, patch: (id, f) => Object.assign(agent, f), changed() {}, runtimes: new Map([['mu1', rt]]), inputAt: new Map(), tell: (id, text) => told.push(text), proof: { read: () => [{ command: 'node calc.test.js', exit: 0 }, { command: 'node calc.test.js', exit: 0 }, { command: 'npm run lint', exit: 1 }, { command: 'rm -rf x', exit: 0 }, { command: null }] } };
+  const seen = [];
+  // "Tests" that check price() but never label(): the first three breaks fail them, the fourth does not.
+  const run = async (command) => {
+    const now = fs.readFileSync(file, 'utf8');
+    seen.push(now === src.join('\n') ? 'as written' : now.split('\n').findIndex((l, i) => l !== src[i]) + 1);
+    const ok = ['n <= 0', 'n * 5', 'member && n >= 10'].every((t) => now.includes(t));
+    return { ok, code: ok ? 0 : 1, ms: 3, tail: ok ? 'ok' : 'AssertionError: 0 !== 10' };
+  };
+  let hash = 'h1';
+  const m = new mu.Mutate({ dir: notes, manager, store: { get: () => agent, list: () => [agent] }, run, changes: async () => ({ diff: ['+++ b/calc.js', `@@ -0,0 +1,${src.length} @@`, ...src.map((l) => `+${l}`)].join('\n'), diffHash: hash }) });
+  let v = await m.view('mu1');
+  assert.deepEqual([v.commands, v.last, v.canRun, v.running], [['node calc.test.js'], null, true, false], 'the passing commands that only look, once each');
+  rt.busy = true;
+  await assert.rejects(m.start('mu1'), /The agent is working/);
+  rt.busy = false;
+  const going = m.start('mu1');
+  assert.equal(m.holds('mu1'), true, 'nothing is sent to the agent meanwhile');
+  v = await going;
+  assert.equal(m.holds('mu1'), false);
+  assert.deepEqual(seen, ['as written', 2, 3, 4, 6], 'the tests as written first, then one line broken at a time');
+  assert.equal(fs.readFileSync(file, 'utf8'), src.join('\n'), 'the file is as it was');
+  assert.equal(fs.existsSync(path.join(notes('mu1'), 'mutant.json')), false, 'nothing left written down');
+  assert.deepEqual(v.last.breaks.map((b) => [b.line, b.status]), [[2, 'caught'], [3, 'caught'], [4, 'caught'], [6, 'missed']]);
+  assert.deepEqual([v.last.tried, v.last.caught, v.last.missed, v.last.stale, v.last.restored, v.line], [4, 3, 1, false, true, '3 of 4 breaks caught by its tests']);
+  assert.match(v.last.breaks[0].tail, /AssertionError/);
+  // The changes moved on: the run no longer speaks for them.
+  hash = 'h2';
+  assert.equal((await m.view('mu1')).last.stale, true);
+  assert.equal(m.forScore(agent, 'h2').stale, true);
+  assert.equal(m.forScore(agent, 'h1').stale, false);
+  hash = 'h1';
+
+  // Told to the agent: only what was not noticed, with what to do about it.
+  await m.send('mu1');
+  assert.match(told[0], /They still passed with these break/);
+  assert.match(told[0], /- calc\.js:6: `===` became `!==` in `export const label/);
+  assert.ok(!told[0].includes('calc.js:2') && /Do not change the code just to make this pass/.test(told[0]));
+  assert.ok(agent.breaks.sentAt);
+  assert.match(mu.breaksMarkdown(await m.view('mu1')), /✅ caught · calc\.js:2 · `<=` became `>`[\s\S]*❌ not noticed · calc\.js:6[\s\S]*3 of 4 breaks caught by its tests/);
+
+  // Tests that fail as they are: nothing is broken. A given command is used as it is.
+  seen.length = 0;
+  const failing = new mu.Mutate({ dir: notes, manager, store: { get: () => agent, list: () => [agent] }, run: async (c) => (seen.push(c), { ok: false, code: 2, ms: 1, tail: 'boom' }), changes: async () => ({ diff: '', diffHash: 'h1' }) });
+  v = await failing.start('mu1', { command: 'make check' });
+  assert.deepEqual([seen, v.last.baseline.ok, v.last.baseline.code, v.last.breaks, v.line], [['make check'], false, 2, [], 'the tests fail before anything is changed']);
+  manager.proof.read = () => [];
+  await assert.rejects(failing.start('mu1'), /No test command/);
+  await assert.rejects(failing.send('mu1'), /Nothing to send/);
+
+  // A break that hangs the tests is caught; typing to the agent stops the rest.
+  agent.breaks = null;
+  manager.proof.read = () => [{ command: 't', exit: 0 }];
+  let n = 0;
+  const hang = new mu.Mutate({ dir: notes, manager, store: { get: () => agent, list: () => [agent] }, run: async () => (++n === 1 ? { ok: true, code: 0, ms: 1, tail: '' } : (manager.inputAt.set('mu1', Date.now() + 1000), { ok: false, code: null, ms: 9, tail: '(stopped after 20 seconds)' })), changes: async () => ({ diff: ['+++ b/calc.js', `@@ -0,0 +1,${src.length} @@`, ...src.map((l) => `+${l}`)].join('\n'), diffHash: 'h1' }) });
+  v = await hang.start('mu1');
+  assert.deepEqual(v.last.breaks.map((b) => [b.status, b.stopped ?? null, b.why ?? null]), [['caught', true, null], ...[1, 2, 3].map(() => ['skipped', null, 'you typed to the agent, so the run stopped'])]);
+  assert.equal(fs.readFileSync(file, 'utf8'), src.join('\n'));
+
+  // Put back: the whole file when it is as we left it; only our line when someone edited meanwhile.
+  const broken = src.map((l, i) => (i === 1 ? '  if (n > 0) return 0;' : l));
+  const j = { path: file, line: 2, before: src[1], after: broken[1], original: src.join('\n'), broken: broken.join('\n') };
+  fs.writeFileSync(file, j.broken);
+  mu.putBack(j);
+  assert.equal(fs.readFileSync(file, 'utf8'), src.join('\n'));
+  fs.writeFileSync(file, ['// a line added above', ...broken, 'export const more = 1;'].join('\n'));
+  mu.putBack(j);
+  assert.equal(fs.readFileSync(file, 'utf8'), ['// a line added above', ...src, 'export const more = 1;'].join('\n'), 'their edits stay, our line goes back');
+  fs.writeFileSync(file, src.join('\n').replace('n <= 0', 'n < 1'));
+  mu.putBack(j);
+  assert.equal(fs.readFileSync(file, 'utf8'), src.join('\n').replace('n <= 0', 'n < 1'), 'a line they rewrote is theirs');
+  // A daemon that stopped with a line broken puts it back when it starts.
+  fs.mkdirSync(notes('mu1'), { recursive: true });
+  fs.writeFileSync(file, j.broken);
+  fs.writeFileSync(path.join(notes('mu1'), 'mutant.json'), JSON.stringify(j));
+  m.recover();
+  assert.equal(fs.readFileSync(file, 'utf8'), src.join('\n'));
+  assert.equal(fs.existsSync(path.join(notes('mu1'), 'mutant.json')), false);
+
+  // The scorecard: the facts line, and the tests score bounded by what the tests noticed.
+  const result = (statuses) => ({ commands: ['npm test'], baseline: { ok: true, ms: 5 }, breaks: statuses.map((status, i) => ({ file: 'calc.js', line: i + 1, from: '===', to: '!==', before: 'x', status })) });
+  const score = (breaks) => {
+    const f = scoreFacts({ files: [{ path: 'calc.js', added: 6 }, { path: 'calc.test.js', added: 4 }], brief: { checks: [{ state: 'passed' }] }, breaks });
+    return [f, combine({ scores: { tests: { score: 90, why: 'well tested' } } }, f, [])];
+  };
+  let [f, sc] = score(result(['caught', 'missed', 'missed', 'missed']));
+  assert.match(factLines(f), /the app broke 4 changed lines one at a time and ran the tests \(npm test\): 1 caught, 3 not noticed \(calc\.js:2 === became !==; /);
+  const tests = (c) => c.scores.tests;
+  assert.deepEqual([tests(sc).score, /3 of 4 breaks made in the changed code were not noticed/.test(tests(sc).notes.join(' '))], [55, true]);
+  [f, sc] = score(result(['missed', 'missed', 'missed']));
+  assert.equal(tests(sc).score, 35);
+  [f, sc] = score(result(['caught', 'caught', 'caught', 'missed']));
+  assert.deepEqual([tests(sc).score, /1 of 4 breaks made in the changed code was not noticed/.test(tests(sc).notes.join(' '))], [90, true]);
+  [f, sc] = score(result(['caught', 'caught']));
+  assert.deepEqual([tests(sc).score, tests(sc).notes], [90, []]);
+  [f, sc] = score({ ...result(['missed', 'missed', 'missed']), stale: true });
+  assert.deepEqual([tests(sc).score, /the app broke/.test(factLines(f))], [90, false], 'a run before the latest changes says nothing');
+  [f, sc] = score({ commands: ['npm test'], baseline: { ok: false, code: 1 }, breaks: [] });
+  assert.equal(tests(sc).score, 40);
+
+  // The results card.
+  const card = (extra) => proofRows({ results: { fromAgent: true, outcome: 'done', notDoneSaid: true }, brief: { checks: [] }, ...extra }, esc);
+  assert.match(card({ breaks: result(['caught', 'caught', 'missed']) }), /Tests tested<\/b> <span class="tag proof-bad"[^>]*>2 of 3 breaks caught<\/span> <button class="small" data-act="proof-open">Open/);
+  assert.match(card({ breaks: result(['caught']), proofDoc: { entries: 1, commands: 1 } }), /tag proof-ok"[^>]*>1 of 1 breaks caught<\/span><\/p>/);
+  assert.match(card({}), /Do its tests notice a mistake\? <button class="small" data-act="proof-open">Test its tests/);
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 test('proof: what the agent recorded, what is not run again, a run compared, the scorecard told, and a merge held', async () => {
   const pr = await import('../src/proof.js');
   const { proofRows, rerunOf } = await import('../public/proof.js');

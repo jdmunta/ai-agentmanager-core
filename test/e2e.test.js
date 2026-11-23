@@ -1505,6 +1505,7 @@ test("Explain summarizes the agent's live session in a separate tool-less Claude
   // Insights: same context, Why / What / How / Now, stored separately.
   const ins = (await call('POST', `/agents/${a.id}/insights`)).body;
   assert.match(ins.insights.markdown, /^### Why\n- Safe call: Explain me please[\s\S]*### Now\n- saw agent text: true/);
+  assert.match(ins.insights.markdown, /### Value\n- Now: high[\s\S]*### Kind\n- Kind: white paper[\s\S]*### Paths\n1\. Cache in memory/, 'worth now and later, the kind of idea, and the ways ranked');
   assert.match(ins.explanation.markdown, /^### The ask/, 'explanation kept');
 });
 
@@ -1641,6 +1642,8 @@ test('proof: the agent is told to record it; what it recorded is shown with what
   const sys = launch.args[launch.args.indexOf('--append-system-prompt') + 1];
   const dir = fs.realpathSync(path.join(home, 'briefs', a.id));
   assert.ok(sys.includes(`Keep the proof of your checks in ${path.join(dir, 'PROOF.md')}`) && sys.includes('"- Not done: nothing" when there is none'), sys);
+  assert.ok(sys.includes('Before you change anything, add a section "## Risks" to the brief'), 'the pre-mortem is asked for');
+  assert.ok(sys.includes('When there is more than one reasonable way to solve this, add a section "## Options" to the brief'), 'the options, ranked, are asked for');
   const ready = await waitFor(async () => {
     const v = await agentNow(a.id);
     return v.workdir && v.status === 'running' ? v : null;
@@ -1652,7 +1655,7 @@ test('proof: the agent is told to record it; what it recorded is shown with what
   fs.writeFileSync(path.join(ready.workdir, 'VERSION'), '1.2.3\n');
   await waitFor(() => fs.existsSync(path.join(dir, 'BRIEF.md')), 15000, "the stand-in's brief");
   await new Promise((r) => setTimeout(r, 300));
-  fs.writeFileSync(path.join(dir, 'BRIEF.md'), 'Status: done\n## Checks\n- [x] the file holds the version\n- [x] the old file is gone\n## Results\nOutcome: done\n- Delivered: VERSION\n- Not done: the changelog entry\nConfidence: 80% - read it back\n');
+  fs.writeFileSync(path.join(dir, 'BRIEF.md'), 'Status: done\n## Risks\n- [x] The version has a trailing space: avoided, cat -A shows none\n- [ ] Another tool reads version.txt\n## Checks\n- [x] the file holds the version\n- [x] the old file is gone\n## Results\nOutcome: done\n- Delivered: VERSION\n- Not done: the changelog entry\nConfidence: 80% - read it back\n');
   fs.writeFileSync(
     path.join(dir, 'PROOF.md'),
     ['## The file holds the version', 'Command: `cat VERSION`', 'Exit: 0', '```', '1.2.3', '```', '## The old file is gone', 'Command: cat version.txt', 'Exit: 0', '```', '(nothing)', '```', '## Cleaned up', 'Command: rm -f VERSION.bak', 'Exit: 0', '## Read the docs', 'Command: none', 'Looked at README.md.'].join('\n'),
@@ -1660,6 +1663,7 @@ test('proof: the agent is told to record it; what it recorded is shown with what
   manager.reloadBrief(a.id);
   const v = await agentNow(a.id);
   assert.deepEqual([v.proofDoc.entries, v.proofDoc.commands, v.results.notDone, v.results.notDoneSaid], [4, 3, ['the changelog entry'], true]);
+  assert.deepEqual(v.brief.risks.map((r) => r.state), ['avoided', 'open'], 'its pre-mortem, read from the brief');
   const shown = (await call('GET', `/agents/${a.id}/proof`)).body;
   assert.deepEqual(shown.entries.map((e) => [e.title, e.command, e.runnable]), [['The file holds the version', 'cat VERSION', true], ['The old file is gone', 'cat version.txt', true], ['Cleaned up', 'rm -f VERSION.bak', false], ['Read the docs', null, false]]);
   assert.deepEqual([shown.passed, shown.notDone, shown.rerun, shown.canRun], [2, ['the changelog entry'], null, true]);
@@ -1680,6 +1684,151 @@ test('proof: the agent is told to record it; what it recorded is shown with what
   manager.reloadBrief(a.id);
   const again = (await call('GET', `/agents/${a.id}/proof`)).body;
   assert.deepEqual([again.entries.length, again.rerun.stale, again.entries[0].rerun], [1, true, null]);
+  await call('POST', `/agents/${a.id}/stop`);
+  await call('DELETE', `/agents/${a.id}`);
+});
+
+test("test the tests: the agent's changed lines are broken one at a time with its real tests run on each, put back after, and what went unnoticed is sent to it; yours to ask, not the agent's", async () => {
+  const origin = makeOrigin('breaks');
+  const [a] = (await call('POST', '/agents', { intent: 'Add a price calculator', repo: `file://${origin}` })).body;
+  const ready = await waitFor(async () => {
+    const v = await agentNow(a.id);
+    return v.workdir && v.status === 'running' && !v.runtime?.busy ? v : null;
+  }, 30000, 'the agent idle in its worktree');
+  const dir = fs.realpathSync(path.join(home, 'briefs', a.id));
+  const src = ['export function price(n, member) {', '  if (n <= 0) return 0;', '  const base = n * 5;', '  return member && n >= 10 ? base - 2 : base;', '}', "export const label = (n) => (n === 1 ? 'item' : 'items');", ''].join('\n');
+  const file = path.join(ready.workdir, 'calc.js');
+  fs.writeFileSync(path.join(ready.workdir, 'package.json'), '{"type":"module"}\n');
+  fs.writeFileSync(file, src);
+  // Its tests check price() and never label().
+  fs.writeFileSync(path.join(ready.workdir, 'calc.test.js'), "import assert from 'node:assert';\nimport { price } from './calc.js';\nassert.equal(price(0), 0);\nassert.equal(price(2), 10);\nassert.equal(price(10, true), 48);\nassert.equal(price(10, false), 50);\n");
+
+  // Nothing recorded and no command given: it says what it needs.
+  let v = (await call('GET', `/agents/${a.id}/breaks`)).body;
+  assert.deepEqual([v.commands, v.last, v.canRun], [[], null, true]);
+  const none = await waitFor(async () => {
+    const r = await call('POST', `/agents/${a.id}/breaks/run`);
+    return /is working/.test(r.body.error ?? '') ? null : r;
+  }, 30000, 'the agent idle');
+  assert.equal(none.status, 400);
+  assert.match(none.body.error, /No test command/);
+  // The agent's own request is refused.
+  for (const route of ['run', 'send']) {
+    const refused = await call('POST', `/agents/${a.id}/breaks/${route}`, { command: 'node calc.test.js' }, { 'x-agentmgr': '1', 'x-agentmgr-agent': a.id });
+    assert.equal(refused.status, 403);
+    assert.match(refused.body.error, /asked by the person, not by an agent/);
+  }
+
+  // The passing command from its proof is the default.
+  fs.writeFileSync(path.join(dir, 'PROOF.md'), '## Prices are right\nCommand: `node calc.test.js`\nExit: 0\n```\n```\n## Pushed\nCommand: git push\nExit: 0\n');
+  manager.reloadBrief(a.id);
+  v = (await call('GET', `/agents/${a.id}/breaks`)).body;
+  assert.deepEqual(v.commands, ['node calc.test.js']);
+  // (The stand-in agent prints now and then, which counts as working for a moment: asked again then.)
+  const run = (body) => waitFor(async () => {
+    const r = await call('POST', `/agents/${a.id}/breaks/run`, body);
+    return r.status === 400 && /is working/.test(r.body.error) ? null : r;
+  }, 30000, 'the agent idle');
+  const ran = await run();
+  assert.equal(ran.status, 200, JSON.stringify(ran.body));
+  v = ran.body;
+  assert.deepEqual(v.last.breaks.map((b) => [b.file, b.line, b.from, b.to, b.status]), [['calc.js', 2, '<=', '>', 'caught'], ['calc.js', 3, '5', '6', 'caught'], ['calc.js', 4, '&&', '||', 'caught'], ['calc.js', 6, '===', '!==', 'missed']]);
+  assert.deepEqual([v.last.baseline.ok, v.last.tried, v.last.caught, v.last.missed, v.last.stale, v.last.restored, v.line], [true, 4, 3, 1, false, true, '3 of 4 breaks caught by its tests']);
+  assert.match(v.last.breaks[0].tail, /expected: 10/);
+  assert.deepEqual([v.last.breaks[0].by, v.last.breaks[0].code], ['node calc.test.js', 1]);
+  assert.equal(fs.readFileSync(file, 'utf8'), src, 'the file is as the agent wrote it');
+  assert.equal(fs.existsSync(path.join(dir, 'mutant.json')), false);
+  assert.equal((await agentNow(a.id)).breaks.breaks.length, 4);
+  assert.match((await call('GET', `/agents/${a.id}/breaks?format=md`)).body.markdown, /❌ not noticed · calc\.js:6 · `===` became `!==`/);
+
+  // Sent to the agent: the line nothing checks.
+  const rec = recordTold();
+  const sent = (await call('POST', `/agents/${a.id}/breaks/send`)).body;
+  rec.restore();
+  assert.ok(sent.last.sentAt);
+  assert.equal(rec.told.length, 1);
+  assert.match(rec.told[0], /- calc\.js:6: `===` became `!==` in `export const label/);
+  assert.ok(!rec.told[0].includes('calc.js:2'));
+
+  // A given command, fewer lines; then the changes move on and the run no longer speaks for them.
+  v = (await run({ command: 'node calc.test.js && true', max: 2 })).body;
+  assert.deepEqual([v.last.commands, v.last.breaks.map((b) => b.line)], [['node calc.test.js && true'], [2, 4]]);
+  fs.writeFileSync(file, `${src}export const more = 1;\n`);
+  assert.equal((await call('GET', `/agents/${a.id}/breaks`)).body.last.stale, true);
+  // Tests that fail as they are: nothing is broken.
+  v = (await run({ command: 'node missing.test.js' })).body;
+  assert.deepEqual([v.last.baseline.ok, v.last.breaks, v.line], [false, [], 'the tests fail before anything is changed']);
+  assert.equal(fs.readFileSync(file, 'utf8'), `${src}export const more = 1;\n`);
+  await call('POST', `/agents/${a.id}/stop`);
+  await call('DELETE', `/agents/${a.id}`);
+});
+
+test("track record: a project gets a level of its own for its new agents, set by you and not by an agent; the record is read", async () => {
+  const refused = await call('PUT', '/autonomy', { project: 'Earned', level: 'run' }, { 'x-agentmgr': '1', 'x-agentmgr-agent': 'someone' });
+  assert.equal(refused.status, 403);
+  assert.equal((await call('PUT', '/autonomy', { project: 'Earned', level: 'everything' })).status, 400);
+  const set = (await call('PUT', '/autonomy', { project: 'Earned', level: 'run' })).body;
+  assert.deepEqual([set.projects, set.level], [{ Earned: 'run' }, 'ask'], 'the default for the others is as it was');
+  // Its new agents get it when none is named; a named level wins; other projects are as before.
+  const make = async (body) => (await call('POST', '/agents', { start: false, ...body })).body[0];
+  const a = await make({ intent: 'Earned: add a cache', project: 'Earned' });
+  const b = await make({ intent: 'Earned: asks me', project: 'Earned', autonomy: 'ask' });
+  const c = await make({ intent: 'Elsewhere: add a cache', project: 'Elsewhere' });
+  assert.deepEqual([a.autonomy?.level, a.acceptance?.status, b.autonomy, c.autonomy], ['run', 'writing', null, null]);
+  // The record, as data and as text.
+  const r = (await call('GET', '/quality/record')).body;
+  assert.ok(Number.isInteger(r.settled) && Array.isArray(r.projects) && r.defaultLevel === 'ask', JSON.stringify(r).slice(0, 300));
+  assert.match((await call('GET', '/quality/record?format=md')).body.markdown, /^# Track record/);
+  // Taken away again.
+  assert.deepEqual((await call('PUT', '/autonomy', { project: 'Earned', level: 'default' })).body.projects, {});
+  assert.equal((await make({ intent: 'Earned: after', project: 'Earned' })).autonomy, null);
+  for (const x of (await call('GET', '/agents')).body.filter((x) => /^(Earned|Elsewhere): /.test(x.intent ?? ''))) await call('DELETE', `/agents/${x.id}`);
+});
+
+test("kept private: an agent that says part of its design is new has every way out held until you allow it; set and lifted by you, not by an agent", async () => {
+  const origin = makeOrigin('private');
+  const [a] = (await call('POST', '/agents', { intent: 'Add an index', repo: `file://${origin}` })).body;
+  const ready = await waitFor(async () => {
+    const v = await agentNow(a.id);
+    return v.workdir && v.status === 'running' ? v : null;
+  }, 20000, 'the agent running');
+  const dir = fs.realpathSync(path.join(home, 'briefs', a.id));
+  assert.equal(ready.keptPrivate, null);
+  await waitFor(() => fs.existsSync(path.join(dir, 'BRIEF.md')), 15000, "the stand-in's brief");
+  await new Promise((r) => setTimeout(r, 300));
+  fs.writeFileSync(path.join(ready.workdir, 'index.js'), 'export const x = 1;\n');
+  fs.writeFileSync(path.join(dir, 'BRIEF.md'), 'Status: working\n## Problem\nx\n## Options\n1. Index by intent: one pass | now: high | later: high | cost: small | risk: low | when: always\n- Preferred: the only one that scales\n- New: an index keyed by intent, not by key\n## Results\nOutcome: in progress\n');
+  manager.reloadBrief(a.id);
+  const v = await agentNow(a.id);
+  assert.deepEqual([v.keptPrivate.from, v.brief.options.paths.length], ['agent', 1]);
+  assert.match(v.keptPrivate.why, /The agent says part of its design may be new: an index keyed by intent, not by key/);
+
+  // Every way out is held, with why and how to lift it.
+  for (const [route, what] of [['drive', 'Publishing to Google Drive'], ['ship', 'Opening the pull request'], ['announce/publish', 'Publishing the update'], ['announce/slack', 'Posting the update to Slack'], ['scorecard/post', 'Posting the scorecard on the pull request']]) {
+    const r = await call('POST', `/agents/${a.id}/${route}`);
+    assert.equal(r.status, 409, `${route}: ${JSON.stringify(r.body)}`);
+    assert.match(r.body.error, new RegExp(`^${what} is held: this work is kept private\\.`), route);
+  }
+  assert.match((await call('POST', `/agents/${a.id}/ship`)).body.error, /agentmgr private \w+ --allow$/);
+  // Lifted by you, not by the agent.
+  const refused = await call('POST', `/agents/${a.id}/private`, { private: false }, { 'x-agentmgr': '1', 'x-agentmgr-agent': a.id });
+  assert.equal(refused.status, 403);
+  assert.equal((await call('POST', `/agents/${a.id}/private`, { private: 'yes' })).status, 400);
+  const allowed = (await call('POST', `/agents/${a.id}/private`, { private: false })).body;
+  assert.deepEqual([allowed.keptPrivate, allowed.idea.allowed], [null, true]);
+  const drive = await call('POST', `/agents/${a.id}/drive`);
+  assert.ok(!/kept private/.test(drive.body.error ?? ''), 'no longer held for that reason');
+  // Back to what was read; and your own mark on work nobody flagged, which the agent is told about.
+  assert.equal((await call('POST', `/agents/${a.id}/private`, { private: null })).body.keptPrivate.from, 'agent');
+  fs.writeFileSync(path.join(dir, 'BRIEF.md'), 'Status: working\n## Problem\nx\n## Results\nOutcome: in progress\n');
+  manager.reloadBrief(a.id);
+  assert.equal((await agentNow(a.id)).keptPrivate, null);
+  const rec = recordTold();
+  const kept = (await call('POST', `/agents/${a.id}/private`, { private: true, note: 'filing first' })).body;
+  rec.restore();
+  assert.deepEqual([kept.keptPrivate.from, kept.keptPrivate.why], ['you', 'You marked it private: filing first']);
+  assert.equal(rec.told.filter((t) => /do not publish any of it outside this repository/.test(t)).length, 1, 'the agent is told');
+  assert.equal((await call('POST', `/agents/${a.id}/drive`)).status, 409);
   await call('POST', `/agents/${a.id}/stop`);
   await call('DELETE', `/agents/${a.id}`);
 });
@@ -2728,8 +2877,8 @@ test('quality: a merged pull request looked at on GitHub: fixed afterwards, then
   const [a] = (await call('POST', '/agents', { intent: 'Cache the prices', start: false })).body;
   const url = 'https://github.com/acme/shop/pull/77';
   const ago = (min) => new Date(Date.now() - min * 60_000).toISOString();
-  const merged = { url, number: 77, title: 'Cache prices', state: 'MERGED', createdAt: ago(240), mergedAt: ago(60), mergeCommit: { oid: 'abc123' }, baseRefName: 'main', files: [{ path: 'src/cache.js' }, { path: 'src/price.js' }], reviews: [{ state: 'CHANGES_REQUESTED' }, { state: 'APPROVED' }], additions: 40, deletions: 2 };
-  const fix = { url: 'https://github.com/acme/shop/pull/78', number: 78, title: 'Fix stale prices in the cache', state: 'MERGED', mergedAt: ago(10), files: [{ path: 'src/cache.js' }], body: '' };
+  const merged = { url, number: 77, title: 'Cache prices', state: 'MERGED', createdAt: ago(240), mergedAt: ago(3), mergeCommit: { oid: 'abc123' }, baseRefName: 'main', files: [{ path: 'src/cache.js' }, { path: 'src/price.js' }], reviews: [{ state: 'CHANGES_REQUESTED' }, { state: 'APPROVED' }], additions: 40, deletions: 2 };
+  const fix = { url: 'https://github.com/acme/shop/pull/78', number: 78, title: 'Fix stale prices in the cache', state: 'MERGED', mergedAt: ago(1), files: [{ path: 'src/cache.js' }], body: '' };
   const write = (prs) => fs.writeFileSync(ghState, JSON.stringify({ prs, checkRuns: { abc123: [{ name: 'test', status: 'completed', conclusion: 'success' }] }, commits: [] }));
   write([merged, fix]);
   try {

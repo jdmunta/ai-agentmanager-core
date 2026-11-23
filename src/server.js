@@ -57,8 +57,11 @@ import { Builder } from './builder.js';
 import { Standup } from './standup.js';
 import { Value, valueSlack } from './value.js';
 import { Quality } from './quality.js';
+import { recordMarkdown } from './record.js';
+import { PRIVATE_MESSAGE, keptPrivate, mustBeShareable } from './private.js';
 import { Standards, runCheck } from './standards.js';
 import { Proof, proofMarkdown } from './proof.js';
+import { Mutate, breaksMarkdown } from './mutate.js';
 import { News } from './news.js';
 import { System } from './system.js';
 import { Advisor } from './advisor.js';
@@ -219,6 +222,7 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
   /** Commit what's left, push and open the agent's pull request, titled after the issue or request. */
   const shipAgent = async (ref, { title = '', body = '' } = {}) => {
     const a = manager.mustGet(ref);
+    mustBeShareable(a, 'Opening the pull request');
     const key = leadingJiraKey(a.intent);
     const words = a.synopsis?.text ?? a.brief?.title ?? String(a.intent ?? '').replace(/^<?https?:\/\/\S+>?\s*/, '').split('\n')[0];
     title = String(title ?? '').trim() || `${key ? `${key}: ` : ''}${words || a.name}`.slice(0, 100);
@@ -247,6 +251,14 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
   // nudges and follow-ups sent, and at "merge" the pull request merged when everything says ready.
   const autonomy = new Autonomy({ manager, store, config, review, landing, backlog });
   manager.proof = new Proof({ manager, store, run: runCheck, log: (m) => console.log(`[agentmgr] ${m}`) });
+  manager.mutate = new Mutate({ manager, store, run: runCheck, changes: (id) => review.get(id), config: config.testTheTests ?? {}, log: (m) => console.log(`[agentmgr] ${m}`) });
+  manager.mutate.recover();
+  // Read as possibly patentable by Insights: the agent is told once to keep it inside the repository (private.js).
+  manager.on('change', (v) => {
+    if (v.keptPrivate?.from !== 'insights' || v.idea?.toldAt || !manager.runtimes.get(v.id)?.pty) return;
+    manager.patch(v.id, { idea: { ...v.idea, toldAt: new Date().toISOString() } });
+    manager.tell(v.id, PRIVATE_MESSAGE);
+  });
   manager.inboxSources.push(() => autonomy.inbox());
   // How far an agent goes without the person is the person's to set: never an agent's own call.
   const yourLevel = (req) => {
@@ -621,6 +633,13 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
   const bg = (req) => req.query.background === '1' || req.body?.background === true;
   api.post('/agents/:id/explain', wrap((req) => (bg(req) ? manager.summarizeInBackground(req.params.id, ['explain']) : manager.explain(req.params.id))));
   api.post('/agents/:id/insights', wrap((req) => (bg(req) ? manager.summarizeInBackground(req.params.id, ['insights']) : manager.insights(req.params.id))));
+  // Kept private (private.js): yours to set and to lift, never the agent's.
+  api.post('/agents/:id/private', wrap((req) => {
+    if (req.headers['x-agentmgr-agent']) throw fail(403, 'Whether work is kept private is decided by the person, not by an agent');
+    const b = req.body ?? {};
+    if (![true, false, null].includes(b.private ?? null)) throw fail(400, 'private is true (keep it private), false (allow sharing) or null (what was read)');
+    return manager.setPrivate(req.params.id, { private: b.private ?? null, note: b.note ?? '' });
+  }));
   const DOC_LIST = ['analysis', 'design', 'flow', 'proposal', 'humanai', 'estimate', 'documentation'];
   api.post('/agents/:id/humanai/answers', wrap((req) => manager.humanAiAnswers(req.params.id, req.body?.answers, { send: req.body?.send === true })));
   api.post(
@@ -656,6 +675,7 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
   api.put('/agents/:id/announce', wrap((req) => manager.updateState(req.params.id, req.body ?? {})));
   api.post('/agents/:id/announce/publish', wrap((req) => manager.publishUpdate(req.params.id)));
   api.post('/agents/:id/announce/slack', wrap(async (req) => {
+    mustBeShareable(manager.mustGet(req.params.id), 'Posting the update to Slack');
     const to = announceSlack();
     if (!to) throw fail(409, 'Slack is not set up: give a webhook for updates (agentmgr announce --webhook <url>), or set up Slack alerts');
     const text = manager.updateSlackText(req.params.id, req.body?.text ?? null);
@@ -676,7 +696,7 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
   });
   // All of an agent's documents to Google Drive (through the Claude account's Google Drive connector).
   api.post('/agents/:id/drive', wrap((req) => manager.publishToDrive(req.params.id)));
-  api.post('/agents/:id/scorecard/post', wrap((req) => review.postScorecard(req.params.id)));
+  api.post('/agents/:id/scorecard/post', wrap((req) => (mustBeShareable(manager.mustGet(req.params.id), 'Posting the scorecard on the pull request'), review.postScorecard(req.params.id))));
   // Improve: its scorecard goes back to the agent; a backlog item in review is reopened with it.
   api.post(
     '/agents/:id/scorecard/improve',
@@ -707,6 +727,20 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
   api.post('/agents/:id/proof/run', wrap((req) => {
     if (req.headers['x-agentmgr-agent']) throw fail(403, 'Running the proof again is asked by the person, not by an agent');
     return manager.proof.rerun(req.params.id);
+  }));
+  // Test the tests (mutate.js): changed lines broken one at a time, the tests run on each. The
+  // person's call only: it runs commands here and changes the agent's files for a moment.
+  api.get('/agents/:id/breaks', wrap(async (req) => {
+    const v = await manager.mutate.view(req.params.id);
+    return req.query.format === 'md' ? { markdown: breaksMarkdown(v) } : v;
+  }));
+  api.post('/agents/:id/breaks/run', wrap((req) => {
+    if (req.headers['x-agentmgr-agent']) throw fail(403, 'Testing the tests is asked by the person, not by an agent');
+    return manager.mutate.start(req.params.id, { command: req.body?.command, max: req.body?.max });
+  }));
+  api.post('/agents/:id/breaks/send', wrap((req) => {
+    if (req.headers['x-agentmgr-agent']) throw fail(403, 'Testing the tests is asked by the person, not by an agent');
+    return manager.mutate.send(req.params.id);
   }));
   // Autonomy (autonomy.js): the default level and the models its calls run on; one agent's level;
   // and what was done for the person: seen ("ack"), or an answer changed to their own ("correct").
@@ -1345,6 +1379,11 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
     return quality.view({ period: String(req.query.period ?? 'week') });
   }));
   // A pull request is named by its link, so it travels in the body.
+  // Track record (record.js): what was said at the merge against what held, and the level each project's record supports.
+  api.get('/quality/record', wrap((req) => {
+    const r = quality.record();
+    return req.query.format === 'md' ? { markdown: recordMarkdown(r) } : r;
+  }));
   api.post('/quality/mark', wrap((req) => quality.mark(String(req.body?.url ?? ''), { verdict: req.body?.verdict ?? null, note: req.body?.note ?? '' })));
   api.post('/quality/check', wrap((req) => quality.check(String(req.body?.url ?? ''), { fresh: true })));
   // Standards are the person's to set: an agent's own calls can read them, not change them.

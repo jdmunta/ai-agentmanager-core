@@ -611,6 +611,52 @@ export async function main(argv) {
     });
 
   program
+    .command('test-tests')
+    .description("Test an agent's tests: break the lines it changed one at a time (=== becomes !==, && becomes ||, a number goes up by one), run the tests on each, and put the line back. A break the tests still pass on is a line nothing checks. Without --run it shows the last run (exit 1 when a break went unnoticed).")
+    .argument('<agent>')
+    .option('--run', "break the changed lines and run the tests now, in the agent's folder")
+    .option('-c, --command <command>', 'the command that runs the tests (default: the passing commands the agent recorded in its proof)')
+    .option('--max <n>', 'how many lines to break (default 8)')
+    .option('--send', 'tell the agent which breaks its tests did not notice')
+    .option('--json', 'print it as JSON')
+    .action(async (ref, opts) => {
+      await daemon();
+      const a = await resolveAgent(ref);
+      let v = await api('GET', `/agents/${a.id}/breaks`);
+      if (opts.run) {
+        const cmds = opts.command ? [opts.command] : v.commands;
+        if (cmds.length) process.stderr.write(dim(`Breaking up to ${opts.max ?? v.max} changed lines in ${a.workdir ?? 'its folder'}, one at a time, and running: ${cmds.join(' && ')}\nEach line is put back after its run…\n`));
+        v = await api('POST', `/agents/${a.id}/breaks/run`, { command: opts.command, max: opts.max ? Number(opts.max) : undefined });
+      }
+      if (opts.send) v = await api('POST', `/agents/${a.id}/breaks/send`);
+      if (opts.json) console.log(JSON.stringify(v, null, 2));
+      else {
+        console.log((await api('GET', `/agents/${a.id}/breaks?format=md`)).markdown);
+        if (!v.last) console.log(dim(v.commands.length ? `\nRun it: agentmgr test-tests ${a.id} --run   (tests: ${v.commands.join(' && ')})` : `\nThe agent recorded no passing test command. Run it with yours: agentmgr test-tests ${a.id} --run -c "npm test"`));
+        else if (opts.send) console.log(green('\nSent to the agent.'));
+        else if (v.last.missed && !v.last.stale) console.log(dim(`\nTell the agent: agentmgr test-tests ${a.id} --send`));
+      }
+      if (v.last && !v.last.stale && (v.last.missed || !v.last.baseline.ok)) process.exitCode = 1;
+    });
+
+  program
+    .command('private')
+    .description("Keep an agent's work private, or allow sharing it. Work that may be patentable (the agent says part of its design is new, or Insights reads it so) is kept private by itself: publishing to Google Drive, updates, Slack, comments on the pull request and opening the pull request are held until you allow it. Publishing before filing can cost the right to a patent.")
+    .argument('<agent>')
+    .option('--keep', 'keep it private')
+    .option('--allow', 'allow sharing it')
+    .option('--reset', 'back to what the agent and Insights say')
+    .option('--note <text>', 'why, in a line')
+    .action(async (ref, o) => {
+      await daemon();
+      const a = await resolveAgent(ref);
+      if ([o.keep, o.allow, o.reset].filter(Boolean).length > 1) throw new Error('Give one of --keep, --allow or --reset');
+      const v = o.keep || o.allow || o.reset ? await api('POST', `/agents/${a.id}/private`, { private: o.keep ? true : o.allow ? false : null, note: o.note ?? '' }) : a;
+      if (v.keptPrivate) console.log(`${bold('Kept private.')} ${v.keptPrivate.why}\n${dim(`Nothing of it is published or sent by the app. Allow sharing: agentmgr private ${a.id} --allow`)}`);
+      else console.log(v.idea?.allowed ? `${green('✓')} Sharing is allowed (you said so).` : `Not kept private: nothing in it was read as new. ${dim(`Keep it private anyway: agentmgr private ${a.id} --keep`)}`);
+    });
+
+  program
     .command('acceptance')
     .description('What done means for an agent: the points its work is checked against. The agent drafts them in its spec; you edit and agree; the review scorecard then reports each one as met, not met or not verified')
     .argument('<agent>')
@@ -667,7 +713,7 @@ export async function main(argv) {
 
   program
     .command('insights')
-    .description('Why / What / How / Now for an agent, three tidy points each (one-off Claude call)')
+    .description('Insights for an agent: Why / What / How / Now in three tidy points each, then what the work is worth now against later, what kind of idea it is (a task, worth a white paper, possibly patentable) and the ways to go, preferred first (one-off Claude call)')
     .argument('<agent>')
     .action(async (ref) => {
       await daemon();
@@ -1517,6 +1563,17 @@ export async function main(argv) {
       if (!v.github) console.log(dim('\nGitHub is not asked here, so nothing is looked at.'));
     });
   qualityCmd
+    .command('record')
+    .description("The track record: what was said when each pull request merged (the agent's own confidence, the scorecard, whether its tests were tested, the model, how far it ran without you) against what held up; and the level of \"Without you\" each project's record supports")
+    .option('--json', 'print JSON')
+    .action(async (opts) => {
+      await daemon();
+      if (opts.json) return console.log(JSON.stringify(await api('GET', '/quality/record'), null, 2));
+      const r = await api('GET', '/quality/record');
+      console.log((await api('GET', '/quality/record?format=md')).markdown);
+      for (const p of r.projects.filter((x) => x.suggestion)) console.log(dim(`\nSet it: agentmgr autonomy --project "${p.label}" --default ${p.suggestion.level}`));
+    });
+  qualityCmd
     .command('mark <pr-url>')
     .description('Say what a merged pull request was: not a problem, a problem, or back to what was found')
     .option('--clean', 'it was not a problem')
@@ -1793,6 +1850,7 @@ export async function main(argv) {
     .argument('[agent]')
     .argument('[level]', 'ask, run, pr or merge: set it for this agent')
     .option('--default <level>', 'the level new agents get when none is named')
+    .option('--project <name>', 'with --default: the level for the new agents of this project only ("default" takes it away again)')
     .option('--models <list>', 'the models its calls run on, best first; the next one is used when a call fails (default: fable,opus,sonnet)')
     .option('--ok <entry>', 'you have seen an answer given for you (its id from the list; "hold" for a held merge)')
     .option('--change <entry=answer>', 'your own answer to a question that was answered for you; the agent is told to apply it')
@@ -1801,10 +1859,12 @@ export async function main(argv) {
       await daemon();
       const { LEVEL_LABEL, logLine } = await import('./autonomy.js');
       if (!ref) {
-        const patch = { ...(o.default ? { level: o.default } : {}), ...(o.models ? { models: o.models } : {}) };
+        if (o.project && !o.default) throw new Error('--project goes with --default <level>');
+        const patch = { ...(o.default ? { level: o.default, ...(o.project ? { project: o.project } : {}) } : {}), ...(o.models ? { models: o.models } : {}) };
         const s = Object.keys(patch).length ? await api('PUT', '/autonomy', patch) : await api('GET', '/autonomy');
         if (o.json) return console.log(JSON.stringify(s, null, 2));
         console.log(`${bold('New agents:')} ${LEVEL_LABEL[s.level]} ${dim(`(${s.level})`)}`);
+        for (const [name, l] of Object.entries(s.projects ?? {})) console.log(`${bold(`New agents in ${name}:`)} ${LEVEL_LABEL[l]} ${dim(`(${l})`)}`);
         console.log(`${bold('Models, best first:')} ${s.models.map((m) => (typeof m === 'string' ? m : `${m.engine ?? 'claude'}:${m.model}`)).join(' → ')}`);
         console.log(dim(`${s.agents} agent${s.agents === 1 ? '' : 's'} running without you · ${s.calls} of ${s.dailyCalls} calls today${s.lastModel ? ` · last answered by ${s.lastModel}` : ''}`));
         if (s.lastError) console.log(dim(`Last failure ${s.lastError.at}: ${s.lastError.message}`));

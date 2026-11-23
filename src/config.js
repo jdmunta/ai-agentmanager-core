@@ -53,6 +53,12 @@ const DEFAULTS = {
   brief: true,
   // With the brief: ask for the proof of its checks (PROOF.md: command, exit code, output) and what it did not do.
   proof: true,
+  // With the brief: ask for a pre-mortem (## Risks: how the task could go wrong, named before starting and marked at the end).
+  premortem: true,
+  // With the brief: when there is more than one way, ask for the options ranked by value now and later (## Options).
+  valueLens: true,
+  // Test the tests (mutate.js): how many changed lines are broken in one run, the longest the tests may take, and one run in all.
+  testTheTests: { max: 8, timeoutMs: 300_000, budgetMs: 900_000 },
   // Backlog: items worked on at once per project (overridable per project), and overall.
   backlogParallel: 2,
   backlogMaxActive: 4,

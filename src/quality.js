@@ -10,6 +10,7 @@ import { PERIODS } from './value.js';
 import { repoOf } from './landing.js';
 import { ghBin } from './tracker.js';
 import { run } from './git.js';
+import { saidOf, trackRecord } from './record.js';
 
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
@@ -265,9 +266,14 @@ export class Quality {
           mergedAt: new Date(p.mergedAt).toISOString(),
         };
         if (!cur) {
-          st.items[p.url] = { ...fields, facts: null, after: null, addedAt: new Date(t).toISOString() };
+          // What is said about the work as it merges (record.js): compared later with what held.
+          st.items[p.url] = { ...fields, facts: null, after: null, said: saidOf(a), addedAt: new Date(t).toISOString() };
           added++;
-        } else Object.assign(cur, fields);
+        } else {
+          Object.assign(cur, fields);
+          // One merged before this was kept: what is said now, marked as read late.
+          if (!cur.said) (cur.said = { ...saidOf(a), late: true }), added++;
+        }
       }
     }
     if (added) this.store.save();
@@ -356,6 +362,14 @@ export class Quality {
     const s = this.settings;
     const all = Object.values(this.state.items).sort((a, b) => b.mergedAt.localeCompare(a.mergedAt));
     return { settings: s, period, periods: aggregate(all, s, { period, t }), items: all.map((it) => this.itemView(it, t)), github: !process.env.AGENTMGR_NO_GH };
+  }
+
+  /** The track record (record.js): what was said at the merge against what held, and the level each project's record supports. */
+  record(t = Date.now()) {
+    this.scan(t);
+    const s = this.settings;
+    const au = this.config.autonomy ?? {};
+    return trackRecord(Object.values(this.state.items), (it) => verdictOf(it, s, t), { levels: { default: au.level ?? 'ask', projects: au.projects ?? {} } });
   }
 
   /** A period's report: the latest complete one of a kind, or the current one so far. */

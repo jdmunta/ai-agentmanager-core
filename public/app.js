@@ -60,6 +60,7 @@ import { morph } from '/morph.js';
 import { acceptanceRow, acceptanceWaits, initAcceptance } from '/acceptance.js';
 import { autoNeedHtml, autonomyNeeds, autonomyRow, initAutonomy, needsPermissionHint } from '/autonomy.js';
 import { initProof, proofRows } from '/proof.js';
+import { kindHtml, optionsRows, parseKind, parsePaths, parseValue, pathsHtml, privateRow, valueHtml } from '/valuelens.js';
 
 const $ = (sel) => document.querySelector(sel);
 const agents = new Map();
@@ -661,6 +662,8 @@ function reviewBox(a) {
 }
 
 const INSIGHT_ICONS = { why: '🎯', what: '📦', how: '🛠', now: '📍' };
+// The decision side of Insights (valuelens.js): worth now against later, the kind of idea, the ways ranked.
+const INSIGHT_WIDE = { value: ['⚖️', 'Value: now and later'], kind: ['💡', 'Kind of idea'], paths: ['🧭', 'Paths, preferred first'] };
 
 // ------------------------------------------------------------------ stakeholder documents
 
@@ -1055,14 +1058,17 @@ bindListen((id) => {
 function insightsBox(a) {
   const ins = a.insights;
   const button = `<button class="small ${ins?.markdown ? '' : 'primary'}" data-act="insights" ${ins?.pending ? 'disabled' : ''}
-    title="Why, What, How and Now in three memorable points each, from the agent's ask and live session (a separate one-off Claude call)">${ins?.pending ? 'Thinking…' : ins?.markdown ? 'Refresh insights' : 'Insights'}</button>`;
+    title="Why, What, How and Now in three memorable points each; then what it is worth now against later, what kind of idea it is, and the ways to go ranked. From the agent's ask and live session (a separate one-off Claude call)">${ins?.pending ? 'Thinking…' : ins?.markdown ? 'Refresh insights' : 'Insights'}</button>`;
   if (!ins?.markdown && !ins?.error) return { button, box: '' };
   const sections = {};
+  const wide = {};
   for (const part of (ins.markdown ?? '').split(/^###\s+/m).slice(1)) {
     const [head, ...rest] = part.split('\n');
     const key = head.trim().toLowerCase().replace(/[^a-z]/g, '');
     if (INSIGHT_ICONS[key]) sections[key] = rest.join('\n').trim();
+    if (INSIGHT_WIDE[key]) wide[key] = rest.join('\n').trim();
   }
+  const lens = { value: valueHtml(parseValue(wide.value), esc), kind: kindHtml(parseKind(wide.kind), esc), paths: pathsHtml(parsePaths(wide.paths), esc) };
   const stale = ins.markdown && a.brief?.updatedAt && ins.briefUpdatedAt !== a.brief.updatedAt;
   const box = `<div class="insights">
       ${ins.error ? `<p class="error">Couldn't get insights: ${esc(ins.error)}</p>` : ''}
@@ -1070,7 +1076,14 @@ function insightsBox(a) {
         ? Object.keys(sections).length
           ? `<div class="insight-grid">${Object.keys(INSIGHT_ICONS)
               .map((k) => `<section class="insight ${k}"><h4>${INSIGHT_ICONS[k]} ${k[0].toUpperCase()}${k.slice(1)}</h4><div class="md">${md(sections[k] || 'Unclear yet')}</div></section>`)
-              .join('')}</div>`
+              .join('')}</div>${
+              Object.keys(INSIGHT_WIDE).some((k) => wide[k])
+                ? `<div class="insight-grid insight-wide">${Object.keys(INSIGHT_WIDE)
+                    .filter((k) => wide[k])
+                    .map((k) => `<section class="insight ${k}"><h4>${INSIGHT_WIDE[k][0]} ${INSIGHT_WIDE[k][1]}</h4>${lens[k] || `<div class="md">${md(wide[k])}</div>`}</section>`)
+                    .join('')}</div>${a.keptPrivate ? '' : '<p class="hint">If this may be worth protecting, <button class="link" data-act="idea-keep" title="The app then publishes and sends nothing of it until you allow it, and the agent is told">keep this work private</button>.</p>'}`
+                : ''
+            }`
           : `<div class="md">${md(ins.markdown)}</div>`
         : ''}
       ${ins.markdown ? `<p class="hint">${stale ? 'The brief has changed since; refresh for the latest. · ' : ''}From ${ago(ins.at)}.</p>` : ''}
@@ -1103,6 +1116,8 @@ function resultsCard(a) {
     ${scoreStrip(a)}
     ${r.confidence ? `<p class="own-conf"><span class="tag conf-${esc(r.confidence.level)}" title="The agent's own confidence in what it built, as it wrote it in its brief. The review scorecard is the separate check.">Its own confidence: ${r.confidence.percent}%</span> ${esc(r.confidence.why)}</p>` : r.fromAgent && ['done', 'partial'].includes(r.outcome) ? '<p class="hint own-conf">The agent has not said how confident it is in this.</p>' : ''}
     ${r.blockers.length ? `<ul class="blockers">${r.blockers.map((x) => item(x, 'blocker')).join('')}</ul>` : ''}
+    ${privateRow(a, esc)}
+    ${optionsRows(a, esc)}
     ${proofRows(a, esc)}
     ${r.delivered.length ? `<ul class="delivered">${r.delivered.map((x) => item(x, 'delivered')).join('')}</ul>` : '<p class="hint">Nothing delivered yet.</p>'}
     ${r.notes ? `<div class="md">${md(r.notes)}</div>` : ''}
@@ -4199,6 +4214,13 @@ $('#detail-body').addEventListener('click', async (e) => {
       return openPlan(a.id);
     case 'accept-open':
       return acceptUi.open(a.id);
+    case 'idea-allow':
+    case 'idea-keep':
+    case 'idea-reset':
+      return act(async () => {
+        upsert(await api('POST', `/agents/${a.id}/private`, { private: btn.dataset.act === 'idea-keep' ? true : btn.dataset.act === 'idea-allow' ? false : null }));
+        toast(btn.dataset.act === 'idea-allow' ? 'Sharing allowed' : btn.dataset.act === 'idea-keep' ? 'Kept private: nothing of it is published or sent' : 'Back to what was read');
+      });
     case 'proof-open':
       return proofUi.open(a.id);
     case 'auto-open':
