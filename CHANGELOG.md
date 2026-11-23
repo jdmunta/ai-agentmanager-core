@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.66.0 (2026-11-23)
+
+- **Possibly patentable work is noticed without asking.** When an agent finishes, Insights is now made by itself, so the kind of idea (a task, worth a white paper, possibly patentable) is read for every finished task. `"insights": { "auto": false }` in config.json turns it off; it is one more model call per finished agent.
+- **It waits in your inbox.** Work that Insights reads as possibly patentable, or that the agent flags as new, shows as **Possibly patentable** in the inbox and in `agentmgr inbox`, with **Keep it private** and **Allow sharing**. Until you decide, it is kept private as before.
+
 ## 1.65.0 (2026-11-23)
 
 - **Test the tests: would the agent's tests notice a mistake?** The app breaks the lines the agent changed, one at a time and in a small way (`===` becomes `!==`, `&&` becomes `||`, a number goes up by one), runs the tests on each, and puts the line back. A break the tests still pass on is a line nothing checks. In the agent's **Proof** dialog under **Test the tests**, or `agentmgr test-tests <agent> --run` (`-c` for the test command, `--max` for how many lines). The Results show **Tests tested**, for example "5 of 6 breaks caught".

@@ -57,6 +57,8 @@ const DEFAULTS = {
   premortem: true,
   // With the brief: when there is more than one way, ask for the options ranked by value now and later (## Options).
   valueLens: true,
+  // Insights (why, what, how, now; value now and later, the kind of idea, the paths ranked) made by itself when an agent finishes.
+  insights: { auto: true },
   // Test the tests (mutate.js): how many changed lines are broken in one run, the longest the tests may take, and one run in all.
   testTheTests: { max: 8, timeoutMs: 300_000, budgetMs: 900_000 },
   // Backlog: items worked on at once per project (overridable per project), and overall.

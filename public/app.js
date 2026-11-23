@@ -1616,7 +1616,7 @@ function loadLimitEngines() {
     })
     .catch(() => (limitEngines = null));
 }
-const NEED_ORDER = { approval: 0, prompt: 0, limit: 1, waiting: 1, plan: 1, acceptance: 1, question: 1, team: 1, rule: 2, auto: 2, review: 2, prereview: 2, autopilot: 2, stuck: 3, conflict: 4, reminder: 5, close: 5, repeat: 5, update: 4 };
+const NEED_ORDER = { approval: 0, prompt: 0, limit: 1, waiting: 1, plan: 1, acceptance: 1, question: 1, team: 1, rule: 2, auto: 2, review: 2, prereview: 2, autopilot: 2, stuck: 3, conflict: 4, reminder: 5, close: 5, repeat: 5, update: 4 , idea: 2 };
 /** What an agent needs from the user. `both`: overlaps on both agents (detail), else only the one that should rebase (inbox). */
 function needsFor(a, { both = false } = {}) {
   const items = [];
@@ -1629,6 +1629,8 @@ function needsFor(a, { both = false } = {}) {
   if (['stalled', 'error'].includes(a.preReview?.status)) items.push({ a, kind: 'prereview', key: `prereview:${a.id}` });
   for (const q of a.questions ?? []) if (!q.answer) items.push({ a, kind: 'question', key: `q:${a.id}:${q.id}`, q });
   items.push(...autonomyNeeds(a));
+  // Read as possibly worth protecting, and not decided by you yet (private.js).
+  if (a.keptPrivate && a.keptPrivate.from !== 'you') items.push({ a, kind: 'idea', key: `idea:${a.id}` });
   for (const f of a.stuck ?? []) items.push({ a, kind: 'stuck', key: `stuck:${a.id}:${f.key}`, f });
   if (updateWaits(a)) items.push({ a, kind: 'update', key: `update:${a.id}` });
   if (a.followUp) items.push({ a, kind: a.followUp.kind === 'close' ? 'close' : 'reminder', key: `reminder:${a.id}`, r: a.followUp });
@@ -1667,7 +1669,7 @@ function inboxItems() {
     .sort((x, y) => NEED_ORDER[x.kind] - NEED_ORDER[y.kind] || (x.a.priority ?? 2) - (y.a.priority ?? 2));
 }
 
-const NEED_LABEL = { update: 'Update to send', limit: 'Limit', reminder: 'Follow up', close: 'Close session?', repeat: 'Make it a playbook?', autopilot: 'Autopilot held', rule: 'Always allow?', approval: 'Approval', team: 'Team', prompt: 'Needs input', waiting: 'Waiting on you', acceptance: 'Done means', auto: 'Done for you', plan: 'Plan review', question: 'Question', review: 'AI review', prereview: 'Not approved', stuck: 'Stuck?', conflict: 'Overlap' };
+const NEED_LABEL = { update: 'Update to send', limit: 'Limit', reminder: 'Follow up', close: 'Close session?', repeat: 'Make it a playbook?', autopilot: 'Autopilot held', rule: 'Always allow?', approval: 'Approval', team: 'Team', prompt: 'Needs input', waiting: 'Waiting on you', acceptance: 'Done means', auto: 'Done for you', plan: 'Plan review', question: 'Question', review: 'AI review', prereview: 'Not approved', stuck: 'Stuck?', conflict: 'Overlap' , idea: 'Possibly patentable' };
 /** Why the AI judge thinks so, as a small tag. */
 const aiTag = (confidence, what = 'AI') => `<span class="tag ai" title="Judged by a model from the agent's activity; your reactions tune later calls">🤖 ${what}${confidence != null ? ` ${Math.round(confidence * 100)}%` : ''}</span>`;
 /** What a permission prompt asks about: the command, file or tool. */
@@ -1782,6 +1784,10 @@ function needCard(it, { inDetail = false } = {}) {
       <div class="need-actions"><button class="small primary" data-ib="team-open" data-team="${t.id}">${t.stage !== 'ready' ? 'Decide' : t.gaps ? 'See the gaps' : 'Review and finalize'}</button></div>`;
   } else if (it.kind === 'auto') {
     body = autoNeedHtml(it, { esc, ago });
+  } else if (it.kind === 'idea') {
+    body = `<p class="need-title">🔒 ${esc(a.keptPrivate.why)}</p>
+      <p class="hint">Kept private until you decide: the app does not publish or send it, and opens no pull request. Publishing before filing can cost the right to a patent. This is a first read without a search for prior art, not a finding.</p>
+      <div class="need-actions"><button class="small primary" data-ib="idea-keep" title="It stays private until you allow sharing; this card goes away">Keep it private</button><button class="small" data-ib="idea-allow" title="It is not worth protecting, or it is already filed: the holds are lifted">Allow sharing</button></div>`;
   } else if (it.kind === 'acceptance') {
     const pts = a.acceptance.points;
     body = `<p class="need-title">What done means: ${pts.length} point${pts.length === 1 ? '' : 's'}</p>
@@ -2047,6 +2053,10 @@ async function onNeed(e) {
       return openPlan(id);
     case 'accept-open':
       return acceptUi.open(id);
+    case 'idea-keep':
+      return act(async () => upsert(await api('POST', `/agents/${id}/private`, { private: true })), 'Kept private until you allow sharing');
+    case 'idea-allow':
+      return act(async () => upsert(await api('POST', `/agents/${id}/private`, { private: false })), 'Sharing allowed');
     case 'auto-ok':
       return autoUi.ok(id, el.dataset.entry);
     case 'auto-change':

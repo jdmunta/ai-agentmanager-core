@@ -704,6 +704,8 @@ Publishing before filing can cost the right to a patent. So when part of an agen
 
 The agent is told as well: nothing published outside the repository, no pull request, and its design doc stays a file.
 
+**Noticed without asking.** When an agent finishes, Insights is made by itself, so the kind of idea is read for every finished task (`"insights": { "auto": false }` in config.json turns that off; it is one more model call per finished agent). Work read as possibly patentable, or flagged by the agent, then waits in your inbox as **Possibly patentable** with two buttons: **Keep it private** and **Allow sharing**. `agentmgr inbox` lists it too. Until you decide, it is kept private.
+
 **Lifting it** is yours alone: **Allow sharing** in the agent's Results, or `agentmgr private <agent> --allow`. An agent's own call is refused. `--reset` goes back to what the agent and Insights say. A white paper is not held.
 
 **Limits.** This guards what the app sends. It does not stop an agent from running a command in its terminal that publishes something; the agent is instructed not to, and its permission prompts still apply. Work already pushed or published before it was marked stays where it is. It is a caution based on a first read, not a finding that anything is patentable: talk to a patent attorney.

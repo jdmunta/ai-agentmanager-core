@@ -2585,6 +2585,9 @@ export class AgentManager extends EventEmitter {
       // The points were agreed (or changed) after the last score: the brief saying done again is checked against them.
       const reagreed = brief.status === 'done' && agent.acceptance?.status === 'agreed' && agent.docs?.scorecard?.data && agent.docs.scorecard.acceptanceAt !== agent.acceptance.agreedAt;
       if ((improved || reagreed || (finished && this.config.scorecard?.auto !== false && !rounds)) && !NO_REPO.has(agent.kind) && this.changesSource) this.summarize(id, 'scorecard').catch(() => {});
+      // ...and read it for what it is worth and what kind of idea it is (Insights), so work that may be worth
+      // protecting is noticed without anyone asking ("insights": { "auto": false } in config.json turns this off).
+      if (finished && this.config.insights?.auto !== false && !NO_REPO.has(agent.kind)) this.summarize(id, 'insights').catch(() => {});
     }
     // Its points for what done means, written or revised in the spec: they wait for the person.
     if (this.acceptanceWaits(agent)) {
@@ -3916,9 +3919,14 @@ export class AgentManager extends EventEmitter {
     }
     // Commands you keep allowing in a repo: offer to always allow them there.
     for (const r of this.rules.view().suggestions) items.push({ kind: 'rule', key: `rule:${r.repo}:${r.rule}`, title: `Always allow ${r.label}${r.everywhere ? ' in every repo' : ''}?`, priority: 2, ...r });
+    // Work read as possibly worth protecting (private.js) that you have not decided on: keep it private, or allow sharing.
+    for (const agent of this.store.list()) {
+      const kept = keptPrivate(agent);
+      if (kept && kept.from !== 'you') items.push({ kind: 'idea', key: `idea:${agent.id}`, agentId: agent.id, agentName: agent.name, priority: agent.priority ?? 2, title: kept.why, from: kept.from, at: agent.insights?.at ?? agent.brief?.updatedAt ?? null });
+    }
     // Others' items (autopilot's held backlog work).
     for (const source of this.inboxSources) items.push(...source());
-    const order = { prompt: 0, limit: 1, waiting: 1, question: 1, rule: 2, review: 2, prereview: 2, autopilot: 2, stuck: 3, conflict: 4, reminder: 5, repeat: 5 };
+    const order = { prompt: 0, limit: 1, waiting: 1, question: 1, rule: 2, review: 2, prereview: 2, autopilot: 2, idea: 2, stuck: 3, conflict: 4, reminder: 5, repeat: 5 };
     return items.sort((a, b) => order[a.kind] - order[b.kind] || a.priority - b.priority);
   }
 
