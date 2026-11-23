@@ -5,6 +5,7 @@
 // so a confident-sounding model can't talk a change into "ready".
 
 import { proofFacts } from './proof.js';
+import { breakCounts, breakFacts } from './mutate.js';
 
 export const DIMENSIONS = [
   ['intent', 'Intent', 'Does it do what was asked?'],
@@ -18,7 +19,7 @@ const WEIGHTS = { intent: 25, spec: 20, tests: 20, safety: 15, scope: 10, plan: 
 const TEST_FILE = /(^|\/)(tests?|__tests__|spec|specs)\/|[._-](test|spec)\.[a-z]+$|_test\.go$|Test\.java$/i;
 
 /** Facts the app knows without a model: CI, test files touched, the agent's checks, plan and spec progress. */
-export function facts({ files = [], prs = [], brief = null, plan = '', spec = '', standards = null, agreed = null, proof = null }) {
+export function facts({ files = [], prs = [], brief = null, plan = '', spec = '', standards = null, agreed = null, proof = null, breaks = null }) {
   const paths = files.map((f) => f.path);
   const tests = paths.filter((p) => TEST_FILE.test(p));
   const code = paths.filter((p) => !TEST_FILE.test(p) && !/\.(md|txt|rst|adoc)$/i.test(p) && !/(^|\/)docs?\//i.test(p));
@@ -42,6 +43,10 @@ export function facts({ files = [], prs = [], brief = null, plan = '', spec = ''
     // Its proof (proof.js): what it recorded, what the app ran again, and what it says it left out.
     proof: proof ? { doc: proof.doc, rerun: proof.rerun ?? null } : null,
     notDone: brief?.results?.notDone ?? [],
+    // Its pre-mortem (brief.js): the risks it named before starting, and how each ended.
+    risks: brief?.risks ?? [],
+    // Its tests tested (mutate.js): changed lines broken one at a time, and whether the tests noticed.
+    breaks: breaks && !breaks.stale ? breaks : null,
     // What done means, agreed with the person (acceptance.js): these are checked, whatever the spec says now.
     agreed: agreed?.length ? agreed.map((p) => ({ id: p.id, text: p.text })) : null,
     // The repository's standards (standards.js): high-risk files touched, and the bar the app ran.
@@ -61,6 +66,14 @@ export const factLines = (f) =>
     ...(f.bar ? [`the repository's quality bar, run by the app: ${f.bar.passed} passed, ${f.bar.failed.length} failed${f.bar.failed.length ? ` (${f.bar.failed.join(', ')})` : ''}`] : []),
     ...(f.risk?.length ? [`files under paths the person marked high risk: ${f.risk.join(', ')}`] : []),
     ...(f.proof ? proofFacts(f.proof.doc, f.proof.rerun) : []),
+    ...breakFacts(f.breaks),
+    ...(f.risks?.length
+      ? [
+          `risks the agent named before starting: ${f.risks.length}; it marks ${f.risks.filter((r) => r.state === 'avoided').length} avoided, ${f.risks.filter((r) => r.state === 'happened').length} happened, ${f.risks.filter((r) => r.state === 'open').length} not checked` +
+            (f.risks.some((r) => r.state !== 'avoided') ? ` (${f.risks.filter((r) => r.state !== 'avoided').map((r) => `${r.state === 'happened' ? 'happened' : 'not checked'}: ${r.text.slice(0, 120)}`).join('; ')})` : '') +
+            '. Check the ones not marked avoided against the changes.',
+        ]
+      : []),
     ...(f.notDone?.length ? [`the agent lists as not done: ${f.notDone.join('; ')}`] : []),
   ].join('\n');
 
@@ -149,6 +162,18 @@ export function combine(reply, f, hunks, { lessons = [], bar = null } = {}) {
   // Its recorded commands, run again by the app at the person's request: one that now gives another result is not verified.
   const differs = f.proof?.rerun && !f.proof.rerun.stale ? f.proof.rerun.results.filter((r) => r.status === 'differs') : [];
   if (differs.length) cap('tests', 40, `${differs.length} of its recorded commands gave a different result when run again (${differs.map((r) => r.title).join('; ').slice(0, 200)})`);
+  // Its tests tested by the app: breaks the tests did not notice are lines nothing verifies.
+  if (f.breaks?.baseline?.ok) {
+    const c = breakCounts(f.breaks.breaks);
+    if (c.tried >= 3 && !c.caught) cap('tests', 35, `none of ${c.tried} breaks made in the changed code was noticed by the tests`);
+    else if (c.tried >= 3 && c.missed * 2 > c.tried) cap('tests', 55, `${c.missed} of ${c.tried} breaks made in the changed code were not noticed by the tests`);
+    else if (c.missed && out.tests) out.tests.notes.push(`${c.missed} of ${c.tried} breaks made in the changed code ${c.missed === 1 ? 'was' : 'were'} not noticed by the tests`);
+  } else if (f.breaks?.baseline) cap('tests', 40, 'the tests failed when the app ran them');
+  // Its own pre-mortem: a risk it named and did not check is a place nobody looked.
+  const unchecked = (f.risks ?? []).filter((r) => r.state === 'open');
+  const happened = (f.risks ?? []).filter((r) => r.state === 'happened');
+  if (unchecked.length && out.tests) out.tests.notes.push(`${unchecked.length} of the ${f.risks.length} risks it named before starting ${unchecked.length === 1 ? 'was' : 'were'} not checked`);
+  if (happened.length && out.safety) out.safety.notes.push(`${happened.length} of the risks it named happened: ${happened.map((r) => r.text.slice(0, 100)).join('; ')}`);
   if (f.notDone?.length && out.intent) out.intent.notes.push(`the agent lists ${f.notDone.length} thing${f.notDone.length === 1 ? '' : 's'} as not done`);
   // Plan: bounded by the steps ticked.
   if (f.plan && out.plan) cap('plan', Math.round(40 + (60 * f.plan.done) / f.plan.steps), `${f.plan.done} of ${f.plan.steps} plan steps ticked`);

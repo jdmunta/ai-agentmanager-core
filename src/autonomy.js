@@ -22,6 +22,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { parseJsonReply, specPath } from './brief.js';
 import { FREE_CHOICE } from './inbox.js';
+import { keptPrivate } from './private.js';
 import { memoryKey, memoryText } from './memory.js';
 import { landState } from './tracker.js';
 
@@ -74,6 +75,8 @@ export function autonomySettings(config = {}) {
   const d = AUTONOMY_DEFAULTS;
   return {
     level: parseLevel(c.level) ?? d.level,
+    // A level for the new agents of one project, by its name; the others get `level`.
+    projects: Object.fromEntries(Object.entries(c.projects ?? {}).map(([k, v]) => [k, parseLevel(v)]).filter(([k, v]) => k && v)),
     models: models.length ? models : d.models,
     answers: c.answers !== false,
     nudges: c.nudges !== false,
@@ -259,6 +262,8 @@ export function menuOf(view) {
 
 /** Why a merge is the person's: the agent says it left something out, or its proof did not hold when run again. */
 export function leftOut(agent, view) {
+  const kept = keptPrivate(agent);
+  if (kept) return `It is kept private: ${kept.why}.`;
   const nd = view?.results?.notDone ?? [];
   if (nd.length) return `The agent lists as not done: ${clip(nd.join('; '), 240)}.`;
   const rerun = agent.proof && agent.proof.proofAt === (agent.proofDoc?.updatedAt ?? null) ? agent.proof.results.filter((r) => r.status === 'differs') : [];
@@ -363,9 +368,15 @@ export class Autonomy {
   change(b = {}) {
     const next = { ...this.config.autonomy };
     if ('level' in b) {
-      const level = parseLevel(b.level);
-      if (!level) throw err(400, `level is one of ${LEVELS.join(', ')}`);
-      next.level = level;
+      // "default" with a project: back to the level every other project gets.
+      const level = b.project && /^default$/i.test(String(b.level).trim()) ? null : parseLevel(b.level);
+      if (!level && !(b.project && /^default$/i.test(String(b.level).trim()))) throw err(400, `level is one of ${LEVELS.join(', ')}`);
+      const project = String(b.project ?? '').trim();
+      if (project) {
+        next.projects = { ...next.projects };
+        if (level) next.projects[project] = level;
+        else delete next.projects[project];
+      } else next.level = level;
     }
     if ('models' in b) {
       const models = cleanModels(b.models);

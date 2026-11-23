@@ -119,7 +119,10 @@ export function questionMenu(screen) {
 export function promptChoices(screen) {
   const text = String(screen ?? '')
     .replace(/\x1b\[(\d*)C/g, (_, n) => ' '.repeat(Math.min(Number(n || 1), 8)))
-    .replace(/\x1b\[[0-9;]*[ABDGHJKfm]/g, '\n')
+    // A jump along the line is a gap, not a new line. Claude Code redraws only the cells that
+    // changed, so a prompt can arrive as "pro" + jump + "eed?" and "❯ 1" + jump + "Yes".
+    .replace(/\x1b\[\d*G/g, ' ')
+    .replace(/\x1b\[[0-9;]*[ABDHJKfm]/g, '\n')
     .replace(/\x1b\[[0-9;?<>=]*[ -\/]*[@-~]|\x1b\][^\x07\x1b]*(\x07|\x1b\\)/g, '')
     .replace(/\r/g, '\n');
   const lines = text.split('\n').map((l) => l.replace(/\s+/g, ' ').trim());
@@ -127,9 +130,11 @@ export function promptChoices(screen) {
   const choices = new Map();
   let question = '';
   for (let i = lines.length - 1; i >= 0; i--) {
-    const m = /^(?:[❯>›]\s*)?(\d)[.)]\s+(.{1,80})$/.exec(lines[i]);
+    // The highlighted choice can lose its dot to a redraw ("❯ 1 Yes"): the pointer marks it as one.
+    const m = /^(?:[❯>›]\s*(\d)[.)]?|(\d)[.)])\s+(.{1,80})$/.exec(lines[i]);
     if (m) {
-      if (!choices.has(m[1])) choices.set(m[1], m[2].trim());
+      const key = m[1] ?? m[2];
+      if (!choices.has(key)) choices.set(key, m[3].replace(/\s*·.*$/, '').trim());
     } else if (choices.size && lines[i]) {
       question = lines[i].slice(0, 200);
       break;
@@ -139,13 +144,14 @@ export function promptChoices(screen) {
   // and switch to auto mode 3. No Esc to cancel"): read the flattened screen after the last question.
   if (!choices.size) {
     const flat = lines.join(' ').replace(/\s+/g, ' ');
-    const at = flat.search(/\?\s*(?:[❯>›]\s*)?1[.)]\s*\S[^?]*$/);
+    const at = flat.search(/\?\s*(?:[❯>›]\s*1[.)]?|1[.)])\s*\S[^?]*$/);
     if (at >= 0) {
       const head = flat.slice(0, at + 1);
       // Drop what's left of the box around it (╌ ─ │ and stray letters before them).
       question = (/([^.?!│]*\?)$/.exec(head)?.[1] ?? '').replace(/^.*[╌─│━]+\s*/, '').trim().slice(-200);
-      for (const m of flat.slice(at + 1).matchAll(/(?:[❯>›]\s*)?\b(\d)[.)]\s*(.+?)(?=\s+(?:[❯>›]\s*)?\d[.)]\s|\s+Esc to cancel|\s+Enter to|$)/g)) {
-        if (!choices.has(m[1])) choices.set(m[1], m[2].replace(/\s*·.*$/, '').trim().slice(0, 80));
+      for (const m of flat.slice(at + 1).matchAll(/(?:[❯>›]\s*(\d)[.)]?|\b(\d)[.)])\s*(.+?)(?=\s+(?:[❯>›]\s*)?\d[.)]\s|\s+Esc to cancel|\s+Enter to|$)/g)) {
+        const key = m[1] ?? m[2];
+        if (!choices.has(key)) choices.set(key, m[3].replace(/\s*·.*$/, '').trim().slice(0, 80));
       }
     }
   }

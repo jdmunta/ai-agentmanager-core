@@ -1,5 +1,6 @@
 // The agent's living brief: Problem, Solution, Diagram and Checks, written by
 // Claude to a Markdown file outside the repository and shown in the UI.
+import { parsePaths } from '../public/valuelens.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { paths } from './config.js';
@@ -48,6 +49,8 @@ const SECTION_ALIASES = {
   checks: ['checks', 'verification', 'tests', 'testing', 'validation'],
   references: ['references', 'links', 'documents', 'docs', 'specs', 'prd / tech spec', 'prd/tech spec'],
   results: ['results', 'result', 'outcome', 'status and results', 'results and status'],
+  risks: ['risks', 'what could go wrong', 'pre-mortem', 'premortem', 'risks named before starting'],
+  options: ['options', 'paths', 'alternatives', 'options considered', 'options weighed'],
 };
 
 // "- **PRD**: [Title](https://...) — highlight", tolerating ":" / "-" / "–" separators and bare URLs.
@@ -74,6 +77,36 @@ function sectionKey(heading) {
 }
 
 const CHECK_STATES = { ' ': 'pending', '~': 'running', x: 'passed', X: 'passed', '!': 'failed' };
+const RISK_STATES = { ' ': 'open', '~': 'open', x: 'avoided', X: 'avoided', '!': 'happened' };
+
+/**
+ * The pre-mortem: before it changes anything the agent names how the task could go wrong, and at
+ * the end says for each whether it did. The list tells a reviewer where to look.
+ */
+export const RISKS_PROMPT =
+  'Before you change anything, add a section "## Risks" to the brief: the 3 to 5 most likely ways this task could go wrong or be done ' +
+  'wrongly, each on one line as "- [ ] <the risk>". Be specific to this task (a part of the request that can be read two ways, an input ' +
+  'that breaks it, something else that depends on what you change, a step that is easy to skip), not general ("bugs", "bad tests"). ' +
+  'Do not remove or reword a risk later. When you finish, mark each one: "- [x] <the risk>: avoided, <how you know: the test or command>", ' +
+  '"- [!] <the risk>: happened, <what, and what you did about it>", or leave "- [ ]" when you did not check it.';
+
+/**
+ * Value and paths: a design is a decision when there is more than one way. The agent lists the
+ * ways, preferred first, with what each is worth now and later; and says when something looks new.
+ */
+export const OPTIONS_PROMPT =
+  'When there is more than one reasonable way to solve this, add a section "## Options" to the brief before you build: 2 to 4 ways, ' +
+  'preferred first, one line each as\n' +
+  '"1. <name>: <what it is> | now: high/medium/low | later: high/medium/low | cost: small/medium/large | risk: low/medium/high | when: <when this one is the right pick>"\n' +
+  '"now" is what the user gains as soon as it ships; "later" is what it makes possible, saves or avoids over time, counted lower the less sure it is. ' +
+  'Then one line "- Preferred: <why the first wins>". How to rank: the most value for its cost first; between close ones, the one that is easier ' +
+  'to undo; a way worth more later than now comes first only when waiting costs little or the cheaper way would close that door. ' +
+  'Build the first unless the user says otherwise. When there is only one reasonable way, leave the section out: most work is just a task. ' +
+  'If part of your design seems new beyond common practice, add a line "- New: <what is new>" there and do not publish it outside this ' +
+  'repository: no public gist, post or package, no pull request, and write the design doc as a file without publishing it. Whether it is worth a paper or a patent is for the user to decide.';
+
+/** Counts of a brief's risks: { total, avoided, happened, open }. */
+export const riskCounts = (risks = []) => ({ total: risks.length, avoided: risks.filter((r) => r.state === 'avoided').length, happened: risks.filter((r) => r.state === 'happened').length, open: risks.filter((r) => r.state === 'open').length });
 
 /** Parse the brief Markdown into its four sections. Unknown sections are ignored. */
 const CONFIDENCE_LINE = /^\s*(?:[-*]\s+)?\**\s*confidence\s*\**\s*:\s*\**\s*(\d{1,3})\s*%?\s*\**\s*(?:[-–—:,;.]\s*)?(.*)$/i;
@@ -90,7 +123,7 @@ export function parseConfidence(body) {
 }
 
 export function parseBrief(markdown) {
-  const out = { status: null, problem: '', solution: '', diagram: null, diagramNotes: '', checks: [], references: [], results: null };
+  const out = { status: null, problem: '', solution: '', diagram: null, diagramNotes: '', checks: [], references: [], results: null, risks: [], options: null };
   const st = markdown.split(/^##\s/m)[0].match(/^\s*\**status\**\s*:\s*\**\s*(planning|working|blocked|done)\b/im);
   if (st) out.status = st[1].toLowerCase();
   const parts = markdown.split(/^##\s+(.+?)\s*#*\s*$/m);
@@ -126,6 +159,16 @@ export function parseBrief(markdown) {
       for (const line of body.split('\n')) {
         const ref = parseReference(line);
         if (ref) out.references.push(ref);
+      }
+    } else if (key === 'options') {
+      // The ways it weighed (OPTIONS_PROMPT): preferred first, each with its value now and later, cost and risk.
+      const o = parsePaths(body);
+      out.options = o.paths.length || o.new ? o : null;
+    } else if (key === 'risks') {
+      // The pre-mortem (RISKS_PROMPT): "- [ ] risk" as named before starting; "[x]" avoided, "[!]" happened.
+      for (const line of body.split('\n')) {
+        const m = line.match(/^\s*[-*]\s+\[([ xX!~])\]\s+(.+?)\s*$/);
+        if (m && out.risks.length < 12) out.risks.push({ state: RISK_STATES[m[1]], text: m[2].slice(0, 400) });
       }
     } else if (key === 'checks') {
       for (const line of body.split('\n')) {
@@ -240,8 +283,8 @@ export function explainPrompt({ intent, status, digest, repo, briefMarkdown }) {
 /** Prompt for "Insights": Why / What / How / Now, three tidy points each. */
 export function insightsPrompt({ intent, status, digest, repo, briefMarkdown }) {
   return [
-    "Give a human the four insights that matter about an AI coding agent's work, from its ask and live",
-    'context below. Write Markdown with exactly these four sections, in this order:',
+    "Give a human the insights that matter about an AI coding agent's work, from its ask and live",
+    'context below. Write Markdown with exactly these seven sections, in this order:',
     '### Why',
     'Why this work matters: the motivation, the user or business need, or the root cause of the problem.',
     '### What',
@@ -250,12 +293,33 @@ export function insightsPrompt({ intent, status, digest, repo, briefMarkdown }) 
     'How it is being done: the approach, the key mechanism or the main changes.',
     '### Now',
     'Where it stands now and the next step, including anything waiting on the user.',
+    '### Value',
+    'What the work is worth now against later. Exactly these four bullets:',
+    '- Now: high, medium or low - who gains what as soon as it ships',
+    '- Later: high, medium or low - what it makes possible, saves or avoids over time; lower the less sure it is',
+    '- Waiting: what is lost each week it is not done, or "little"',
+    '- Weighs: now, later or both - which of the two should drive the design, and why',
+    '### Kind',
+    'What kind of idea this is. Exactly these three bullets:',
+    '- Kind: task, white paper or patentable idea. "task" for ordinary work done in a known way (most work). "white paper" when the approach or',
+    '  the result would teach others something and is worth writing up. "patentable idea" only when there is a specific technical mechanism',
+    '  that seems new, not an obvious step for someone skilled in the field, and useful; an idea, a goal or a business rule alone is not.',
+    '- New: what, concretely, is new beyond common practice, or "nothing new"',
+    '- Next: what to do about it: build it; write it up (and for whom); or keep it unpublished and talk to a patent attorney before sharing',
+    '### Paths',
+    'The 2 to 4 real ways to go from here, preferred first, one numbered line each, exactly in this form:',
+    '1. <name>: <what it is> | now: high/medium/low | later: high/medium/low | cost: small/medium/large | risk: low/medium/high | when: <when this is the right pick>',
+    'Then one bullet "- Preferred: <why the first wins>". Rank by the most value for the cost; between close ones, the one easier to undo;',
+    'a way worth more later than now comes first only when waiting costs little or the cheaper way would close that door.',
+    'Include the way the agent is taking. If there is truly one way, give it alone and say so in Preferred.',
     '',
     'Style rules, strictly:',
-    '- Each section has 1 to 3 bullets, never more. Fewer is better when it is enough.',
-    '- Each bullet is one short, concrete line of at most 12 words: easy to remember and repeat.',
+    '- Why, What, How and Now have 1 to 3 bullets each, never more. Fewer is better when it is enough.',
+    '- In those four, each bullet is one short, concrete line of at most 12 words: easy to remember and repeat.',
+    '- In Value, Kind and Paths, keep each line under 25 words and keep the labels exactly as given.',
     '- Lead with the key word; no filler, no hedging, no nested bullets, no preamble or closing text.',
     '- Use only the context. If something is not known yet, write "Unclear yet" as the bullet.',
+    '- Kind is a first read, not legal advice, and you have not searched for prior art: when unsure between two kinds, give the lower one.',
     '',
     '<agent_status>',
     status,

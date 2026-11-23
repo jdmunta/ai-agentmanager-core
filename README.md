@@ -550,9 +550,96 @@ The number is the agent's own statement, not a measurement.
 
 **Limits.** The record is written by the agent: until you run the commands again, it is still its word, now in a form you can check. Running them again happens on your computer with your rights and without the agent's permission prompts, which is why only you can ask for it (an agent's own call is refused) and why the commands are shown first; the list of what is not run is a filter on the command's text, not a sandbox, so read the commands. The same exit code does not prove the same output (durations and dates differ between runs; the page says when the last recorded line was not printed). An agent in a container cannot be run again from here. `"proof": false` in `config.json` stops asking agents for it.
 
+## Pre-mortem: how could this go wrong?
+
+Before it changes anything, each agent writes **Risks** in its brief: the 3 to 5 most likely ways this task could go wrong or be done wrongly, specific to the task. When it finishes it marks each one:
+
+| Mark | Meaning |
+| --- | --- |
+| **Avoided** | with how it knows (the test or command) |
+| **Happened** | with what, and what it did about it |
+| **Not checked** | it named the risk and did not look |
+
+- **Where you see it.** In the agent's Results, as **Risks it named before starting** ("3 avoided, 1 not checked"). The list is open when one happened or was not checked.
+- **Why it helps.** The list is written before the work, so it is not shaped by what was built. It tells a reviewer where to look first, and a risk left "not checked" is a place nobody looked.
+- **What it feeds.** The review scorecard is given the list and asked to check the ones not marked avoided against the changes. Risks that happened are noted under safety, ones not checked under tests.
+- **Off:** `"premortem": false` in config.json.
+
+**Limit.** The marks are the agent's word. "Avoided" with a command is as good as that command; [Proof](#proof-what-it-ran-and-what-it-did-not-do) lets you run it again.
+
+## Test the tests: would they notice a mistake?
+
+Proof shows the tests ran and passed. It does not show they could have failed. Tests written by the same agent as the code can pass while checking very little.
+
+**Test the tests** answers that by measuring. The app takes the lines the agent changed and breaks them one at a time in a small way, runs the tests, and puts the line back:
+
+| Kind of break | Example |
+| --- | --- |
+| Equal and not equal swapped | `===` becomes `!==` |
+| A comparison turned around | `<=` becomes `>` |
+| And / or swapped | `&&` becomes `\|\|` |
+| True / false swapped | `true` becomes `false` |
+| Plus / minus swapped | `total + fee` becomes `total - fee` |
+| A number moved by one | `10` becomes `11` |
+
+A break the tests fail on is **Caught**. A break they still pass on is **Not noticed**: that line can be wrong and no test will say so.
+
+- **Where.** In the agent's **Proof** dialog, under **Test the tests**: **Break the code and run the tests**. Or `agentmgr test-tests <agent> --run`. The Results then show **Tests tested**, for example "5 of 6 breaks caught".
+- **Which tests.** The passing commands the agent recorded in its proof, or the command you type (`-c "npm test"`).
+- **Which lines.** Up to 8 (`--max`), spread over the changed source lines and over the kinds of break. Test files, comments, text inside strings, imports and logging lines are left alone.
+- **Tell the agent.** **Tell the agent** (or `--send`) sends it the lines whose breaks went unnoticed and asks for tests that fail when they are wrong, or a reason why none should.
+- **What it feeds.** The review scorecard is given the result. When no break was caught, its tests score is at most 35; when more than half went unnoticed, at most 55. A run made before the latest changes is not counted.
+- **Exit code.** `agentmgr test-tests` exits with 1 when a break went unnoticed or the tests fail as they are.
+
+**How the folder is kept safe.** The tests are run first with nothing changed; if they fail, nothing is broken. One line of one file is different at a time, and it is put back before the next. The line is written down before it is changed, so a daemon that stops halfway puts it back when it starts again. A run does not start while the agent is working, messages to the agent wait until the run is over, and typing to the agent stops the run. After the run the app compares the folder's changes with those before it and says so if they differ.
+
+**Limits.**
+
+- It runs on your computer with your rights, without the agent's permission prompts, and changes the agent's files for a moment. For that reason only you can ask for it; an agent's own call is refused.
+- "Not noticed" is a pointer, not a verdict. Some breaks change nothing a test could see (a number in a timeout, two versions that behave the same). Read the line before asking for a test.
+- "Caught" includes a break that stops the code from loading at all, which any test would notice. A high count shows the changed lines are exercised; it does not show every behaviour is checked.
+- The breaks are made on the text of a line, not on a parsed program. They cover JavaScript, TypeScript, Python, Go, Ruby, Java, Kotlin, Rust, C, C++, C#, PHP, Swift and Scala.
+- Each run of the tests may take 5 minutes at most, and a whole run 15 (`"testTheTests"` in config.json: `max`, `timeoutMs`, `budgetMs`). An agent in a container is not covered.
+
+## Track record: was the confidence right?
+
+An agent writes "Confidence: 85%" and the scorecard says "Ready to approve". The track record shows how much those were worth.
+
+[Quality](#quality-what-happened-after-the-merge) already watches each merged pull request for some days: held up, or reverted, fixed afterwards, failed its checks. As a pull request merges, the app now also keeps what was said about it:
+
+- the agent's own confidence,
+- the review scorecard's recommendation,
+- whether its tests were tested, and whether every break was caught,
+- the engine and model,
+- how far the agent ran without you.
+
+**Quality → Track record**, or `agentmgr quality record`, compares the two once a pull request is settled:
+
+| Table | Reads like |
+| --- | --- |
+| The agent's own confidence | "90 to 100%: 6 of 10 held up (60%), said 92% on average: said more than held up" |
+| The review scorecard | "Ready to approve: 9 of 10 held up" |
+| Tests tested | "every break caught: 6 of 6 held up" |
+| Model | "claude · opus: 11 of 13 held up" |
+| Without you | "Run to pull request: 4 of 5 held up" |
+
+A row with fewer than 5 settled pull requests says "too few to say". "Said more than held up" means the average confidence was at least 15 points above the share that held.
+
+### Earned autonomy: the level a project's record supports
+
+The last table lists each project with the level of [Without you](#without-you-how-far-an-agent-goes-on-its-own) its new agents get, and what the record supports:
+
+- **Up one step** after at least 5 settled pull requests, 9 in 10 held up, and none of the last 5 a problem. "Run to merge" needs 10, with 95% held up and all of the last 10.
+- **Down one step** when one of the last 3 did not hold up.
+- Otherwise, keep it.
+
+It is a suggestion. The level changes only when you press **Set** or run `agentmgr autonomy --project <name> --default <level>`; an agent's own call is refused. A project's level applies to its new agents when none is named; agents that run now keep theirs. `--default default` takes the project's own level away again.
+
+**Limits.** The record counts merged pull requests only: work that was thrown away before a merge is not in it. "Fixed afterwards" is Quality's guess from titles and files, so mark the ones it gets wrong there. A pull request merged before this version has what is said about its agent now, not as it merged. A project is matched by its name. Small numbers say little, which is why the app waits for 5.
+
 ## Insights
 
-**Insights** in the Brief panel, or `agentmgr insights <agent>`, shows the agent's work as four cards built from its ask and live context:
+**Insights** in the Brief panel, or `agentmgr insights <agent>`, shows the agent's work as four quick cards built from its ask and live context, followed by three cards for the decision in it:
 
 | Card | Answers |
 | --- | --- |
@@ -562,6 +649,67 @@ The number is the agent's own statement, not a measurement.
 | 📍 **Now** | Where it stands and the next step, including anything waiting on you |
 
 Each card has at most **three points of about 12 words each**, so they're easy to remember and repeat. Insights uses the same context and the same separate, tool-less Claude call as Explain, so the agent isn't interrupted. Use Insights for a quick glance and Explain for the full briefing.
+
+### The decision side: value, kind of idea, and paths
+
+Below the four cards, Insights adds three more, for the part of a design that is a decision:
+
+| Card | Answers |
+| --- | --- |
+| ⚖️ **Value: now and later** | What the work is worth as soon as it ships, what it is worth over time, what waiting costs, and which of the two should drive the design |
+| 💡 **Kind of idea** | Just a task, worth a white paper, or possibly patentable; what is new, and what to do next |
+| 🧭 **Paths, preferred first** | The 2 to 4 real ways to go, ranked, each with its value now and later, cost, risk, and when it is the right pick |
+
+**Now against later.** "Now" is what someone gains as soon as it ships. "Later" is what it makes possible, saves or avoids over time, counted lower the less sure it is. Each is rated high, medium or low with a one-line reason.
+
+**How the paths are ranked.**
+
+1. The most value for its cost comes first.
+2. Between close ones, the one that is easier to undo.
+3. A path worth more later than now comes first only when waiting costs little, or when the cheaper path would close that door.
+
+The first path is marked **Preferred**, with the reason it wins. The others stay listed with the condition under which each becomes the right pick, so the ranking can change when your situation does.
+
+**Kind of idea.**
+
+| Kind | Means | Next |
+| --- | --- | --- |
+| Just a task | Ordinary work done in a known way. Most work. | Build it |
+| Worth a white paper | The approach or the result would teach others something | Write it up, and for whom |
+| Possibly patentable | A specific technical mechanism that seems new, not an obvious step, and useful. An idea, a goal or a business rule alone is not. | Keep it unpublished and talk to a patent attorney before sharing |
+
+When unsure between two kinds, the lower one is given.
+
+**While the agent designs.** Agents weigh the same things before they build. When a task has more than one reasonable way, the agent lists them in its brief under **Options**, preferred first, in the same form, and builds the first unless you say otherwise. Its Results show them as **Paths it weighed**. If part of its design seems new, it says so in one line and keeps it inside the repository; whether that is worth a paper or a patent is yours to decide. A task with one reasonable way has no Options section. `"valueLens": false` in config.json turns this off for agents.
+
+### Kept private: possibly patentable work is not sent out
+
+Publishing before filing can cost the right to a patent. So when part of an agent's work is read as possibly new, the app keeps it private until you say otherwise.
+
+**What makes it private:**
+
+- the agent says part of its design is new (the "New:" line under Options in its brief),
+- Insights reads it as possibly patentable,
+- or you mark it: **keep this work private** under Insights, or `agentmgr private <agent> --keep`.
+
+**What is held**, each with the reason and how to lift it:
+
+| Held | Where it would have gone |
+| --- | --- |
+| Publishing its documents | Google Drive |
+| Publishing an update, or posting it | Google Drive, Slack |
+| Posting the scorecard | A comment on the pull request |
+| Opening the pull request | GitHub, also when the agent runs without you or on autopilot |
+| A merge without you | Left to you |
+
+The agent is told as well: nothing published outside the repository, no pull request, and its design doc stays a file.
+
+**Lifting it** is yours alone: **Allow sharing** in the agent's Results, or `agentmgr private <agent> --allow`. An agent's own call is refused. `--reset` goes back to what the agent and Insights say. A white paper is not held.
+
+**Limits.** This guards what the app sends. It does not stop an agent from running a command in its terminal that publishes something; the agent is instructed not to, and its permission prompts still apply. Work already pushed or published before it was marked stays where it is. It is a caution based on a first read, not a finding that anything is patentable: talk to a patent attorney.
+
+**Limits.** The ratings are a model's judgement from the agent's request and session, not a calculation with your numbers. The kind of idea is a first read: no search for prior art is made, and it is not legal advice. Publishing before filing can cost the right to a patent, so treat "possibly patentable" as a reason to ask an attorney before you share, not as a finding.
+
 
 ## Review changes
 

@@ -56,6 +56,8 @@ import {
   demoPagePrompt,
   benchPath,
   benchmarksPrompt,
+  RISKS_PROMPT,
+  OPTIONS_PROMPT,
 } from './brief.js';
 
 // One-off summaries / documents built from an agent's live context.
@@ -137,6 +139,7 @@ import { CONTAINER_ENGINES, claudeToken, containerName, containerRunning, engine
 import { conflictMessage, findConflicts, related, repoKey, summarize as summarizeConflicts } from './conflicts.js';
 import { answerMessage, loadQuestions, questionsPath, questionsPrompt } from './inbox.js';
 import { PROOF_FILE, proofBlock, proofFacts, proofPrompt } from './proof.js';
+import { PRIVATE_MESSAGE, ideaPatch, keptPrivate, mustBeShareable } from './private.js';
 import { GroundRules, groundRulesMessage } from './groundrules.js';
 import { autonomySettings, callLadder, eligible as autonomyEligible, levelOf, modelName, parseLevel } from './autonomy.js';
 import { STUCK_DEFAULTS, detectStuck } from './stuck.js';
@@ -405,6 +408,8 @@ export class AgentManager extends EventEmitter {
       // Intent, spec and plan files that exist, with when each changed (task agents).
       ...(NO_REPO.has(agent.kind) ? {} : { specDocs: specDocsInfo(agent.id) }),
       results: this.results(agent, rt, prs),
+      // Why its work is not sent outside this computer (private.js), or null.
+      keptPrivate: keptPrivate(agent),
       priority: agent.priority ?? 2,
       activeAt: this.activeAt(agent, rt),
       projectInfo: this.projectInfo(agent),
@@ -784,6 +789,12 @@ export class AgentManager extends EventEmitter {
       ...(team ? { team } : {}),
       ...(imported ? { imported } : {}),
     };
+    // A project with a level of its own (autonomy.js, set from its track record): its new agents get it when none is named.
+    const own = plainTask && !asked ? autonomySettings(this.config).projects[projectOf(agent).name] : null;
+    if (own && own !== level) {
+      agent.autonomy = own !== 'ask' ? { level: own, log: [], seen: {} } : null;
+      if (acceptance === undefined || acceptance === null) agent.acceptance = (own !== 'ask' ? true : this.config.acceptance) ? { status: 'writing', wait: true, points: [] } : null;
+    }
     // The PR a reviewer reviews isn't its own: it stays "mentioned", so landing and the rest leave it alone.
     for (const pr of refs.prs) agent.prs[pr.url] = { ...pr, source: pr.url === agent.reviewing?.url ? 'mentioned' : 'intent' };
     for (const bug of refs.bugs) agent.bugs[bug.key] = { ...bug, source: 'intent' };
@@ -1397,6 +1408,10 @@ export class AgentManager extends EventEmitter {
       prompts.push(briefPrompt(path.join(dir, path.basename(briefPath(agent.id)))));
       // What it ran to verify, kept so it can be checked, and what it left out (proof.js).
       if (this.config.proof !== false) prompts.push(proofPrompt(path.join(dir, PROOF_FILE)));
+      // The pre-mortem: how this could go wrong, named before it starts and marked at the end (brief.js).
+      if (this.config.premortem !== false) prompts.push(RISKS_PROMPT);
+      // Value and paths: more than one way is a decision, listed with what each is worth now and later (brief.js).
+      if (this.config.valueLens !== false) prompts.push(OPTIONS_PROMPT);
       if (this.config.inbox !== false) prompts.push(questionsPrompt(path.join(dir, path.basename(questionsPath(agent.id)))));
     }
     // SPEC.md before changing code, and PLAN.md kept as it goes (unless the plan review asks for the plan).
@@ -2532,6 +2547,19 @@ export class AgentManager extends EventEmitter {
     return true;
   }
 
+  /**
+   * Keep an agent's work private, allow sharing it, or go back to what was read (private.js). The
+   * person's call. When it becomes private from outside its session, the agent is told.
+   */
+  setPrivate(ref, { private: keep = null, note = '' } = {}) {
+    const agent = this.mustGet(ref);
+    const before = keptPrivate(agent);
+    this.patch(agent.id, ideaPatch(agent, { private: keep, note }));
+    const cur = this.store.get(agent.id);
+    if (keep === true && !before && this.runtimes.get(agent.id)?.pty) this.tell(agent.id, PRIVATE_MESSAGE);
+    return this.view(cur);
+  }
+
   /** Pick up changes to the agent's brief file. */
   reloadBrief(id) {
     const agent = this.store.get(id);
@@ -2966,7 +2994,8 @@ export class AgentManager extends EventEmitter {
     // The repository's standards: its bar is run here, by the app, before the model is asked.
     const standards = (await this.standards?.assess(agent.id, data)) ?? null;
     const proof = this.proof?.forScore(cur0) ?? null;
-    const f = scoreFacts({ files: data.files, prs: Object.values(cur0.prs ?? {}), brief: cur0.brief, plan: doc('plan'), spec: doc('spec'), standards, agreed: cur0.acceptance?.status === 'agreed' ? cur0.acceptance.points : null, proof });
+    const breaks = this.mutate?.forScore(cur0, data.diffHash) ?? null;
+    const f = scoreFacts({ files: data.files, prs: Object.values(cur0.prs ?? {}), brief: cur0.brief, plan: doc('plan'), spec: doc('spec'), standards, agreed: cur0.acceptance?.status === 'agreed' ? cur0.acceptance.points : null, proof, breaks });
     const writer = this.writerFor(agent);
     const prompt = scorecardPrompt({ ...ctx, briefMarkdown: this.briefFile(agent.id).markdown ?? '', intentDoc: doc('intent'), specDoc: doc('spec'), planDoc: doc('plan'), proofDoc: proof?.entries?.length ? proofBlock(proof.entries) : '', hunks, facts: f, lessons: standards?.lessons ?? [] });
     const sc = combine(parseJsonReply(await this.oneShot(agent, prompt, writer)), f, hunks, { lessons: standards?.lessons ?? [], bar: standards?.bar ?? null });
@@ -3112,6 +3141,7 @@ export class AgentManager extends EventEmitter {
    */
   publishToDrive(ref) {
     const agent = this.mustGet(ref);
+    mustBeShareable(agent, 'Publishing to Google Drive');
     if (NO_REPO.has(agent.kind)) throw Object.assign(new Error('Only task agents have documents to publish'), { status: 400 });
     if (agent.drive?.pending) return this.view(agent);
     const docs = this.driveDocuments(agent);
@@ -3204,6 +3234,7 @@ export class AgentManager extends EventEmitter {
   /** The update's details as one Google Doc, through the Drive connector; its link then goes under both messages. */
   publishUpdate(ref) {
     const agent = this.mustGet(ref);
+    mustBeShareable(agent, 'Publishing the update');
     const markdown = agent.docs?.update?.markdown;
     if (!markdown) throw Object.assign(new Error('Write the update first'), { status: 409 });
     if (agent.announce?.publishing) return this.view(agent);
@@ -3441,6 +3472,7 @@ export class AgentManager extends EventEmitter {
         continue;
       }
       // Idle, no prompt open, and not right after our last message (give it time to react).
+      if (this.mutate?.holds(id)) continue; // its files are changed for a moment (mutate.js)
       if (!rt?.pty || rt.busy || rt.attention || rt.planning || t - (rt.startedAt ?? 0) < 2500 || t - (rt.toldAt ?? 0) < 8000) continue;
       const { text } = queue.shift();
       rt.toldAt = t;

@@ -335,7 +335,7 @@ if (args.includes('--input-format') && args.includes('stream-json')) {
     }
     if (/Why[\s\S]*What[\s\S]*How[\s\S]*Now/.test(input.split('<agent_status>')[0])) {
       process.stdout.write(
-        `### Why\n- ${ok ? 'Safe call' : 'UNSAFE'}: ${section('intent')}\n### What\n- One\n### How\n- Two\n### Now\n- saw agent text: ${conv.includes('[agent] Looking at')}\n`,
+        `### Why\n- ${ok ? 'Safe call' : 'UNSAFE'}: ${section('intent')}\n### What\n- One\n### How\n- Two\n### Now\n- saw agent text: ${conv.includes('[agent] Looking at')}\n### Value\n- Now: high - support stops answering this by hand\n- Later: medium - the same check serves two planned features\n- Waiting: about three hours of support a week\n- Weighs: now - the gain is sure and near\n### Kind\n- Kind: white paper\n- New: caching by <intent>, not by key\n- Next: write it up for the platform team\n### Paths\n1. Cache in memory: one process, no new service | now: high | later: low | cost: small | risk: low | when: one server is enough\n2. Shared cache: a service every server reads | now: medium | later: high | cost: large | risk: medium | when: a second server is planned\n- Preferred: 1, because it ships this week and does not block the second\n`,
         () => process.exit(0),
       );
       return;

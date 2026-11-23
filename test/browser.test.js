@@ -87,8 +87,8 @@ before(async () => {
   // Quality: merged pull requests already looked at (GitHub is not asked in these tests).
   const mergedPr = (n, title, extra = {}) => [`https://github.com/acme/shop/pull/${n}`, { url: `https://github.com/acme/shop/pull/${n}`, number: n, title, repo: 'acme/shop', agentId: 'gone', agentName: `agent-${n}`, project: 'Shop', openedAt: new Date(Date.now() - 3 * 3_600_000 - 2000).toISOString(), mergedAt: new Date(Date.now() - 2000).toISOString(), facts: { mergeCommit: `sha${n}`, base: 'main', files: ['src/cache.js'], lines: 40 + n, changesRequested: n === 71 ? 2 : 0, reviews: 1 }, after: { reverted: null, fixes: [], checks: { state: 'passed', failed: [] } }, checkedAt: new Date().toISOString(), ...extra }];
   const qualityItems = Object.fromEntries([
-    mergedPr(71, 'Cache prices', { after: { reverted: null, fixes: [{ number: 75, title: 'Fix stale prices', url: 'https://github.com/acme/shop/pull/75', at: new Date().toISOString(), shared: ['src/cache.js'], named: false }], checks: { state: 'passed', failed: [] } } }),
-    mergedPr(72, 'Export orders', { after: { reverted: { number: 76, title: 'Revert "Export orders"', url: 'https://github.com/acme/shop/pull/76', at: new Date().toISOString() }, fixes: [], checks: { state: 'passed', failed: [] } } }),
+    mergedPr(71, 'Cache prices', { said: { confidence: 90, recommendation: 'ready', breaks: null, engine: 'claude', model: 'opus', level: 'pr' }, after: { reverted: null, fixes: [{ number: 75, title: 'Fix stale prices', url: 'https://github.com/acme/shop/pull/75', at: new Date().toISOString(), shared: ['src/cache.js'], named: false }], checks: { state: 'passed', failed: [] } } }),
+    mergedPr(72, 'Export orders', { said: { confidence: 96, recommendation: 'look', breaks: { caught: 1, tried: 3 }, engine: 'claude', model: 'opus', level: 'pr' }, after: { reverted: { number: 76, title: 'Revert "Export orders"', url: 'https://github.com/acme/shop/pull/76', at: new Date().toISOString() }, fixes: [], checks: { state: 'passed', failed: [] } } }),
     mergedPr(73, 'Faster search'),
     mergedPr(74, 'New footer', { facts: null, after: null, checkedAt: null }),
   ]);
@@ -1395,6 +1395,28 @@ test('Quality: the share of merged pull requests that held up, why each did not,
   assert.deepEqual([c.Reverted.split(' | ')[0], c['Fixed afterwards'].split(' | ')[0], c['Checks failed'].split(' | ')[0]], ['1', '1', '0']);
   assert.equal(c['Changes requested'], '33% | by a reviewer, before the merge (1)');
   assert.equal(c['Opened to merged'], '3h | median');
+  // Track record: what was said as they merged against what held, and the level the project's record supports.
+  await api('PUT', '/autonomy', { project: 'Shop', level: 'pr' });
+  await js(`document.querySelector('#quality-body [data-quality-mode="record"]').click()`);
+  await until(`document.querySelector('#quality-body .rec-table')`, 'the track record');
+  const rc = await cards();
+  assert.deepEqual([rc['Held up'], rc['Said by the agents'], rc['Not settled yet']], ['0% | 0 of 2 settled pull requests', '93% | their own confidence, on average; 0% of those held up', '2 | still watched, or not looked at']);
+  const recRows = () => js(`[...document.querySelectorAll('#quality-body .rec-table tbody tr')].map((r) => [...r.children].map((td) => td.textContent.replace(/\\s+/g, ' ').trim()).join(' | '))`);
+  const rr = await recRows();
+  assert.ok(rr.includes('90 to 100% | 0 of 2 | 0% | 93% | too few to say'), rr.join('\n'));
+  assert.ok(rr.includes('Ready to approve | 0 of 1 | 0% | too few to say') && rr.includes('Tests tested: a break not noticed | 0 of 1 | 0% | too few to say') && rr.includes('claude · opus | 0 of 2 | 0% | too few to say') && rr.includes('Run to pull request | 0 of 2 | 0% | too few to say'), rr.join('\n'));
+  assert.ok(rr.some((x) => /^Shop \| 0 of 2 \| 0% \| Run to pull request \| The record supports Agree, then run ?2 of its last 2 merged pull requests did not hold up \| Set Agree, then run ?Use the default$/.test(x)), rr.join('\n'));
+  await js(`document.querySelector('#quality-body [data-record-level="run"]').click()`);
+  await until(`document.querySelector('#quality-body [data-record-level="ask"]')`, 'set, and the next step down offered');
+  assert.deepEqual((await api('GET', '/autonomy')).projects, { Shop: 'run' });
+  await js(`document.querySelector('#quality-body [data-record-level="default"]').click()`);
+  await until(`!document.querySelector('#quality-body [data-record-level]')`, 'the default again: nothing below Ask me');
+  assert.deepEqual((await api('GET', '/autonomy')).projects, {});
+  await width(390);
+  assert.ok(await js(`document.documentElement.scrollWidth <= window.innerWidth && [...document.querySelectorAll('#quality-body .value-card, #quality-body .issues-scroll')].every((el) => el.getBoundingClientRect().right <= 390)`), 'the record fits a phone');
+  await width(1600);
+  await js(`document.querySelector('#quality-body [data-quality-mode="after"]').click()`);
+  await until(`document.querySelector('#quality-body .quality-items')`, 'back to After the merge');
   assert.match(await js(`document.querySelector('#quality-body .value-period').textContent`), /4 pull requests from agents merged · 1 not looked at yet/);
   assert.match(await js(`document.querySelector('#quality-body').textContent`), /GitHub is not asked on this computer/);
   const rows = () => js(`[...document.querySelectorAll('#quality-body .quality-items tbody tr')].map((r) => [r.children[1].querySelector('a').textContent, r.children[2].textContent.trim(), r.children[3].textContent.replace(/\\s+/g, ' ').trim()])`);
@@ -1637,7 +1659,7 @@ test('Without you and ground rules: the level on a new agent and on one that run
   for (let i = 0; i < 100 && (await api('GET', `/agents/${a.id}`)).status !== 'running'; i++) await sleep(200);
   await sleep(1500); // the stand-in engine writes its own brief as it starts
   fs.writeFileSync(path.join(briefs, 'PROOF.md'), '## The cache answers\nCommand: `echo ok`\nExit: 0\n```\nok\n```\n## The suite passes\nCommand: false\nExit: 0\n```\n12 passed\n```\n## Saved the log\nCommand: echo hi > log.txt\nExit: 0\n## Read the config\nCommand: none\nLooked at <config>.\n');
-  fs.writeFileSync(path.join(briefs, 'BRIEF.md'), 'Status: done\n## Problem\nx\n## Solution\ny\n## Checks\n- [x] the cache answers\n- [x] the suite passes\n## Results\nOutcome: done\nConfidence: 60% - read the code, ran nothing <b>yet</b>\n- Delivered: a cache\n- Not done: eviction when <full>\n');
+  fs.writeFileSync(path.join(briefs, 'BRIEF.md'), 'Status: done\n## Problem\nx\n## Solution\ny\n## Risks\n- [x] A stale entry is served: avoided, the expiry test passes\n- [ ] The cache grows without <limit>\n## Options\n1. Cache in memory: one process | now: high | later: low | cost: small | risk: low | when: one server is enough\n2. Shared cache: a service | now: medium | later: high | cost: large | risk: medium | when: a second server is planned\n- Preferred: 1, because it ships <now>\n## Checks\n- [x] the cache answers\n- [x] the suite passes\n## Results\nOutcome: done\nConfidence: 60% - read the code, ran nothing <b>yet</b>\n- Delivered: a cache\n- Not done: eviction when <full>\n');
   await until(`document.querySelector('.own-conf .tag')`, 'its confidence shown', 30_000);
   assert.match(await js(`document.querySelector('.own-conf').textContent.replace(/\\s+/g, ' ')`), /Its own confidence: 60% read the code, ran nothing <b>yet<\/b>/);
   assert.ok(await js(`document.querySelector('.own-conf .tag').classList.contains('conf-low')`));
@@ -1647,6 +1669,30 @@ test('Without you and ground rules: the level on a new agent and on one that run
   await until(`document.querySelector('.results .proof-row [data-act="proof-open"]')`, 'the proof row');
   assert.match(await js(`document.querySelector('.results .not-done').textContent.replace(/\\s+/g, ' ')`), /Not done, as the agent says ?eviction when <full>/);
   assert.match(await js(`document.querySelector('.results .proof-row').textContent.replace(/\\s+/g, ' ')`), /Proof 3 recorded runs, 1 by reading Open/);
+  assert.match(await js(`document.querySelector('.results .risks').textContent.replace(/\\s+/g, ' ')`), /Risks it named before starting 1 avoided, 1 not checked ?Avoided A stale entry is served: avoided, the expiry test passes ?Not checked The cache grows without <limit>/);
+  assert.ok(await js(`document.querySelector('.results .risks').open`), 'open when one was not checked');
+  // The ways it weighed, preferred first; and Insights with what it is worth now and later, the kind of idea and the paths.
+  assert.match(await js(`document.querySelector('.results .vl-options').textContent.replace(/\\s+/g, ' ')`), /Paths it weighed 2, preferred first: Cache in memory ?Preferred Cache in memory one process ?now high ?later low ?cost small ?risk low ?Pick when: one server is enough ?Shared cache a service ?now medium ?later high ?cost large ?risk medium ?Pick when: a second server is planned ?Why the first it ships <now>/);
+  await js(`document.querySelector('[data-act="insights"]').click()`);
+  await until(`document.querySelector('.insight-wide .insight.paths .vl-paths')`, 'Insights, with the decision cards', 30_000);
+  const wideCards = await js(`Object.fromEntries([...document.querySelectorAll('.insight-wide .insight')].map((c) => [c.querySelector('h4').textContent, c.textContent.replace(/\\s+/g, ' ').trim()]))`);
+  assert.match(wideCards['⚖️ Value: now and later'], /Now High ?support stops answering this by hand ?Later Medium ?the same check serves two planned features ?Waiting costs about three hours of support a week ?Design for now the gain is sure and near/);
+  assert.match(wideCards['💡 Kind of idea'], /Worth a white paper ?New caching by <intent>, not by key ?Next write it up for the platform team/);
+  assert.match(wideCards['🧭 Paths, preferred first'], /Preferred Cache in memory one process, no new service ?now high ?later low ?cost small ?risk low ?Pick when: one server is enough ?Shared cache .*Why the first it ships this week and does not block the second/);
+  assert.equal(await js(`document.querySelectorAll('.insight-grid:not(.insight-wide) .insight').length`), 4, 'the four quick cards as before');
+  // Kept private, by your own word: shown with why and what is held; allowed again; and back.
+  assert.equal(await js(`document.querySelector('.kept-private')`), null);
+  await js(`document.querySelector('[data-act="idea-keep"]').click()`);
+  await until(`document.querySelector('.results .kept-private')`, 'kept private');
+  assert.match(await js(`document.querySelector('.results .kept-private').textContent.replace(/\\s+/g, ' ')`), /🔒 Kept private You marked it private\. The app does not publish or send it: .*Publishing before filing can cost the right to a patent; talk to a patent attorney first\. Allow sharing/);
+  assert.equal((await api('POST', `/agents/${a.id}/drive`)).error?.startsWith('Publishing to Google Drive is held'), true);
+  await js(`document.querySelector('[data-act="idea-allow"]').click()`);
+  await until(`!document.querySelector('.kept-private') && document.querySelector('.kept-private-off')`, 'sharing allowed');
+  await js(`document.querySelector('[data-act="idea-reset"]').click()`);
+  await until(`!document.querySelector('.kept-private-off')`, 'back to what was read');
+  await width(390);
+  assert.ok(await js(`document.documentElement.scrollWidth <= window.innerWidth && [...document.querySelectorAll('.insight-wide .insight, .vl-options')].every((el) => el.getBoundingClientRect().right <= 390)`), 'the decision cards fit a phone');
+  await width(1600);
   await js(`document.querySelector('.results [data-act="proof-open"]').click()`);
   const pd = `document.querySelector('#proof-dialog')`;
   await until(`${pd}.open && ${pd}.querySelectorAll('.proof-list li').length === 4`, 'the proof opens');
@@ -1656,11 +1702,40 @@ test('Without you and ground rules: the level on a new agent and on one that run
   await until(`${pd}.querySelectorAll('.proof-list .tag').length === 3`, 'run again', 30_000);
   assert.deepEqual(await js(`[...${pd}.querySelectorAll('.proof-list .tag')].map((t) => t.textContent)`), ['Same result', 'Different result', 'Not run again']);
   assert.match(await js(`${pd}.textContent.replace(/\\s+/g, ' ')`), /Run again: exit 1, and its last recorded line was not printed.*Run again here .*: 1 same, 1 different, 1 not run\./);
+  // Test the tests, in the same dialog: its changed lines broken one at a time, its tests run on each.
+  const wd = (await api('GET', `/agents/${a.id}`)).workdir;
+  const git = (...args) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@example.com', ...args], { cwd: wd, stdio: 'ignore' });
+  git('init', '-q', '-b', 'main');
+  git('commit', '-q', '--allow-empty', '-m', 'start');
+  const calc = "export function price(n, member) {\n  if (n <= 0) return 0;\n  const base = n * 5;\n  return member && n >= 10 ? base - 2 : base;\n}\nexport const label = (n) => (n === 1 ? 'item' : 'items');\n";
+  fs.writeFileSync(path.join(wd, 'package.json'), '{"type":"module"}\n');
+  fs.writeFileSync(path.join(wd, 'calc.js'), calc);
+  fs.writeFileSync(path.join(wd, 'calc.test.js'), "import assert from 'node:assert';\nimport { price } from './calc.js';\nassert.equal(price(0), 0);\nassert.equal(price(2), 10);\nassert.equal(price(10, true), 48);\nassert.equal(price(10, false), 50);\n");
+  assert.match(await js(`${pd}.querySelector('.breaks-head').textContent`), /Test the tests/);
+  assert.equal(await js(`${pd}.querySelector('[data-breaks="command"]').placeholder`), 'echo ok && false', 'the passing commands it recorded, as the default');
+  assert.equal(await js(`${pd}.querySelector('button[data-breaks="run"]').textContent`), 'Break the code and run the tests');
+  await js(`(() => { const i = ${pd}.querySelector('[data-breaks="command"]'); i.focus(); i.value = 'node calc.test.js'; i.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+  // (The stand-in agent prints now and then, which counts as working for a moment: asked again then.)
+  for (let i = 0; i < 20 && !(await js(`${pd}.querySelectorAll('.breaks-list li').length`)); i++) {
+    await js(`${pd}.querySelector('button[data-breaks="run"]:not([disabled])')?.click()`);
+    await sleep(1500);
+  }
+  await until(`${pd}.querySelectorAll('.breaks-list li').length === 4`, 'the breaks tried', 30_000);
+  assert.deepEqual(await js(`[...${pd}.querySelectorAll('.breaks-list .tag')].map((t) => t.textContent)`), ['Caught', 'Caught', 'Caught', 'Not noticed']);
+  assert.match(await js(`${pd}.textContent.replace(/\\s+/g, ' ')`), /with node calc\.test\.js: 3 of 4 breaks caught by its tests\..*calc\.js:6 === became !== ?export const label = .*The tests still passed with this line wrong: nothing checks it\./);
+  assert.equal(await js(`${pd}.querySelector('[data-breaks="command"]').value`), 'node calc.test.js', 'the command typed is kept');
+  assert.equal(fs.readFileSync(path.join(wd, 'calc.js'), 'utf8'), calc, 'the file is as it was');
+  assert.equal(await js(`${pd}.querySelector('button[data-breaks="send"]').textContent`), 'Tell the agent');
+  await js(`${pd}.querySelector('button[data-breaks="send"]').click()`);
+  await until(`${pd}.querySelector('button[data-breaks="send"]')?.textContent === 'Tell the agent again'`, 'sent to the agent');
+  assert.match(await js(`${pd}.textContent.replace(/\\s+/g, ' ')`), /The ones not noticed were sent to the agent/);
   await width(390);
+  assert.ok(await js(`[...${pd}.querySelectorAll('.breaks-list li, .breaks-cmd input')].every((li) => li.getBoundingClientRect().right <= 390)`), 'the breaks fit a phone');
   assert.ok(await js(`${pd}.getBoundingClientRect().right <= 390 && ${pd}.scrollWidth <= ${pd}.clientWidth + 1 && [...${pd}.querySelectorAll('.proof-list li')].every((li) => li.getBoundingClientRect().right <= 390)`), 'the proof fits a phone');
   await width(1600);
   await js(`${pd}.querySelector('[data-proof="close"]').click()`);
   await until(`/1 different when run again/.test(document.querySelector('.results .proof-row .tag')?.textContent ?? '')`, 'the result beside the results');
+  await until(`/Tests tested 3 of 4 breaks caught/.test(document.querySelector('.results')?.textContent.replace(/\\s+/g, ' ') ?? '')`, 'the breaks beside the results');
   assert.ok(!fs.existsSync(path.join((await api('GET', `/agents/${a.id}`)).workdir, 'log.txt')), 'the command that writes a file was not run');
 
   // A question it stops on is answered for you: a card in the inbox, seen with OK, and on its record.

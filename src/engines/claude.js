@@ -107,6 +107,9 @@ export default {
   attention: [
     [/trustthisfolder/i, 'Folder trust prompt'],
     [/Doyouwantto(proceed|make|create|allow|run|overwrite)/i, 'Permission prompt'],
+    // The same prompt when a redraw dropped letters of its question ("Do you want to pro eed?"): its
+    // choices and footer, Yes first, No last, then "Esc to cancel" (a question menu ends "Enter to select").
+    [/(?:^|[^a-z0-9])1\.?Yes.{0,300}\d\.?No.{0,60}(?<!Entertoselect.{0,40})Esctocancel/i, 'Permission prompt'],
     // The agent's own question, as a menu: a message typed now would pick the highlighted option.
     [/Entertoselect.{0,40}Esctocancel/i, 'Question'],
   ],
