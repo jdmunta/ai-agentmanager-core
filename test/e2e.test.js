@@ -1664,6 +1664,12 @@ test('proof: the agent is told to record it; what it recorded is shown with what
   const v = await agentNow(a.id);
   assert.deepEqual([v.proofDoc.entries, v.proofDoc.commands, v.results.notDone, v.results.notDoneSaid], [4, 3, ['the changelog entry'], true]);
   assert.deepEqual(v.brief.risks.map((r) => r.state), ['avoided', 'open'], 'its pre-mortem, read from the brief');
+  // Finished: Insights is made by itself, so the kind of idea is read without anyone asking.
+  const ins = await waitFor(async () => {
+    const x = await agentNow(a.id);
+    return x.insights?.markdown ? x.insights : null;
+  }, 30000, 'Insights after it finished');
+  assert.match(ins.markdown, /### Kind\n- Kind: white paper/);
   const shown = (await call('GET', `/agents/${a.id}/proof`)).body;
   assert.deepEqual(shown.entries.map((e) => [e.title, e.command, e.runnable]), [['The file holds the version', 'cat VERSION', true], ['The old file is gone', 'cat version.txt', true], ['Cleaned up', 'rm -f VERSION.bak', false], ['Read the docs', null, false]]);
   assert.deepEqual([shown.passed, shown.notDone, shown.rerun, shown.canRun], [2, ['the changelog entry'], null, true]);
@@ -1802,6 +1808,9 @@ test("kept private: an agent that says part of its design is new has every way o
   const v = await agentNow(a.id);
   assert.deepEqual([v.keptPrivate.from, v.brief.options.paths.length], ['agent', 1]);
   assert.match(v.keptPrivate.why, /The agent says part of its design may be new: an index keyed by intent, not by key/);
+  // It waits in the inbox for your decision.
+  const waiting = async () => (await call('GET', '/inbox')).body.filter((i) => i.kind === 'idea' && i.agentId === a.id);
+  assert.deepEqual((await waiting()).map((i) => [i.key, i.from, /may be new: an index keyed by intent/.test(i.title)]), [[`idea:${a.id}`, 'agent', true]]);
 
   // Every way out is held, with why and how to lift it.
   for (const [route, what] of [['drive', 'Publishing to Google Drive'], ['ship', 'Opening the pull request'], ['announce/publish', 'Publishing the update'], ['announce/slack', 'Posting the update to Slack'], ['scorecard/post', 'Posting the scorecard on the pull request']]) {
@@ -1816,6 +1825,7 @@ test("kept private: an agent that says part of its design is new has every way o
   assert.equal((await call('POST', `/agents/${a.id}/private`, { private: 'yes' })).status, 400);
   const allowed = (await call('POST', `/agents/${a.id}/private`, { private: false })).body;
   assert.deepEqual([allowed.keptPrivate, allowed.idea.allowed], [null, true]);
+  assert.deepEqual(await waiting(), [], 'decided: no longer waiting');
   const drive = await call('POST', `/agents/${a.id}/drive`);
   assert.ok(!/kept private/.test(drive.body.error ?? ''), 'no longer held for that reason');
   // Back to what was read; and your own mark on work nobody flagged, which the agent is told about.
@@ -1827,6 +1837,7 @@ test("kept private: an agent that says part of its design is new has every way o
   const kept = (await call('POST', `/agents/${a.id}/private`, { private: true, note: 'filing first' })).body;
   rec.restore();
   assert.deepEqual([kept.keptPrivate.from, kept.keptPrivate.why], ['you', 'You marked it private: filing first']);
+  assert.deepEqual(await waiting(), [], 'your own mark needs no decision');
   assert.equal(rec.told.filter((t) => /do not publish any of it outside this repository/.test(t)).length, 1, 'the agent is told');
   assert.equal((await call('POST', `/agents/${a.id}/drive`)).status, 409);
   await call('POST', `/agents/${a.id}/stop`);
@@ -2300,7 +2311,8 @@ test('claims check: what a brief and an update say, traced to sources by another
       return v.docs?.claims?.data && !v.docs.claims.pending ? v : null;
     }, 40000, 'the check, made by itself');
     const d = done.docs.claims.data;
-    assert.deepEqual(d.texts.map((x) => [x.key, x.at]), [['brief', done.brief.updatedAt], ['update', done.docs.update.at]]);
+    // (Insights, made by itself when the agent finishes, is checked with them when it is there in time.)
+    assert.deepEqual(d.texts.filter((x) => x.key !== 'insights').map((x) => [x.key, x.at]), [['brief', done.brief.updatedAt], ['update', done.docs.update.at]]);
     assert.ok(d.sources.some((x) => x.name === "The agent's brief" && x.own));
     const [brief, update] = d.texts;
     assert.ok(!brief.claims.some((x) => x.source?.name === "The agent's brief"), 'the brief does not back itself');

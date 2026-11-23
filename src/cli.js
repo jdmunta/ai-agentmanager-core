@@ -2145,6 +2145,11 @@ export async function main(argv) {
           console.log(dim('    agentmgr rules'));
           continue;
         }
+        if (it.kind === 'idea') {
+          console.log(`${yellow('possibly patentable')}  ${bold(it.agentName)} ${dim(it.agentId)}  ${it.title}`);
+          console.log(dim(`    Kept private until you decide. agentmgr private ${it.agentId} --keep  ·  agentmgr private ${it.agentId} --allow  ·  agentmgr insights ${it.agentId}`));
+          continue;
+        }
         if (it.kind === 'auto') {
           console.log(`${cyan('done for you')}  ${bold(it.agentName)} ${dim(it.agentId)}  ${it.title}`);
           if (it.entry?.answer) console.log(dim(`    → ${it.entry.answer}\n    agentmgr autonomy ${it.agentId} --ok  ·  agentmgr autonomy ${it.agentId} --change ${it.entry.id}="your answer"`));

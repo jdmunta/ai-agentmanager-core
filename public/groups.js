@@ -49,8 +49,13 @@ export function ownFont(v) {
 /** The text size was changed in the menu. */
 export function newFont(v, fit, box) {
   v.xterm.options.fontSize = termFont();
-  if (v.follow) requestAnimationFrame(() => scaleToFit(v, box));
-  else fit();
+  if (v.follow) {
+    // xterm takes the new size in over the next frames: measured too early, the view would stay
+    // at the full size and no longer fit. Fitting again is harmless once it does.
+    const again = () => scaleToFit(v, box);
+    requestAnimationFrame(again);
+    for (const ms of [120, 400, 1000]) setTimeout(again, ms);
+  } else fit();
 }
 
 /** This view sets the size again: its own font, fitted to its panel, sent to the session. */

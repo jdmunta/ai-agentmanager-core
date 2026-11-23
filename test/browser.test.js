@@ -1690,6 +1690,13 @@ test('Without you and ground rules: the level on a new agent and on one that run
   await until(`!document.querySelector('.kept-private') && document.querySelector('.kept-private-off')`, 'sharing allowed');
   await js(`document.querySelector('[data-act="idea-reset"]').click()`);
   await until(`!document.querySelector('.kept-private-off')`, 'back to what was read');
+  // The agent itself says part of its design is new: a card in the inbox until you decide.
+  fs.writeFileSync(path.join(briefs, 'BRIEF.md'), fs.readFileSync(path.join(briefs, 'BRIEF.md'), 'utf8').replace('- Preferred: 1, because it ships <now>\n', '- Preferred: 1, because it ships <now>\n- New: eviction by <intent>\n'));
+  await until(`document.querySelector('.need.idea')`, 'the card', 30_000);
+  const ideaCard = `document.querySelector('.need.idea')`;
+  assert.match(await js(`(${ideaCard}).textContent.replace(/\\s+/g, ' ')`), /Possibly patentable.*🔒 The agent says part of its design may be new: eviction by <intent>.*Kept private until you decide.*Keep it private ?Allow sharing/);
+  await js(`document.querySelector('.need.idea [data-ib="idea-allow"]').click()`);
+  await until(`!document.querySelector('.need.idea') && !document.querySelector('.results .kept-private')`, 'decided: the card is gone');
   await width(390);
   assert.ok(await js(`document.documentElement.scrollWidth <= window.innerWidth && [...document.querySelectorAll('.insight-wide .insight, .vl-options')].every((el) => el.getBoundingClientRect().right <= 390)`), 'the decision cards fit a phone');
   await width(1600);
