@@ -61,6 +61,8 @@ import { acceptanceRow, acceptanceWaits, initAcceptance } from '/acceptance.js';
 import { autoNeedHtml, autonomyNeeds, autonomyRow, initAutonomy, needsPermissionHint } from '/autonomy.js';
 import { initProof, proofRows } from '/proof.js';
 import { initWeekly } from '/weekly.js';
+import { initReadFirst, readFirstRow } from '/readfirst.js';
+import { initUnderstand } from '/understand.js';
 import { kindHtml, optionsRows, parseKind, parsePaths, parseValue, pathsHtml, privateRow, valueHtml } from '/valuelens.js';
 
 const $ = (sel) => document.querySelector(sel);
@@ -223,6 +225,8 @@ initSpend({ api, esc, toast, $ });
 const goalsUi = initGoals({ api, esc, toast, $, ago: (t) => ago(t), getProjects: () => projectsState, rerender: () => renderBacklog() });
 initWorklog({ api, esc, toast, $ });
 initWeekly({ api, esc, toast, $, md: (t) => md(t) });
+const understandUi = initUnderstand({ $, esc, api, toast: (m, ms) => toast(m, ms), openChanges: (id) => (showTab('agents'), select(id), reviewUi.open(id)), agentOf: (id) => agents.get(id) });
+const readFirstUi = initReadFirst({ $, esc, ago: (t) => ago(t), agents, openAgent: (id) => (showTab('agents'), select(id)), openChanges: (id) => (showTab('agents'), select(id), reviewUi.open(id)), projectOf: (a) => a.projectInfo?.name ?? null, api, toast: (m, ms) => toast(m, ms), understand: (id) => understandUi.open(id) });
 initSetup({ api, esc, $ });
 const updateUi = initUpdate({ api, esc, toast, $ });
 initMenu({ api, esc, toast, $ });
@@ -1118,6 +1122,7 @@ function resultsCard(a) {
     ${scoreStrip(a)}
     ${r.confidence ? `<p class="own-conf"><span class="tag conf-${esc(r.confidence.level)}" title="The agent's own confidence in what it built, as it wrote it in its brief. The review scorecard is the separate check.">Its own confidence: ${r.confidence.percent}%</span> ${esc(r.confidence.why)}</p>` : r.fromAgent && ['done', 'partial'].includes(r.outcome) ? '<p class="hint own-conf">The agent has not said how confident it is in this.</p>' : ''}
     ${r.blockers.length ? `<ul class="blockers">${r.blockers.map((x) => item(x, 'blocker')).join('')}</ul>` : ''}
+    ${readFirstRow(a, esc)}
     ${privateRow(a, esc)}
     ${optionsRows(a, esc)}
     ${proofRows(a, esc)}
@@ -2809,6 +2814,7 @@ const ALL_VIEWS = Object.keys(VIEWS);
 function render() {
   dirty.clear();
   perf.draw(ALL_VIEWS);
+  readFirstUi.render();
 }
 
 // Live updates come many times a second when many agents work. They mark the views they touch,
@@ -4024,6 +4030,7 @@ function upsert(a) {
 
 /** Views that show one agent's details outside the main render: keep them current. */
 function agentChanged(a) {
+  understandUi.agentChanged(a);
   if (a.id === term.agentId) term.renderTabs();
   // An open intent / spec / plan that the agent just updated: read it again.
   if (docView?.agentId === a.id && isSpecKind(a, docView.kind) && specCache.get(`${a.id}:${docView.kind}`)?.at !== (a.specDocs?.[docView.kind] ?? null)) {
@@ -4233,6 +4240,8 @@ $('#detail-body').addEventListener('click', async (e) => {
         upsert(await api('POST', `/agents/${a.id}/private`, { private: btn.dataset.act === 'idea-keep' ? true : btn.dataset.act === 'idea-allow' ? false : null }));
         toast(btn.dataset.act === 'idea-allow' ? 'Sharing allowed' : btn.dataset.act === 'idea-keep' ? 'Kept private: nothing of it is published or sent' : 'Back to what was read');
       });
+    case 'readfirst-open':
+      return readFirstUi.open(a.id);
     case 'proof-open':
       return proofUi.open(a.id);
     case 'auto-open':

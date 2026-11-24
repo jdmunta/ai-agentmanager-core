@@ -832,15 +832,81 @@ export async function main(argv) {
     });
 
   program
+    .command('trace')
+    .description('Requirement trace: each point of what done means for an agent, followed to what shows it: whether the scorecard found it met and its evidence, the checks the agent recorded for it (command, exit code, and whether it held when run again), and what is missing. Exit 1 when a point has a gap.')
+    .argument('<agent>')
+    .option('--json', 'print JSON')
+    .action(async (ref, o) => {
+      await daemon();
+      const a = await resolveAgent(ref);
+      const t = await api('GET', `/agents/${a.id}/trace`);
+      if (o.json) console.log(JSON.stringify(t, null, 2));
+      else console.log((await api('GET', `/agents/${a.id}/trace?format=md`)).markdown);
+      if (t.counts.gaps) process.exitCode = 1;
+    });
+
+  program
+    .command('understand')
+    .description("Understanding check: two or three questions about what an agent's changes do (what happens on a failure, an empty input, what else depends on it), to answer before you approve them. Without --answers it prints the questions only; the answers come with --answers (one-off model call).")
+    .argument('<agent>')
+    .option('--answers', 'print the answers and where to read them')
+    .option('--again', 'write new questions from the changes as they are now')
+    .action(async (ref, o) => {
+      await daemon();
+      const a = await resolveAgent(ref);
+      let u = a.docs?.understanding;
+      if (!u?.data?.questions?.length || o.again || (a.brief?.updatedAt && u.at && Date.parse(a.brief.updatedAt) > Date.parse(u.at))) {
+        process.stderr.write(dim('Writing the questions from its changes… (a separate model call; the agent is not interrupted)\n'));
+        u = (await api('POST', `/agents/${a.id}/docs/understanding`)).docs.understanding;
+      }
+      u.data.questions.forEach((x, i) => console.log(`${bold(`${i + 1}.`)} ${x.q}`));
+      if (!o.answers) return console.log(dim(`\nAnswer them first, then: agentmgr understand ${a.id} --answers`));
+      console.log('');
+      u.data.questions.forEach((x, i) => console.log(`${bold(`${i + 1}.`)} ${x.answer}${x.why ? dim(` ${x.why}`) : ''}${x.file ? dim(`\n   read: ${x.file}${x.head ? ` ${x.head}` : ''}`) : ''}`));
+    });
+
+  program
+    .command('read-first')
+    .description('Finished work waiting for your review, the pieces that need reading most first: each with a level (read closely, look, skim), the reasons from what the app measured (high-risk files, the scorecard, checks, whether the tests notice a mistake, what was left out, risks not checked, its own confidence, size), and where to start. Exit 1 when something is to be read closely.')
+    .option('--reviewed <agent>', 'you have reviewed this one: it leaves the queue until the agent changes its work again')
+    .option('--reviewed-older <days>', 'mark every one finished more than this many days ago as reviewed')
+    .option('--json', 'print JSON')
+    .action(async (o) => {
+      await daemon();
+      if (o.reviewed) {
+        const a = await resolveAgent(o.reviewed);
+        await api('POST', '/read-first/reviewed', { agent: a.id });
+        console.log(`${green('✓')} ${bold(a.name)} marked as reviewed`);
+      }
+      if (o.reviewedOlder) console.log(`${green('✓')} ${(await api('POST', '/read-first/reviewed', { olderThanDays: Number(o.reviewedOlder) })).marked} marked as reviewed`);
+      const { items } = await api('GET', '/read-first');
+      if (o.json) return console.log(JSON.stringify(items, null, 2));
+      if (!items.length) return console.log(dim('No finished work is waiting for review.'));
+      const tone = { close: red, look: yellow, skim: green };
+      const word = { close: 'read closely', look: 'look', skim: 'skim' };
+      for (const it of items) {
+        console.log(`${tone[it.level](word[it.level].padEnd(12))} ${String(it.score).padStart(3)}  ${bold(it.name)} ${dim(it.agentId)}${it.project ? dim(`  ${it.project}`) : ''}`);
+        for (const r of it.reasons.slice(0, 4)) console.log(`    - ${r.text}`);
+        for (const c of it.calm) console.log(dim(`    + ${c}`));
+        if (it.start.length) console.log(dim(`    start with: ${it.start.join(', ')}`));
+        console.log(dim(`    agentmgr changes ${it.agentId}${it.pr ? `  ·  ${it.pr.url}` : ''}`));
+      }
+      if (items.some((it) => it.level === 'close')) process.exitCode = 1;
+    });
+
+  program
     .command('weekly')
-    .description("Weekly summary for management: a week's work and achievements on one page. The week in one line, highlights, what was merged and finished by project, bugs fixed, the numbers against the week before, estimated value, how the merged work held up, what is in progress and what is blocked. Work that is kept private is listed without a description. A draft: nothing is sent.")
-    .option('--current', 'this week so far (default: the week that just ended)')
+    .description("Weekly summary for management (or --month, --quarter): a period's work and achievements on one page. The week in one line, highlights, what was merged and finished by project, bugs fixed, the numbers against the week before, estimated value, how the merged work held up, what is in progress and what is blocked. Work that is kept private is listed without a description. A draft: nothing is sent.")
+    .option('--current', 'the period so far (default: the one that just ended)')
+    .option('--month', 'the month instead of the week')
+    .option('--quarter', 'the quarter instead of the week')
     .option('--save', 'also write it to the reports folder (~/.agentmanager/reports/weekly-<monday>.md)')
     .option('-o, --out <file>', 'write it to this file')
     .option('--json', 'print the facts as JSON')
     .action(async (o) => {
       await daemon();
-      const r = o.save ? await api('POST', '/weekly/save', { current: Boolean(o.current) }) : await api('GET', `/weekly${o.current ? '?current=1' : ''}`);
+      const kind = o.quarter ? 'quarter' : o.month ? 'month' : 'week';
+      const r = o.save ? await api('POST', '/weekly/save', { kind, current: Boolean(o.current) }) : await api('GET', `/weekly?kind=${kind}${o.current ? '&current=1' : ''}`);
       if (o.out) fs.writeFileSync(o.out, `${r.markdown}\n`);
       if (o.json) return console.log(JSON.stringify(r.facts, null, 2));
       console.log(r.markdown);

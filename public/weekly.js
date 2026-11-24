@@ -5,12 +5,16 @@
 export function initWeekly({ api, esc, toast, $, md }) {
   const dlg = $('#weekly-dialog');
   let current = false;
+  let kind = 'week';
   let report = null;
 
   function render() {
-    $('#weekly-tabs').innerHTML = [[false, 'Last week'], [true, 'This week so far']]
-      .map(([v, label]) => `<button type="button" class="chip ${v === current ? 'active' : ''}" role="tab" aria-selected="${v === current}" data-weekly-current="${v ? 1 : 0}">${label}</button>`)
-      .join('');
+    $('#weekly-tabs').innerHTML =
+      [['week', 'Week'], ['month', 'Month'], ['quarter', 'Quarter']].map(([k, label]) => `<button type="button" class="chip ${k === kind ? 'active' : ''}" role="tab" aria-selected="${k === kind}" data-weekly-kind="${k}">${label}</button>`).join('') +
+      '<span class="weekly-gap"></span>' +
+      [[false, `Last ${kind}`], [true, `This ${kind} so far`]]
+        .map(([v, label]) => `<button type="button" class="chip ${v === current ? 'active' : ''}" role="tab" aria-selected="${v === current}" data-weekly-current="${v ? 1 : 0}">${label}</button>`)
+        .join('');
     $('#weekly-body').innerHTML = report ? `<div class="md weekly-md">${md(report.markdown)}</div>` : '<p class="hint">Loading…</p>';
     $('#weekly-note').textContent = report
       ? `${report.saved ? `Saved as ${report.file}. ` : ''}Put together from the work record, Value and Quality; estimates are marked as estimates. Work that is kept private is listed without a description. Nothing is sent from here.`
@@ -21,7 +25,7 @@ export function initWeekly({ api, esc, toast, $, md }) {
     report = null;
     render();
     try {
-      report = await api('GET', `/weekly${current ? '?current=1' : ''}`);
+      report = await api('GET', `/weekly?kind=${kind}${current ? '&current=1' : ''}`);
     } catch (err) {
       $('#weekly-body').innerHTML = `<p class="error">${esc(err.message)}</p>`;
       return;
@@ -34,6 +38,11 @@ export function initWeekly({ api, esc, toast, $, md }) {
     load();
   };
   dlg.addEventListener('click', async (e) => {
+    const k = e.target.closest('[data-weekly-kind]');
+    if (k) {
+      kind = k.dataset.weeklyKind;
+      return load();
+    }
     const tab = e.target.closest('[data-weekly-current]');
     if (tab) {
       current = tab.dataset.weeklyCurrent === '1';
@@ -47,13 +56,13 @@ export function initWeekly({ api, esc, toast, $, md }) {
         await navigator.clipboard.writeText(report.markdown);
         toast(`Copied the summary for ${report.week.label}`);
       } else if (act === 'save') {
-        report = await api('POST', '/weekly/save', { current });
+        report = await api('POST', '/weekly/save', { kind, current });
         toast(`Saved as ${report.file}`, 6000);
         render();
       } else if (act === 'download') {
         const a = document.createElement('a');
         a.href = URL.createObjectURL(new Blob([`${report.markdown}\n`], { type: 'text/markdown' }));
-        a.download = `weekly-${report.week.start}.md`;
+        a.download = report.file.split('/').pop();
         a.click();
         URL.revokeObjectURL(a.href);
       }

@@ -5,6 +5,8 @@
 // "said 85% on average, 6 of 10 held up". Per project it also says what level of "Without you"
 // the record supports. The level stays the person's to set; this only suggests. No model is called.
 
+import { costOf } from './budgets.js';
+
 export const MIN_TO_SAY = 5; // fewer settled pull requests than this say nothing
 const LEVELS = ['ask', 'run', 'pr', 'merge'];
 const LEVEL_LABEL = { ask: 'Ask me', run: 'Agree, then run', pr: 'Run to pull request', merge: 'Run to merge' };
@@ -26,6 +28,8 @@ export function saidOf(agent, { engine = null } = {}) {
     engine: engine ?? agent.engine ?? 'claude',
     model: agent.model ?? null,
     level: LEVELS.includes(agent.autonomy?.level) ? agent.autonomy.level : 'ask',
+    // What the AI work cost as it merged, kept only to compare models with each other (never shown as money).
+    cost: costOf(agent) || null,
   };
 }
 
@@ -78,6 +82,37 @@ export function suggestLevel(settled, current = 'ask') {
   return null;
 }
 
+const modelKey = (it) => `${it.said?.engine ?? 'unknown'}${it.said?.model ? ` · ${it.said.model}` : ''}`;
+
+/**
+ * Model fit: which model held up as well as the most used one at a lower cost. Per model: how many
+ * settled pieces, the share that held up, the average review scorecard, and the cost per piece
+ * against the most used model's (a ratio, not money). A suggestion needs MIN_TO_SAY settled pieces
+ * for both, a share that held up within 5 points of the most used model's, and a cost at most
+ * three quarters of it. `settled`: the settled pull requests.
+ */
+export function modelFit(settled) {
+  const keys = [...new Set(settled.map(modelKey))];
+  const rows = keys.map((k) => {
+    const list = settled.filter((it) => modelKey(it) === k);
+    const held = list.filter((it) => it.held).length;
+    const costs = list.map((it) => it.said?.cost).filter((c) => Number.isFinite(c) && c > 0);
+    const scores = list.map((it) => it.said?.score).filter(Number.isFinite);
+    return { model: k, n: list.length, held, heldPct: round((held / list.length) * 100), avgCost: costs.length ? costs.reduce((a, c) => a + c, 0) / costs.length : null, costed: costs.length, score: scores.length ? round(scores.reduce((a, c) => a + c, 0) / scores.length) : null };
+  }).sort((a, b) => b.n - a.n);
+  const base = rows[0] ?? null;
+  const out = rows.map((r) => ({ ...r, costVsMain: base?.avgCost && r.avgCost ? Math.round((r.avgCost / base.avgCost) * 100) / 100 : null, avgCost: undefined }));
+  let suggestion = null;
+  if (base && base.n >= MIN_TO_SAY && base.avgCost) {
+    const better = out
+      .slice(1)
+      .filter((r) => r.n >= MIN_TO_SAY && r.costed >= MIN_TO_SAY && r.costVsMain != null && r.costVsMain <= 0.75 && r.heldPct >= base.heldPct - 5)
+      .sort((a, b) => a.costVsMain - b.costVsMain)[0];
+    if (better) suggestion = { model: better.model, main: base.model, costVsMain: better.costVsMain, heldPct: better.heldPct, mainHeldPct: base.heldPct, n: better.n };
+  }
+  return { rows: out, suggestion };
+}
+
 /**
  * The record from Quality's items. `verdict(it)` is quality.js's verdictOf; a pull request counts
  * once it is settled: held up after the watch days, or a problem. `levels`: { default, projects }.
@@ -116,6 +151,7 @@ export function trackRecord(items, verdict, { levels = {} } = {}) {
     ]),
     models: rowsOf(settled, uniq((it) => `${it.said?.engine ?? 'unknown'}${it.said?.model ? ` · ${it.said.model}` : ''}`).map((k) => [k, k, (it) => `${it.said?.engine ?? 'unknown'}${it.said?.model ? ` · ${it.said.model}` : ''}` === k])),
     levels: rowsOf(settled, LEVELS.map((l) => [l, LEVEL_LABEL[l], (it) => (it.said?.level ?? 'ask') === l])),
+    fit: modelFit(settled),
     projects: projects.sort((a, b) => b.n - a.n),
     defaultLevel: levels.default ?? 'ask',
   };
@@ -136,6 +172,11 @@ export function recordMarkdown(r) {
   part('Tests tested', r.tests);
   part('Model', r.models);
   part('Without you', r.levels);
+  if (r.fit.rows.length > 1) {
+    out.push('## Model fit', '', ...r.fit.rows.map((m) => `- ${m.model}: ${m.held} of ${m.n} held up (${m.heldPct}%)${m.score != null ? `, scorecard ${m.score} on average` : ''}${m.costVsMain != null && m !== r.fit.rows[0] ? `, ${m.costVsMain} times the cost of ${r.fit.rows[0].model}` : ''}`));
+    if (r.fit.suggestion) out.push('', `**${r.fit.suggestion.model}** held up as well as ${r.fit.suggestion.main} (${r.fit.suggestion.heldPct}% against ${r.fit.suggestion.mainHeldPct}%) at ${r.fit.suggestion.costVsMain} times the cost, over ${r.fit.suggestion.n} settled pull requests: worth trying for more of the work.`);
+    out.push('');
+  }
   if (r.projects.length) {
     out.push('## Projects', '');
     for (const p of r.projects) {

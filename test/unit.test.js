@@ -2011,6 +2011,165 @@ test('scorecard: Improve tells the agent its low scores (lowest first), the crit
   assert.ok(!/Scores to raise|Acceptance criteria|Where a reviewer/.test(clean));
 });
 
+test('understanding check: questions about what a change does, cleaned and mapped to the hunk where each is answered', async () => {
+  const { understandingPrompt, understandingFrom, understandingMarkdown } = await import('../src/brief.js');
+  const { understandSummary } = await import('../public/understand.js');
+  const hunks = [{ id: 'H1', file: 'src/save.js', head: '@@ -1,3 +1,5 @@', text: '+if (!data) return;' }, { id: 'H2', file: 'src/load.js', head: '@@ -9 +9 @@', text: '-a\n+b' }];
+  const p = understandingPrompt({ intent: 'Save it', status: 'done', digest: '', briefMarkdown: '', hunks });
+  assert.match(p, /^You write an understanding check for a person about to approve/);
+  assert.match(p, /Two or three questions, never more[\s\S]*Ask what happens: on a failure, a bad or empty input[\s\S]*Not what a function is called/);
+  assert.match(p, /<hunk id="H2" file="src\/load\.js">\n@@ -9 \+9 @@\n-a\n\+b\n<\/hunk>/);
+  const qs = understandingFrom({ questions: [{ q: ' What happens on empty input? ', answer: 'It returns early.', why: 'No data is wiped.', hunk: 'H1' }, { q: 'No answer', answer: '' }, { q: 'Ghost?', answer: 'n/a', hunk: 'H9' }, { q: 'Third?', answer: 'yes', hunk: 'H2' }, { q: 'Fourth', answer: 'cut' }, 'nonsense'] }, hunks);
+  assert.deepEqual(qs.map((x) => [x.q, x.file, x.head]), [['What happens on empty input?', 'src/save.js', '@@ -1,3 +1,5 @@'], ['Ghost?', null, null], ['Third?', 'src/load.js', '@@ -9 +9 @@']], 'three at most; no answer dropped; an unknown hunk is kept without a place');
+  assert.deepEqual(understandingFrom(null, hunks), []);
+  assert.match(understandingMarkdown(qs, 'save'), /^# Understanding check: save\n\n1\. What happens on empty input\?\n[\s\S]*## Answers\n\n1\. It returns early\. \(src\/save\.js, @@ -1,3 \+1,5 @@\) Why it matters: No data is wiped\./);
+  const u = (knew) => ({ data: { questions: [1, 2, 3] }, knew });
+  assert.deepEqual([understandSummary(u({})), understandSummary(u({ 0: true })), understandSummary(u({ 0: true, 1: false, 2: true })), understandSummary(u({ 0: true, 1: true, 2: true })), understandSummary(null)], ['0 of 3 answered', '1 of 3 answered', 'Knew 2 of 3', 'Knew all 3', '']);
+});
+
+test('requirement trace: each point of what done means followed to the scorecard and the recorded checks, with what is missing', async () => {
+  const tr = await import('../src/trace.js');
+  const { readFirst } = await import('../src/readfirst.js');
+  const agent = {
+    name: 'greet',
+    acceptance: { status: 'agreed', points: [{ id: 'A1', text: 'Prints the greeting' }, { id: 'A2', text: 'A missing name is a usage error' }, { id: 'A3', text: 'No dependencies' }, { id: 'A4', text: 'Works on Windows' }, { id: 'A5', text: 'Fast enough' }, { id: 'A6', text: 'Documented' }] },
+    docs: { scorecard: { data: { criteria: [{ id: 'A1', criterion: 'Prints the greeting', status: 'met', evidence: 'greet.test.js' }, { id: 'A2', criterion: 'x', status: 'met', evidence: 'usage test' }, { id: 'A3', criterion: 'No dependencies', status: 'met', evidence: 'package.json' }, { id: 'A4', criterion: 'Works on Windows', status: 'unverified', evidence: '' }, { id: 'A5', criterion: 'Fast enough', status: 'not_met', evidence: '900 ms' }] } } },
+  };
+  const entries = [
+    { title: 'A1 prints the greeting', point: 'A1', command: 'node greet.js Ada', exit: 0, note: '' },
+    { title: 'A2 usage error', point: 'A2', command: 'node greet.js', exit: 1, note: '' },
+    { title: 'A3 no dependencies', point: 'A3', command: null, exit: null, note: 'Read package.json: no dependencies field.' },
+    { title: 'A5 timing', point: 'A5', command: 'node bench.js', exit: 0, note: '' },
+    { title: 'Documented', point: null, command: 'grep -c greet README.md', exit: 0, note: '' },
+    { title: 'Something else', point: null, command: 'true', exit: 0, note: '' },
+  ];
+  const rerun = { stale: false, results: [{ title: 'A1 prints the greeting', command: 'node greet.js Ada', status: 'same' }, { title: 'Documented', command: 'grep -c greet README.md', status: 'differs' }] };
+  const t = tr.traceOf(agent, entries, rerun);
+  assert.equal(t.source, 'agreed');
+  assert.deepEqual(t.rows.map((r) => [r.id, r.status, r.proof.length, r.gap]), [
+    ['A1', 'met', 1, null],
+    ['A2', 'met', 1, null],
+    ['A3', 'met', 1, 'checked by reading only: no command was run'],
+    ['A4', 'unverified', 0, 'nothing recorded for it'],
+    ['A5', 'not_met', 1, 'the scorecard found it not met'],
+    ['A6', 'unscored', 1, 'its recorded command gave a different result when run again'],
+  ]);
+  assert.deepEqual([t.rows[0].proof[0].rerun, t.rows[0].evidence, t.rows[1].proof[0].exit], ['same', 'greet.test.js', 1], 'an error the point asks for may exit with 1');
+  assert.deepEqual(t.counts, { points: 6, met: 3, notMet: 1, shown: 2, gaps: 4 });
+  assert.equal(tr.traceLine(t), '2 of 6 points shown by a recorded run; 4 with a gap');
+  // A run before the proof changed says nothing; a failing exit on a point that asks for success is a gap.
+  assert.equal(tr.traceOf(agent, entries, { ...rerun, stale: true }).rows[5].gap, null);
+  assert.equal(tr.traceOf(agent, [{ title: 'A1 x', point: 'A1', command: 'node greet.js Ada', exit: 2, note: '' }]).rows[0].gap, 'its recorded command did not exit with success');
+  assert.equal(tr.traceOf(agent, []).rows[0].gap, 'met by the scorecard, with no check recorded for it');
+  // Nothing agreed: the scorecard's own criteria; nothing at all: no rows.
+  const sc = tr.traceOf({ docs: agent.docs }, entries);
+  assert.deepEqual([sc.source, sc.rows.length, sc.rows[0].id], ['scorecard', 5, 'A1']);
+  assert.deepEqual([tr.traceOf({}).source, tr.traceOf({}).rows, tr.traceLine(tr.traceOf({}))], ['none', [], '']);
+
+  const md = tr.traceMarkdown('greet', t);
+  assert.match(md, /^# Requirement trace: greet\n\nThe points agreed with you as what done means\.\n\n2 of 6 points shown by a recorded run; 4 with a gap\./);
+  assert.match(md, /## A1 Prints the greeting\n\n- Scorecard: Met: greet\.test\.js\n- Check: `node greet\.js Ada` \(exit 0\), the same result when run again\n- Shown by a recorded run\./);
+  assert.match(md, /## A3 No dependencies\n\n- Scorecard: Met: package\.json\n- Check: by reading: Read package\.json: no dependencies field\.\n- \*\*Gap:\*\* checked by reading only/);
+  assert.match(md, /## A4 Works on Windows\n\n- Scorecard: Not verified\n- \*\*Gap:\*\* nothing recorded for it/);
+  assert.match(tr.traceMarkdown('x', tr.traceOf({})), /No points to trace/);
+
+  // Read first counts them: points not met, and points with nothing behind them.
+  const done = { kind: 'task', brief: { status: 'done', results: { outcome: 'done', confidence: { percent: 90 }, notDone: [] }, checks: [], risks: [] }, docs: { scorecard: { data: { recommendation: 'ready', overall: 90 } } } };
+  const r = readFirst(done, t);
+  assert.deepEqual(r.reasons.map((x) => [x.points, x.text]), [[18, '3 points of what done means have no recorded run behind them: A3, A4, A6'], [15, '1 point of what done means is not met: A5 Fast enough']]);
+  assert.ok(readFirst(done, tr.traceOf(agent, entries.slice(0, 2).concat({ title: 'A3', point: 'A3', command: 'c', exit: 0 }, { title: 'A4', point: 'A4', command: 'c', exit: 0 }, { title: 'A6', point: 'A6', command: 'c', exit: 0 }))).reasons.some((x) => /A5 Fast enough/.test(x.text)));
+  const all = tr.traceOf({ acceptance: { status: 'agreed', points: [{ id: 'A1', text: 'x' }] }, docs: { scorecard: { data: { criteria: [{ id: 'A1', criterion: 'x', status: 'met' }] } } } }, [{ title: 'A1 x', point: 'A1', command: 'c', exit: 0 }]);
+  assert.ok(readFirst(done, all).calm.includes('The one point of what done means is shown by a recorded run'));
+});
+
+test('read first: finished work ranked by how much it needs reading, with the reasons and where to start', async () => {
+  const rf = await import('../src/readfirst.js');
+  const page = await import('../public/readfirst.js');
+  const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;');
+  const done = (extra = {}) => ({ id: 'x', name: 'x', kind: 'task', intent: 'Do it', brief: { status: 'done', updatedAt: '2026-11-20T10:00:00Z', results: { outcome: 'done', confidence: { percent: 90 }, notDone: [] }, checks: [], risks: [] }, ...extra });
+
+  // What waits for review: finished, not merged, not a closed pull request, a task of its own.
+  assert.equal(rf.awaitsReview(done()), true);
+  assert.equal(rf.awaitsReview(done({ prs: { a: { state: 'OPEN' } } })), true);
+  assert.equal(rf.awaitsReview(done({ prs: { a: { state: 'MERGED' } } })), false);
+  assert.equal(rf.awaitsReview(done({ prs: { a: { state: 'CLOSED' } } })), false);
+  assert.equal(rf.awaitsReview(done({ prs: { a: { state: 'MERGED', source: 'mentioned' } } })), true, 'a pull request it only mentions is not its own');
+  assert.equal(rf.awaitsReview({ ...done(), brief: { status: 'working', results: { outcome: 'in progress' } } }), false);
+  assert.equal(rf.awaitsReview({ ...done(), brief: { status: 'working', results: { outcome: 'partial' } } }), true);
+  assert.equal(rf.awaitsReview(done({ kind: 'general' })), false);
+  assert.equal(rf.awaitsReview(done({ team: 't1' })), false);
+  assert.equal(rf.awaitsReview(done({ reviewed: { at: '2026-11-21T00:00:00Z' } })), false, 'you marked it as reviewed');
+  assert.equal(rf.awaitsReview(done({ reviewed: { at: '2026-11-19T00:00:00Z' } })), true, 'it changed after you reviewed it');
+
+  // Well checked work: nothing speaks against it.
+  const good = done({
+    proofDoc: { commands: 2, updatedAt: 'p1' },
+    proof: { proofAt: 'p1', results: [{ status: 'same' }] },
+    breaks: { baseline: { ok: true }, breaks: [{ status: 'caught' }, { status: 'caught' }] },
+    docs: { scorecard: { data: { recommendation: 'ready', overall: 91, look: [], facts: { files: 3, added: 60, removed: 5, codeFiles: 2, testFiles: 1 } } } },
+    brief: { status: 'done', results: { outcome: 'done', confidence: { percent: 92 }, notDone: [] }, checks: [{ state: 'passed' }], risks: [{ state: 'avoided', text: 'a' }] },
+  });
+  assert.deepEqual(rf.readFirst(good), { score: 0, level: 'skim', reasons: [], calm: ['The scorecard says ready (91 of 100)', 'Its tests caught all 2 deliberate breaks', 'Its recorded commands gave the same result when run again'], start: [] });
+
+  // Work with a lot against it: each fact is a reason with its points, the heaviest first.
+  const bad = done({
+    standards: { risk: [{ path: 'src/auth/login.js' }, { path: 'src/billing/charge.js' }], bar: { results: [{ name: 'Lint', ok: false }, { name: 'Tests', ok: true }] } },
+    prs: { p: { state: 'OPEN', url: 'https://github.com/acme/x/pull/3', number: 3, checks: { state: 'failed' } } },
+    breaks: { baseline: { ok: true }, breaks: [{ status: 'missed', file: 'src/auth/login.js', line: 14 }, { status: 'missed', file: 'src/auth/token.js', line: 9 }, { status: 'caught' }] },
+    proofDoc: { commands: 1, updatedAt: 'p2' },
+    proof: { proofAt: 'p2', results: [{ status: 'differs' }] },
+    docs: { scorecard: { data: { recommendation: 'not_ready', reasons: ['CI is failing'], overall: 48, look: [{ file: 'src/billing/charge.js', reason: 'rounding' }, { file: 'src/api.js', reason: 'x' }], facts: { files: 30, added: 1500, removed: 200, codeFiles: 20, testFiles: 0 } } } },
+    autonomy: { level: 'pr', log: [{ kind: 'answer' }, { kind: 'answer' }, { kind: 'nudge' }] },
+    brief: { status: 'done', results: { outcome: 'partial', confidence: { percent: 55, why: 'did not run the migration' }, notDone: ['the migration', 'docs'] }, checks: [{ state: 'passed' }, { state: 'failed' }], risks: [{ state: 'happened', text: 'old clients break' }, { state: 'open', text: 'two tabs' }] },
+  });
+  const r = rf.readFirst(bad);
+  assert.deepEqual([r.score, r.level, r.calm], [100, 'close', []]);
+  assert.deepEqual(r.reasons.map((x) => [x.points, x.text.slice(0, 44)]), [
+    [30, 'Touches 2 files you marked high risk: src/au'],
+    [30, 'The scorecard says not ready: CI is failing'],
+    [25, 'The quality bar is not met: Lint'],
+    [25, 'CI is failing on its pull request'],
+    [25, '1 recorded command gave a different result w'],
+    [20, '1 check of its own failed'],
+    [20, 'A large change: 1700 lines in 30 files'],
+    [16, '2 of 3 deliberate breaks in its code went un'],
+    [15, 'Its own confidence is 55%: did not run the m'],
+    [12, 'It lists 2 things as not done: the migration'],
+    [10, '1 risk it named happened: old clients break'],
+    [10, 'It says the work is partial'],
+    [8, 'Code changed with no test file'],
+    [8, '2 questions answered for you while it ran wi'],
+    [5, '1 risk it named was not checked: two tabs'],
+  ]);
+  assert.deepEqual(r.start, ['src/auth/login.js', 'src/billing/charge.js', 'src/api.js', 'src/auth/login.js:14', 'src/auth/token.js:9']);
+
+  // In between, and the things not known yet.
+  const mid = done({ brief: { status: 'done', results: { outcome: 'done', notDone: [] }, checks: [{ state: 'passed' }, { state: 'passed' }], risks: [] }, docs: { scorecard: { data: { recommendation: 'look', overall: 72, look: [], facts: { files: 4, added: 300, removed: 150, codeFiles: 3, testFiles: 1 } } } } });
+  const m = rf.readFirst(mid);
+  assert.deepEqual([m.score, m.level, m.reasons.map((x) => x.text)], [43, 'look', ['The scorecard says to look first (72 of 100)', '450 lines changed in 4 files', 'No proof recorded for its 2 passed checks', 'Its tests have not been tested', 'It gave no confidence']]);
+  assert.deepEqual(rf.readFirst(done()).reasons.map((x) => x.text), ['Not scored yet'], 'said 90% and nothing else is known');
+  assert.equal(rf.readFirst(done({ breaks: { baseline: { ok: false } } })).reasons[0].text, 'Its tests failed when the app ran them');
+  assert.equal(rf.readFirst(done({ proofDoc: { commands: 1, updatedAt: 'new' }, proof: { proofAt: 'old', results: [{ status: 'differs' }] } })).reasons.some((x) => /different result/.test(x.text)), false, 'a run before the proof changed says nothing');
+
+  // The queue: the ones that need reading most first; what is merged or still worked on is not in it.
+  const agents = [{ ...good, id: 'g', name: 'good' }, { ...bad, id: 'b', name: 'bad', intent: 'Rework billing\nmore' }, { ...mid, id: 'm', name: 'mid' }, { ...done(), id: 'w', brief: { status: 'working' } }, { ...bad, id: 'p', name: 'private', idea: { private: true }, prs: {} }];
+  const q = rf.readQueue(agents, (a) => ({ projectInfo: { name: a.id === 'b' ? 'shop' : 'api' } }));
+  assert.deepEqual(q.map((x) => [x.name, x.level, x.project, x.keptPrivate]), [['bad', 'close', 'shop', false], ['private', 'close', 'api', true], ['mid', 'look', 'api', false], ['good', 'skim', 'api', false]]);
+  assert.deepEqual([q[0].title, q[0].pr], ['Rework billing', { url: 'https://github.com/acme/x/pull/3', number: 3 }]);
+  const md = rf.queueMarkdown(q);
+  assert.match(md, /^# Read first\n\n4 pieces of finished work waiting for review: 2 to read closely, 1 to look at, 1 to skim\./);
+  assert.match(md, /## Read closely \(100\): bad · shop\n\nRework billing\n\n- Touches 2 files you marked high risk[\s\S]*Start with: src\/auth\/login\.js, src\/billing\/charge\.js[\s\S]*https:\/\/github\.com\/acme\/x\/pull\/3/);
+  assert.match(md, /## Skim \(0\): good · api\n\nDo it\n\n- In its favour: The scorecard says ready \(91 of 100\)/);
+  assert.match(rf.queueMarkdown([]), /No finished work is waiting for review\.$/);
+
+  // On the page: the queue from the agents, and the row in an agent's Results.
+  const map = new Map(agents.map((a) => [a.id, { ...a, readFirst: rf.awaitsReview(a) ? rf.readFirst(a) : null }]));
+  assert.deepEqual(page.queueOf(map).map((a) => a.name), ['bad', 'private', 'mid', 'good']);
+  assert.match(page.readFirstRow(map.get('b'), esc), /<b>Review<\/b> <span class="tag rf-close"[^>]*>Read closely<\/span> <span class="hint">Touches 2 files you marked high risk: [^·]* · The scorecard says not ready: CI is failing<\/span> <button class="small" data-act="readfirst-open">Why/);
+  assert.match(page.readFirstRow(map.get('g'), esc), /rf-skim"[^>]*>Skim<\/span> <span class="hint">The scorecard says ready \(91 of 100\)</);
+  assert.equal(page.readFirstRow(map.get('w'), esc), '');
+});
+
 test('weekly summary: a week on one page for management, from the work record, Value and Quality; private work is not described', async () => {
   const wk = await import('../src/weekly.js');
   const { weekStart } = await import('../src/worklog.js');
@@ -2067,7 +2226,7 @@ test('weekly summary: a week on one page for management, from the work record, V
   assert.match(md, /## The week in one line\n\n3 pull requests merged across 3 projects; 1 more task finished; 1 bug fixed; about 22 hours of engineering work delivered \(an estimate\)\./);
   assert.match(md, /### Merged\n\n\*\*shop\*\*\n- \[Cache prices\]\(https:\/\/github\.com\/acme\/shop\/pull\/a1\) \(SHOP-7\): Prices load from a cache, so checkout is faster\.\n[\s\S]*\n\n\*\*api\*\*\n- \[Rate limits\]\([^)]*\): Rate limits protect the API from bursts\.\n[\s\S]*?\n- \(kept private\)\n/);
   assert.match(md, /### Bugs fixed\n\n- \[SHOP-7 Prices are stale\]\(https:\/\/jira\/SHOP-7\) \(SHOP-7\)/);
-  assert.match(md, /\| Pull requests merged \| 3 \| 1 \|/);
+  assert.match(md, /\| \| This week \| The week before \|\n[^\n]*\n\| Pull requests merged \| 3 \| 1 \|/);
   assert.match(md, /Estimated size: about 22 hours of engineering work for 2 of the 3 pieces listed\. An estimate of what a person would have needed, not a measurement\./);
   assert.ok(!/\$|AI cost|USD/.test(md), 'no money amounts');
   // The technical side: how each piece was done, what it touched, how it was checked; and the week as a whole.
@@ -2082,6 +2241,19 @@ test('weekly summary: a week on one page for management, from the work record, V
   assert.match(md, /## Blocked: needs a decision or help\n\n- \*\*shop\*\*: Migrate the database\. the staging password \(needs: ops\)/);
   assert.match(md, /2 items above are kept private and listed without a description\.$/);
   assert.ok(!/secret|Secret/.test(md), 'nothing of the private work is described');
+  // A month and a quarter: the same page over a longer period, with the period before beside it.
+  const nov = wk.periodOf('month', now, { current: true });
+  assert.deepEqual([nov.label, nov.key, new Date(nov.start).getDate(), new Date(nov.end).getMonth(), new Date(nov.prevStart).getMonth()], ['November 2026', '2026-11', 1, 11, 9]);
+  assert.deepEqual([wk.periodOf('month', now).label, wk.periodOf('quarter', now).label, wk.periodOf('quarter', now, { current: true }).key], ['October 2026', 'Q3 2026', '2026-Q4']);
+  const wkp = wk.periodOf('week', now, { current: true });
+  assert.deepEqual([wkp.start, wkp.end - wkp.start, wkp.label, wkp.key], [start, 7 * DAY, 'Nov 16 to Nov 22, 2026', '2026-11-16']);
+  assert.throws(() => wk.periodOf('year', now), /kind is one of week, month, quarter/);
+  const mf = wk.weeklyFacts({ ...nov, events, value, quality, agents, t: now });
+  assert.deepEqual([mf.kind, mf.row.prs_merged, mf.prev.prs_merged, mf.merged.length], ['month', 5, 0, 5], 'the whole month, the week before and after included');
+  const mmd = wk.weeklyMarkdown(mf, { who: 'Pat Lee' });
+  assert.match(mmd, /^# Monthly summary: November 2026\n\nPat Lee · the month so far\n\n## The month in one line\n\n5 pull requests merged/);
+  assert.match(mmd, /\| \| This month \| The month before \|\n\| --- \| --- \| --- \|\n\| Pull requests merged \| 5 \| 0 \|/);
+  assert.deepEqual(wk.countRow(start, start + 7 * DAY, events), { prs_opened: 1, prs_merged: 3, bugs_fixed: 1, issues_filed: 1, agents_finished: 2, median_hours_to_merge: 3 });
   // A week with nothing, and a week that is over.
   const empty = wk.weeklyFacts({ start: start - 70 * DAY, events, agents: [], t: now });
   assert.deepEqual([empty.complete, empty.size, empty.quality], [true, null, null]);
@@ -2098,6 +2270,8 @@ test('weekly summary: a week on one page for management, from the work record, V
   assert.equal(fs.readFileSync(drafted.file, 'utf8'), `${(await w.report({ t: next })).markdown}\n`);
   assert.match(fs.readFileSync(drafted.file, 'utf8'), /the week as it ended/);
   assert.equal(await w.rollOver(next), null, 'once');
+  assert.deepEqual(fs.readdirSync(dir).sort(), ['monthly-2026-10.md', 'quarterly-2026-Q3.md', 'weekly-2026-11-16.md'], 'the month and the quarter that ended too');
+  assert.equal((await w.report({ kind: 'month', current: true, t: now })).file, path.join(dir, 'monthly-2026-11.md'));
   w.config.weekly = { auto: false };
   assert.equal(await w.rollOver(next + 7 * DAY), null, 'not when turned off');
   w.close();
@@ -2253,8 +2427,8 @@ test('track record: what was said at the merge against what held, and the level 
 
   // What is said about an agent's work as it merges.
   const agent = { id: 'a1', name: 'cache', kind: 'task', engine: 'claude', model: 'opus', autonomy: { level: 'pr' }, brief: { results: { confidence: { percent: 85 }, notDone: ['docs'] } }, docs: { scorecard: { data: { overall: 82, recommendation: 'ready' } } }, breaks: { baseline: { ok: true }, breaks: [{ status: 'caught' }, { status: 'missed' }, { status: 'skipped' }] } };
-  assert.deepEqual(rec.saidOf(agent), { confidence: 85, score: 82, recommendation: 'ready', breaks: { caught: 1, tried: 2 }, notDone: 1, engine: 'claude', model: 'opus', level: 'pr' });
-  assert.deepEqual(rec.saidOf({ id: 'a2' }), { confidence: null, score: null, recommendation: null, breaks: null, notDone: 0, engine: 'claude', model: null, level: 'ask' });
+  assert.deepEqual(rec.saidOf(agent), { confidence: 85, score: 82, recommendation: 'ready', breaks: { caught: 1, tried: 2 }, notDone: 1, engine: 'claude', model: 'opus', level: 'pr', cost: null });
+  assert.deepEqual(rec.saidOf({ id: 'a2' }), { confidence: null, score: null, recommendation: null, breaks: null, notDone: 0, engine: 'claude', model: null, level: 'ask', cost: null });
   assert.equal(rec.saidOf({ breaks: { baseline: { ok: false }, breaks: [] } }).breaks, null);
 
   // Items as Quality keeps them: settled ones count, watched ones do not.
@@ -2297,6 +2471,21 @@ test('track record: what was said at the merge against what held, and the level 
   assert.equal(lvl(run(0), 'run'), 'ask');
   assert.equal(lvl(run(0, 0, 0), 'ask'), null, 'nothing below Ask me');
   assert.equal(lvl(run(1, 1, 1, 0, 1, 1, 1), 'pr'), null, 'an older problem keeps the level');
+
+  // Model fit: the cheaper model that held up as well, only when there is enough behind both.
+  const piece = (model, held, cost, score) => ({ held, said: { engine: 'claude', model, cost, score } });
+  const fitOf = (...lists) => rec.modelFit(lists.flat());
+  const many = (model, nHeld, nBad, cost, score) => [...Array(nHeld)].map(() => piece(model, true, cost, score)).concat([...Array(nBad)].map(() => piece(model, false, cost, score)));
+  const good = fitOf(many('opus', 9, 1, 10, 88), many('sonnet', 5, 0, 4, 84), many('haiku', 3, 2, 1, 70));
+  assert.deepEqual(good.rows.map((m) => [m.model, m.n, m.heldPct, m.score, m.costVsMain]), [['claude · opus', 10, 90, 88, 1], ['claude · sonnet', 5, 100, 84, 0.4], ['claude · haiku', 5, 60, 70, 0.1]]);
+  assert.deepEqual(good.suggestion, { model: 'claude · sonnet', main: 'claude · opus', costVsMain: 0.4, heldPct: 100, mainHeldPct: 90, n: 5 });
+  assert.equal(fitOf(many('opus', 9, 1, 10, 88), many('haiku', 3, 2, 1, 70)).suggestion, null, 'it held up worse');
+  assert.equal(fitOf(many('opus', 9, 1, 10, 88), many('sonnet', 4, 0, 4, 84)).suggestion, null, 'too few behind it');
+  assert.equal(fitOf(many('opus', 9, 1, 10, 88), many('sonnet', 5, 0, 9, 84)).suggestion, null, 'not cheaper enough');
+  assert.equal(fitOf(many('opus', 9, 1, null, 88), many('sonnet', 5, 0, 4, 84)).suggestion, null, 'no cost known for the main one');
+  assert.equal(fitOf(many('opus', 3, 0, 10, 88), many('sonnet', 5, 0, 1, 84)).suggestion, null, 'too few behind the main one');
+  assert.equal(rec.saidOf({ sessions: [{ cost: { usd: 1.5 } }, { cost: { usd: 0.5 } }] }).cost, 2);
+  assert.equal(r.fit.rows.length, 2, 'in the record');
 
   const md = rec.recordMarkdown(r);
   assert.match(md, /8 of 13 merged pull requests held up \(62%\)\. 2 more are still watched or not looked at\./);

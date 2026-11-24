@@ -51,7 +51,7 @@ const js = async (expression) => {
   return r.result.value;
 };
 // Waits for an expression to be true; one that throws (the page is between two loads) is tried again.
-const until = async (expression, what, ms = 10_000) => {
+const until = async (expression, what, ms = 10_000, info = null) => {
   let last;
   for (const end = Date.now() + ms; Date.now() < end; await sleep(150)) {
     try {
@@ -60,7 +60,16 @@ const until = async (expression, what, ms = 10_000) => {
       last = e;
     }
   }
-  throw new Error(`timed out waiting for ${what}${last ? ` (last error: ${last.message})` : ''}`);
+  // What the page showed when the wait gave up, when the caller said what to look at.
+  let seen = '';
+  if (info) {
+    try {
+      seen = `; saw ${JSON.stringify(await js(info))}`;
+    } catch (e) {
+      seen = `; could not read what it saw: ${e.message}`;
+    }
+  }
+  throw new Error(`timed out waiting for ${what}${last ? ` (last error: ${last.message})` : ''}${seen}`);
 };
 // A reload: the checks that follow must see the new page, not the old one still on screen.
 const reload = async () => {
@@ -173,7 +182,7 @@ test('the top bar fits the window: the view buttons that do not fit go into More
       menuOk: document.querySelector('#menu-btn').getBoundingClientRect().right <= innerWidth,
     })`);
     assert.ok(r.page <= w, `${w}px: the page is ${r.page}px wide`);
-    assert.equal(r.inRow + r.inMore, 22, `${w}px: every view button is in the row or in More`);
+    assert.equal(r.inRow + r.inMore, 23, `${w}px: every view button is in the row or in More`);
     assert.ok(r.newOk && r.menuOk, `${w}px: New agents and the account menu are on screen`);
     if (w >= 1024) assert.ok(r.inRow >= 3, `${w}px: only ${r.inRow} buttons in the row`);
   }
@@ -256,20 +265,25 @@ test('split screen: split, load, type, follow sizes, keys, reload, close', { ski
   await sleep(400);
   const rows = (sel) => `document.querySelector('${sel} .xterm-rows').children.length`;
   const font = (sel) => `parseFloat(getComputedStyle(document.querySelector('${sel} .xterm-rows')).fontSize)`;
+  // What the two views show, said when a wait below gives up: this test has failed on slow machines
+  // and the sizes at that moment are what tells why.
+  const sizes = `(() => { const v = (sel) => { const el = document.querySelector(sel); const r = el?.querySelector('.xterm-rows'); const sc = el?.querySelector('.xterm-screen'); return el ? { rows: r?.children.length, cols: Math.round((sc?.offsetWidth ?? 0) / ((r?.firstElementChild?.offsetWidth ?? 0) / Math.max(1, r?.firstElementChild?.textContent.length || 1) || 1)), font: r ? parseFloat(getComputedStyle(r).fontSize) : null, shrunk: el.classList.contains('shrunk') || Boolean(el.querySelector('.shrunk')), box: [el.clientWidth, el.clientHeight], screen: [sc?.offsetWidth, sc?.offsetHeight] } : null; }; return { main: v('#terminal'), pane: v('.gpane .gterm') ?? v('.gpane'), active: document.querySelector('#detail').classList.contains('gactive'), setting: localStorage.getItem('agentmgr.termFont') }; })()`;
   await js(`document.querySelector('.gpane .gterm textarea').focus()`);
   await send('Input.insertText', { text: 'x' });
-  await until(`${rows('#terminal')} === ${rows('.gpane')} && ${font('.gpane')} === 13`, 'the main terminal following the group');
+  await until(`${rows('#terminal')} === ${rows('.gpane')} && ${font('.gpane')} === 13`, 'the main terminal following the group', 10_000, sizes);
+  const saw = await js(sizes);
+  assert.ok(saw.main.rows > 0 && saw.pane.rows > 0 && saw.pane.font === 13, `the sizes can be read: ${JSON.stringify(saw)}`);
   // Made much smaller for it, the view says why and how to end it.
-  await until(`${font('#terminal')} < 10 && document.querySelector('#terminal').classList.contains('shrunk')`, 'the note on the shrunk view');
+  await until(`${font('#terminal')} < 10 && document.querySelector('#terminal').classList.contains('shrunk')`, 'the note on the shrunk view', 10_000, sizes);
   await key('Digit1', '!', 49, 2 | 8);
   await until(`document.querySelector('#detail').classList.contains('gactive')`, 'the main group active');
-  await until(`${rows('#terminal')} === ${rows('.gpane')} && ${font('#terminal')} === 13`, 'the group following the main terminal');
-  await until(`!document.querySelector('#terminal').classList.contains('shrunk') && document.querySelector('.gpane .gterm').classList.contains('shrunk')`, 'the note moves to the view that follows now');
+  await until(`${rows('#terminal')} === ${rows('.gpane')} && ${font('#terminal')} === 13`, 'the group following the main terminal', 10_000, sizes);
+  await until(`!document.querySelector('#terminal').classList.contains('shrunk') && document.querySelector('.gpane .gterm').classList.contains('shrunk')`, 'the note moves to the view that follows now', 10_000, sizes);
 
   // Terminal text size, in the menu: every terminal takes it, and it is kept.
   await js(`document.querySelector('#menu-btn').click()`);
   await js(`document.querySelector('[data-term-font="1"]').click()`);
-  await until(`${font('#terminal')} === 14 && ${font('.gpane')} < 10 && document.querySelector('#term-font-now').textContent === '14'`, 'the larger text; the following view still fits');
+  await until(`${font('#terminal')} === 14 && ${font('.gpane')} < 10 && document.querySelector('#term-font-now').textContent === '14'`, 'the larger text; the following view still fits', 10_000, sizes);
   assert.equal(await js(`!document.querySelector('#menu').hidden && localStorage.getItem('agentmgr.termFont')`), '14', 'kept, and the menu stays open');
   await js(`document.querySelector('#term-font-now').click()`);
   await until(`${font('#terminal')} === 13 && localStorage.getItem('agentmgr.termFont') === null`, 'back to 13');
@@ -1392,7 +1406,11 @@ test('Weekly summary: opened from the Work record, last week and this week so fa
   const wd = `document.querySelector('#weekly-dialog')`;
   await until(`${wd}.open && ${wd}.querySelector('.weekly-md h1')`, 'the summary');
   assert.match(await js(`${wd}.querySelector('.weekly-md h1').textContent`), /^Weekly summary: /);
-  assert.deepEqual(await js(`[...${wd}.querySelectorAll('#weekly-tabs .chip')].map((c) => [c.textContent, c.classList.contains('active')])`), [['Last week', true], ['This week so far', false]]);
+  assert.deepEqual(await js(`[...${wd}.querySelectorAll('#weekly-tabs .chip')].map((c) => [c.textContent, c.classList.contains('active')])`), [['Week', true], ['Month', false], ['Quarter', false], ['Last week', true], ['This week so far', false]]);
+  await js(`${wd}.querySelector('[data-weekly-kind="month"]').click()`);
+  await until(`/^Monthly summary: /.test(${wd}.querySelector('.weekly-md h1')?.textContent ?? '') && ${wd}.querySelector('[data-weekly-current="1"]').textContent === 'This month so far'`, 'the month');
+  await js(`${wd}.querySelector('[data-weekly-kind="week"]').click()`);
+  await until(`/^Weekly summary: /.test(${wd}.querySelector('.weekly-md h1')?.textContent ?? '')`, 'the week again');
   assert.match(await js(`${wd}.querySelector('.weekly-md').textContent`), /the week as it ended/);
   await js(`${wd}.querySelector('[data-weekly-current="1"]').click()`);
   await until(`/the week so far/.test(${wd}.querySelector('.weekly-md')?.textContent ?? '')`, 'this week so far');
@@ -1695,6 +1713,47 @@ test('Without you and ground rules: the level on a new agent and on one that run
   assert.match(await js(`document.querySelector('.results .proof-row').textContent.replace(/\\s+/g, ' ')`), /Proof 3 recorded runs, 1 by reading Open/);
   assert.match(await js(`document.querySelector('.results .risks').textContent.replace(/\\s+/g, ' ')`), /Risks it named before starting 1 avoided, 1 not checked ?Avoided A stale entry is served: avoided, the expiry test passes ?Not checked The cache grows without <limit>/);
   assert.ok(await js(`document.querySelector('.results .risks').open`), 'open when one was not checked');
+  // Read first: how much this finished work needs reading, why, and the queue in the top bar.
+  await until(`document.querySelector('.results .read-first-row .tag')`, 'the review level in its Results');
+  assert.match(await js(`document.querySelector('.results .read-first-row').textContent.replace(/\\s+/g, ' ')`), /^Review (Read closely|Look) .* Why$/);
+  await js(`document.querySelector('.results [data-act="readfirst-open"]').click()`);
+  const rfd = `document.querySelector('#readfirst-dialog')`;
+  await until(`${rfd}.open && ${rfd}.querySelectorAll('.rf-item').length === 1`, 'why, for this one');
+  const why = await js(`${rfd}.querySelector('.rf-item').textContent.replace(/\\s+/g, ' ')`);
+  assert.match(why, /It lists 1 thing as not done: eviction when <full> \+6/);
+  assert.match(why, /1 risk it named was not checked: The cache grows without <limit> \+5/);
+  assert.match(why, /Its own confidence is 60%: read the code, ran nothing <b>yet<\/b> \+15/);
+  assert.match(await js(`${rfd}.querySelector('#readfirst-body > .hint').textContent`), /No model decides it\. "Skim" means nothing measured speaks against it, not that it is correct\./);
+  await width(390);
+  assert.ok(await js(`${rfd}.getBoundingClientRect().right <= 390 && ${rfd}.scrollWidth <= ${rfd}.clientWidth + 1 && [...${rfd}.querySelectorAll('.rf-item')].every((li) => li.getBoundingClientRect().right <= 390)`), 'the queue fits a phone');
+  await width(1600);
+  await js(`${rfd}.querySelector('[data-rf="close"]').click()`);
+  await js(`document.querySelector('#readfirst-btn').click()`);
+  await until(`${rfd}.open && ${rfd}.querySelectorAll('.rf-item').length >= 1 && /Finished work waiting for your review: /.test(${rfd}.textContent)`, 'the whole queue from the top bar');
+  // The understanding check, from the queue: questions to answer first, the answer shown, and whether you knew it.
+  await js(`${rfd}.querySelector('[data-rf-understand]').click()`);
+  const ud = `document.querySelector('#understand-dialog')`;
+  await until(`${ud}.open && ${ud}.querySelector('.us-item') || ${ud}.querySelector('.error')`, 'the questions', 30_000);
+  const usText = await js(`${ud}.textContent.replace(/\\s+/g, ' ')`);
+  assert.ok(/Do you understand it\?/.test(usText), usText.slice(0, 200));
+  if (await js(`Boolean(${ud}.querySelector('.us-item'))`)) {
+    assert.equal(await js(`${ud}.querySelectorAll('.us-a').length`), 0, 'no answer until asked');
+    await js(`${ud}.querySelector('[data-us-show="0"]').click()`);
+    await until(`${ud}.querySelector('.us-a')`, 'the answer shown');
+    await js(`${ud}.querySelector('[data-us-knew="0"][data-v="false"]').click()`);
+    await until(`${ud}.querySelector('.us-item.us-miss') && /Knew 0 of|1 of \\d+ answered/.test(${ud}.textContent)`, 'said you did not know it', 15_000);
+  }
+  await width(390);
+  assert.ok(await js(`${ud}.getBoundingClientRect().right <= 390 && ${ud}.scrollWidth <= ${ud}.clientWidth + 1`), 'the check fits a phone');
+  await width(1600);
+  await js(`${ud}.querySelector('[data-us="close"]').click()`);
+  // Marked as reviewed: it leaves the queue and its Results; brought back for the rest of this test.
+  const waitingBefore = await js(`${rfd}.querySelectorAll('.rf-item').length`);
+  await js(`${rfd}.querySelector('[data-rf-reviewed="${a.id}"]').click()`);
+  await until(`${rfd}.querySelectorAll('.rf-item').length === ${waitingBefore} - 1 && !document.querySelector('.results .read-first-row')`, 'reviewed: out of the queue');
+  await api('POST', '/read-first/reviewed', { agent: a.id, reviewed: false });
+  await until(`document.querySelector('.results .read-first-row')`, 'back in the queue');
+  await js(`${rfd}.querySelector('[data-rf="close"]').click()`);
   // The ways it weighed, preferred first; and Insights with what it is worth now and later, the kind of idea and the paths.
   assert.match(await js(`document.querySelector('.results .vl-options').textContent.replace(/\\s+/g, ' ')`), /Paths it weighed 2, preferred first: Cache in memory ?Preferred Cache in memory one process ?now high ?later low ?cost small ?risk low ?Pick when: one server is enough ?Shared cache a service ?now medium ?later high ?cost large ?risk medium ?Pick when: a second server is planned ?Why the first it ships <now>/);
   await js(`document.querySelector('[data-act="insights"]').click()`);

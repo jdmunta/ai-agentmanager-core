@@ -297,6 +297,10 @@ if (args.includes('--input-format') && args.includes('stream-json')) {
       process.stdout.write(`"Check ${/Pull request (#\d+)/.exec(input)?.[1] ?? 'it'} again: ${section('what_happened').split('\n')[1] ?? ''}"`, () => process.exit(0));
       return;
     }
+    if (input.startsWith('You write an understanding check for a person')) {
+      const ids = [...input.matchAll(/<hunk id="(H\d+)" file="([^"]+)">/g)].map((m) => [m[1], m[2]]);
+      return json({ questions: [{ q: `What happens to ${ids[0]?.[1] ?? 'the file'} when the input is empty?`, answer: 'It returns early without writing.', why: 'An empty call must not wipe data.', hunk: ids[0]?.[0] ?? 'H1' }, { q: 'x'.repeat(10), answer: '' }, { q: 'Ghost hunk?', answer: 'Nowhere.', hunk: 'H99' }, { q: 'Third?', answer: 'Yes.', hunk: ids[0]?.[0] }, { q: 'Fourth?', answer: 'Dropped: three at most.' }] });
+    }
     if (input.startsWith("You help a person review an AI coding agent's changes")) {
       // Every hunk but the last, in reverse order (a reading order other than the diff's).
       const ids = [...input.matchAll(/<hunk id="(H\d+)" file="([^"]+)">/g)].map((m) => [m[1], m[2]]);

@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.69.0 (2026-11-24)
+
+- **Read first: where your attention goes.** **Read first** in the top bar, or `agentmgr read-first`, ranks finished work waiting for your review by how much it needs reading: **Read closely**, **Look** or **Skim**, with the reasons and where to start. The ranking adds up facts the app already measured: high-risk files, the scorecard, checks and CI, breaks the tests did not notice, recorded commands that gave a different result, what was left out, risks not checked, the agent's own confidence, size, and questions answered for you. No model decides it.
+- **In an agent's Results.** A **Review** line with the level and the first reasons; **Why** opens the full list.
+- **Mark as reviewed.** A piece leaves the queue when its pull request merges or when you mark it as reviewed (`--reviewed <agent>`), and comes back if the agent changes its work again. Everything finished more than 14 days ago can be cleared at once.
+- **Limits.** "Skim" means nothing measured speaks against it, not that it is correct. The points are a fixed table chosen by judgement.
+- **Understanding check.** **Check my understanding** on a piece in Read first, or `agentmgr understand <agent>`, asks two or three questions about what the change does: what happens on a failure, an empty input, or what depends on it. Answer first, then show the answer and where to read it, and say whether you knew it. Nothing grades you. One model call.
+- **Requirement trace.** In the Proof dialog, or `agentmgr trace <agent>`: each point of what done means followed to the scorecard's finding, the checks recorded for it (and whether they held when run again), and what is missing. Points with a gap count in Read first.
+- **Monthly and quarterly summaries.** The weekly summary also covers a month or a quarter (`--month`, `--quarter`, and tabs in the dialog), written by itself as drafts when the period ends.
+- **Model fit.** The track record compares models by share that held up, scorecard and cost per piece against the most used one, and suggests a cheaper model that held up as well, with at least 5 settled pull requests behind both.
+- **Fixed: a point typed in What done means could be lost.** When the dialog's load finished after you had started typing a new point, the list was drawn again without it. What is typed is now read back first.
+- **Fixed:** a test that failed in the first minutes after midnight; the split screen test now reports the sizes it saw when it times out.
+
 ## 1.68.0 (2026-11-24)
 
 - **Weekly summary: technical, with no money amounts.** The AI cost and the dollar value are gone. Under each delivered piece the summary now says **How** it was done (from the agent's brief), what was **Changed** (files, lines, folders, test files) and how it was **Checked** (checks passed, commands recorded with their output, breaks caught by the tests, the scorecard, named risks avoided, reviews).
