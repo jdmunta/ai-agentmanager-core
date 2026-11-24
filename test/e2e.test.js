@@ -1776,6 +1776,22 @@ test("test the tests: the agent's changed lines are broken one at a time with it
   await call('DELETE', `/agents/${a.id}`);
 });
 
+test('production signal: an incident reported by a tool is linked to its merged pull request; an agent cannot report one', async () => {
+  const url = 'https://github.com/acme/incident/pull/41';
+  manager.store.data.quality ??= { items: {} };
+  manager.store.data.quality.items[url] = { url, number: 41, title: 'Faster totals', repo: 'acme/incident', mergedAt: new Date(Date.now() - 3_600_000).toISOString(), facts: { files: ['src/total.js'], mergeCommit: 'feedbeef1234' }, after: { fixes: [], checks: { state: 'passed' } }, agentId: 'gone' };
+  const refused = await call('POST', '/quality/incident', { title: 'x', pr: url }, { 'x-agentmgr': '1', 'x-agentmgr-agent': 'someone' });
+  assert.equal(refused.status, 403);
+  assert.equal((await call('POST', '/quality/incident', { title: 'Boom', files: ['nowhere.js'] })).status, 404);
+  const r = (await call('POST', '/quality/incident', { title: 'NaN totals at checkout', files: ['src/total.js:12'], id: 'DD-9', url: 'https://monitor.example/DD-9', source: 'datadog' })).body;
+  assert.deepEqual([r.number, r.matchedBy, r.verdict], [41, 'files', 'incident']);
+  const v = (await call('GET', '/quality')).body;
+  assert.equal(v.items.find((x) => x.url === url).verdict, 'incident');
+  assert.ok(v.periods[0].totals.incident >= 1);
+  assert.equal((await call('POST', '/quality/incident/drop', { url, key: 'DD-9' })).body.verdict === 'incident', false);
+  delete manager.store.data.quality.items[url];
+});
+
 test("track record: a project gets a level of its own for its new agents, set by you and not by an agent; the record is read", async () => {
   const refused = await call('PUT', '/autonomy', { project: 'Earned', level: 'run' }, { 'x-agentmgr': '1', 'x-agentmgr-agent': 'someone' });
   assert.equal(refused.status, 403);

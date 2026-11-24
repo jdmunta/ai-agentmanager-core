@@ -197,6 +197,7 @@ export function builtInChecks(bar, { files = [], diff = '' } = {}) {
 // ---------------------------------------------------------------- lessons
 
 const SOURCE_TEXT = {
+  incident: 'caused an incident in production',
   reverted: 'was reverted',
   fixed: 'needed a fix afterwards',
   broke: 'failed its checks once merged',
@@ -216,6 +217,7 @@ export function cleanLesson(text) {
 export function lessonSource(it) {
   const a = it.after ?? {};
   const name = (x) => clip(`${x?.number ? `#${x.number} ` : ''}${x?.title ?? ''}`, 140);
+  if (it.verdict === 'incident') return { kind: 'incident', detail: `Seen in production: ${(it.incidents ?? []).map((x) => clip(x.title, 100)).join('; ')}` };
   if (it.verdict === 'reverted') return { kind: 'reverted', detail: a.reverted ? `Reverted by ${name(a.reverted)}` : 'Reverted' };
   if (it.verdict === 'fixed') return { kind: 'fixed', detail: `Fixed afterwards by ${(a.fixes ?? []).map(name).join('; ')}` };
   if (it.verdict === 'broke') return { kind: 'broke', detail: `Checks failed on the commit it merged as: ${(a.checks?.failed ?? []).join(', ')}` };

@@ -1,5 +1,10 @@
 # Changelog
 
+## 1.70.0 (2026-11-24)
+
+- **Production signal: incidents from your monitoring tool.** Any tool, a script or you can report an incident (`agentmgr quality incident "<title>"`, or `POST /api/quality/incident`). It is linked to the merged pull request it belongs to: the one it names, the one that merged as the commit it was seen on, or the latest that changed a file in its stack trace. That pull request then shows **Incident in production** and counts as one that did not hold up in Quality, the track record and the weekly summary. The same id is counted once. An agent cannot report one.
+- **Delegation map.** The track record sorts work by kind (features, bug fixes, tests, documentation, upgrades, refactoring, investigation), read from each request's words, with how it held up and how much ran without you. It names the next kind worth handing over more of, and the kinds worth keeping close. It sees only work given to agents.
+
 ## 1.69.0 (2026-11-24)
 
 - **Read first: where your attention goes.** **Read first** in the top bar, or `agentmgr read-first`, ranks finished work waiting for your review by how much it needs reading: **Read closely**, **Look** or **Skim**, with the reasons and where to start. The ranking adds up facts the app already measured: high-risk files, the scorecard, checks and CI, breaks the tests did not notice, recorded commands that gave a different result, what was left out, risks not checked, the agent's own confidence, size, and questions answered for you. No model decides it.

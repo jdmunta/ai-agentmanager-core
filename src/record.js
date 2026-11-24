@@ -10,8 +10,26 @@ import { costOf } from './budgets.js';
 export const MIN_TO_SAY = 5; // fewer settled pull requests than this say nothing
 const LEVELS = ['ask', 'run', 'pr', 'merge'];
 const LEVEL_LABEL = { ask: 'Ask me', run: 'Agree, then run', pr: 'Run to pull request', merge: 'Run to merge' };
-const PROBLEMS = new Set(['reverted', 'fixed', 'broke', 'problem']);
+const PROBLEMS = new Set(['incident', 'reverted', 'fixed', 'broke', 'problem']);
 const round = (n) => (Number.isFinite(n) ? Math.round(n) : null);
+
+// Kinds of work, read from the request's words (first match wins). No model: a rough sort that is
+// stable and can be checked; work it cannot place is a feature.
+export const KINDS = [
+  ['docs', 'Documentation', /\b(docs?|readme|documentation|changelog|comments?)\b/i],
+  ['tests', 'Tests', /\b(tests?|test cases?|coverage|e2e|unit tests?)\b/i],
+  ['upgrade', 'Upgrades and migrations', /\b(upgrade|bump|migrat(e|ion)|dependenc(y|ies)|deprecat)/i],
+  ['fix', 'Bug fixes', /\b(fix(es|ed)?|bugs?|crash(es)?|errors?|broken|regression|fails?|failing|exception)\b/i],
+  ['refactor', 'Refactoring', /\b(refactor|clean ?up|rename|simplif(y|ies)|restructure|dedupe)\b/i],
+  ['investigate', 'Investigation', /\b(investigate|explore|analy[sz]e|research|look into|find out|why)\b/i],
+];
+export const KIND_LABEL = { ...Object.fromEntries(KINDS.map(([k, l]) => [k, l])), feature: 'Features' };
+
+/** The kind of a piece of work from its request or title. */
+export function kindOf(text) {
+  const t = String(text ?? '').split('\n')[0].replace(/^<?https?:\/\/\S+>?\s*/, '');
+  return KINDS.find(([, , re]) => re.test(t))?.[0] ?? 'feature';
+}
 
 /** What is said about an agent's work now, kept when its pull request merges. */
 export function saidOf(agent, { engine = null } = {}) {
@@ -30,6 +48,7 @@ export function saidOf(agent, { engine = null } = {}) {
     level: LEVELS.includes(agent.autonomy?.level) ? agent.autonomy.level : 'ask',
     // What the AI work cost as it merged, kept only to compare models with each other (never shown as money).
     cost: costOf(agent) || null,
+    kind: kindOf(agent.intent ?? agent.name),
   };
 }
 
@@ -114,6 +133,31 @@ export function modelFit(settled) {
 }
 
 /**
+ * Delegation map: by kind of work, how much went to agents, how far it ran without the person,
+ * and how it held up. A kind that held up at 9 in 10 over 5 settled pull requests while most of it
+ * still asked the person is the next worth handing over more of; one under 7 in 10 is worth
+ * keeping close. `settled`: the settled pull requests.
+ */
+export function delegationMap(settled) {
+  const kindOfItem = (it) => it.said?.kind ?? kindOf(it.title);
+  const rows = Object.keys(KIND_LABEL)
+    .map((k) => {
+      const list = settled.filter((it) => kindOfItem(it) === k);
+      if (!list.length) return null;
+      const held = list.filter((it) => it.held).length;
+      const asked = list.filter((it) => (it.said?.level ?? 'ask') === 'ask').length;
+      const heldPct = round((held / list.length) * 100);
+      const advice =
+        list.length < MIN_TO_SAY ? null : heldPct >= 90 && asked * 2 > list.length ? 'hand over more' : heldPct < 70 ? 'keep close' : null;
+      return { kind: k, label: KIND_LABEL[k], n: list.length, held, heldPct, withoutYou: list.length - asked, advice };
+    })
+    .filter(Boolean)
+    .sort((a, b) => b.n - a.n);
+  const next = rows.filter((r) => r.advice === 'hand over more').sort((a, b) => b.heldPct - a.heldPct || b.n - a.n)[0] ?? null;
+  return { rows, next: next ? { kind: next.kind, label: next.label, heldPct: next.heldPct, n: next.n } : null };
+}
+
+/**
  * The record from Quality's items. `verdict(it)` is quality.js's verdictOf; a pull request counts
  * once it is settled: held up after the watch days, or a problem. `levels`: { default, projects }.
  */
@@ -152,6 +196,7 @@ export function trackRecord(items, verdict, { levels = {} } = {}) {
     models: rowsOf(settled, uniq((it) => `${it.said?.engine ?? 'unknown'}${it.said?.model ? ` · ${it.said.model}` : ''}`).map((k) => [k, k, (it) => `${it.said?.engine ?? 'unknown'}${it.said?.model ? ` · ${it.said.model}` : ''}` === k])),
     levels: rowsOf(settled, LEVELS.map((l) => [l, LEVEL_LABEL[l], (it) => (it.said?.level ?? 'ask') === l])),
     fit: modelFit(settled),
+    delegation: delegationMap(settled),
     projects: projects.sort((a, b) => b.n - a.n),
     defaultLevel: levels.default ?? 'ask',
   };
@@ -172,6 +217,11 @@ export function recordMarkdown(r) {
   part('Tests tested', r.tests);
   part('Model', r.models);
   part('Without you', r.levels);
+  if (r.delegation.rows.length) {
+    out.push('## Delegation map', '', ...r.delegation.rows.map((d) => `- ${d.label}: ${d.held} of ${d.n} held up (${d.heldPct}%), ${d.withoutYou} ran without you${d.advice ? `: ${d.advice}` : ''}`));
+    if (r.delegation.next) out.push('', `Next to hand over more of: **${r.delegation.next.label}** (${r.delegation.next.heldPct}% held up over ${r.delegation.next.n}, most of it still asking you).`);
+    out.push('');
+  }
   if (r.fit.rows.length > 1) {
     out.push('## Model fit', '', ...r.fit.rows.map((m) => `- ${m.model}: ${m.held} of ${m.n} held up (${m.heldPct}%)${m.score != null ? `, scorecard ${m.score} on average` : ''}${m.costVsMain != null && m !== r.fit.rows[0] ? `, ${m.costVsMain} times the cost of ${r.fit.rows[0].model}` : ''}`));
     if (r.fit.suggestion) out.push('', `**${r.fit.suggestion.model}** held up as well as ${r.fit.suggestion.main} (${r.fit.suggestion.heldPct}% against ${r.fit.suggestion.mainHeldPct}%) at ${r.fit.suggestion.costVsMain} times the cost, over ${r.fit.suggestion.n} settled pull requests: worth trying for more of the work.`);

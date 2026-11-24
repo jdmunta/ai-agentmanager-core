@@ -1641,7 +1641,7 @@ export async function main(argv) {
       const now = v.periods[0];
       const items = v.items.filter((it) => now.items.includes(it.url));
       if (items.length) console.log('');
-      const word = { reverted: 'reverted', fixed: 'fixed afterwards', broke: 'failed checks', problem: 'a problem (yours)', clean: 'held up', watching: 'fine so far', unchecked: 'not looked at' };
+      const word = { incident: 'incident in production', reverted: 'reverted', fixed: 'fixed afterwards', broke: 'failed checks', problem: 'a problem (yours)', clean: 'held up', watching: 'fine so far', unchecked: 'not looked at' };
       for (const it of items) console.log(`  ${truncate(`#${it.number ?? '?'} ${it.title}`, 54).padEnd(54)} ${(['clean', 'watching'].includes(it.verdict) ? green : it.verdict === 'unchecked' ? dim : yellow)(word[it.verdict].padEnd(17))} ${dim(it.url)}`);
       if (!v.github) console.log(dim('\nGitHub is not asked here, so nothing is looked at.'));
     });
@@ -1655,6 +1655,20 @@ export async function main(argv) {
       const r = await api('GET', '/quality/record');
       console.log((await api('GET', '/quality/record?format=md')).markdown);
       for (const p of r.projects.filter((x) => x.suggestion)) console.log(dim(`\nSet it: agentmgr autonomy --project "${p.label}" --default ${p.suggestion.level}`));
+    });
+  qualityCmd
+    .command('incident <title>')
+    .description('Report an incident from production. It is linked to the merged pull request it belongs to (by --pr, the --commit it was seen on, or --files from its stack trace), which then counts as one that did not hold up, in Quality, the track record and the weekly summary. For a monitoring tool or a script: POST /api/quality/incident with the same fields.')
+    .option('--pr <url>', 'the pull request it belongs to')
+    .option('--commit <sha>', 'the commit or release it was seen on')
+    .option('--files <list>', 'files from its stack trace, comma separated')
+    .option('--url <url>', 'a link to the incident in your monitoring tool')
+    .option('--id <id>', 'its id in your monitoring tool: reported again, it is not counted twice')
+    .option('--at <date>', 'when it happened (default: now)')
+    .action(async (title, o) => {
+      await daemon();
+      const it = await api('POST', '/quality/incident', { title, pr: o.pr, commit: o.commit, files: o.files, url: o.url, id: o.id, at: o.at, source: 'cli' });
+      console.log(`${green('✓')} linked to #${it.number ?? '?'} ${bold(it.title)} ${dim(`(matched by ${it.matchedBy})`)}`);
     });
   qualityCmd
     .command('mark <pr-url>')

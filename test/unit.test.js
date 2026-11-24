@@ -2011,6 +2011,44 @@ test('scorecard: Improve tells the agent its low scores (lowest first), the crit
   assert.ok(!/Scores to raise|Acceptance criteria|Where a reviewer/.test(clean));
 });
 
+test('production signal: an incident is linked to the merged pull request it belongs to, which then did not hold up', async () => {
+  const { matchIncident, verdictOf, totals, Quality } = await import('../src/quality.js');
+  const day = 86_400_000;
+  const now = Date.parse('2026-11-20T12:00:00Z');
+  const pr = (n, mergedDaysAgo, files, sha) => ({ url: `https://github.com/acme/shop/pull/${n}`, number: n, title: `PR ${n}`, mergedAt: new Date(now - mergedDaysAgo * day).toISOString(), facts: { files, mergeCommit: sha }, after: { fixes: [], checks: { state: 'passed' } } });
+  const items = [pr(1, 2, ['src/cart/total.js', 'test/cart.test.js'], 'aaaa1111bbbb'), pr(2, 1, ['src/cart/total.js'], 'cccc2222dddd'), pr(3, 30, ['src/login.js'], 'eeee3333ffff')];
+  const m = (q) => {
+    const r = matchIncident(items, { at: now, ...q });
+    return r && [r.item.number, r.by];
+  };
+  assert.deepEqual(m({ pr: 'https://github.com/acme/shop/pull/3/' }), [3, 'pull request']);
+  assert.deepEqual(m({ commit: 'AAAA1111' }), [1, 'commit'], 'a short sha, any case');
+  assert.deepEqual(m({ files: ['./src/cart/total.js:42:7'] }), [2, 'files'], 'the latest merged before it that changed the file');
+  assert.deepEqual(m({ files: ['cart/total.js'] }), [2, 'files'], 'a path from the end');
+  assert.deepEqual(m({ files: ['src/login.js'] }), null, 'outside the watch days');
+  assert.deepEqual(m({ files: ['src/cart/total.js'], at: now - 3 * day }), null, 'merged after the incident');
+  assert.equal(m({ commit: 'abc' }), null, 'too short to be a commit');
+  assert.equal(m({ pr: 'https://github.com/acme/shop/pull/9' }), null);
+
+  const it = { ...items[0], incidents: [{ key: 'S-1', title: 'TypeError in total' }] };
+  assert.equal(verdictOf(it, undefined, now), 'incident');
+  assert.equal(verdictOf({ ...it, mark: { verdict: 'clean' } }, undefined, now), 'clean', 'what you say wins');
+  const t = totals([it, items[1]], undefined, now);
+  assert.deepEqual([t.incident, t.problems], [1, 1]);
+
+  // The class: reported, matched, not counted twice, dropped.
+  const store = { data: { quality: { items: Object.fromEntries(items.map((x) => [x.url, structuredClone(x)])) } }, list: () => [], get: () => null, save() {} };
+  const q = new Quality({ manager: { view: () => ({}) }, store, config: { qualityFirstMs: 1e9 } });
+  q.close();
+  assert.throws(() => q.incident({ files: ['x'] }), /needs a title/);
+  assert.throws(() => q.incident({ title: 'Boom', files: ['nowhere.js'] }), /No merged pull request matches it/);
+  const got = q.incident({ title: 'TypeError in total', id: 'SENTRY-7', url: 'https://sentry.example/7', commit: 'cccc2222', source: 'sentry' });
+  assert.deepEqual([got.number, got.matchedBy, got.verdict, got.incidents.length], [2, 'commit', 'incident', 1]);
+  q.incident({ title: 'TypeError in total', id: 'SENTRY-7', commit: 'cccc2222' });
+  assert.equal(store.data.quality.items[items[1].url].incidents.length, 1, 'the same id once');
+  assert.equal(q.dropIncident(items[1].url, 'SENTRY-7').verdict === 'incident', false);
+});
+
 test('understanding check: questions about what a change does, cleaned and mapped to the hunk where each is answered', async () => {
   const { understandingPrompt, understandingFrom, understandingMarkdown } = await import('../src/brief.js');
   const { understandSummary } = await import('../public/understand.js');
@@ -2427,8 +2465,8 @@ test('track record: what was said at the merge against what held, and the level 
 
   // What is said about an agent's work as it merges.
   const agent = { id: 'a1', name: 'cache', kind: 'task', engine: 'claude', model: 'opus', autonomy: { level: 'pr' }, brief: { results: { confidence: { percent: 85 }, notDone: ['docs'] } }, docs: { scorecard: { data: { overall: 82, recommendation: 'ready' } } }, breaks: { baseline: { ok: true }, breaks: [{ status: 'caught' }, { status: 'missed' }, { status: 'skipped' }] } };
-  assert.deepEqual(rec.saidOf(agent), { confidence: 85, score: 82, recommendation: 'ready', breaks: { caught: 1, tried: 2 }, notDone: 1, engine: 'claude', model: 'opus', level: 'pr', cost: null });
-  assert.deepEqual(rec.saidOf({ id: 'a2' }), { confidence: null, score: null, recommendation: null, breaks: null, notDone: 0, engine: 'claude', model: null, level: 'ask', cost: null });
+  assert.deepEqual(rec.saidOf(agent), { confidence: 85, score: 82, recommendation: 'ready', breaks: { caught: 1, tried: 2 }, notDone: 1, engine: 'claude', model: 'opus', level: 'pr', cost: null, kind: 'feature' });
+  assert.deepEqual(rec.saidOf({ id: 'a2' }), { confidence: null, score: null, recommendation: null, breaks: null, notDone: 0, engine: 'claude', model: null, level: 'ask', cost: null, kind: 'feature' });
   assert.equal(rec.saidOf({ breaks: { baseline: { ok: false }, breaks: [] } }).breaks, null);
 
   // Items as Quality keeps them: settled ones count, watched ones do not.
@@ -2486,6 +2524,15 @@ test('track record: what was said at the merge against what held, and the level 
   assert.equal(fitOf(many('opus', 3, 0, 10, 88), many('sonnet', 5, 0, 1, 84)).suggestion, null, 'too few behind the main one');
   assert.equal(rec.saidOf({ sessions: [{ cost: { usd: 1.5 } }, { cost: { usd: 0.5 } }] }).cost, 2);
   assert.equal(r.fit.rows.length, 2, 'in the record');
+
+  // Delegation map: by kind of work, read from the request; the next kind worth handing over more of.
+  assert.deepEqual(['Fix the login crash', 'Add tests for the cart', 'Update the README', 'Bump express to 5', 'Refactor the cache', 'Investigate slow search', 'Add SSO login', 'https://jira/x/OPS-1 Fix it'].map(rec.kindOf), ['fix', 'tests', 'docs', 'upgrade', 'refactor', 'investigate', 'feature', 'fix']);
+  const job = (kind, held, level = 'ask') => ({ held, title: 't', said: { kind, level } });
+  const dm = rec.delegationMap([...[...Array(9)].map(() => job('fix', true)), job('fix', false, 'run'), ...[...Array(5)].map((_, i) => job('feature', i < 3, 'pr')), job('docs', true), { held: true, title: 'Update the docs' }]);
+  assert.deepEqual(dm.rows.map((d) => [d.kind, d.n, d.heldPct, d.withoutYou, d.advice]), [['fix', 10, 90, 1, 'hand over more'], ['feature', 5, 60, 5, 'keep close'], ['docs', 2, 100, 0, null]]);
+  assert.deepEqual(dm.next, { kind: 'fix', label: 'Bug fixes', heldPct: 90, n: 10 });
+  assert.equal(rec.delegationMap([...[...Array(10)].map(() => job('fix', true, 'run'))]).next, null, 'already handed over');
+  assert.ok(Array.isArray(r.delegation.rows));
 
   const md = rec.recordMarkdown(r);
   assert.match(md, /8 of 13 merged pull requests held up \(62%\)\. 2 more are still watched or not looked at\./);

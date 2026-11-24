@@ -229,7 +229,7 @@ export function weeklyFacts({ start, end = start + 7 * DAY, prevStart = start - 
     technical,
     size,
     quality: held,
-    problems: qItems.filter((it) => it.after?.reverted || it.after?.fixes?.length).map((it) => ({ title: hidden.has(it.agentId) ? PRIVATE : clip(it.title), link: hidden.has(it.agentId) ? null : it.url, what: it.after?.reverted ? 'reverted' : 'fixed afterwards' })),
+    problems: qItems.filter((it) => it.incidents?.length || it.after?.reverted || it.after?.fixes?.length).map((it) => ({ title: hidden.has(it.agentId) ? PRIVATE : clip(it.title), link: hidden.has(it.agentId) ? null : it.url, what: it.incidents?.length ? `caused ${it.incidents.length === 1 ? 'an incident' : `${it.incidents.length} incidents`} in production` : it.after?.reverted ? 'reverted' : 'fixed afterwards' })),
     blocked: open.filter((o) => o.state === 'blocked'),
     open: open.filter((o) => o.state !== 'blocked'),
     keptPrivate: [...merged, ...finished, ...open].filter((e) => e.private).length,
