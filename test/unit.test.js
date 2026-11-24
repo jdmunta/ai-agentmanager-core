@@ -2043,41 +2043,48 @@ test('weekly summary: a week on one page for management, from the work record, V
       { agentId: 'a9', deliveredAt: at(-3), est: { humanHours: 50 } },
     ],
   };
-  const quality = { settings: { watchDays: 14 }, items: [{ url: 'u1', agentId: 'a1', title: 'Cache prices', mergedAt: at(1), after: { fixes: [], checks: { state: 'passed' } } }, { url: 'u2', agentId: 'a2', title: 'Rate limits', mergedAt: at(2), after: { reverted: { number: 9 }, fixes: [] } }] };
+  const quality = { settings: { watchDays: 14 }, items: [{ url: 'https://github.com/acme/shop/pull/a1', agentId: 'a1', title: 'Cache prices', mergedAt: at(1), facts: { files: ['src/cache/lru.js', 'src/cache/index.js', 'test/unit/cache.test.js'], lines: 120, reviews: 2, changesRequested: 1 }, after: { fixes: [], checks: { state: 'passed' } } }, { url: 'https://github.com/acme/api/pull/a2', agentId: 'a2', title: 'Rate limits', mergedAt: at(2), facts: { files: ['src/limits.js'], lines: 40, reviews: 0, changesRequested: 0 }, said: { score: 90, breaks: { caught: 3, tried: 3 }, engine: 'codex', model: null }, after: { reverted: { number: 9 }, fixes: [] } }] };
   const agents = [
     { agent: { id: 'a3', kind: 'task', intent: 'A secret index', idea: { private: true }, brief: { status: 'done' } }, view: { projectInfo: { name: 'api' } } },
     { agent: { id: 'b1', kind: 'task', intent: 'Add SSO login\nmore', prs: { p: { state: 'OPEN', url: 'https://github.com/acme/api/pull/12' } }, brief: { status: 'working' } }, view: { projectInfo: { name: 'api' } } },
     { agent: { id: 'b2', kind: 'task', intent: 'Migrate the database', brief: { status: 'blocked', results: { blockers: ['the staging password (needs: ops)'] } } }, view: { projectInfo: { name: 'shop' } } },
     { agent: { id: 'b3', kind: 'task', intent: 'Another secret', idea: { private: true }, brief: { status: 'working' } }, view: { projectInfo: { name: 'api' } } },
     { agent: { id: 'g1', kind: 'general', intent: 'chat' }, view: {} },
-    { agent: { id: 'a1', kind: 'task', intent: 'Cache prices', brief: { status: 'done' } }, view: { projectInfo: { name: 'shop' } } },
+    { agent: { id: 'a1', kind: 'task', intent: 'Cache prices', engine: 'claude', model: 'opus', proofDoc: { commands: 2 }, breaks: { baseline: { ok: true }, breaks: [{ status: 'caught' }, { status: 'caught' }, { status: 'missed' }] }, docs: { scorecard: { data: { overall: 84 } } }, brief: { status: 'done', solution: 'Prices are read through an LRU cache in cache.js. Entries expire after five minutes. More detail follows here.', checks: [{ state: 'passed' }, { state: 'passed' }, { state: 'failed' }], risks: [{ state: 'avoided', text: 'a' }, { state: 'happened', text: 'b' }] } }, view: { projectInfo: { name: 'shop' } } },
   ];
   const f = wk.weeklyFacts({ start, events, spend: {}, value, quality, agents, t: now });
   assert.deepEqual([f.complete, f.row.prs_merged, f.row.bugs_fixed, f.prev.prs_merged, f.projects], [false, 3, 1, 1, ['shop', 'api', 'docs']]);
   assert.deepEqual(f.merged.map((e) => [e.project, e.title, e.link, e.summary ?? null, e.hours ?? null]), [['shop', 'Cache prices', 'https://github.com/acme/shop/pull/a1', 'Prices load from a cache, so checkout is faster.', 6], ['api', 'Rate limits', 'https://github.com/acme/api/pull/a2', 'Rate limits protect the API from bursts.', 16], ['api', '(kept private)', null, null, null]]);
   assert.deepEqual(f.finished.map((e) => [e.project, e.title]), [['docs', 'Explain the release steps']], 'finished ones that merged are listed once, under Merged');
   assert.deepEqual(f.highlights.map((e) => e.title), ['Rate limits', 'Cache prices'], 'by estimated hours; never a private one');
-  assert.deepEqual([f.worth.humanHours, f.worth.items, f.quality.held, f.quality.checked, f.problems], [62, 3, 1, 2, [{ title: 'Rate limits', link: 'u2', what: 'reverted' }]]);
+  assert.deepEqual([f.size, f.quality.held, f.quality.checked, f.problems], [{ hours: 22, estimated: 2, pieces: 3 }, 1, 2, [{ title: 'Rate limits', link: 'https://github.com/acme/api/pull/a2', what: 'reverted' }]]);
   assert.deepEqual(f.open.map((o) => [o.project, o.title, o.state, o.link]), [['api', 'Add SSO login', 'in review', 'https://github.com/acme/api/pull/12'], ['api', '(kept private)', 'in progress', null]]);
   assert.deepEqual(f.blocked.map((o) => [o.title, o.blockers]), [['Migrate the database', ['the staging password (needs: ops)']]]);
   assert.equal(f.keptPrivate, 2);
 
   const md = wk.weeklyMarkdown(f, { who: 'Pat Lee' });
   assert.match(md, /^# Weekly summary: Nov 16 to Nov 22, 2026\n\nPat Lee · the week so far\n/);
-  assert.match(md, /## The week in one line\n\n3 pull requests merged across 3 projects; 1 more task finished; 1 bug fixed; about 62 hours of engineering delivered for 1\.5 of mine\./);
-  assert.match(md, /## Highlights\n\n- \*\*Rate limits\*\* \(api\): Rate limits protect the API from bursts\.\n- \*\*Cache prices\*\* \(shop\)/);
-  assert.match(md, /### Merged\n\n\*\*shop\*\*\n- \[Cache prices\]\(https:\/\/github\.com\/acme\/shop\/pull\/a1\) \(SHOP-7\): Prices load from a cache, so checkout is faster\.\n\n\*\*api\*\*\n- \[Rate limits\]\([^)]*\): Rate limits protect the API from bursts\.\n- \(kept private\)\n/);
+  assert.match(md, /## The week in one line\n\n3 pull requests merged across 3 projects; 1 more task finished; 1 bug fixed; about 22 hours of engineering work delivered \(an estimate\)\./);
+  assert.match(md, /### Merged\n\n\*\*shop\*\*\n- \[Cache prices\]\(https:\/\/github\.com\/acme\/shop\/pull\/a1\) \(SHOP-7\): Prices load from a cache, so checkout is faster\.\n[\s\S]*\n\n\*\*api\*\*\n- \[Rate limits\]\([^)]*\): Rate limits protect the API from bursts\.\n[\s\S]*?\n- \(kept private\)\n/);
   assert.match(md, /### Bugs fixed\n\n- \[SHOP-7 Prices are stale\]\(https:\/\/jira\/SHOP-7\) \(SHOP-7\)/);
   assert.match(md, /\| Pull requests merged \| 3 \| 1 \|/);
-  assert.match(md, /Estimated value: about 62 engineering hours \(\$6,200\); 885\.7 times the AI cost\. These are estimates for 3 of 3 delivered pieces, not measurements\./);
-  assert.match(md, /## Quality\n\n1 of 2 merged pull requests looked at held up[^\n]*\n- \[Rate limits\]\(u2\): reverted/);
+  assert.match(md, /Estimated size: about 22 hours of engineering work for 2 of the 3 pieces listed\. An estimate of what a person would have needed, not a measurement\./);
+  assert.ok(!/\$|AI cost|USD/.test(md), 'no money amounts');
+  // The technical side: how each piece was done, what it touched, how it was checked; and the week as a whole.
+  assert.match(md, /- \[Cache prices\]\([^)]*\) \(SHOP-7\): Prices load from a cache, so checkout is faster\.\n  - How: Prices are read through an LRU cache in cache\.js\. Entries expire after five minutes\.\n  - Changed: 3 files, 120 lines in src\/cache, test\/unit; 1 test file\n  - Checked: 2 checks passed, 1 failed; 2 commands recorded with their output; tests tested: 2 of 3 breaks caught; scorecard 84; 1 of 2 named risks avoided, 1 happened; 2 reviews, 1 change request/);
+  assert.match(md, /- \[Rate limits\]\([^)]*\): Rate limits protect the API from bursts\.\n  - Changed: 1 file, 40 lines in src\n  - Checked: tests tested: 3 of 3 breaks caught; scorecard 90\n/, 'from what was kept at the merge when the agent is gone');
+  assert.match(md, /## Technical summary\n\n- \*\*Code:\*\* 4 files and 160 lines changed in merged pull requests, 1 test file among them\.\n- \*\*Areas touched:\*\* src\/cache \(2\), test\/unit \(1\), src \(1\)\.\n- \*\*Verification:\*\* 2 checks passed, 1 failed across 2 pieces of work; 2 commands recorded with their output, so they can be run again\.\n- \*\*Tests tested:\*\* on 2 pieces, 5 of 6 deliberate breaks in the changed code were caught by the tests\.\n- \*\*Review scorecard:\*\* 87 of 100 on average over 2 pieces\.\n- \*\*Risks named before starting:\*\* 2; 1 avoided, 1 happened\.\n- \*\*Review:\*\* changes were requested 1 time before merging\.\n- \*\*Done with:\*\* claude · opus \(1\), codex \(1\)\./);
+  assert.match(md, /## Highlights\n\n- \*\*Rate limits\*\* \(api\): Rate limits protect the API from bursts\.\n- \*\*Cache prices\*\* \(shop\): Prices load from a cache, so checkout is faster\. Prices are read through an LRU cache/);
+  assert.equal(wk.gist('## Plan\n- cost.js: one function. Then the rest. And more.'), 'cost.js: one function. Then the rest.');
+  assert.deepEqual(['a.js', 'src/a.js', 'src/engines/claude.js', 'src/engines/x/y.js'].map(wk.areaOf), ['(top level)', 'src', 'src/engines', 'src/engines']);
+  assert.match(md, /## Quality\n\n1 of 2 merged pull requests looked at held up[^\n]*\n- \[Rate limits\]\(https:\/\/github\.com\/acme\/api\/pull\/a2\): reverted/);
   assert.match(md, /## In progress\n\n\*\*api\*\*\n- \[Add SSO login\]\([^)]*\) \(in review\)\n- \(kept private\) \(in progress\)/);
   assert.match(md, /## Blocked: needs a decision or help\n\n- \*\*shop\*\*: Migrate the database\. the staging password \(needs: ops\)/);
   assert.match(md, /2 items above are kept private and listed without a description\.$/);
   assert.ok(!/secret|Secret/.test(md), 'nothing of the private work is described');
   // A week with nothing, and a week that is over.
   const empty = wk.weeklyFacts({ start: start - 70 * DAY, events, agents: [], t: now });
-  assert.deepEqual([empty.complete, empty.worth, empty.quality], [true, null, null]);
+  assert.deepEqual([empty.complete, empty.size, empty.quality], [true, null, null]);
   assert.match(wk.weeklyMarkdown(empty), /the week as it ended\n\nNothing was recorded this week\.$/);
 
   // The class: the report, saved as a file once the week is over, once.

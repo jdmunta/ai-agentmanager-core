@@ -1,9 +1,11 @@
 // Weekly summary: one page on a week's work and achievements, written for management. It is put
 // together from what is already recorded, with no model call:
 //   the work record (worklog.js) - pull requests merged and opened, bugs fixed, issues filed
-//   Value (value.js)             - what each delivered piece is, and the hours and money estimated
+//   Value (value.js)             - what each delivered piece is, and the engineering hours estimated
+//   the agents' own briefs       - how each piece was done, how it was checked, the risks named
 //   Quality (quality.js)         - how the week's merged pull requests held up
 //   the agents as they are now   - what is in progress, and what is blocked
+// It is a technical summary: what was built and how it was verified. No money amounts are shown.
 // Work that is kept private (private.js) is counted but not described: no title and no link.
 // It is a draft for you: shown, copied or saved as a file. Nothing is sent to anyone.
 import fs from 'node:fs';
@@ -12,7 +14,7 @@ import { paths } from './config.js';
 import { dayKey } from './budgets.js';
 import { keptPrivate } from './private.js';
 import { totals as qualityTotals } from './quality.js';
-import { itemValue, totals as valueTotals } from './value.js';
+import { itemValue } from './value.js';
 import { weekRow, weekStart } from './worklog.js';
 
 const DAY = 86_400_000;
@@ -22,8 +24,67 @@ const clip = (s, n = 140) => {
   return t.length > n ? `${t.slice(0, n - 1)}…` : t;
 };
 const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
-const money = (n) => (n == null ? '—' : `$${Math.round(n).toLocaleString('en-US')}`);
 const dayLabel = (t) => new Date(t).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+
+/** The first sentence or two of a text, cut to size: how a piece of work was done, from its brief's Solution. */
+export function gist(text, max = 240) {
+  const t = String(text ?? '').replace(/```[\s\S]*?```/g, ' ').replace(/^\s*#.*$/gm, ' ').replace(/^[>*\-\s]+/gm, '').replace(/\s+/g, ' ').trim();
+  if (!t) return '';
+  const two = /^(.+?[.!?])(\s+.+?[.!?])?(?=\s|$)/.exec(t);
+  return clip(two ? two[0] : t, max);
+}
+
+/** The part of the code a file is in: its first two folders ("src/engines"), or "(top level)". */
+export const areaOf = (file) => {
+  const parts = String(file).split('/');
+  return parts.length > 1 ? parts.slice(0, Math.min(2, parts.length - 1)).join('/') : '(top level)';
+};
+
+/**
+ * The technical side of one piece of work, from the agent as it is now and from Quality's record
+ * of its merged pull request: how it was done, what it touched, and how it was checked.
+ */
+export function techOf(agent, q = null) {
+  const b = agent?.brief ?? {};
+  const checks = b.checks ?? [];
+  const sc = agent?.docs?.scorecard?.data;
+  const br = agent?.breaks?.baseline?.ok ? agent.breaks.breaks ?? [] : null;
+  const n = (st) => br.filter((x) => x.status === st).length;
+  const risks = b.risks ?? [];
+  const files = q?.facts?.files ?? [];
+  const areas = {};
+  for (const f of files) areas[areaOf(f)] = (areas[areaOf(f)] ?? 0) + 1;
+  return {
+    how: gist(b.solution),
+    files: files.length || null,
+    lines: q?.facts?.lines ?? null,
+    areas: Object.entries(areas).sort((x, y) => y[1] - x[1]).slice(0, 3).map(([k]) => k),
+    testFiles: files.filter((f) => /(^|\/)(tests?|__tests__|spec|specs)\/|[._-](test|spec)\.[a-z]+$|_test\.go$/i.test(f)).length,
+    checksPassed: checks.filter((c) => c.state === 'passed').length,
+    checksFailed: checks.filter((c) => c.state === 'failed').length,
+    proof: agent?.proofDoc?.commands ?? 0,
+    breaks: br && n('caught') + n('missed') ? { caught: n('caught'), tried: n('caught') + n('missed') } : q?.said?.breaks ?? null,
+    score: Number.isFinite(sc?.overall) ? sc.overall : q?.said?.score ?? null,
+    risks: risks.length ? { named: risks.length, avoided: risks.filter((r) => r.state === 'avoided').length, happened: risks.filter((r) => r.state === 'happened').length } : null,
+    reviews: q?.facts?.reviews ?? null,
+    changesRequested: q?.facts?.changesRequested ?? null,
+    engine: agent?.engine ?? q?.said?.engine ?? null,
+    model: agent?.model ?? q?.said?.model ?? null,
+  };
+}
+
+/** How one piece was checked, in a line: "4 checks passed, 3 with recorded runs; tests tested: 5 of 6 breaks caught; scorecard 86". */
+export function checkedLine(t) {
+  if (!t) return '';
+  const out = [];
+  if (t.checksPassed || t.checksFailed) out.push(`${plural(t.checksPassed, 'check')} passed${t.checksFailed ? `, ${t.checksFailed} failed` : ''}`);
+  if (t.proof) out.push(`${plural(t.proof, 'command')} recorded with ${t.proof === 1 ? 'its' : 'their'} output`);
+  if (t.breaks) out.push(`tests tested: ${t.breaks.caught} of ${plural(t.breaks.tried, 'break')} caught`);
+  if (t.score != null) out.push(`scorecard ${t.score}`);
+  if (t.risks) out.push(`${t.risks.avoided} of ${plural(t.risks.named, 'named risk')} avoided${t.risks.happened ? `, ${t.risks.happened} happened` : ''}`);
+  if (t.reviews) out.push(`${plural(t.reviews, 'review')}${t.changesRequested ? `, ${plural(t.changesRequested, 'change request')}` : ''}`);
+  return out.join('; ');
+}
 
 /** The Monday a week's summary starts on: the week before `t`, or the one `t` is in. */
 export const weekOf = (t = Date.now(), { current = false } = {}) => (current ? weekStart(t) : weekStart(weekStart(t) - DAY));
@@ -46,13 +107,55 @@ export function weeklyFacts({ start, events = [], spend = {}, value = null, qual
 
   // What each delivered piece is, in Value's words, with its estimate.
   const vItems = (value?.items ?? []).filter((it) => !it.excluded && inWeek(it.deliveredAt));
-  const worth = value ? valueTotals(vItems, value.settings) : null;
   const said = new Map(vItems.map((it) => [it.agentId, itemValue(it, value.settings)]));
   for (const e of [...merged, ...finished]) {
     const v = e.agentId && said.get(e.agentId);
     if (v?.summary) e.summary = clip(v.summary, 200);
     if (v?.humanHours != null) e.hours = v.humanHours;
   }
+  // The technical side of each: how it was done, what it touched, how it was checked.
+  const byId = new Map(agents.map((x) => [x.agent.id, x.agent]));
+  const qBy = new Map((quality?.items ?? []).map((it) => [it.url, it]));
+  for (const e of [...merged, ...finished]) {
+    if (e.private || !e.agentId) continue;
+    const q = (e.link && qBy.get(e.link)) || null;
+    if (byId.get(e.agentId) || q) e.tech = techOf(byId.get(e.agentId), q);
+  }
+  const techs = [...merged, ...finished].map((e) => e.tech).filter(Boolean);
+  const sum = (f) => techs.reduce((n, t) => n + (f(t) || 0), 0);
+  const areaCount = {};
+  for (const e of merged) for (const f of (e.link && qBy.get(e.link)?.facts?.files) || []) if (!e.private) areaCount[areaOf(f)] = (areaCount[areaOf(f)] ?? 0) + 1;
+  const scores = techs.map((t) => t.score).filter(Number.isFinite);
+  const tested = techs.filter((t) => t.breaks);
+  const models = {};
+  for (const t of techs) if (t.engine) models[`${t.engine}${t.model ? ` · ${t.model}` : ''}`] = (models[`${t.engine}${t.model ? ` · ${t.model}` : ''}`] ?? 0) + 1;
+  const technical = techs.length
+    ? {
+        pieces: techs.length,
+        files: sum((t) => t.files),
+        lines: sum((t) => t.lines),
+        testFiles: sum((t) => t.testFiles),
+        areas: Object.entries(areaCount).sort((x, y) => y[1] - x[1]).slice(0, 6).map(([area, files]) => ({ area, files })),
+        checksPassed: sum((t) => t.checksPassed),
+        checksFailed: sum((t) => t.checksFailed),
+        proof: sum((t) => t.proof),
+        tested: tested.length,
+        breaksCaught: tested.reduce((n, t) => n + t.breaks.caught, 0),
+        breaksTried: tested.reduce((n, t) => n + t.breaks.tried, 0),
+        score: scores.length ? Math.round(scores.reduce((a, b) => a + b, 0) / scores.length) : null,
+        scored: scores.length,
+        risksNamed: sum((t) => t.risks?.named),
+        risksAvoided: sum((t) => t.risks?.avoided),
+        risksHappened: sum((t) => t.risks?.happened),
+        changesRequested: sum((t) => t.changesRequested),
+        models: Object.entries(models).sort((x, y) => y[1] - x[1]).map(([name, n]) => ({ name, n })),
+      }
+    : null;
+
+  // The size of the week, over the pieces listed: the hours a person would have needed, as Value estimates them.
+  const listed = [...merged, ...finished].filter((e) => !e.private);
+  const sized = listed.filter((e) => e.hours != null);
+  const size = sized.length ? { hours: Math.round(sized.reduce((n, e) => n + e.hours, 0) * 10) / 10, estimated: sized.length, pieces: listed.length } : null;
   // The three worth the most, as the week's highlights.
   const highlights = [...merged, ...finished]
     .filter((e) => !e.private && e.hours != null)
@@ -89,7 +192,8 @@ export function weeklyFacts({ start, events = [], spend = {}, value = null, qual
     bugs: of('bug_fixed'),
     filed: of('issue_filed'),
     highlights,
-    worth,
+    technical,
+    size,
     quality: held,
     problems: qItems.filter((it) => it.after?.reverted || it.after?.fixes?.length).map((it) => ({ title: hidden.has(it.agentId) ? PRIVATE : clip(it.title), link: hidden.has(it.agentId) ? null : it.url, what: it.after?.reverted ? 'reverted' : 'fixed afterwards' })),
     blocked: open.filter((o) => o.state === 'blocked'),
@@ -100,6 +204,14 @@ export function weeklyFacts({ start, events = [], spend = {}, value = null, qual
 }
 
 const item = (e) => `${e.link ? `[${e.title}](${e.link})` : e.title}${e.bugs ? ` (${e.bugs})` : ''}${e.summary ? `: ${e.summary}` : ''}`;
+/** A delivered piece with its technical side under it: how it was done, what it touched, how it was checked. */
+const piece = (e) => {
+  const t = e.tech;
+  if (!t) return item(e);
+  const touched = t.files ? `${plural(t.files, 'file')}${t.lines ? `, ${plural(t.lines, 'line')}` : ''}${t.areas.length ? ` in ${t.areas.join(', ')}` : ''}${t.testFiles ? `; ${plural(t.testFiles, 'test file')}` : ''}` : '';
+  const checked = checkedLine(t);
+  return [item(e), ...(t.how ? [`  - How: ${t.how}`] : []), ...(touched ? [`  - Changed: ${touched}`] : []), ...(checked ? [`  - Checked: ${checked}`] : [])].join('\n');
+};
 const byProject = (list, each) => {
   const out = [];
   for (const p of [...new Set(list.map((e) => e.project))]) {
@@ -120,15 +232,15 @@ export function weeklyMarkdown(f, { who = '' } = {}) {
   if (r.prs_merged) parts.push(`${plural(r.prs_merged, 'pull request')} merged${f.projects.length > 1 ? ` across ${f.projects.length} projects` : f.projects.length === 1 ? ` in ${f.projects[0]}` : ''}`);
   if (f.finished.length) parts.push(`${plural(f.finished.length, 'more task')} finished`);
   if (r.bugs_fixed) parts.push(`${plural(r.bugs_fixed, 'bug')} fixed`);
-  if (f.worth?.humanHours) parts.push(`about ${f.worth.humanHours} hours of engineering delivered${f.worth.yourHours ? ` for ${f.worth.yourHours} of mine` : ''}`);
+  if (f.size) parts.push(`about ${f.size.hours} hours of engineering work delivered (an estimate)`);
   out.push('## The week in one line', '', parts.length ? `${parts.join('; ')}.` : 'Work is in progress; nothing was delivered yet.', '');
 
-  if (f.highlights.length) out.push('## Highlights', '', ...f.highlights.map((e) => `- **${e.title}** (${e.project})${e.summary ? `: ${e.summary}` : ''}`), '');
+  if (f.highlights.length) out.push('## Highlights', '', ...f.highlights.map((e) => `- **${e.title}** (${e.project})${e.summary ? `: ${e.summary}` : ''}${e.tech?.how ? ` ${e.tech.how}` : ''}`), '');
 
   if (done) {
     out.push('## Achievements', '');
-    if (f.merged.length) out.push('### Merged', '', ...byProject(f.merged, item));
-    if (f.finished.length) out.push('### Finished, not merged yet or with no pull request', '', ...byProject(f.finished, item));
+    if (f.merged.length) out.push('### Merged', '', ...byProject(f.merged, piece));
+    if (f.finished.length) out.push('### Finished, not merged yet or with no pull request', '', ...byProject(f.finished, piece));
   }
   if (f.bugs.length) out.push('### Bugs fixed', '', ...f.bugs.map((e) => `- ${item(e)}`), '');
   if (f.filed.length) out.push('### Issues filed', '', ...f.filed.map((e) => `- ${item(e)}`), '');
@@ -136,9 +248,21 @@ export function weeklyMarkdown(f, { who = '' } = {}) {
   const p = f.prev;
   const num = (label, a, b) => `| ${label} | ${a === '' || a == null ? '—' : a} | ${b === '' || b == null ? '—' : b} |`;
   out.push('## Numbers', '', '| | This week | Week before |', '| --- | --- | --- |');
-  out.push(num('Pull requests merged', r.prs_merged, p.prs_merged), num('Pull requests opened', r.prs_opened, p.prs_opened), num('Bugs fixed', r.bugs_fixed, p.bugs_fixed), num('Issues filed', r.issues_filed, p.issues_filed), num('Tasks finished', r.agents_finished, p.agents_finished), num('Hours from opened to merged (median)', r.median_hours_to_merge, p.median_hours_to_merge), num('AI cost', money(r.cost_usd), money(p.cost_usd)), '');
-  if (f.worth?.estimated) {
-    out.push(`Estimated value: about ${f.worth.humanHours} engineering hours (${money(f.worth.laborUsd)})${f.worth.savingsUsd ? `, ${money(f.worth.savingsUsd)} saved beyond that` : ''}${f.worth.roi ? `; ${f.worth.roi} times the AI cost` : ''}. These are estimates for ${f.worth.estimated} of ${plural(f.worth.items, 'delivered piece')}, not measurements.`, '');
+  out.push(num('Pull requests merged', r.prs_merged, p.prs_merged), num('Pull requests opened', r.prs_opened, p.prs_opened), num('Bugs fixed', r.bugs_fixed, p.bugs_fixed), num('Issues filed', r.issues_filed, p.issues_filed), num('Tasks finished', r.agents_finished, p.agents_finished), num('Hours from opened to merged (median)', r.median_hours_to_merge, p.median_hours_to_merge), '');
+  if (f.size) out.push(`Estimated size: about ${f.size.hours} hours of engineering work for ${f.size.estimated} of the ${plural(f.size.pieces, 'piece')} listed. An estimate of what a person would have needed, not a measurement.`, '');
+
+  const k = f.technical;
+  if (k) {
+    out.push('## Technical summary', '');
+    if (k.files) out.push(`- **Code:** ${plural(k.files, 'file')} and ${plural(k.lines, 'line')} changed in merged pull requests${k.testFiles ? `, ${plural(k.testFiles, 'test file')} among them` : ''}.`);
+    if (k.areas.length) out.push(`- **Areas touched:** ${k.areas.map((a) => `${a.area} (${a.files})`).join(', ')}.`);
+    if (k.checksPassed || k.checksFailed) out.push(`- **Verification:** ${plural(k.checksPassed, 'check')} passed${k.checksFailed ? `, ${k.checksFailed} failed` : ''} across ${plural(k.pieces, 'piece')} of work${k.proof ? `; ${plural(k.proof, 'command')} recorded with ${k.proof === 1 ? 'its' : 'their'} output, so ${k.proof === 1 ? 'it' : 'they'} can be run again` : ''}.`);
+    if (k.tested) out.push(`- **Tests tested:** on ${plural(k.tested, 'piece')}, ${k.breaksCaught} of ${plural(k.breaksTried, 'deliberate break')} in the changed code ${k.breaksCaught === 1 ? 'was' : 'were'} caught by the tests.`);
+    if (k.scored) out.push(`- **Review scorecard:** ${k.score} of 100 on average over ${plural(k.scored, 'piece')}.`);
+    if (k.risksNamed) out.push(`- **Risks named before starting:** ${k.risksNamed}; ${k.risksAvoided} avoided${k.risksHappened ? `, ${k.risksHappened} happened` : ''}${k.risksNamed - k.risksAvoided - k.risksHappened ? `, ${k.risksNamed - k.risksAvoided - k.risksHappened} not checked` : ''}.`);
+    if (k.changesRequested) out.push(`- **Review:** changes were requested ${plural(k.changesRequested, 'time')} before merging.`);
+    if (k.models.length) out.push(`- **Done with:** ${k.models.map((m) => `${m.name} (${m.n})`).join(', ')}.`);
+    out.push('');
   }
 
   if (f.quality) {

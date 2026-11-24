@@ -1435,10 +1435,11 @@ Agents started this way are marked **⚡ GitHub** or **⚡ webhook**, Slack aler
 
 | Section | What it holds |
 | --- | --- |
-| The week in one line | Pull requests merged and across how many projects, tasks finished, bugs fixed, engineering hours delivered |
-| Highlights | The three pieces of work estimated to be worth the most, each with a sentence on what it is |
-| Achievements | What merged, by project, with links, bug keys and a sentence each; then what finished without a merge; bugs fixed; issues filed |
-| Numbers | Merged, opened, bugs fixed, issues filed, tasks finished, hours to merge and AI cost, against the week before; and the estimated value |
+| The week in one line | Pull requests merged and across how many projects, tasks finished, bugs fixed, engineering hours delivered (an estimate) |
+| Highlights | The three largest pieces of work, each with a sentence on what it is and how it was done |
+| Achievements | What merged, by project, with links and bug keys; then what finished without a merge; bugs fixed; issues filed. Under each piece: **How** it was done, what was **Changed**, and how it was **Checked** |
+| Numbers | Merged, opened, bugs fixed, issues filed, tasks finished and hours to merge, against the week before; and the estimated size in engineering hours |
+| Technical summary | Files and lines changed, the areas of the code touched, checks passed and commands recorded, tests tested, the average review scorecard, risks named and avoided, change requests, and the engines and models used |
 | Quality | How many of the week's merged pull requests held up, and the ones reverted or fixed afterwards |
 | In progress | Open work by project: in review or in progress |
 | Blocked | What needs a decision or help, with what it waits for |
@@ -1448,7 +1449,13 @@ Agents started this way are marked **⚡ GitHub** or **⚡ webhook**, Slack aler
 - **Nothing is sent.** It is a draft for you to read and pass on.
 - **Private work stays private.** Work that is [kept private](#kept-private-possibly-patentable-work-is-not-sent-out) is counted and listed as "(kept private)", with no title, link or description.
 
-It is put together from what is already recorded, with no model call: the [work record](#work-record), [Value](#value) for the sentence on each piece and the estimates, and [Quality](#quality-what-happened-after-the-merge). Hours and money are Value's estimates and are marked as estimates. A sentence appears next to a piece of work once Value has estimated it.
+**It is technical, with no money amounts.** Under each delivered piece:
+
+- **How:** the first sentences of the Solution in the agent's brief.
+- **Changed:** files and lines of its merged pull request, the folders they are in, and how many are test files.
+- **Checked:** checks passed and failed, commands recorded with their output ([Proof](#proof-what-it-ran-and-what-it-did-not-do)), breaks caught ([Test the tests](#test-the-tests-would-they-notice-a-mistake)), the scorecard, named risks avoided, reviews and change requests.
+
+It is put together from what is already recorded, with no model call: the [work record](#work-record), the agents' briefs, [Quality](#quality-what-happened-after-the-merge) for the files and lines of merged pull requests, and [Value](#value) for the sentence on each piece and its estimated engineering hours. A line appears only when there is something to say: an agent that was removed keeps what was recorded as its pull request merged, and loses the rest.
 
 ## Value
 

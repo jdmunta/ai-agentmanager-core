@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.68.0 (2026-11-24)
+
+- **Weekly summary: technical, with no money amounts.** The AI cost and the dollar value are gone. Under each delivered piece the summary now says **How** it was done (from the agent's brief), what was **Changed** (files, lines, folders, test files) and how it was **Checked** (checks passed, commands recorded with their output, breaks caught by the tests, the scorecard, named risks avoided, reviews).
+- **Technical summary for the week.** Files and lines changed, the areas of the code touched, verification, tests tested, the average review scorecard, risks named and avoided, change requests, and the engines and models used.
+- **The hours estimate covers exactly the pieces listed**, and says how many of them it is for.
+
 ## 1.67.0 (2026-11-23)
 
 - **Weekly summary for management.** **Work record → Weekly summary**, or `agentmgr weekly`, gives one page on a week's work and achievements: the week in one line, highlights, what merged and finished by project with links, bugs fixed, the numbers against the week before, the estimated value, how the merged work held up, what is in progress and what is blocked. Last week, or this week so far (`--current`).
