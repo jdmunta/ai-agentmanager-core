@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.70.1 (2026-11-24)
+
+- **Split screen: a view no longer starts following itself.** The daemon sent a new terminal size back to every view, including the one that set it. When that view fitted itself twice in a row, the first size came back after the second, was taken for another view's, and the view shrank to follow it. The daemon no longer sends a view its own size, and a view ignores a size it sent a moment ago. Found from the sizes the split screen test now reports when it fails.
+
 ## 1.70.0 (2026-11-24)
 
 - **Production signal: incidents from your monitoring tool.** Any tool, a script or you can report an incident (`agentmgr quality incident "<title>"`, or `POST /api/quality/incident`). It is linked to the merged pull request it belongs to: the one it names, the one that merged as the commit it was seen on, or the latest that changed a file in its stack trace. That pull request then shows **Incident in production** and counts as one that did not hold up in Quality, the track record and the weekly summary. The same id is counted once. An agent cannot report one.

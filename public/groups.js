@@ -20,9 +20,17 @@ const isShell = (k) => /^shell(:\d+)?$/.test(k ?? '');
 // click sets the session's size; the others show it at that size, the font scaled to fit, until
 // you type in or click one of them (a view made much smaller says so). `v` is { xterm, follow }.
 
+/** This view sent the session a size (it leads): kept briefly, so its own size coming back is not taken for another view's. */
+export function sentSize(v, cols, rows) {
+  const t = Date.now();
+  v.sentSizes = [...(v.sentSizes ?? []).filter((x) => t - x.at < 3000), { cols, rows, at: t }];
+}
+
 /** Another view resized the session: show it at that size. */
 export function followSize(v, cols, rows, box) {
   if (!(cols > 0 && rows > 0) || (cols === v.xterm.cols && rows === v.xterm.rows)) return;
+  // A size this view sent a moment ago, coming back after it fitted again: not another view's.
+  if (!v.follow && (v.sentSizes ?? []).some((x) => x.cols === cols && x.rows === rows && Date.now() - x.at < 3000)) return;
   v.follow = true;
   v.xterm.resize(cols, rows);
   fitSoon(v, box);
@@ -71,6 +79,7 @@ export function leadSize(v, fit, send) {
   try {
     fit();
   } catch {}
+  sentSize(v, v.xterm.cols, v.xterm.rows);
   send({ t: 'r', cols: v.xterm.cols, rows: v.xterm.rows });
 }
 
@@ -130,7 +139,7 @@ export function initGroups({ $, esc, agents, Terminal, FitAddon, openStream, api
       lead(p);
       p.conn?.send({ t: 'i', d });
     });
-    xterm.onResize(({ cols, rows }) => !p.follow && p.conn?.send({ t: 'r', cols, rows }));
+    xterm.onResize(({ cols, rows }) => !p.follow && (sentSize(p, cols, rows), p.conn?.send({ t: 'r', cols, rows })));
     new ResizeObserver(() => (p.follow ? scaleToFit(p, el.querySelector('.gterm')) : refit(p))).observe(el.querySelector('.gterm'));
     panes.set(id, p);
     if (show.agentId) load(id, show.agentId, show.kind);
