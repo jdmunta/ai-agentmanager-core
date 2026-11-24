@@ -10,6 +10,7 @@
 - **Requirement trace.** In the Proof dialog, or `agentmgr trace <agent>`: each point of what done means followed to the scorecard's finding, the checks recorded for it (and whether they held when run again), and what is missing. Points with a gap count in Read first.
 - **Monthly and quarterly summaries.** The weekly summary also covers a month or a quarter (`--month`, `--quarter`, and tabs in the dialog), written by itself as drafts when the period ends.
 - **Model fit.** The track record compares models by share that held up, scorecard and cost per piece against the most used one, and suggests a cheaper model that held up as well, with at least 5 settled pull requests behind both.
+- **Fixed: a point typed in What done means could be lost.** When the dialog's load finished after you had started typing a new point, the list was drawn again without it. What is typed is now read back first.
 - **Fixed:** a test that failed in the first minutes after midnight; the split screen test now reports the sizes it saw when it times out.
 
 ## 1.68.0 (2026-11-24)

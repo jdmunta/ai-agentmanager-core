@@ -101,6 +101,8 @@ export function initAcceptance({ dialog, api, esc, toast, ago, agentOf, upsert }
     try {
       const view = await api('GET', `/agents/${id}/acceptance`);
       if (st?.id !== id) return;
+      // What was typed while it loaded is read back before the list is drawn again.
+      readEdits();
       st.view = view;
       st.error = null;
       // Not agreed yet: straight to the points, to edit. (Typing in progress is kept.)
