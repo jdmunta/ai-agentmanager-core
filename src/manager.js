@@ -2087,7 +2087,8 @@ export class AgentManager extends EventEmitter {
     this.termRuntime(id, kind)?.pty?.write(data);
   }
 
-  resize(id, cols, rows, kind = 'claude') {
+  /** Resize a session. `from`: the viewer that asked, which is not sent its own size back. */
+  resize(id, cols, rows, kind = 'claude', from = null) {
     const rt = this.termRuntime(id, kind);
     if (!rt || !(cols > 0 && rows > 0)) return;
     const changed = rt.cols !== cols || rt.rows !== rows;
@@ -2097,7 +2098,9 @@ export class AgentManager extends EventEmitter {
       rt.pty?.resize(cols, rows);
     } catch {}
     // Viewers that don't size the session follow it.
-    if (changed) for (const c of rt.clients ?? []) c.send({ t: 'size', cols, rows });
+    // (Sent back to the one that asked, a size it has since replaced with a newer one would make it
+    // follow itself.)
+    if (changed) for (const c of rt.clients ?? []) if (c !== from) c.send({ t: 'size', cols, rows });
   }
 
   // ------------------------------------------------------- ancillary shells

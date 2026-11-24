@@ -29,7 +29,7 @@ import { initSupport } from '/support.js';
 import { initCode } from '/code.js';
 import { initMachine } from '/machine.js';
 import { initWatch } from '/watch.js';
-import { initGroups, followSize, scaleToFit, leadSize, ownFont, newFont } from '/groups.js';
+import { initGroups, followSize, scaleToFit, leadSize, ownFont, newFont, sentSize } from '/groups.js';
 import { termFont } from '/termfont.js';
 import { initTopNav } from '/topnav.js';
 import { initStandup } from '/standup.js';
@@ -2905,7 +2905,7 @@ const term = {
       this.send({ t: 'i', d });
     });
     // Shown in a split-screen group too (or another window): the view typed in sets the size.
-    this.xterm.onResize(({ cols, rows }) => !this.follow && this.send({ t: 'r', cols, rows }));
+    this.xterm.onResize(({ cols, rows }) => !this.follow && (sentSize(this, cols, rows), this.send({ t: 'r', cols, rows })));
     new ResizeObserver(() => (this.follow ? scaleToFit(this, $('#terminal')) : this.refit())).observe($('#terminal'));
     window.addEventListener('agentmgr-termfont', () => newFont(this, () => this.refit(), $('#terminal')));
     touchScroll($('#terminal'), this.xterm);
