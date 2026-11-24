@@ -25,7 +25,18 @@ export function followSize(v, cols, rows, box) {
   if (!(cols > 0 && rows > 0) || (cols === v.xterm.cols && rows === v.xterm.rows)) return;
   v.follow = true;
   v.xterm.resize(cols, rows);
-  requestAnimationFrame(() => scaleToFit(v, box));
+  fitSoon(v, box);
+}
+
+/**
+ * Fit a following view once xterm has taken a new size or font in, which takes it some frames:
+ * measured too early, the view would stay at the full size and no longer fit, with nothing to
+ * correct it. Fitting again is harmless once it does.
+ */
+function fitSoon(v, box) {
+  const again = () => scaleToFit(v, box);
+  requestAnimationFrame(again);
+  for (const ms of [120, 400, 1000]) setTimeout(again, ms);
 }
 
 /** While following: the font that fits the session's size into the panel. */
@@ -49,13 +60,8 @@ export function ownFont(v) {
 /** The text size was changed in the menu. */
 export function newFont(v, fit, box) {
   v.xterm.options.fontSize = termFont();
-  if (v.follow) {
-    // xterm takes the new size in over the next frames: measured too early, the view would stay
-    // at the full size and no longer fit. Fitting again is harmless once it does.
-    const again = () => scaleToFit(v, box);
-    requestAnimationFrame(again);
-    for (const ms of [120, 400, 1000]) setTimeout(again, ms);
-  } else fit();
+  if (v.follow) fitSoon(v, box);
+  else fit();
 }
 
 /** This view sets the size again: its own font, fitted to its panel, sent to the session. */

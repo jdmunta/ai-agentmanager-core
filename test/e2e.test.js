@@ -6190,6 +6190,29 @@ test('Close all closes every open session but the busy ones (unless asked) and t
   assert.deepEqual((await call('GET', '/agents')).body.filter((a) => a.runtime.running && a.kind !== 'assistant').map((a) => a.name), []);
 });
 
+test('weekly summary: this week on one page, with what merged; saved as a file when asked; nothing is sent', async () => {
+  const [a] = (await call('POST', '/agents', { intent: 'Weekly: ship the importer', project: 'Weekly', start: false })).body;
+  const url = 'https://github.com/acme/weekly/pull/5';
+  manager.patch(a.id, { prs: { [url]: { url, number: 5, title: 'Ship the importer', source: 'branch', state: 'MERGED', openedAt: new Date(Date.now() - 3_600_000).toISOString(), mergedAt: new Date().toISOString() } } });
+  const r = (await call('GET', '/weekly?current=1')).body;
+  assert.deepEqual([r.week.complete, r.saved, r.file], [false, false, path.join(home, 'reports', `weekly-${r.week.start}.md`)]);
+  assert.match(r.markdown, /^# Weekly summary: .*\n\n.*the week so far/);
+  assert.match(r.markdown, /### Merged\n[\s\S]*\*\*Weekly\*\*\n- \[Ship the importer\]\(https:\/\/github\.com\/acme\/weekly\/pull\/5\)/);
+  assert.ok(r.facts.row.prs_merged >= 1 && r.facts.merged.some((e) => e.title === 'Ship the importer'));
+  // Kept private: counted, not described.
+  await call('POST', `/agents/${a.id}/private`, { private: true });
+  const hidden = (await call('GET', '/weekly?current=1')).body;
+  assert.ok(!hidden.markdown.includes('Ship the importer') && /- \(kept private\)/.test(hidden.markdown) && /kept private and listed without a description/.test(hidden.markdown));
+  await call('POST', `/agents/${a.id}/private`, { private: null });
+  // Saved when asked; the week before is its own report.
+  const saved = (await call('POST', '/weekly/save', { current: true })).body;
+  assert.equal(saved.saved, true);
+  assert.equal(fs.readFileSync(saved.file, 'utf8'), `${saved.markdown}\n`);
+  const last = (await call('GET', '/weekly')).body;
+  assert.ok(last.week.complete && last.week.start < r.week.start);
+  await call('DELETE', `/agents/${a.id}`);
+});
+
 test('work record: what the agents got done, appended to a CSV in agentmgr home, with a summary to copy', async () => {
   const v = (await call('GET', '/worklog?days=0')).body;
   assert.equal(v.files.events, path.join(home, 'worklog.csv'));

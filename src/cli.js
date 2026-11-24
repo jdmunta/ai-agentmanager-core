@@ -832,6 +832,23 @@ export async function main(argv) {
     });
 
   program
+    .command('weekly')
+    .description("Weekly summary for management: a week's work and achievements on one page. The week in one line, highlights, what was merged and finished by project, bugs fixed, the numbers against the week before, estimated value, how the merged work held up, what is in progress and what is blocked. Work that is kept private is listed without a description. A draft: nothing is sent.")
+    .option('--current', 'this week so far (default: the week that just ended)')
+    .option('--save', 'also write it to the reports folder (~/.agentmanager/reports/weekly-<monday>.md)')
+    .option('-o, --out <file>', 'write it to this file')
+    .option('--json', 'print the facts as JSON')
+    .action(async (o) => {
+      await daemon();
+      const r = o.save ? await api('POST', '/weekly/save', { current: Boolean(o.current) }) : await api('GET', `/weekly${o.current ? '?current=1' : ''}`);
+      if (o.out) fs.writeFileSync(o.out, `${r.markdown}\n`);
+      if (o.json) return console.log(JSON.stringify(r.facts, null, 2));
+      console.log(r.markdown);
+      if (o.save) process.stderr.write(dim(`\nSaved as ${r.file}\n`));
+      if (o.out) process.stderr.write(dim(`\nWritten to ${o.out}\n`));
+    });
+
+  program
     .command('worklog')
     .description('Work record: pull requests opened and merged, bugs fixed, issues filed, agents finished; also appended to ~/.agentmanager/worklog.csv')
     .option('-d, --days <n>', 'the last n days (0: all time)', '30')

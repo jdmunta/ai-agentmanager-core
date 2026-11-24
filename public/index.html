@@ -884,12 +884,20 @@
       </form>
     </dialog>
 
+    <dialog id="weekly-dialog" class="update-dialog weekly-dialog" aria-label="Weekly summary">
+      <div class="issues-head"><h2>Weekly summary</h2><div class="chips" role="tablist" id="weekly-tabs"></div></div>
+      <div id="weekly-body"></div>
+      <p id="weekly-note" class="hint"></p>
+      <div class="dialog-actions"><button type="button" class="small primary" data-weekly="copy" title="As Markdown, to paste into an email, a document or Slack">Copy</button><button type="button" class="small" data-weekly="download">Download</button><button type="button" class="small" data-weekly="save" title="Write it to the reports folder on this computer">Save on this computer</button><span class="spacer"></span><button type="button" class="small" data-weekly="close">Close</button></div>
+    </dialog>
+
     <dialog id="worklog-dialog">
       <form method="dialog" class="alerts-body">
         <h2>Work record <select id="worklog-days" class="inline-select"><option value="7">last 7 days</option><option value="30" selected>last 30 days</option><option value="90">last 90 days</option><option value="365">last year</option><option value="0">all time</option></select></h2>
         <div id="worklog-body"></div>
         <p id="worklog-files" class="hint"></p>
         <div class="dialog-actions">
+          <button type="button" id="weekly-open" class="primary" title="One page on a week's work and achievements, written for management">Weekly summary</button>
           <button type="button" id="worklog-copy" title="The period's totals and what was merged, fixed and filed, with links, as Markdown for a review or status update">Copy summary</button>
           <button type="button" id="worklog-csv" class="ghost">Download events</button>
           <button type="button" id="worklog-weekly" class="ghost">Download weekly</button>
