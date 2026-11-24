@@ -59,8 +59,26 @@ export function initProof({ dialog, api, esc, toast, ago, agentOf }) {
   let view = null;
   let stamp = '';
   let breaks = null; // Test the tests: the view of /breaks
+  let trace = null; // Requirement trace: each point of what done means, followed to what shows it
   let command = ''; // the test command typed here, kept over redraws
   const stampOf = (a) => `${a.proofDoc?.updatedAt ?? ''}|${a.proof?.at ?? ''}|${a.breaks?.at ?? ''}|${a.breaks?.sentAt ?? ''}`;
+
+  /** Requirement trace: each point of what done means, what the scorecard found, the checks recorded for it, and what is missing. */
+  function traceHtml() {
+    const t = trace;
+    if (!t?.rows.length) return '';
+    const word = { met: ['proof-ok', 'Met'], not_met: ['proof-bad', 'Not met'], unverified: ['', 'Not verified'], unscored: ['', 'Not scored yet'] };
+    const again = { same: 'the same result when run again', differs: 'a different result when run again', skipped: 'not run again' };
+    const row = (r) => `<li class="${r.gap ? 'trace-gap' : ''}">
+      <div class="proof-title"><span class="tag">${esc(r.id)}</span> ${esc(r.text)}</div>
+      <div><span class="tag ${word[r.status][0]}">${word[r.status][1]}</span> <span class="hint">by the scorecard${r.evidence ? `: ${esc(r.evidence)}` : ''}</span></div>
+      ${r.proof.map((p) => `<div class="trace-check">${p.command ? `<code class="proof-cmd">${esc(p.command)}</code>${p.exit === null ? '' : ` <span class="hint">exit ${p.exit}</span>`}${p.rerun ? ` <span class="hint">· ${again[p.rerun]}</span>` : ''}` : `<span class="hint">By reading${p.note ? `: ${esc(p.note)}` : ''}</span>`}</div>`).join('')}
+      ${r.gap ? `<p class="trace-missing"><b>Gap</b> ${esc(r.gap)}</p>` : '<p class="hint">Shown by a recorded run.</p>'}
+    </li>`;
+    return `<h3 class="breaks-head trace-head">What done means, traced</h3>
+      <p class="hint">${t.source === 'agreed' ? 'Each point you agreed on' : "Each of the scorecard's criteria (no points were agreed)"}, followed to what shows it: the scorecard's finding and the checks recorded for it. <b>${t.counts.shown} of ${t.counts.points}</b> ${t.counts.points === 1 ? 'is' : 'are'} shown by a recorded run${t.counts.gaps ? `; <b>${t.counts.gaps}</b> ${t.counts.gaps === 1 ? 'has' : 'have'} a gap` : ''}.</p>
+      <ul class="trace-list">${t.rows.map(row).join('')}</ul>`;
+  }
 
   /** Test the tests: the last run, the command, and the buttons. */
   function breaksHtml() {
@@ -115,6 +133,7 @@ export function initProof({ dialog, api, esc, toast, ago, agentOf }) {
       ${view.entries.length ? `<ul class="proof-list">${view.entries.map(entry).join('')}</ul>` : '<p class="hint">Nothing recorded yet.</p>'}
       ${view.rerun ? `<p class="hint">${view.rerun.stale ? 'The last run here was before the agent changed its proof.' : `Run again here ${ago(view.rerun.at)}: ${view.rerun.same} same, ${view.rerun.differs} different${view.rerun.skipped ? `, ${view.rerun.skipped} not run` : ''}.`}</p>` : ''}
       ${!view.canRun && view.counts.commands ? `<p class="hint">${esc(view.whyNot)}</p>` : ''}
+      ${traceHtml()}
       ${breaksHtml()}`;
     if (typing !== null) {
       const input = dialog.querySelector('[data-breaks="command"]');
@@ -131,7 +150,7 @@ export function initProof({ dialog, api, esc, toast, ago, agentOf }) {
   async function load() {
     stamp = stampOf(agentOf(id) ?? {});
     try {
-      [view, breaks] = await Promise.all([api('GET', `/agents/${id}/proof`), api('GET', `/agents/${id}/breaks`)]);
+      [view, breaks, trace] = await Promise.all([api('GET', `/agents/${id}/proof`), api('GET', `/agents/${id}/breaks`), api('GET', `/agents/${id}/trace`)]);
     } catch (e) {
       toast(`Error: ${e.message}`, 5000);
     }
@@ -172,7 +191,7 @@ export function initProof({ dialog, api, esc, toast, ago, agentOf }) {
   dialog.addEventListener('input', (e) => {
     if (e.target.dataset?.breaks === 'command') command = e.target.value;
   });
-  dialog.addEventListener('close', () => ((id = null), (view = null), (breaks = null), (command = '')));
+  dialog.addEventListener('close', () => ((id = null), (view = null), (breaks = null), (trace = null), (command = '')));
 
   return {
     open(agentId) {

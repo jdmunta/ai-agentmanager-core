@@ -59,6 +59,8 @@ import { Value, valueSlack } from './value.js';
 import { Quality } from './quality.js';
 import { recordMarkdown } from './record.js';
 import { Weekly } from './weekly.js';
+import { queueMarkdown, readQueue } from './readfirst.js';
+import { traceMarkdown, traceOf } from './trace.js';
 import { PRIVATE_MESSAGE, keptPrivate, mustBeShareable } from './private.js';
 import { Standards, runCheck } from './standards.js';
 import { Proof, proofMarkdown } from './proof.js';
@@ -643,6 +645,11 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
     if (![true, false, null].includes(b.private ?? null)) throw fail(400, 'private is true (keep it private), false (allow sharing) or null (what was read)');
     return manager.setPrivate(req.params.id, { private: b.private ?? null, note: b.note ?? '' });
   }));
+  // Understanding check: whether you knew the answer. Yours to say, not the agent's.
+  api.post('/agents/:id/understanding/knew', wrap((req) => {
+    if (req.headers['x-agentmgr-agent']) throw fail(403, 'Whether you knew an answer is said by the person, not by an agent');
+    return manager.understandingKnew(req.params.id, req.body?.question, req.body?.knew ?? null);
+  }));
   const DOC_LIST = ['analysis', 'design', 'flow', 'proposal', 'humanai', 'estimate', 'documentation'];
   api.post('/agents/:id/humanai/answers', wrap((req) => manager.humanAiAnswers(req.params.id, req.body?.answers, { send: req.body?.send === true })));
   api.post(
@@ -730,6 +737,13 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
   api.post('/agents/:id/proof/run', wrap((req) => {
     if (req.headers['x-agentmgr-agent']) throw fail(403, 'Running the proof again is asked by the person, not by an agent');
     return manager.proof.rerun(req.params.id);
+  }));
+  // Requirement trace (trace.js): each point of what done means, followed to the scorecard's finding and the recorded checks.
+  api.get('/agents/:id/trace', wrap((req) => {
+    const a = manager.mustGet(req.params.id);
+    const p = manager.proof.forScore(a);
+    const t = traceOf(a, p.entries, p.rerun);
+    return req.query.format === 'md' ? { markdown: traceMarkdown(a.name, t) } : t;
   }));
   // Test the tests (mutate.js): changed lines broken one at a time, the tests run on each. The
   // person's call only: it runs commands here and changes the agent's files for a moment.
@@ -1260,9 +1274,26 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
   api.get('/repeats', wrap(() => repeats.view()));
   api.post('/repeats/dismiss', wrap((req) => repeats.dismiss(String(req.body?.key ?? ''))));
   api.post('/playbooks/:id/run', wrap((req) => playbooks.run(req.params.id, { vars: req.body?.vars ?? {} })));
+  // Read first (readfirst.js): finished work waiting for review, the pieces that need reading most first.
+  api.get('/read-first', wrap((req) => {
+    const items = readQueue(store.list(), (a) => manager.view(a));
+    return req.query.format === 'md' ? { markdown: queueMarkdown(items) } : { items };
+  }));
+  // Reviewed: the person has read it, so it leaves the queue until the agent changes its brief again. `olderThanDays` marks every one finished longer ago.
+  api.post('/read-first/reviewed', wrap((req) => {
+    if (req.headers['x-agentmgr-agent']) throw fail(403, 'Whether work was reviewed is said by the person, not by an agent');
+    const b = req.body ?? {};
+    const at = new Date().toISOString();
+    let ids = [];
+    if (b.agent) ids = [manager.mustGet(b.agent).id];
+    else if (Number(b.olderThanDays) > 0) ids = readQueue(store.list(), (a) => manager.view(a)).filter((i) => Date.parse(i.finishedAt) < Date.now() - Number(b.olderThanDays) * 86_400_000).map((i) => i.agentId);
+    else throw fail(400, 'Give agent, or olderThanDays');
+    for (const id of ids) manager.patch(id, { reviewed: b.reviewed === false ? null : { at } });
+    return { marked: ids.length, items: readQueue(store.list(), (a) => manager.view(a)) };
+  }));
   // Weekly summary (weekly.js): a week's work and achievements on one page, for management. A draft: nothing is sent.
-  api.get('/weekly', wrap((req) => weekly.report({ current: req.query.current === '1' })));
-  api.post('/weekly/save', wrap((req) => weekly.save({ current: req.body?.current === true })));
+  api.get('/weekly', wrap((req) => weekly.report({ kind: String(req.query.kind ?? 'week'), current: req.query.current === '1' })));
+  api.post('/weekly/save', wrap((req) => weekly.save({ kind: String(req.body?.kind ?? 'week'), current: req.body?.current === true })));
   api.get('/worklog', wrap(async (req) => (await worklog.record(), worklog.view({ days: Number(req.query.days ?? 30) || 0 }))));
   api.get('/worklog/summary', wrap(async (req) => {
     await worklog.record();

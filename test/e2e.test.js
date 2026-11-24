@@ -1664,6 +1664,13 @@ test('proof: the agent is told to record it; what it recorded is shown with what
   const v = await agentNow(a.id);
   assert.deepEqual([v.proofDoc.entries, v.proofDoc.commands, v.results.notDone, v.results.notDoneSaid], [4, 3, ['the changelog entry'], true]);
   assert.deepEqual(v.brief.risks.map((r) => r.state), ['avoided', 'open'], 'its pre-mortem, read from the brief');
+  // Requirement trace: with points agreed, each is followed to the checks recorded for it.
+  manager.patch(a.id, { acceptance: { status: 'agreed', agreedAt: new Date().toISOString(), points: [{ id: 'A1', text: 'The file holds the version' }, { id: 'A2', text: 'The changelog has an entry' }] } });
+  const trace = (await call('GET', `/agents/${a.id}/trace`)).body;
+  assert.deepEqual([trace.source, trace.rows.map((r) => [r.id, r.status, r.proof.map((p) => p.command), r.gap]), trace.counts.gaps], ['agreed', [['A1', 'unscored', ['cat VERSION'], null], ['A2', 'unscored', [], 'nothing recorded for it']], 1]);
+  assert.match((await call('GET', `/agents/${a.id}/trace?format=md`)).body.markdown, /## A2 The changelog has an entry\n\n- Scorecard: Not scored yet\n- \*\*Gap:\*\* nothing recorded for it/);
+  assert.ok((await agentNow(a.id)).readFirst.reasons.some((r) => /^1 point of what done means has no recorded run behind it: A2/.test(r.text)), 'counted in Read first');
+  manager.patch(a.id, { acceptance: null });
   // Finished: Insights is made by itself, so the kind of idea is read without anyone asking.
   const ins = await waitFor(async () => {
     const x = await agentNow(a.id);
@@ -2407,6 +2414,28 @@ test('attachments: staged before the agent exists, copied to each agent, listed 
   assert.deepEqual(item.attachments, [log.body.path]);
 });
 
+test('understanding check: questions made from the changes; whether you knew each is yours to say, not the agent\'s', async () => {
+  const origin = makeOrigin('understand');
+  const [a] = (await call('POST', '/agents', { intent: 'Ask me about it', repo: `file://${origin}`, start: false })).body;
+  const ready = await waitFor(async () => ((await agentNow(a.id)).status === 'stopped' ? agentNow(a.id) : null), 20000, 'ready');
+  assert.equal((await call('POST', `/agents/${a.id}/docs/understanding`)).status, 400, 'no changes to ask about yet');
+  fs.writeFileSync(path.join(ready.workdir, 'save.js'), 'export const save = (d) => d && d.length;\n');
+  const res = await call('POST', `/agents/${a.id}/docs/understanding`);
+  assert.equal(res.status, 200, JSON.stringify(res.body).slice(0, 200));
+  const u = res.body.docs.understanding;
+  assert.deepEqual(u.data.questions.map((x) => [x.q, x.file]), [['What happens to save.js when the input is empty?', 'save.js'], ['Ghost hunk?', null], ['Third?', 'save.js']]);
+  assert.match(u.markdown, /^# Understanding check: /);
+  // What you say about each: yours.
+  const refused = await call('POST', `/agents/${a.id}/understanding/knew`, { question: 0, knew: true }, { 'x-agentmgr': '1', 'x-agentmgr-agent': a.id });
+  assert.equal(refused.status, 403);
+  assert.equal((await call('POST', `/agents/${a.id}/understanding/knew`, { question: 9, knew: true })).status, 404);
+  await call('POST', `/agents/${a.id}/understanding/knew`, { question: 0, knew: true });
+  const v = (await call('POST', `/agents/${a.id}/understanding/knew`, { question: 1, knew: false })).body;
+  assert.deepEqual(v.docs.understanding.knew, { 0: true, 1: false });
+  assert.deepEqual((await call('POST', `/agents/${a.id}/understanding/knew`, { question: 1, knew: null })).body.docs.understanding.knew, { 0: true });
+  await call('DELETE', `/agents/${a.id}`);
+});
+
 test('walkthrough: the changes explained one by one, in reading order, matched to their hunks', async () => {
   const origin = makeOrigin('walk');
   const [a] = (await call('POST', '/agents', { intent: 'Walk me through it', repo: `file://${origin}`, start: false })).body;
@@ -2888,7 +2917,9 @@ test('quality: a merged pull request looked at on GitHub: fixed afterwards, then
   const saved = { bin: process.env.AGENTMGR_GH_BIN, noGh: process.env.AGENTMGR_NO_GH, st: process.env.FAKE_GH_STATE, log: process.env.FAKE_GH_LOG };
   const [a] = (await call('POST', '/agents', { intent: 'Cache the prices', start: false })).body;
   const url = 'https://github.com/acme/shop/pull/77';
-  const ago = (min) => new Date(Date.now() - min * 60_000).toISOString();
+  // Never before today started: the day's totals are checked below, also in the minutes after midnight.
+  const dayStart = new Date().setHours(0, 0, 0, 0);
+  const ago = (min) => new Date(Math.max(dayStart + (4 - Math.min(min, 3)) * 1000, Date.now() - min * 60_000)).toISOString();
   const merged = { url, number: 77, title: 'Cache prices', state: 'MERGED', createdAt: ago(240), mergedAt: ago(3), mergeCommit: { oid: 'abc123' }, baseRefName: 'main', files: [{ path: 'src/cache.js' }, { path: 'src/price.js' }], reviews: [{ state: 'CHANGES_REQUESTED' }, { state: 'APPROVED' }], additions: 40, deletions: 2 };
   const fix = { url: 'https://github.com/acme/shop/pull/78', number: 78, title: 'Fix stale prices in the cache', state: 'MERGED', mergedAt: ago(1), files: [{ path: 'src/cache.js' }], body: '' };
   const write = (prs) => fs.writeFileSync(ghState, JSON.stringify({ prs, checkRuns: { abc123: [{ name: 'test', status: 'completed', conclusion: 'success' }] }, commits: [] }));
@@ -6188,6 +6219,32 @@ test('Close all closes every open session but the busy ones (unless asked) and t
     assert.equal(now.followUp, null, 'closed by you: no reminder');
   }
   assert.deepEqual((await call('GET', '/agents')).body.filter((a) => a.runtime.running && a.kind !== 'assistant').map((a) => a.name), []);
+});
+
+test('read first: finished work waiting for review is ranked with its reasons; merged work leaves the queue', async () => {
+  const mk = async (intent) => (await call('POST', '/agents', { intent, project: 'ReadFirst', start: false })).body[0];
+  const [calm, risky] = [await mk('ReadFirst: a small fix'), await mk('ReadFirst: rework the billing')];
+  manager.patch(calm.id, { brief: { status: 'done', updatedAt: new Date().toISOString(), checks: [{ state: 'passed', text: 'a' }], risks: [], results: { outcome: 'done', confidence: { percent: 95 }, notDone: [], notDoneSaid: true } }, proofDoc: { commands: 1, entries: 1 } });
+  manager.patch(risky.id, { brief: { status: 'done', updatedAt: new Date().toISOString(), checks: [{ state: 'failed', text: 'a' }], risks: [{ state: 'open', text: 'double charge' }], results: { outcome: 'partial', confidence: { percent: 40 }, notDone: ['refunds'], notDoneSaid: true } }, breaks: { baseline: { ok: true }, breaks: [{ status: 'missed', file: 'src/charge.js', line: 7 }] } });
+  const mine = async () => (await call('GET', '/read-first')).body.items.filter((i) => [calm.id, risky.id].includes(i.agentId));
+  const q = await mine();
+  assert.deepEqual(q.map((i) => [i.name, i.level, i.project]), [[risky.name, 'close', 'ReadFirst'], [calm.name, 'skim', 'ReadFirst']]);
+  assert.ok(q[0].reasons.some((r) => /^1 check of its own failed/.test(r.text)) && q[0].start.includes('src/charge.js:7'), JSON.stringify(q[0]));
+  assert.deepEqual([(await agentNow(risky.id)).readFirst.level, (await agentNow(calm.id)).readFirst.level], ['close', 'skim'], 'on the agent too');
+  assert.match((await call('GET', '/read-first?format=md')).body.markdown, /^# Read first\n[\s\S]*## Read closely \(\d+\): /);
+  // Reviewed, says you (not the agent): it leaves the queue, and comes back when its work changes again.
+  assert.equal((await call('POST', '/read-first/reviewed', { agent: calm.id }, { 'x-agentmgr': '1', 'x-agentmgr-agent': calm.id })).status, 403);
+  assert.equal((await call('POST', '/read-first/reviewed', {})).status, 400);
+  assert.equal((await call('POST', '/read-first/reviewed', { agent: calm.id })).body.marked, 1);
+  assert.deepEqual((await mine()).map((i) => i.name), [risky.name]);
+  manager.patch(calm.id, { brief: { ...(await agentNow(calm.id)).brief, updatedAt: new Date(Date.now() + 5000).toISOString() } });
+  assert.deepEqual((await mine()).map((i) => i.name), [risky.name, calm.name], 'changed since: to be read again');
+  assert.equal((await call('POST', '/read-first/reviewed', { olderThanDays: 14 })).body.marked, 0, 'nothing here is that old');
+  // Merged: reviewed, so no longer in the queue.
+  manager.patch(risky.id, { prs: { u: { url: 'https://github.com/acme/rf/pull/1', state: 'MERGED', source: 'branch', mergedAt: new Date().toISOString(), openedAt: new Date().toISOString() } } });
+  assert.deepEqual((await mine()).map((i) => i.name), [calm.name]);
+  assert.equal((await agentNow(risky.id)).readFirst, null);
+  for (const a of [calm, risky]) await call('DELETE', `/agents/${a.id}`);
 });
 
 test('weekly summary: this week on one page, with what merged; saved as a file when asked; nothing is sent', async () => {

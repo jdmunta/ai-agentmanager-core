@@ -68,19 +68,10 @@ export function newFont(v, fit, box) {
 export function leadSize(v, fit, send) {
   if (!v.follow) return;
   ownFont(v);
-  // Its own font is taken in by xterm over the next frames. Fitted only at once, the size could be
-  // worked out from the small font it had while following, come out as the size it already had,
-  // and so never reach the session or the views that follow it. Fitting again is harmless.
-  const go = () => {
-    if (v.follow) return; // another view leads again
-    try {
-      fit();
-    } catch {}
-    send({ t: 'r', cols: v.xterm.cols, rows: v.xterm.rows });
-  };
-  go();
-  requestAnimationFrame(go);
-  for (const ms of [120, 400, 1000]) setTimeout(go, ms);
+  try {
+    fit();
+  } catch {}
+  send({ t: 'r', cols: v.xterm.cols, rows: v.xterm.rows });
 }
 
 export function initGroups({ $, esc, agents, Terminal, FitAddon, openStream, api, upsert, toast, statusOf, pillText, engineLabel, dragged, openInMain, refitMain, mainActive, focusMain }) {

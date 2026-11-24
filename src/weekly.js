@@ -14,8 +14,8 @@ import { paths } from './config.js';
 import { dayKey } from './budgets.js';
 import { keptPrivate } from './private.js';
 import { totals as qualityTotals } from './quality.js';
-import { itemValue } from './value.js';
-import { weekRow, weekStart } from './worklog.js';
+import { PERIODS, itemValue } from './value.js';
+import { weekStart } from './worklog.js';
 
 const DAY = 86_400_000;
 const PRIVATE = '(kept private)';
@@ -89,12 +89,45 @@ export function checkedLine(t) {
 /** The Monday a week's summary starts on: the week before `t`, or the one `t` is in. */
 export const weekOf = (t = Date.now(), { current = false } = {}) => (current ? weekStart(t) : weekStart(weekStart(t) - DAY));
 
+export const KINDS = { week: 'Weekly', month: 'Monthly', quarter: 'Quarterly' };
+
+/**
+ * The period a summary covers: a week (Monday to Sunday), a calendar month or a quarter; the one
+ * that just ended, or the one `t` is in. { kind, start, end, prevStart, label, key }.
+ */
+export function periodOf(kind = 'week', t = Date.now(), { current = false } = {}) {
+  if (!KINDS[kind]) throw Object.assign(new Error(`kind is one of ${Object.keys(KINDS).join(', ')}`), { status: 400 });
+  if (kind === 'week') {
+    const start = weekOf(t, { current });
+    const end = start + 7 * DAY;
+    return { kind, start, end: weekStart(end + DAY), prevStart: weekStart(start - DAY), label: `${dayLabel(start)} to ${dayLabel(end - DAY)}, ${new Date(end - DAY).getFullYear()}`, key: dayKey(start) };
+  }
+  const P = PERIODS[kind];
+  const here = P.start(t);
+  const start = current ? here : P.start(here - DAY);
+  return { kind, start, end: P.next(start), prevStart: P.start(start - DAY), label: P.label(start), key: P.key(start) };
+}
+
+const median = (list) => {
+  const a = list.filter(Number.isFinite).sort((x, y) => x - y);
+  if (!a.length) return null;
+  const m = a.length >> 1;
+  return a.length % 2 ? a[m] : (a[m - 1] + a[m]) / 2;
+};
+
+/** The work record's counts between two moments. */
+export function countRow(start, end, events) {
+  const mine = events.filter((e) => Date.parse(e.date) >= start && Date.parse(e.date) < end);
+  const n = (k) => mine.filter((e) => e.event === k).length;
+  const hours = median(mine.filter((e) => e.event === 'pr_merged' && e.hours !== '' && e.hours != null).map((e) => Number(e.hours)));
+  return { prs_opened: n('pr_opened'), prs_merged: n('pr_merged'), bugs_fixed: n('bug_fixed'), issues_filed: n('issue_filed'), agents_finished: n('agent_finished'), median_hours_to_merge: hours == null ? '' : Math.round(hours * 10) / 10 };
+}
+
 /**
  * A week's facts. `events`: the work record's rows; `spend`: the spend ledger's days; `value` and
  * `quality`: { items, settings } of those modules; `agents`: [{ agent, view }] as they are now.
  */
-export function weeklyFacts({ start, events = [], spend = {}, value = null, quality = null, agents = [], t = Date.now() }) {
-  const end = start + 7 * DAY;
+export function weeklyFacts({ start, end = start + 7 * DAY, prevStart = start - 7 * DAY, kind = 'week', label = null, events = [], value = null, quality = null, agents = [], t = Date.now() }) {
   const inWeek = (iso) => Date.parse(iso) >= start && Date.parse(iso) < end;
   const hidden = new Set(agents.filter((x) => keptPrivate(x.agent)).map((x) => x.agent.id));
   const mine = events.filter((e) => inWeek(e.date));
@@ -160,7 +193,7 @@ export function weeklyFacts({ start, events = [], spend = {}, value = null, qual
   const highlights = [...merged, ...finished]
     .filter((e) => !e.private && e.hours != null)
     .sort((a, b) => b.hours - a.hours)
-    .slice(0, 3);
+    .slice(0, kind === 'week' ? 3 : 5);
 
   const qItems = (quality?.items ?? []).filter((it) => inWeek(it.mergedAt));
   const held = quality && qItems.length ? qualityTotals(qItems, quality.settings, t) : null;
@@ -183,10 +216,11 @@ export function weeklyFacts({ start, events = [], spend = {}, value = null, qual
   return {
     start: dayKey(start),
     end: dayKey(end - DAY),
-    label: `${dayLabel(start)} to ${dayLabel(end - DAY)}, ${new Date(end - DAY).getFullYear()}`,
+    kind,
+    label: label ?? `${dayLabel(start)} to ${dayLabel(end - DAY)}, ${new Date(end - DAY).getFullYear()}`,
     complete: t >= end,
-    row: weekRow(start, events, spend),
-    prev: weekRow(start - 7 * DAY, events, spend),
+    row: countRow(start, end, events),
+    prev: countRow(prevStart, start, events),
     merged,
     finished,
     bugs: of('bug_fixed'),
@@ -223,9 +257,10 @@ const byProject = (list, each) => {
 /** The summary as Markdown: the week in a line, achievements, numbers, quality, what is next, and what is in the way. */
 export function weeklyMarkdown(f, { who = '' } = {}) {
   const r = f.row;
-  const out = [`# Weekly summary: ${f.label}`, '', `${who ? `${who} · ` : ''}${f.complete ? 'the week as it ended' : 'the week so far'}`, ''];
+  const word = f.kind ?? 'week';
+  const out = [`# ${KINDS[word]} summary: ${f.label}`, '', `${who ? `${who} · ` : ''}${f.complete ? `the ${word} as it ended` : `the ${word} so far`}`, ''];
   const done = f.merged.length + f.finished.length;
-  if (!done && !f.bugs.length && !r.prs_opened && !f.open.length && !f.blocked.length) return [...out, 'Nothing was recorded this week.'].join('\n');
+  if (!done && !f.bugs.length && !r.prs_opened && !f.open.length && !f.blocked.length) return [...out, `Nothing was recorded this ${word}.`].join('\n');
 
   // One line a manager can repeat.
   const parts = [];
@@ -233,7 +268,7 @@ export function weeklyMarkdown(f, { who = '' } = {}) {
   if (f.finished.length) parts.push(`${plural(f.finished.length, 'more task')} finished`);
   if (r.bugs_fixed) parts.push(`${plural(r.bugs_fixed, 'bug')} fixed`);
   if (f.size) parts.push(`about ${f.size.hours} hours of engineering work delivered (an estimate)`);
-  out.push('## The week in one line', '', parts.length ? `${parts.join('; ')}.` : 'Work is in progress; nothing was delivered yet.', '');
+  out.push(`## The ${word} in one line`, '', parts.length ? `${parts.join('; ')}.` : 'Work is in progress; nothing was delivered yet.', '');
 
   if (f.highlights.length) out.push('## Highlights', '', ...f.highlights.map((e) => `- **${e.title}** (${e.project})${e.summary ? `: ${e.summary}` : ''}${e.tech?.how ? ` ${e.tech.how}` : ''}`), '');
 
@@ -247,7 +282,7 @@ export function weeklyMarkdown(f, { who = '' } = {}) {
 
   const p = f.prev;
   const num = (label, a, b) => `| ${label} | ${a === '' || a == null ? '—' : a} | ${b === '' || b == null ? '—' : b} |`;
-  out.push('## Numbers', '', '| | This week | Week before |', '| --- | --- | --- |');
+  out.push('## Numbers', '', `| | This ${word} | The ${word} before |`, '| --- | --- | --- |');
   out.push(num('Pull requests merged', r.prs_merged, p.prs_merged), num('Pull requests opened', r.prs_opened, p.prs_opened), num('Bugs fixed', r.bugs_fixed, p.bugs_fixed), num('Issues filed', r.issues_filed, p.issues_filed), num('Tasks finished', r.agents_finished, p.agents_finished), num('Hours from opened to merged (median)', r.median_hours_to_merge, p.median_hours_to_merge), '');
   if (f.size) out.push(`Estimated size: about ${f.size.hours} hours of engineering work for ${f.size.estimated} of the ${plural(f.size.pieces, 'piece')} listed. An estimate of what a person would have needed, not a measurement.`, '');
 
@@ -289,24 +324,24 @@ export class Weekly {
     clearInterval(this.timer);
   }
 
-  fileFor(start) {
-    return path.join(this.dir, `weekly-${dayKey(start)}.md`);
+  fileFor(p) {
+    return path.join(this.dir, `${KINDS[p.kind].toLowerCase()}-${String(p.key).replace(/[^\w-]+/g, '-')}.md`);
   }
 
-  async report({ current = false, t = Date.now() } = {}) {
+  /** A week's, a month's or a quarter's summary: the one just ended, or the current one so far. */
+  async report({ kind = 'week', current = false, t = Date.now() } = {}) {
     await this.worklog.record(t).catch(() => {});
-    const start = weekOf(t, { current });
+    const p = periodOf(kind, t, { current });
     const facts = weeklyFacts({
-      start,
+      ...p,
       events: this.worklog.state.events,
-      spend: this.store.data.spend?.days ?? {},
       value: this.value ? { items: Object.values(this.value.state.items), settings: this.value.settings } : null,
       quality: this.quality ? { items: Object.values(this.quality.state.items), settings: this.quality.settings } : null,
       agents: this.store.list().map((agent) => ({ agent, view: this.manager.view(agent) })),
       t,
     });
-    const file = this.fileFor(start);
-    return { week: { start: facts.start, end: facts.end, label: facts.label, complete: facts.complete }, facts, markdown: weeklyMarkdown(facts, { who: (await this.who) ?? '' }), file, saved: fs.existsSync(file) };
+    const file = this.fileFor(p);
+    return { week: { kind, start: facts.start, end: facts.end, label: facts.label, complete: facts.complete }, facts, markdown: weeklyMarkdown(facts, { who: (await this.who) ?? '' }), file, saved: fs.existsSync(file) };
   }
 
   /** Write the summary to its file (again: replaced). Nothing is sent. */
@@ -317,15 +352,20 @@ export class Weekly {
     return { ...r, saved: true };
   }
 
-  /** Once a week is over, its summary is written as a draft file, once. */
+  /** Once a week, a month or a quarter is over, its summary is written as a draft file, once. */
   async rollOver(t = Date.now()) {
     if (this.config.weekly?.auto === false) return null;
-    const start = weekOf(t);
     const st = (this.store.data.weekly ??= {});
-    if (st.drafted === dayKey(start) || fs.existsSync(this.fileFor(start))) return null;
-    const r = await this.save({ t });
-    st.drafted = dayKey(start);
-    this.store.save();
-    return r;
+    st.draftedBy ??= {};
+    let first = null;
+    for (const kind of Object.keys(KINDS)) {
+      const p = periodOf(kind, t);
+      if (st.draftedBy[kind] === p.key || fs.existsSync(this.fileFor(p))) continue;
+      const r = await this.save({ kind, t });
+      st.draftedBy[kind] = p.key;
+      first ??= r;
+    }
+    if (first) this.store.save();
+    return first;
   }
 }

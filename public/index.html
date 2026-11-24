@@ -33,6 +33,7 @@
         <button id="go-btn" class="go-btn" title="Go to: find a view, an agent or a setting by name (Ctrl+K or ⌘K)" aria-label="Go to a view, an agent or a setting">⌕ Go to</button>
         <nav class="top-nav" id="top-nav" aria-label="Views">
         <button id="today-btn" title="Today: what needs you, from every list, most pressing first, and why (y)">Today <span id="today-count" class="badge ready"></span></button>
+        <button id="readfirst-btn" title="Read first: finished work waiting for your review, the pieces that need reading most first, and why">Read first <span id="readfirst-count" class="badge"></span></button>
         <button id="assistant-btn" title="An always-on session that finds new work and starts agents for it">Assistant <span id="assistant-dot" class="assistant-dot" hidden></span></button>
         <button id="spend-btn" title="Results across agents (merge rate, time to PR, cost per merged PR), what they cost, and spending limits">Results <span id="spend-today" class="spend-today"></span></button>
         <button id="standup-btn" title="Today's standup: each agent's news read aloud, and what they need from you">Standup <span id="standup-dot" class="assistant-dot" hidden></span></button>
@@ -452,6 +453,17 @@
     </dialog>
     <dialog id="value-dialog" class="issues-dialog value-dialog" aria-label="Value">
       <div id="value-body"></div>
+    </dialog>
+    <dialog id="understand-dialog" class="update-dialog readfirst-dialog" aria-label="Understanding check">
+      <h2 id="understand-title">Do you understand it?</h2>
+      <div id="understand-body"></div>
+      <div class="dialog-actions"><button type="button" class="small" data-us="make" title="Write new questions from its changes as they are now">New questions</button><button type="button" class="small" data-us="changes">Review changes</button><span class="spacer"></span><button type="button" class="small primary" data-us="close">Close</button></div>
+    </dialog>
+
+    <dialog id="readfirst-dialog" class="update-dialog readfirst-dialog" aria-label="Read first">
+      <h2>Read first</h2>
+      <div id="readfirst-body"></div>
+      <div class="dialog-actions"><span class="spacer"></span><button type="button" class="small primary" data-rf="close">Close</button></div>
     </dialog>
     <dialog id="quality-dialog" class="issues-dialog value-dialog" aria-label="Quality">
       <div id="quality-body"></div>
@@ -885,7 +897,7 @@
     </dialog>
 
     <dialog id="weekly-dialog" class="update-dialog weekly-dialog" aria-label="Weekly summary">
-      <div class="issues-head"><h2>Weekly summary</h2><div class="chips" role="tablist" id="weekly-tabs"></div></div>
+      <div class="issues-head"><h2>Summary</h2><div class="chips" role="tablist" id="weekly-tabs"></div></div>
       <div id="weekly-body"></div>
       <p id="weekly-note" class="hint"></p>
       <div class="dialog-actions"><button type="button" class="small primary" data-weekly="copy" title="As Markdown, to paste into an email, a document or Slack">Copy</button><button type="button" class="small" data-weekly="download">Download</button><button type="button" class="small" data-weekly="save" title="Write it to the reports folder on this computer">Save on this computer</button><span class="spacer"></span><button type="button" class="small" data-weekly="close">Close</button></div>

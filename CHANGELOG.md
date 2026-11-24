@@ -1,8 +1,16 @@
 # Changelog
 
-## 1.68.1 (2026-11-24)
+## 1.69.0 (2026-11-24)
 
-- **Split screen: the view you switch to takes the size of its own panel.** Taking the lead from a view it had been following, a terminal was fitted once, at a moment when it could still measure with the small text it had while following. The size could come out as the one it already had, so the session was not resized and the other view did not follow. It is now fitted again over the next moments. This is the cause of a test that kept failing on slow machines.
+- **Read first: where your attention goes.** **Read first** in the top bar, or `agentmgr read-first`, ranks finished work waiting for your review by how much it needs reading: **Read closely**, **Look** or **Skim**, with the reasons and where to start. The ranking adds up facts the app already measured: high-risk files, the scorecard, checks and CI, breaks the tests did not notice, recorded commands that gave a different result, what was left out, risks not checked, the agent's own confidence, size, and questions answered for you. No model decides it.
+- **In an agent's Results.** A **Review** line with the level and the first reasons; **Why** opens the full list.
+- **Mark as reviewed.** A piece leaves the queue when its pull request merges or when you mark it as reviewed (`--reviewed <agent>`), and comes back if the agent changes its work again. Everything finished more than 14 days ago can be cleared at once.
+- **Limits.** "Skim" means nothing measured speaks against it, not that it is correct. The points are a fixed table chosen by judgement.
+- **Understanding check.** **Check my understanding** on a piece in Read first, or `agentmgr understand <agent>`, asks two or three questions about what the change does: what happens on a failure, an empty input, or what depends on it. Answer first, then show the answer and where to read it, and say whether you knew it. Nothing grades you. One model call.
+- **Requirement trace.** In the Proof dialog, or `agentmgr trace <agent>`: each point of what done means followed to the scorecard's finding, the checks recorded for it (and whether they held when run again), and what is missing. Points with a gap count in Read first.
+- **Monthly and quarterly summaries.** The weekly summary also covers a month or a quarter (`--month`, `--quarter`, and tabs in the dialog), written by itself as drafts when the period ends.
+- **Model fit.** The track record compares models by share that held up, scorecard and cost per piece against the most used one, and suggests a cheaper model that held up as well, with at least 5 settled pull requests behind both.
+- **Fixed:** a test that failed in the first minutes after midnight; the split screen test now reports the sizes it saw when it times out.
 
 ## 1.68.0 (2026-11-24)
 

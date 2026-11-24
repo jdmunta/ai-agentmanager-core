@@ -58,6 +58,9 @@ import {
   benchmarksPrompt,
   RISKS_PROMPT,
   OPTIONS_PROMPT,
+  understandingPrompt,
+  understandingFrom,
+  understandingMarkdown,
 } from './brief.js';
 
 // One-off summaries / documents built from an agent's live context.
@@ -69,6 +72,7 @@ const SUMMARIES = {
   diagrams: { doc: 'diagrams', run: 'runDiagrams' },
   walkthrough: { doc: 'walkthrough', run: 'runWalkthrough' },
   scorecard: { doc: 'scorecard', run: 'runScorecard' },
+  understanding: { doc: 'understanding', run: 'runUnderstanding' },
   update: { doc: 'update', run: 'runUpdate' },
   claims: { doc: 'claims', run: 'runClaims' },
 };
@@ -140,6 +144,8 @@ import { conflictMessage, findConflicts, related, repoKey, summarize as summariz
 import { answerMessage, loadQuestions, questionsPath, questionsPrompt } from './inbox.js';
 import { PROOF_FILE, proofBlock, proofFacts, proofPrompt } from './proof.js';
 import { PRIVATE_MESSAGE, ideaPatch, keptPrivate, mustBeShareable } from './private.js';
+import { awaitsReview, readFirst } from './readfirst.js';
+import { traceOf } from './trace.js';
 import { GroundRules, groundRulesMessage } from './groundrules.js';
 import { autonomySettings, callLadder, eligible as autonomyEligible, levelOf, modelName, parseLevel } from './autonomy.js';
 import { STUCK_DEFAULTS, detectStuck } from './stuck.js';
@@ -410,6 +416,8 @@ export class AgentManager extends EventEmitter {
       results: this.results(agent, rt, prs),
       // Why its work is not sent outside this computer (private.js), or null.
       keptPrivate: keptPrivate(agent),
+      // Finished and waiting for review: how much it needs reading, why, and where to start (readfirst.js).
+      readFirst: awaitsReview(agent) ? readFirst(agent, this.traceFor(agent)) : null,
       priority: agent.priority ?? 2,
       activeAt: this.activeAt(agent, rt),
       projectInfo: this.projectInfo(agent),
@@ -2547,6 +2555,13 @@ export class AgentManager extends EventEmitter {
     return true;
   }
 
+  /** The requirement trace of an agent (trace.js), from its proof as it is on disk. */
+  traceFor(agent) {
+    if (!this.proof || (agent.acceptance?.status !== 'agreed' && !agent.docs?.scorecard?.data?.criteria?.length)) return null;
+    const p = this.proof.forScore(agent);
+    return traceOf(agent, p.entries, p.rerun);
+  }
+
   /**
    * Keep an agent's work private, allow sharing it, or go back to what was read (private.js). The
    * person's call. When it becomes private from outside its session, the agent is told.
@@ -2981,6 +2996,48 @@ export class AgentManager extends EventEmitter {
         }),
       ),
     );
+  }
+
+  /**
+   * The understanding check: two or three questions about what the change does, to answer before
+   * approving it. Made from the same diff as the walkthrough; the answers come with them.
+   */
+  async runUnderstanding(agent, ctx) {
+    if (!this.changesSource) throw new Error('Changes are not available here');
+    const data = await this.changesSource(agent.id);
+    const { hunks } = walkthroughHunks(parseDiff(data.diff), { maxChars: 50_000 });
+    if (!hunks.length) throw Object.assign(new Error('No changes to ask about yet'), { status: 400 });
+    const writer = this.writerFor(agent);
+    const questions = understandingFrom(parseJsonReply(await this.oneShot(agent, understandingPrompt({ ...ctx, hunks }), writer)), hunks);
+    if (!questions.length) throw new Error('The model wrote no usable questions: try again');
+    const cur = this.store.get(agent.id);
+    if (!cur) return null;
+    return this.view(
+      this.patch(
+        agent.id,
+        summaryPatch(cur, 'understanding', {
+          data: { questions },
+          diffHash: hash(data.diff),
+          markdown: understandingMarkdown(questions, cur.name),
+          writer: `${writer.engine.label}${writer.model ? ` (${writer.model})` : ''}`,
+          // What the person said about each (understanding.js): { [index]: true (knew it) | false }.
+          knew: {},
+          at: now(),
+          pending: false,
+          error: null,
+        }),
+      ),
+    );
+  }
+
+  /** The person says whether they knew the answer to a question of the check (never the agent's call). */
+  understandingKnew(ref, index, knew) {
+    const agent = this.mustGet(ref);
+    const u = agent.docs?.understanding;
+    const i = Number(index);
+    if (!u?.data?.questions?.[i]) throw Object.assign(new Error('No such question: make the check first'), { status: 404 });
+    this.patch(agent.id, { docs: { ...agent.docs, understanding: { ...u, knew: { ...u.knew, [i]: knew === null ? undefined : Boolean(knew) } } } });
+    return this.view(this.store.get(agent.id));
   }
 
   /**

@@ -156,12 +156,21 @@ export class Proof {
   constructor({ manager, store, run, log = () => {}, timeoutMs = RERUN_TIMEOUT_MS }) {
     Object.assign(this, { manager, store, run, log, timeoutMs });
     this.running = new Map(); // agentId -> the run in progress
+    this.cache = new Map(); // agentId -> { mtimeMs, entries }: the proof as last read
   }
 
+  /** What an agent recorded. Read again only when the file changed: views ask for it often. */
   read(agentId) {
     try {
-      return parseProof(fs.readFileSync(proofPath(agentId), 'utf8'));
+      const file = proofPath(agentId);
+      const { mtimeMs } = fs.statSync(file);
+      const had = this.cache.get(agentId);
+      if (had?.mtimeMs === mtimeMs) return had.entries;
+      const entries = parseProof(fs.readFileSync(file, 'utf8'));
+      this.cache.set(agentId, { mtimeMs, entries });
+      return entries;
     } catch {
+      this.cache.delete(agentId);
       return [];
     }
   }

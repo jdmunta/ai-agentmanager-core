@@ -625,6 +625,12 @@ An agent writes "Confidence: 85%" and the scorecard says "Ready to approve". The
 
 A row with fewer than 5 settled pull requests says "too few to say". "Said more than held up" means the average confidence was at least 15 points above the share that held.
 
+### Model fit: which model held up as well for less
+
+The track record also compares models. For each engine and model it shows how many settled pieces it did, the share that held up, the average review scorecard and the cost per piece against the most used model's (a ratio, not money).
+
+It suggests a model when another one held up within 5 points of the most used one, at three quarters of its cost or less, with at least 5 settled pull requests behind both: "sonnet held up as well as opus (100% against 90%) at 0.4 times the cost: worth trying for more of the work." The cost is what the AI work cost as each pull request merged, kept only for this comparison. Pull requests merged before this version have no cost kept and are not counted in it.
+
 ### Earned autonomy: the level a project's record supports
 
 The last table lists each project with the level of [Without you](#without-you-how-far-an-agent-goes-on-its-own) its new agents get, and what the record supports:
@@ -1429,6 +1435,67 @@ Agents started this way are marked **⚡ GitHub** or **⚡ webhook**, Slack aler
 }
 ```
 
+## Read first: where your attention goes
+
+You cannot read everything agents produce with the same care. **Read first** in the top bar, or `agentmgr read-first`, ranks finished work waiting for your review by how much it needs reading.
+
+Each piece gets a level, the reasons, and where to start:
+
+| Level | Means |
+| --- | --- |
+| **Read closely** | Several things measured speak against it (45 points or more) |
+| **Look** | Something does, or little was measured (20 to 44) |
+| **Skim** | Nothing measured speaks against it |
+
+The points add up facts the app already holds. No model decides the ranking, so each reason can be checked:
+
+| What | Points |
+| --- | --- |
+| Touches files you marked high risk | 30 |
+| The scorecard says not ready; says to look first; not scored yet | 30; 15; 10 |
+| The quality bar is not met; CI is failing; its own tests fail when run | 25 each |
+| A recorded command gave a different result when run again | 25 |
+| One of its own checks failed | 20 |
+| Deliberate breaks its tests did not notice | 12 to 20 |
+| A large change: over 1500 lines; over 400 | 20; 10 |
+| Its own confidence under 65%; under 85%; none given | 15; 5; 5 |
+| Points of what done means that are not met; that have no recorded run behind them | 15 each up to 30; 6 each up to 18 |
+| Things it lists as not done | 6 each, up to 18 |
+| Risks it named that happened; that it did not check | 10 each; 5 each |
+| It says the work is partial | 10 |
+| No proof recorded for passed checks; code changed with no test file | 8 each |
+| Questions answered for you while it ran without you | 6 to 12 |
+| Its tests have not been tested | 5 |
+
+What speaks for a piece is listed too: the scorecard says ready, its tests caught every break, its recorded commands gave the same result again.
+
+- **Start with.** High-risk files, the places the scorecard pointed at, and the lines whose breaks went unnoticed.
+- **In an agent's Results.** A **Review** line with its level and the first reasons; **Why** opens the full list.
+- **Leaving the queue.** A piece leaves when its pull request merges, or when you press **Mark as reviewed** (`--reviewed <agent>`). It comes back if the agent changes its work again. **Mark those as reviewed** clears everything finished more than 14 days ago (`--reviewed-older 14`). An agent cannot mark its own work.
+- **Exit code.** `agentmgr read-first` exits with 1 when something is to be read closely.
+
+### Understanding check
+
+Ranking tells you where to look. **Check my understanding** (on a piece in Read first, or `agentmgr understand <agent>`) asks whether you did, before you approve.
+
+- It writes two or three questions from the agent's changes: what happens on a failure, an empty input, a second call, or what else depends on what changed. Not trivia and not names.
+- You answer in your head. Then **Show the answer**, which comes with where to read it, and say whether you knew it.
+- The ones you did not know point to the file and hunk. Nothing grades you and nothing is sent anywhere.
+- The command prints only the questions; `--answers` prints the answers. `--again` writes new ones.
+- It is one model call. The questions and answers are the model's reading of the diff: check an answer against the code before you trust it.
+
+**Limits.** "Skim" means nothing that was measured speaks against it. It does not mean the work is correct. Work finished before proof, confidence and the scorecard existed has little measured, so it ranks as "Look" for that reason alone. The points are a fixed table chosen by judgement, not fitted to data; the [track record](#track-record-was-the-confidence-right) will show over time whether the ranking matches what held up.
+
+## Requirement trace: from each point of what done means to what shows it
+
+In an agent's **Proof** dialog under **What done means, traced**, or `agentmgr trace <agent>`: each point you [agreed on](#acceptance-agree-on-what-done-means) (or the scorecard's criteria when none were agreed), followed to:
+
+- the scorecard's finding (met, not met, not verified) and its evidence,
+- the checks the agent recorded for it, with the command, the exit code, and whether it gave the same result when the app ran it again,
+- what is missing: nothing recorded, checked by reading only, a different result when run again, or not met.
+
+A point with a gap stands out and counts in the [Read first](#read-first-where-your-attention-goes) ranking. `agentmgr trace` exits with 1 when a point has a gap. It joins what the scorecard and the proof already hold, with no model call. A point is matched to a check by the id its section starts with ("A2 ...") or by the same wording.
+
 ## Weekly summary: the week's work and achievements, for management
 
 **Work record → Weekly summary**, or `agentmgr weekly`, gives one page on a week that you can pass to your manager.
@@ -1444,8 +1511,8 @@ Agents started this way are marked **⚡ GitHub** or **⚡ webhook**, Slack aler
 | In progress | Open work by project: in review or in progress |
 | Blocked | What needs a decision or help, with what it waits for |
 
-- **Which week.** Last week by default; **This week so far** or `--current` for the one running.
-- **Getting it out.** **Copy** (Markdown, for an email, a document or Slack), **Download**, or **Save on this computer** (`--save`, or `-o <file>`). When a week is over, its summary is also written by itself to `~/.agentmanager/reports/weekly-<monday>.md` (`"weekly": { "auto": false }` in config.json turns that off).
+- **Which period.** A week by default; **Month** or **Quarter** (`--month`, `--quarter`) for a performance review or a planning meeting, with the same sections and the period before beside it. Last one by default; **This ... so far** or `--current` for the one running.
+- **Getting it out.** **Copy** (Markdown, for an email, a document or Slack), **Download**, or **Save on this computer** (`--save`, or `-o <file>`). When a week, a month or a quarter is over, its summary is also written by itself to `~/.agentmanager/reports/` (`weekly-<monday>.md`, `monthly-<year>-<month>.md`, `quarterly-<year>-Q<n>.md`) (`"weekly": { "auto": false }` in config.json turns that off).
 - **Nothing is sent.** It is a draft for you to read and pass on.
 - **Private work stays private.** Work that is [kept private](#kept-private-possibly-patentable-work-is-not-sent-out) is counted and listed as "(kept private)", with no title, link or description.
 

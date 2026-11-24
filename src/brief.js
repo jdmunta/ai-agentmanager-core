@@ -571,6 +571,53 @@ export function walkthroughPrompt({ intent, status, digest, briefMarkdown, hunks
   ].join('\n');
 }
 
+/**
+ * Understanding check: two or three questions a person who really read the change could answer,
+ * about what happens rather than what things are called. For a person to answer before approving a
+ * large change; the answers and where to read them come with the questions. `hunks` as walkthroughPrompt.
+ */
+export function understandingPrompt({ intent, status, digest, briefMarkdown, hunks }) {
+  return [
+    "You write an understanding check for a person about to approve an AI coding agent's changes.",
+    'Below are the changes as numbered hunks (H1, H2, ...), with the request and its conversation.',
+    '',
+    'Reply with one JSON object only, no prose around it:',
+    '{"questions": [{"q": "<the question>", "answer": "<the answer, one or two sentences, concrete>", "why": "<why it matters for approving, one sentence>", "hunk": "H3"}]}',
+    '',
+    'Rules:',
+    '- Two or three questions, never more. Fewer is better when the change is simple.',
+    '- Ask what happens: on a failure, a bad or empty input, a second call, a user without access, or what else depends on what changed. Not what a function is called, not trivia, not yes or no questions.',
+    '- Each must be answerable from the hunks and the context alone, and the answer must be what the code really does, not what was intended.',
+    '- "hunk" is the one hunk where the answer is found.',
+    '- Put the question that matters most for safety first.',
+    '',
+    ...contextBlock({ intent, status, digest, repo: '', briefMarkdown }),
+    '<hunks>',
+    ...hunks.map((h) => `<hunk id="${h.id}" file="${h.file}">\n${h.head}\n${h.text}\n</hunk>`),
+    '</hunks>',
+  ].join('\n');
+}
+
+/** The model's questions, cleaned and mapped to the hunk where each is answered: [{ q, answer, why, file, head }]. */
+export function understandingFrom(reply, hunks) {
+  const byId = new Map(hunks.map((h) => [h.id, h]));
+  const clip = (t, n) => String(t ?? '').replace(/\s+/g, ' ').trim().slice(0, n);
+  return (Array.isArray(reply?.questions) ? reply.questions : [])
+    .map((x) => ({ q: clip(x?.q, 300), answer: clip(x?.answer, 500), why: clip(x?.why, 300), h: byId.get(String(x?.hunk ?? '').trim()) }))
+    .filter((x) => x.q && x.answer)
+    .slice(0, 3)
+    .map(({ h, ...x }) => ({ ...x, file: h?.file ?? null, head: h?.head ?? null }));
+}
+
+/** Markdown of a check: the questions, then the answers. */
+export function understandingMarkdown(qs, name = '') {
+  const out = [`# Understanding check${name ? `: ${name}` : ''}`, ''];
+  qs.forEach((x, i) => out.push(`${i + 1}. ${x.q}`));
+  out.push('', '## Answers', '');
+  qs.forEach((x, i) => out.push(`${i + 1}. ${x.answer}${x.file ? ` (${x.file}${x.head ? `, ${x.head}` : ''})` : ''}${x.why ? ` Why it matters: ${x.why}` : ''}`));
+  return out.join('\n');
+}
+
 /** The hunks a walkthrough explains, from a parsed diff: ids, and the text sent (capped). */
 export function walkthroughHunks(files, { maxLines = 80, maxChars = 60_000 } = {}) {
   const out = [];
