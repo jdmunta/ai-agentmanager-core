@@ -6,6 +6,8 @@
 - **Copy, download or save.** Copy it as Markdown, download it, or save it on this computer (`--save`, `-o <file>`). When a week is over its summary is also written to `~/.agentmanager/reports/weekly-<monday>.md`. Nothing is sent.
 - **Private work is not described.** Work that is kept private is counted and listed as "(kept private)", with no title, link or description.
 
+- **Split screen: a view that follows another fits when the other one resizes.** The same timing as the text size fix in 1.66.0, in the other place it applied: a following view could be measured before the terminal had taken the new size in, and stay too large without its note.
+
 ## 1.66.0 (2026-11-23)
 
 - **Possibly patentable work is noticed without asking.** When an agent finishes, Insights is now made by itself, so the kind of idea (a task, worth a white paper, possibly patentable) is read for every finished task. `"insights": { "auto": false }` in config.json turns it off; it is one more model call per finished agent.
