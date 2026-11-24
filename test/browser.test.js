@@ -1385,6 +1385,30 @@ test('Value: the pull requests merged next to the value, by day, week, month, qu
   await js(`document.querySelector('#value-dialog').close()`);
 });
 
+test('Weekly summary: opened from the Work record, last week and this week so far, copied and saved', { skip }, async () => {
+  await js(`document.querySelector('#worklog-btn').click()`);
+  await until(`document.querySelector('#worklog-dialog').open`, 'the Work record');
+  await js(`document.querySelector('#weekly-open').click()`);
+  const wd = `document.querySelector('#weekly-dialog')`;
+  await until(`${wd}.open && ${wd}.querySelector('.weekly-md h1')`, 'the summary');
+  assert.match(await js(`${wd}.querySelector('.weekly-md h1').textContent`), /^Weekly summary: /);
+  assert.deepEqual(await js(`[...${wd}.querySelectorAll('#weekly-tabs .chip')].map((c) => [c.textContent, c.classList.contains('active')])`), [['Last week', true], ['This week so far', false]]);
+  assert.match(await js(`${wd}.querySelector('.weekly-md').textContent`), /the week as it ended/);
+  await js(`${wd}.querySelector('[data-weekly-current="1"]').click()`);
+  await until(`/the week so far/.test(${wd}.querySelector('.weekly-md')?.textContent ?? '')`, 'this week so far');
+  assert.match(await js(`${wd}.querySelector('#weekly-note').textContent`), /Nothing is sent from here\./);
+  await js(`${wd}.querySelector('[data-weekly="save"]').click()`);
+  await until(`/^Saved as .*weekly-\\d{4}-\\d\\d-\\d\\d\\.md\\./.test(${wd}.querySelector('#weekly-note').textContent)`, 'saved on this computer');
+  const file = (await api('GET', '/weekly?current=1')).file;
+  assert.match(fs.readFileSync(file, 'utf8'), /^# Weekly summary: /);
+  await width(390);
+  assert.ok(await js(`${wd}.getBoundingClientRect().right <= 390 && ${wd}.scrollWidth <= ${wd}.clientWidth + 1`), 'fits a phone');
+  await width(1600);
+  await js(`${wd}.querySelector('[data-weekly="close"]').click()`);
+  await js(`document.querySelector('#worklog-dialog').close()`);
+  assert.deepEqual(errors, [], 'no errors on the page');
+});
+
 test('Quality: the share of merged pull requests that held up, why each did not, Not a problem and back, only the problems, by year', { skip }, async () => {
   await js(`document.querySelector('#quality-btn').click()`);
   await until(`document.querySelector('#quality-dialog').open && document.querySelector('#quality-body .value-cards')`, 'Quality, open');

@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.67.0 (2026-11-23)
+
+- **Weekly summary for management.** **Work record → Weekly summary**, or `agentmgr weekly`, gives one page on a week's work and achievements: the week in one line, highlights, what merged and finished by project with links, bugs fixed, the numbers against the week before, the estimated value, how the merged work held up, what is in progress and what is blocked. Last week, or this week so far (`--current`).
+- **Copy, download or save.** Copy it as Markdown, download it, or save it on this computer (`--save`, `-o <file>`). When a week is over its summary is also written to `~/.agentmanager/reports/weekly-<monday>.md`. Nothing is sent.
+- **Private work is not described.** Work that is kept private is counted and listed as "(kept private)", with no title, link or description.
+
 ## 1.66.0 (2026-11-23)
 
 - **Possibly patentable work is noticed without asking.** When an agent finishes, Insights is now made by itself, so the kind of idea (a task, worth a white paper, possibly patentable) is read for every finished task. `"insights": { "auto": false }` in config.json turns it off; it is one more model call per finished agent.

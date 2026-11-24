@@ -60,6 +60,7 @@ import { morph } from '/morph.js';
 import { acceptanceRow, acceptanceWaits, initAcceptance } from '/acceptance.js';
 import { autoNeedHtml, autonomyNeeds, autonomyRow, initAutonomy, needsPermissionHint } from '/autonomy.js';
 import { initProof, proofRows } from '/proof.js';
+import { initWeekly } from '/weekly.js';
 import { kindHtml, optionsRows, parseKind, parsePaths, parseValue, pathsHtml, privateRow, valueHtml } from '/valuelens.js';
 
 const $ = (sel) => document.querySelector(sel);
@@ -221,6 +222,7 @@ const triggersUi = initTriggers({ api, esc, toast, $ });
 initSpend({ api, esc, toast, $ });
 const goalsUi = initGoals({ api, esc, toast, $, ago: (t) => ago(t), getProjects: () => projectsState, rerender: () => renderBacklog() });
 initWorklog({ api, esc, toast, $ });
+initWeekly({ api, esc, toast, $, md: (t) => md(t) });
 initSetup({ api, esc, $ });
 const updateUi = initUpdate({ api, esc, toast, $ });
 initMenu({ api, esc, toast, $ });

@@ -2011,6 +2011,92 @@ test('scorecard: Improve tells the agent its low scores (lowest first), the crit
   assert.ok(!/Scores to raise|Acceptance criteria|Where a reviewer/.test(clean));
 });
 
+test('weekly summary: a week on one page for management, from the work record, Value and Quality; private work is not described', async () => {
+  const wk = await import('../src/weekly.js');
+  const { weekStart } = await import('../src/worklog.js');
+  const DAY = 86_400_000;
+  const now = new Date(2026, 10, 18, 12).getTime(); // a Wednesday
+  const start = weekStart(now);
+  assert.equal(wk.weekOf(now, { current: true }), start);
+  assert.equal(wk.weekOf(now), start - 7 * DAY, 'by default the week that just ended');
+  const at = (d, h = 10) => new Date(start + d * DAY + h * 3_600_000).toISOString();
+  const ev = (event, agent_id, project, title, extra = {}) => ({ date: at(extra.day ?? 1), event, project, agent: agent_id, agent_id, title, link: extra.link ?? `https://github.com/acme/${project}/pull/${agent_id}`, bugs: extra.bugs ?? '', hours: extra.hours ?? 2 });
+  const events = [
+    ev('pr_opened', 'a1', 'shop', 'Cache prices'),
+    ev('pr_merged', 'a1', 'shop', 'Cache prices', { bugs: 'SHOP-7', hours: 3 }),
+    ev('bug_fixed', 'a1', 'shop', 'SHOP-7 Prices are stale', { link: 'https://jira/SHOP-7', bugs: 'SHOP-7' }),
+    ev('agent_finished', 'a1', 'shop', 'Cache prices'),
+    ev('pr_merged', 'a2', 'api', 'Rate limits', { hours: 5 }),
+    ev('pr_merged', 'a3', 'api', 'A secret index', { hours: 1 }),
+    ev('agent_finished', 'a4', 'docs', 'Explain the release steps', { link: '' }),
+    ev('issue_filed', 'a2', 'api', 'Retry storms', { link: 'https://github.com/acme/api/issues/9' }),
+    ev('pr_merged', 'a9', 'shop', 'From the week before', { day: -3 }),
+    ev('pr_merged', 'a8', 'shop', 'From next week', { day: 8 }),
+  ];
+  const value = {
+    settings: { hourlyRate: 100, yourMinutes: 30 },
+    items: [
+      { agentId: 'a1', deliveredAt: at(1), est: { humanHours: 6, summary: 'Prices load from a cache, so checkout is faster.' }, aiCostUsd: 2 },
+      { agentId: 'a2', deliveredAt: at(2), est: { humanHours: 16, summary: 'Rate limits protect the API from bursts.' }, aiCostUsd: 4 },
+      { agentId: 'a3', deliveredAt: at(2), est: { humanHours: 40, summary: 'Describes the secret mechanism.' }, aiCostUsd: 1 },
+      { agentId: 'a5', deliveredAt: at(2), est: { humanHours: 99 }, excluded: true },
+      { agentId: 'a9', deliveredAt: at(-3), est: { humanHours: 50 } },
+    ],
+  };
+  const quality = { settings: { watchDays: 14 }, items: [{ url: 'u1', agentId: 'a1', title: 'Cache prices', mergedAt: at(1), after: { fixes: [], checks: { state: 'passed' } } }, { url: 'u2', agentId: 'a2', title: 'Rate limits', mergedAt: at(2), after: { reverted: { number: 9 }, fixes: [] } }] };
+  const agents = [
+    { agent: { id: 'a3', kind: 'task', intent: 'A secret index', idea: { private: true }, brief: { status: 'done' } }, view: { projectInfo: { name: 'api' } } },
+    { agent: { id: 'b1', kind: 'task', intent: 'Add SSO login\nmore', prs: { p: { state: 'OPEN', url: 'https://github.com/acme/api/pull/12' } }, brief: { status: 'working' } }, view: { projectInfo: { name: 'api' } } },
+    { agent: { id: 'b2', kind: 'task', intent: 'Migrate the database', brief: { status: 'blocked', results: { blockers: ['the staging password (needs: ops)'] } } }, view: { projectInfo: { name: 'shop' } } },
+    { agent: { id: 'b3', kind: 'task', intent: 'Another secret', idea: { private: true }, brief: { status: 'working' } }, view: { projectInfo: { name: 'api' } } },
+    { agent: { id: 'g1', kind: 'general', intent: 'chat' }, view: {} },
+    { agent: { id: 'a1', kind: 'task', intent: 'Cache prices', brief: { status: 'done' } }, view: { projectInfo: { name: 'shop' } } },
+  ];
+  const f = wk.weeklyFacts({ start, events, spend: {}, value, quality, agents, t: now });
+  assert.deepEqual([f.complete, f.row.prs_merged, f.row.bugs_fixed, f.prev.prs_merged, f.projects], [false, 3, 1, 1, ['shop', 'api', 'docs']]);
+  assert.deepEqual(f.merged.map((e) => [e.project, e.title, e.link, e.summary ?? null, e.hours ?? null]), [['shop', 'Cache prices', 'https://github.com/acme/shop/pull/a1', 'Prices load from a cache, so checkout is faster.', 6], ['api', 'Rate limits', 'https://github.com/acme/api/pull/a2', 'Rate limits protect the API from bursts.', 16], ['api', '(kept private)', null, null, null]]);
+  assert.deepEqual(f.finished.map((e) => [e.project, e.title]), [['docs', 'Explain the release steps']], 'finished ones that merged are listed once, under Merged');
+  assert.deepEqual(f.highlights.map((e) => e.title), ['Rate limits', 'Cache prices'], 'by estimated hours; never a private one');
+  assert.deepEqual([f.worth.humanHours, f.worth.items, f.quality.held, f.quality.checked, f.problems], [62, 3, 1, 2, [{ title: 'Rate limits', link: 'u2', what: 'reverted' }]]);
+  assert.deepEqual(f.open.map((o) => [o.project, o.title, o.state, o.link]), [['api', 'Add SSO login', 'in review', 'https://github.com/acme/api/pull/12'], ['api', '(kept private)', 'in progress', null]]);
+  assert.deepEqual(f.blocked.map((o) => [o.title, o.blockers]), [['Migrate the database', ['the staging password (needs: ops)']]]);
+  assert.equal(f.keptPrivate, 2);
+
+  const md = wk.weeklyMarkdown(f, { who: 'Pat Lee' });
+  assert.match(md, /^# Weekly summary: Nov 16 to Nov 22, 2026\n\nPat Lee · the week so far\n/);
+  assert.match(md, /## The week in one line\n\n3 pull requests merged across 3 projects; 1 more task finished; 1 bug fixed; about 62 hours of engineering delivered for 1\.5 of mine\./);
+  assert.match(md, /## Highlights\n\n- \*\*Rate limits\*\* \(api\): Rate limits protect the API from bursts\.\n- \*\*Cache prices\*\* \(shop\)/);
+  assert.match(md, /### Merged\n\n\*\*shop\*\*\n- \[Cache prices\]\(https:\/\/github\.com\/acme\/shop\/pull\/a1\) \(SHOP-7\): Prices load from a cache, so checkout is faster\.\n\n\*\*api\*\*\n- \[Rate limits\]\([^)]*\): Rate limits protect the API from bursts\.\n- \(kept private\)\n/);
+  assert.match(md, /### Bugs fixed\n\n- \[SHOP-7 Prices are stale\]\(https:\/\/jira\/SHOP-7\) \(SHOP-7\)/);
+  assert.match(md, /\| Pull requests merged \| 3 \| 1 \|/);
+  assert.match(md, /Estimated value: about 62 engineering hours \(\$6,200\); 885\.7 times the AI cost\. These are estimates for 3 of 3 delivered pieces, not measurements\./);
+  assert.match(md, /## Quality\n\n1 of 2 merged pull requests looked at held up[^\n]*\n- \[Rate limits\]\(u2\): reverted/);
+  assert.match(md, /## In progress\n\n\*\*api\*\*\n- \[Add SSO login\]\([^)]*\) \(in review\)\n- \(kept private\) \(in progress\)/);
+  assert.match(md, /## Blocked: needs a decision or help\n\n- \*\*shop\*\*: Migrate the database\. the staging password \(needs: ops\)/);
+  assert.match(md, /2 items above are kept private and listed without a description\.$/);
+  assert.ok(!/secret|Secret/.test(md), 'nothing of the private work is described');
+  // A week with nothing, and a week that is over.
+  const empty = wk.weeklyFacts({ start: start - 70 * DAY, events, agents: [], t: now });
+  assert.deepEqual([empty.complete, empty.worth, empty.quality], [true, null, null]);
+  assert.match(wk.weeklyMarkdown(empty), /the week as it ended\n\nNothing was recorded this week\.$/);
+
+  // The class: the report, saved as a file once the week is over, once.
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'am-weekly-'));
+  const store = { data: {}, list: () => agents.map((x) => x.agent), save() {} };
+  const w = new wk.Weekly({ dir, store, manager: { view: (a) => agents.find((x) => x.agent === a).view }, worklog: { record: async () => {}, state: { events } }, value: { state: { items: Object.fromEntries(value.items.map((i) => [i.agentId, i])) }, settings: value.settings }, quality: { state: { items: {} }, settings: quality.settings }, who: Promise.resolve('Pat Lee') });
+  const r = await w.report({ current: true, t: now });
+  assert.deepEqual([r.week.start, r.week.end, r.saved, r.file], ['2026-11-16', '2026-11-22', false, path.join(dir, 'weekly-2026-11-16.md')]);
+  const next = now + 7 * DAY;
+  const drafted = await w.rollOver(next);
+  assert.equal(fs.readFileSync(drafted.file, 'utf8'), `${(await w.report({ t: next })).markdown}\n`);
+  assert.match(fs.readFileSync(drafted.file, 'utf8'), /the week as it ended/);
+  assert.equal(await w.rollOver(next), null, 'once');
+  w.config.weekly = { auto: false };
+  assert.equal(await w.rollOver(next + 7 * DAY), null, 'not when turned off');
+  w.close();
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 test('kept private: work read as possibly patentable is held from every way out until the person allows it', async () => {
   const pv = await import('../src/private.js');
   const { privateRow } = await import('../public/valuelens.js');

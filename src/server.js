@@ -58,6 +58,7 @@ import { Standup } from './standup.js';
 import { Value, valueSlack } from './value.js';
 import { Quality } from './quality.js';
 import { recordMarkdown } from './record.js';
+import { Weekly } from './weekly.js';
 import { PRIVATE_MESSAGE, keptPrivate, mustBeShareable } from './private.js';
 import { Standards, runCheck } from './standards.js';
 import { Proof, proofMarkdown } from './proof.js';
@@ -355,6 +356,8 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
   const quality = new Quality({ manager, store, config, who: me, onChange: () => pushQuality() });
   // Standards per repository: lessons from what went wrong, high-risk paths, and the quality bar (standards.js).
   const standards = new Standards({ manager, store, config, quality, onChange: () => pushQuality() });
+  // A week's work and achievements on one page, for management (weekly.js); written as a draft file when the week is over.
+  const weekly = new Weekly({ manager, store, worklog, value, quality, who: me, config });
   // AI News: the frontier labs' latest releases, summarized (news.js).
   let pushNews = () => {};
   const news = new News({
@@ -1257,6 +1260,9 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
   api.get('/repeats', wrap(() => repeats.view()));
   api.post('/repeats/dismiss', wrap((req) => repeats.dismiss(String(req.body?.key ?? ''))));
   api.post('/playbooks/:id/run', wrap((req) => playbooks.run(req.params.id, { vars: req.body?.vars ?? {} })));
+  // Weekly summary (weekly.js): a week's work and achievements on one page, for management. A draft: nothing is sent.
+  api.get('/weekly', wrap((req) => weekly.report({ current: req.query.current === '1' })));
+  api.post('/weekly/save', wrap((req) => weekly.save({ current: req.body?.current === true })));
   api.get('/worklog', wrap(async (req) => (await worklog.record(), worklog.view({ days: Number(req.query.days ?? 30) || 0 }))));
   api.get('/worklog/summary', wrap(async (req) => {
     await worklog.record();
@@ -2106,6 +2112,7 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
     standup.close();
     value.close();
     quality.close();
+    weekly.close();
     news.close();
     system.close();
     milestones.close();

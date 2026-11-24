@@ -1429,6 +1429,27 @@ Agents started this way are marked **⚡ GitHub** or **⚡ webhook**, Slack aler
 }
 ```
 
+## Weekly summary: the week's work and achievements, for management
+
+**Work record → Weekly summary**, or `agentmgr weekly`, gives one page on a week that you can pass to your manager.
+
+| Section | What it holds |
+| --- | --- |
+| The week in one line | Pull requests merged and across how many projects, tasks finished, bugs fixed, engineering hours delivered |
+| Highlights | The three pieces of work estimated to be worth the most, each with a sentence on what it is |
+| Achievements | What merged, by project, with links, bug keys and a sentence each; then what finished without a merge; bugs fixed; issues filed |
+| Numbers | Merged, opened, bugs fixed, issues filed, tasks finished, hours to merge and AI cost, against the week before; and the estimated value |
+| Quality | How many of the week's merged pull requests held up, and the ones reverted or fixed afterwards |
+| In progress | Open work by project: in review or in progress |
+| Blocked | What needs a decision or help, with what it waits for |
+
+- **Which week.** Last week by default; **This week so far** or `--current` for the one running.
+- **Getting it out.** **Copy** (Markdown, for an email, a document or Slack), **Download**, or **Save on this computer** (`--save`, or `-o <file>`). When a week is over, its summary is also written by itself to `~/.agentmanager/reports/weekly-<monday>.md` (`"weekly": { "auto": false }` in config.json turns that off).
+- **Nothing is sent.** It is a draft for you to read and pass on.
+- **Private work stays private.** Work that is [kept private](#kept-private-possibly-patentable-work-is-not-sent-out) is counted and listed as "(kept private)", with no title, link or description.
+
+It is put together from what is already recorded, with no model call: the [work record](#work-record), [Value](#value) for the sentence on each piece and the estimates, and [Quality](#quality-what-happened-after-the-merge). Hours and money are Value's estimates and are marked as estimates. A sentence appears next to a piece of work once Value has estimated it.
+
 ## Value
 
 **Value** in the top bar (or `v`) shows what the work delivered with agents is worth, for you and for management: by **Day**, **Week**, **Month**, **Quarter** or **Year**, with bars for the last periods and the items behind each.
