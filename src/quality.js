@@ -21,8 +21,8 @@ const RETRY_MS = HOUR;
 const PER_TICK = 3;
 
 export const QUALITY_DEFAULTS = { enabled: true, watchDays: 14 };
-export const VERDICTS = ['reverted', 'fixed', 'broke', 'problem', 'clean', 'watching', 'unchecked'];
-const PROBLEMS = new Set(['reverted', 'fixed', 'broke', 'problem']);
+export const VERDICTS = ['incident', 'reverted', 'fixed', 'broke', 'problem', 'clean', 'watching', 'unchecked'];
+const PROBLEMS = new Set(['incident', 'reverted', 'fixed', 'broke', 'problem']);
 
 const err = (status, message) => Object.assign(new Error(message), { status });
 const clip = (s, n) => {
@@ -94,6 +94,8 @@ export function commitChecks(runs) {
 export function verdictOf(it, s = QUALITY_DEFAULTS, t = Date.now()) {
   if (it.mark?.verdict === 'clean') return 'clean';
   if (it.mark?.verdict === 'problem') return 'problem';
+  // Seen in production (a monitoring tool reported it): what users met wins over what GitHub shows.
+  if (it.incidents?.length) return 'incident';
   if (!it.after) return 'unchecked';
   if (it.after.reverted) return 'reverted';
   if (it.after.fixes?.length) return 'fixed';
@@ -111,12 +113,12 @@ const round = (n, d = 0) => (Number.isFinite(n) ? Math.round(n * 10 ** d) / 10 *
 
 /** Totals for a set of merged pull requests. */
 export function totals(items, s = QUALITY_DEFAULTS, t = Date.now()) {
-  const out = { prs: items.length, reverted: 0, fixed: 0, broke: 0, problem: 0, clean: 0, watching: 0, unchecked: 0, changesRequested: 0 };
+  const out = { prs: items.length, incident: 0, reverted: 0, fixed: 0, broke: 0, problem: 0, clean: 0, watching: 0, unchecked: 0, changesRequested: 0 };
   for (const it of items) {
     out[verdictOf(it, s, t)] += 1;
     if ((it.facts?.changesRequested ?? 0) > 0) out.changesRequested += 1;
   }
-  out.problems = out.reverted + out.fixed + out.broke + out.problem;
+  out.problems = out.incident + out.reverted + out.fixed + out.broke + out.problem;
   // Of the ones looked at: the share that held up, and the share that didn't.
   out.checked = out.prs - out.unchecked;
   out.held = out.clean + out.watching;
@@ -147,7 +149,7 @@ export function aggregate(items, s = QUALITY_DEFAULTS, { period = 'week', count,
   return out;
 }
 
-const VERDICT_TEXT = { reverted: 'reverted', fixed: 'fixed afterwards', broke: 'checks failed after the merge', problem: 'a problem (marked by me)', clean: 'held up', watching: 'no problem so far', unchecked: 'not looked at yet' };
+const VERDICT_TEXT = { incident: 'caused an incident in production', reverted: 'reverted', fixed: 'fixed afterwards', broke: 'checks failed after the merge', problem: 'a problem (marked by me)', clean: 'held up', watching: 'no problem so far', unchecked: 'not looked at yet' };
 
 /** A period's report as Markdown. */
 export function qualityMarkdown(p, items, s = QUALITY_DEFAULTS, { who = '', prev = null, t = Date.now() } = {}) {
@@ -159,7 +161,7 @@ export function qualityMarkdown(p, items, s = QUALITY_DEFAULTS, { who = '', prev
     `${x.prs} pull request${x.prs === 1 ? '' : 's'} from AI agents merged.`,
     '',
     `- **Held up**: ${x.heldPct == null ? 'n/a' : `${x.heldPct}%`}${was}: ${x.held} of ${x.checked} looked at${x.watching ? `, ${x.watching} still within the ${s.watchDays} days watched` : ''}`,
-    `- **Problems after the merge**: ${x.problems}: ${x.reverted} reverted, ${x.fixed} fixed afterwards, ${x.broke} with failed checks${x.problem ? `, ${x.problem} marked by me` : ''}`,
+    `- **Problems after the merge**: ${x.problems}: ${x.incident ? `${x.incident} caused an incident in production, ` : ''}${x.reverted} reverted, ${x.fixed} fixed afterwards, ${x.broke} with failed checks${x.problem ? `, ${x.problem} marked by me` : ''}`,
     `- **Before the merge**: a reviewer asked for changes on ${x.changesRequested}${x.changesPct == null ? '' : ` (${x.changesPct}%)`}; ${x.hoursToMerge == null ? 'n/a' : `${x.hoursToMerge} hours`} from opened to merged (median)`,
     '',
   ];
@@ -219,6 +221,34 @@ export const github = {
     return (JSON.parse(out || '{}').check_runs ?? []).map((r) => ({ name: r.name, status: r.status, conclusion: r.conclusion }));
   },
 };
+
+/**
+ * Which merged pull request an incident from production belongs to. In order: the pull request it
+ * names; the one that merged as the commit it was seen on (a release is often a commit); else, of
+ * the ones merged in the watch days before it, the latest that changed a file in its stack trace.
+ * { item, by } or null. `items`: Quality's merged pull requests.
+ */
+export function matchIncident(items, { pr = null, commit = null, files = [], at = Date.now() } = {}, s = QUALITY_DEFAULTS) {
+  if (pr) {
+    const it = items.find((x) => x.url === pr || x.url.replace(/\/+$/, '') === String(pr).replace(/\/+$/, ''));
+    return it ? { item: it, by: 'pull request' } : null;
+  }
+  const sha = String(commit ?? '').trim().toLowerCase();
+  if (sha.length >= 7) {
+    const it = items.find((x) => x.facts?.mergeCommit && (x.facts.mergeCommit.toLowerCase().startsWith(sha) || sha.startsWith(x.facts.mergeCommit.toLowerCase())));
+    if (it) return { item: it, by: 'commit' };
+  }
+  const want = (files ?? []).map((f) => String(f).replace(/^\.?\//, '').replace(/:\d+(:\d+)?$/, '')).filter(Boolean);
+  if (want.length) {
+    const t = typeof at === 'number' ? at : Date.parse(at) || Date.now();
+    const ends = (a, b) => a === b || a.endsWith(`/${b}`) || b.endsWith(`/${a}`);
+    const it = items
+      .filter((x) => Date.parse(x.mergedAt) <= t && t - Date.parse(x.mergedAt) <= s.watchDays * DAY && (x.facts?.files ?? []).some((f) => want.some((w) => ends(f, w))))
+      .sort((a, b) => b.mergedAt.localeCompare(a.mergedAt))[0];
+    if (it) return { item: it, by: 'files' };
+  }
+  return null;
+}
 
 export class Quality {
   constructor({ manager, store, config = {}, who = null, gh = github, onChange = () => {}, log = (m) => console.log(`[agentmgr] ${m}`) }) {
@@ -330,6 +360,39 @@ export class Quality {
     return Object.values(this.state.items)
       .filter((it) => it.repo && !it.final && !(it.error && t - Date.parse(it.triedAt) < RETRY_MS) && !(it.checkedAt && t - Date.parse(it.checkedAt) < RECHECK_MS))
       .sort((a, b) => (a.checkedAt ?? '').localeCompare(b.checkedAt ?? '') || b.mergedAt.localeCompare(a.mergedAt));
+  }
+
+  /**
+   * An incident from production (any monitoring tool, a script or you): linked to the merged pull
+   * request it belongs to, which then counts as one that did not hold up. Reported again with the
+   * same id, it is not counted twice.
+   */
+  incident({ title = '', url = null, id = null, at = null, pr = null, commit = null, files = [], source = '' } = {}) {
+    this.scan();
+    const name = clip(title, 200);
+    if (!name) throw err(400, 'An incident needs a title: what went wrong');
+    const when = at ? Date.parse(at) : Date.now();
+    if (!Number.isFinite(when)) throw err(400, 'at is a date');
+    const found = matchIncident(Object.values(this.state.items), { pr, commit, files: Array.isArray(files) ? files : String(files ?? '').split(',').map((f) => f.trim()), at: when }, this.settings);
+    if (!found) throw err(404, pr ? 'No merged pull request with that link' : 'No merged pull request matches it: give the pull request, the commit it was seen on, or files from its stack trace');
+    const it = found.item;
+    const key = String(id ?? url ?? `${name}@${new Date(when).toISOString()}`);
+    it.incidents ??= [];
+    if (!it.incidents.some((x) => x.key === key)) it.incidents.push({ key, title: name, url: url ? clip(url, 500) : null, at: new Date(when).toISOString(), by: found.by, source: clip(source, 60) || null });
+    this.store.save();
+    this.onChange();
+    return { ...this.itemView(it), matchedBy: found.by };
+  }
+
+  /** Take an incident off a pull request (it was not this one's). */
+  dropIncident(url, key) {
+    const it = this.state.items[url];
+    if (!it) throw err(404, 'No merged pull request with that link');
+    it.incidents = (it.incidents ?? []).filter((x) => x.key !== key);
+    if (!it.incidents.length) delete it.incidents;
+    this.store.save();
+    this.onChange();
+    return this.itemView(it);
   }
 
   /** What you say about a pull request: 'clean' (not a problem), 'problem', or null for what was found. */

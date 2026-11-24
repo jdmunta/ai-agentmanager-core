@@ -1421,6 +1421,12 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
     const r = quality.record();
     return req.query.format === 'md' ? { markdown: recordMarkdown(r) } : r;
   }));
+  // Production signal: an incident from any monitoring tool, a script or you, linked to the merged pull request it belongs to.
+  api.post('/quality/incident', wrap((req) => {
+    if (req.headers['x-agentmgr-agent']) throw fail(403, 'Incidents are reported by the person or their tools, not by an agent');
+    return quality.incident({ ...(req.body ?? {}), source: req.body?.source ?? 'api' });
+  }));
+  api.post('/quality/incident/drop', wrap((req) => quality.dropIncident(String(req.body?.url ?? ''), String(req.body?.key ?? ''))));
   api.post('/quality/mark', wrap((req) => quality.mark(String(req.body?.url ?? ''), { verdict: req.body?.verdict ?? null, note: req.body?.note ?? '' })));
   api.post('/quality/check', wrap((req) => quality.check(String(req.body?.url ?? ''), { fresh: true })));
   // Standards are the person's to set: an agent's own calls can read them, not change them.

@@ -601,6 +601,23 @@ A break the tests fail on is **Caught**. A break they still pass on is **Not not
 - The breaks are made on the text of a line, not on a parsed program. They cover JavaScript, TypeScript, Python, Go, Ruby, Java, Kotlin, Rust, C, C++, C#, PHP, Swift and Scala.
 - Each run of the tests may take 5 minutes at most, and a whole run 15 (`"testTheTests"` in config.json: `max`, `timeoutMs`, `budgetMs`). An agent in a container is not covered.
 
+## Production signal: incidents from your monitoring tool
+
+Quality judges merged work by what GitHub shows. An incident in production says more: users met it. Any monitoring tool, a script, or you can report one, and it is linked to the merged pull request it belongs to:
+
+```sh
+agentmgr quality incident "NaN totals at checkout" --files src/total.js:12 --id DD-9 --url https://monitor.example/DD-9
+curl -X POST -H 'x-agentmgr: 1' -H 'content-type: application/json' http://127.0.0.1:<port>/api/quality/incident \
+  -d '{"title":"NaN totals at checkout","commit":"feedbeef","id":"DD-9","source":"datadog"}'
+```
+
+- **How it is matched.** The pull request it names (`--pr`); else the one that merged as the commit it was seen on (`--commit`: a release is often a commit); else, of the pull requests merged in the watch days before it, the latest that changed a file in its stack trace (`--files`).
+- **What it changes.** That pull request shows **Incident in production** in Quality, with the link and how it was matched. It counts as one that did not hold up in Quality's totals, the [track record](#track-record-was-the-confidence-right) and the [weekly summary](#weekly-summary-the-weeks-work-and-achievements-for-management), and it can become a lesson in [Standards](#standards-what-every-change-in-a-repository-has-to-meet). What you mark yourself still wins.
+- **Reported twice.** The same `--id` is counted once. A wrong match can be taken off (`POST /api/quality/incident/drop` with the pull request and the id).
+- **Who reports it.** You or your tools; an agent's own call is refused.
+
+**Limits.** There is no built-in connector to a particular tool: point your tool's webhook, or a small script, at the route above. The daemon listens on this computer, so a tool in the cloud needs a script that forwards to it. Matching by files picks the latest pull request that touched them, which can be the wrong one when several did.
+
 ## Track record: was the confidence right?
 
 An agent writes "Confidence: 85%" and the scorecard says "Ready to approve". The track record shows how much those were worth.
@@ -624,6 +641,19 @@ An agent writes "Confidence: 85%" and the scorecard says "Ready to approve". The
 | Without you | "Run to pull request: 4 of 5 held up" |
 
 A row with fewer than 5 settled pull requests says "too few to say". "Said more than held up" means the average confidence was at least 15 points above the share that held.
+
+### Delegation map: what to hand over next
+
+The track record also sorts work by kind, read from the words of each request: features, bug fixes, tests, documentation, upgrades and migrations, refactoring, investigation. For each kind it shows how it held up and how much of it ran without you.
+
+| Advice | When |
+| --- | --- |
+| **Hand over more** | At least 5 settled pull requests, 9 in 10 held up, and most of it still asked you |
+| **Keep close** | At least 5 settled, and under 7 in 10 held up |
+
+The kind that held up best among the "hand over more" ones is named as the next to hand over: set its projects' level, or start that kind of work with "Agree, then run".
+
+**Limits.** It sees only work given to agents, not what you do by hand. The kind is read from words with fixed rules, so a request can land in the wrong kind; work it cannot place counts as a feature. Pull requests merged before this version are sorted by their title.
 
 ### Model fit: which model held up as well for less
 

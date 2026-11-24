@@ -14,8 +14,8 @@ const PERIODS = [
   ['year', 'Year'],
 ];
 const SAVED = 'agentmgr.qualityPeriod';
-const WORD = { reverted: 'Reverted', fixed: 'Fixed afterwards', broke: 'Checks failed', problem: 'A problem', clean: 'Held up', watching: 'Fine so far', unchecked: 'Not looked at' };
-const BAD = new Set(['reverted', 'fixed', 'broke', 'problem']);
+const WORD = { incident: 'Incident in production', reverted: 'Reverted', fixed: 'Fixed afterwards', broke: 'Checks failed', problem: 'A problem', clean: 'Held up', watching: 'Fine so far', unchecked: 'Not looked at' };
+const BAD = new Set(['incident', 'reverted', 'fixed', 'broke', 'problem']);
 
 export function initQuality({ api, $, esc, toast, ago, openAgent }) {
   const dialog = $('#quality-dialog');
@@ -92,6 +92,7 @@ export function initQuality({ api, $, esc, toast, ago, openAgent }) {
   function why(it) {
     const a = it.after;
     if (it.mark) return `You said so${it.mark.note ? `: ${esc(it.mark.note)}` : ''}`;
+    if (it.verdict === 'incident') return it.incidents.map((x) => `${x.url ? `<a href="${esc(x.url)}" target="_blank" rel="noopener">${esc(x.title)}</a>` : esc(x.title)} <span class="hint">matched by ${esc(x.by)}${x.source ? ` · ${esc(x.source)}` : ''}</span>`).join('<br>');
     if (it.verdict === 'reverted') return `Reverted by ${link(a.reverted)}`;
     if (it.verdict === 'fixed') return a.fixes.map((f) => `${link(f)}${f.shared.length ? ` <span class="hint">same file${f.shared.length === 1 ? '' : 's'}: ${esc(f.shared.join(', '))}</span>` : ' <span class="hint">names it</span>'}`).join('<br>');
     if (it.verdict === 'broke') return `Failed on the merged commit: ${esc(a.checks.failed.join(', '))}`;
@@ -145,6 +146,9 @@ export function initQuality({ api, $, esc, toast, ago, openAgent }) {
       ${table('The review scorecard', 'What the scorecard recommended as it merged.', r.scorecard)}
       ${table('Tests tested', 'Whether the tests were tested before the merge (Test the tests), and how that went.', r.tests)}
       ${table('Model', 'The engine and model that did the work.', r.models)}
+      ${r.delegation.rows.length ? `<h3 class="rec-head">Delegation map</h3><p class="hint">By kind of work, read from the words of each request: how it held up and how much of it ran without you. A kind that held up 9 times in 10 over at least 5 settled pull requests while most of it still asked you is worth handing over more of; under 7 in 10 is worth keeping close. It sees only the work given to agents, not what you do by hand.</p>
+        <div class="issues-scroll"><table class="issues rec-table"><thead><tr><th>Kind of work</th><th class="num">Held up</th><th class="num">Share</th><th class="num">Without you</th><th></th></tr></thead><tbody>${r.delegation.rows.map((d) => `<tr><td>${esc(d.label)}</td><td class="num">${d.held} of ${d.n}</td><td class="num">${d.heldPct}%</td><td class="num">${d.withoutYou} of ${d.n}</td><td class="${d.advice === 'hand over more' ? 'rec-ok' : d.advice ? 'rec-bad' : 'hint'}">${d.advice ?? (d.n < 5 ? 'too few to say' : 'keep as is')}</td></tr>`).join('')}</tbody></table></div>
+        ${r.delegation.next ? `<p class="rec-ok">Next to hand over more of: <b>${esc(r.delegation.next.label)}</b> (${r.delegation.next.heldPct}% held up over ${r.delegation.next.n}, most of it still asking you). Set its projects' level above, or start that kind of work with <i>Agree, then run</i>.</p>` : ''}` : ''}
       ${r.fit.rows.length > 1 ? `<h3 class="rec-head">Model fit</h3><p class="hint">Which model held up as well as the most used one at a lower cost. Cost is shown against the most used model's, per piece of work. A suggestion needs 5 settled pull requests for both, a share that held up within 5 points of the most used model's, and at most three quarters of its cost.</p>
         <div class="issues-scroll"><table class="issues rec-table"><thead><tr><th>Model</th><th class="num">Held up</th><th class="num">Share</th><th class="num">Scorecard</th><th class="num">Cost</th></tr></thead><tbody>${r.fit.rows.map((m, i) => `<tr><td>${esc(m.model)}</td><td class="num">${m.held} of ${m.n}</td><td class="num">${m.heldPct}%</td><td class="num">${m.score ?? '—'}</td><td class="num">${i === 0 ? 'the most used' : m.costVsMain == null ? '—' : `${m.costVsMain}×`}</td></tr>`).join('')}</tbody></table></div>
         ${r.fit.suggestion ? `<p class="rec-ok"><b>${esc(r.fit.suggestion.model)}</b> held up as well as ${esc(r.fit.suggestion.main)} (${r.fit.suggestion.heldPct}% against ${r.fit.suggestion.mainHeldPct}%) at ${r.fit.suggestion.costVsMain}× the cost, over ${r.fit.suggestion.n} settled pull requests: worth trying for more of the work.</p>` : ''}` : ''}
@@ -216,6 +220,7 @@ export function initQuality({ api, $, esc, toast, ago, openAgent }) {
       <div class="value-cards">
         ${card('Held up', pct(t.heldPct), `${t.held} of ${t.checked} looked at${t.watching ? `; ${t.watching} still watched` : ''}`, prev && t.heldPct != null ? t.heldPct - prev.heldPct : null, true)}
         ${card('Problems after the merge', String(t.problems), `${pct(t.failurePct)} of those looked at`, prev && t.failurePct != null ? t.failurePct - prev.failurePct : null, false)}
+        ${t.incident ? card('Incidents in production', String(t.incident), 'reported by a monitoring tool or by you', null) : ''}
         ${card('Reverted', String(t.reverted), 'taken back out', null)}
         ${card('Fixed afterwards', String(t.fixed), `a fix to the same files within ${s.watchDays} days`, null)}
         ${card('Checks failed', String(t.broke), 'on the commit it merged as', null)}
