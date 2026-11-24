@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.68.1 (2026-11-24)
+
+- **Split screen: the view you switch to takes the size of its own panel.** Taking the lead from a view it had been following, a terminal was fitted once, at a moment when it could still measure with the small text it had while following. The size could come out as the one it already had, so the session was not resized and the other view did not follow. It is now fitted again over the next moments. This is the cause of a test that kept failing on slow machines.
+
 ## 1.68.0 (2026-11-24)
 
 - **Weekly summary: technical, with no money amounts.** The AI cost and the dollar value are gone. Under each delivered piece the summary now says **How** it was done (from the agent's brief), what was **Changed** (files, lines, folders, test files) and how it was **Checked** (checks passed, commands recorded with their output, breaks caught by the tests, the scorecard, named risks avoided, reviews).
