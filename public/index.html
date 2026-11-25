@@ -33,6 +33,7 @@
         <button id="go-btn" class="go-btn" title="Go to: find a view, an agent or a setting by name (Ctrl+K or ⌘K)" aria-label="Go to a view, an agent or a setting">⌕ Go to</button>
         <nav class="top-nav" id="top-nav" aria-label="Views">
         <button id="today-btn" title="Today: what needs you, from every list, most pressing first, and why (y)">Today <span id="today-count" class="badge ready"></span></button>
+        <button id="glance-btn" title="At a glance: every agent on one line, grouped by what it needs from you (act now, fix, review, working, follow up, tidy up, idle), and why">Glance <span id="glance-count" class="badge"></span></button>
         <button id="readfirst-btn" title="Read first: finished work waiting for your review, the pieces that need reading most first, and why">Read first <span id="readfirst-count" class="badge"></span></button>
         <button id="assistant-btn" title="An always-on session that finds new work and starts agents for it">Assistant <span id="assistant-dot" class="assistant-dot" hidden></span></button>
         <button id="spend-btn" title="Results across agents (merge rate, time to PR, cost per merged PR), what they cost, and spending limits">Results <span id="spend-today" class="spend-today"></span></button>
@@ -460,6 +461,11 @@
       <div class="dialog-actions"><button type="button" class="small" data-us="make" title="Write new questions from its changes as they are now">New questions</button><button type="button" class="small" data-us="changes">Review changes</button><span class="spacer"></span><button type="button" class="small primary" data-us="close">Close</button></div>
     </dialog>
 
+    <dialog id="glance-dialog" class="update-dialog readfirst-dialog" aria-label="At a glance">
+      <h2>At a glance</h2>
+      <div id="glance-body"></div>
+      <div class="dialog-actions"><span class="spacer"></span><button type="button" class="small primary" data-gl="close">Close</button></div>
+    </dialog>
     <dialog id="readfirst-dialog" class="update-dialog readfirst-dialog" aria-label="Read first">
       <h2>Read first</h2>
       <div id="readfirst-body"></div>

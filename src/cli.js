@@ -866,6 +866,37 @@ export async function main(argv) {
     });
 
   program
+    .command('glance')
+    .description('Every agent on one line, grouped by what it needs from you: needs you now (a prompt, a question it stopped at, a sign-in, an error, stuck), to fix (failing checks, changes requested, a conflict, blocked), to review, to answer (questions asked without stopping), working, to follow up, to tidy up, and idle; each with why. Exit 1 when something needs you now or is to fix.')
+    .option('-a, --all', 'list the idle agents too')
+    .option('-o, --out <file>', 'write it as Markdown to a file')
+    .option('--json', 'print JSON')
+    .action(async (o) => {
+      await daemon();
+      const g = await api('GET', `/glance${o.all ? '?all=1' : ''}`);
+      if (o.json) return console.log(JSON.stringify(g, null, 2));
+      if (o.out) {
+        fs.writeFileSync(o.out, `${g.markdown}\n`);
+        console.log(`${green('✓')} written to ${o.out}`);
+      } else {
+        console.log(bold(g.line));
+        const tone = { act: red, fix: yellow, review: cyan, answer: cyan, working: green, follow: yellow, tidy: dim, quiet: dim };
+        const label = { act: 'Needs you now', fix: 'To fix', review: 'To review', answer: 'To answer', working: 'Working', follow: 'Follow up', tidy: 'Tidy up', quiet: 'Idle' };
+        for (const key of Object.keys(label)) {
+          const list = g.items.filter((i) => i.group === key);
+          if (!list.length) continue;
+          if (key === 'quiet' && !o.all) {
+            console.log(dim(`\n${list.length} idle (agentmgr glance --all to list them)`));
+            continue;
+          }
+          console.log(`\n${tone[key](label[key])} ${dim(`(${list.length})`)}`);
+          for (const i of list) console.log(`  ${bold(i.name)} ${dim(i.id)}${i.project ? dim(`  ${i.project}`) : ''}\n    ${i.why.slice(0, 3).join(dim(' · '))}`);
+        }
+      }
+      if (g.counts.act || g.counts.fix) process.exitCode = 1;
+    });
+
+  program
     .command('read-first')
     .description('Finished work waiting for your review, the pieces that need reading most first: each with a level (read closely, look, skim), the reasons from what the app measured (high-risk files, the scorecard, checks, whether the tests notice a mistake, what was left out, risks not checked, its own confidence, size), and where to start. Exit 1 when something is to be read closely.')
     .option('--reviewed <agent>', 'you have reviewed this one: it leaves the queue until the agent changes its work again')

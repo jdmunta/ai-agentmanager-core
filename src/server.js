@@ -60,6 +60,7 @@ import { Quality } from './quality.js';
 import { recordMarkdown } from './record.js';
 import { Weekly } from './weekly.js';
 import { queueMarkdown, readQueue } from './readfirst.js';
+import { glance, glanceLine, glanceMarkdown } from '../public/glance.js';
 import { traceMarkdown, traceOf } from './trace.js';
 import { PRIVATE_MESSAGE, keptPrivate, mustBeShareable } from './private.js';
 import { Standards, runCheck } from './standards.js';
@@ -1275,6 +1276,11 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
   api.post('/repeats/dismiss', wrap((req) => repeats.dismiss(String(req.body?.key ?? ''))));
   api.post('/playbooks/:id/run', wrap((req) => playbooks.run(req.params.id, { vars: req.body?.vars ?? {} })));
   // Read first (readfirst.js): finished work waiting for review, the pieces that need reading most first.
+  // At a glance: every agent on one line, grouped by what it needs from you (public/glance.js).
+  api.get('/glance', wrap((req) => {
+    const g = glance(store.list().map((a) => manager.view(a)));
+    return { ...g, line: glanceLine(g), markdown: glanceMarkdown(g, { all: req.query.all === '1' }) };
+  }));
   api.get('/read-first', wrap((req) => {
     const items = readQueue(store.list(), (a) => manager.view(a));
     return req.query.format === 'md' ? { markdown: queueMarkdown(items) } : { items };
