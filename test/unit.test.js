@@ -2011,21 +2011,20 @@ test('scorecard: Improve tells the agent its low scores (lowest first), the crit
   assert.ok(!/Scores to raise|Acceptance criteria|Where a reviewer/.test(clean));
 });
 
-test('split screen: the daemon does not send a viewer its own size back', async () => {
+test('split screen: every viewer, the one that asked too, is sent the size the session took', async () => {
   // (The page's side, a view ignoring a size it just sent, runs in the browser: the split screen browser test.)
-  // The daemon: the viewer that asked is not sent its own size.
+  // Two views taking the lead at once must end up at one size: the last one the session took.
   const { AgentManager } = await import('../src/manager.js');
   const got = { a: [], b: [] };
   const a = { send: (m) => got.a.push(m) };
   const b = { send: (m) => got.b.push(m) };
   const rt = { cols: 100, rows: 30, clients: new Set([a, b]), pty: null };
   const fake = { termRuntime: () => rt };
-  AgentManager.prototype.resize.call(fake, 'x', 120, 40, 'claude', a);
-  assert.deepEqual([got.a, got.b], [[], [{ t: 'size', cols: 120, rows: 40 }]]);
-  AgentManager.prototype.resize.call(fake, 'x', 120, 40, 'claude', b);
-  assert.equal(got.a.length, 0, 'no change, nothing sent');
-  AgentManager.prototype.resize.call(fake, 'x', 80, 24);
-  assert.deepEqual([got.a.length, got.b.length], [1, 2], 'from no viewer (the hub, a request): to all');
+  AgentManager.prototype.resize.call(fake, 'x', 120, 40, 'claude');
+  AgentManager.prototype.resize.call(fake, 'x', 90, 20, 'claude');
+  assert.deepEqual([got.a.at(-1), got.b.at(-1)], [{ t: 'size', cols: 90, rows: 20 }, { t: 'size', cols: 90, rows: 20 }]);
+  AgentManager.prototype.resize.call(fake, 'x', 90, 20, 'claude');
+  assert.deepEqual([got.a.length, got.b.length], [2, 2], 'no change, nothing sent');
 });
 
 test('production signal: an incident is linked to the merged pull request it belongs to, which then did not hold up', async () => {

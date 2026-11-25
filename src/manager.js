@@ -2088,7 +2088,7 @@ export class AgentManager extends EventEmitter {
   }
 
   /** Resize a session. `from`: the viewer that asked, which is not sent its own size back. */
-  resize(id, cols, rows, kind = 'claude', from = null) {
+  resize(id, cols, rows, kind = 'claude') {
     const rt = this.termRuntime(id, kind);
     if (!rt || !(cols > 0 && rows > 0)) return;
     const changed = rt.cols !== cols || rt.rows !== rows;
@@ -2097,10 +2097,10 @@ export class AgentManager extends EventEmitter {
     try {
       rt.pty?.resize(cols, rows);
     } catch {}
-    // Viewers that don't size the session follow it.
-    // (Sent back to the one that asked, a size it has since replaced with a newer one would make it
-    // follow itself.)
-    if (changed) for (const c of rt.clients ?? []) if (c !== from) c.send({ t: 'size', cols, rows });
+    // Viewers that don't size the session follow it. The one that asked is told too: when two views
+    // take the lead at once, the last size the session took is what they all end up showing. (A
+    // view ignores a size it sent itself a moment ago: groups.js, followSize.)
+    if (changed) for (const c of rt.clients ?? []) c.send({ t: 'size', cols, rows });
   }
 
   // ------------------------------------------------------- ancillary shells

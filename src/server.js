@@ -2089,7 +2089,7 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
           return;
         }
         if (msg.t === 'i' && typeof msg.d === 'string') manager.write(agent.id, msg.d, kind);
-        else if (msg.t === 'r') manager.resize(agent.id, msg.cols | 0, msg.rows | 0, kind, client);
+        else if (msg.t === 'r') manager.resize(agent.id, msg.cols | 0, msg.rows | 0, kind);
       });
       ws.on('close', () => session.detach());
     } catch (err) {

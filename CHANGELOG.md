@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.70.2 (2026-11-24)
+
+- **Split screen: two views that take the lead at once end up at one size.** 1.70.1 stopped sending a view the size it had just set. When two views took the lead at the same moment, each then followed the other's size, and both stayed shrunk. Every view is sent the size the session took again, so they all end up at the last one. A view still ignores a size it sent itself a moment ago, which was the fix for 1.70.1's problem.
+
 ## 1.70.1 (2026-11-24)
 
 - **Split screen: a view no longer starts following itself.** The daemon sent a new terminal size back to every view, including the one that set it. When that view fitted itself twice in a row, the first size came back after the second, was taken for another view's, and the view shrank to follow it. The daemon no longer sends a view its own size, and a view ignores a size it sent a moment ago. Found from the sizes the split screen test now reports when it fails.
