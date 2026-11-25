@@ -62,6 +62,7 @@ import { autoNeedHtml, autonomyNeeds, autonomyRow, initAutonomy, needsPermission
 import { initProof, proofRows } from '/proof.js';
 import { initWeekly } from '/weekly.js';
 import { initReadFirst, readFirstRow } from '/readfirst.js';
+import { initGlance } from '/glance.js';
 import { initUnderstand } from '/understand.js';
 import { kindHtml, optionsRows, parseKind, parsePaths, parseValue, pathsHtml, privateRow, valueHtml } from '/valuelens.js';
 
@@ -227,6 +228,7 @@ initWorklog({ api, esc, toast, $ });
 initWeekly({ api, esc, toast, $, md: (t) => md(t) });
 const understandUi = initUnderstand({ $, esc, api, toast: (m, ms) => toast(m, ms), openChanges: (id) => (showTab('agents'), select(id), reviewUi.open(id)), agentOf: (id) => agents.get(id) });
 const readFirstUi = initReadFirst({ $, esc, ago: (t) => ago(t), agents, openAgent: (id) => (showTab('agents'), select(id)), openChanges: (id) => (showTab('agents'), select(id), reviewUi.open(id)), projectOf: (a) => a.projectInfo?.name ?? null, api, toast: (m, ms) => toast(m, ms), understand: (id) => understandUi.open(id) });
+const glanceUi = initGlance({ $, esc, ago: (t) => ago(t), agents, openAgent: (id) => (showTab('agents'), select(id)), readFirst: () => readFirstUi.open() });
 initSetup({ api, esc, $ });
 const updateUi = initUpdate({ api, esc, toast, $ });
 initMenu({ api, esc, toast, $ });
@@ -2808,6 +2810,7 @@ const VIEWS = {
   watch: () => watchUi?.render(),
   groups: () => groupsUi?.render(),
   standup: () => standupUi?.render(),
+  glance: () => glanceUi?.render(),
 };
 const ALL_VIEWS = Object.keys(VIEWS);
 
@@ -4895,7 +4898,7 @@ function handleEvent(msg) {
     if (msg.agent.hunting) bugsUi.changed();
     // The detail, terminal and document views show one agent; another agent's update leaves them be.
     return invalidate([
-      'list', 'backlog', 'land', 'inbox', 'race', 'team',
+      'list', 'backlog', 'land', 'inbox', 'race', 'team', 'glance',
       ...(watchUi.isOpen() ? ['watch'] : []),
       ...(groupsUi?.count() ? ['groups'] : []),
       ...(standupUi.isOpen() ? ['standup'] : []),

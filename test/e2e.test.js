@@ -6237,6 +6237,23 @@ test('Close all closes every open session but the busy ones (unless asked) and t
   assert.deepEqual((await call('GET', '/agents')).body.filter((a) => a.runtime.running && a.kind !== 'assistant').map((a) => a.name), []);
 });
 
+test('at a glance: every agent grouped by what it needs from you, from the daemon', async () => {
+  const mk = async (intent) => (await call('POST', '/agents', { intent, project: 'Glance', start: false })).body[0];
+  const [done, blocked] = [await mk('Glance: a finished fix'), await mk('Glance: a blocked job')];
+  manager.patch(done.id, { brief: { status: 'done', updatedAt: new Date().toISOString(), checks: [], risks: [], results: { outcome: 'done', confidence: { percent: 95 }, notDone: [], notDoneSaid: true } } });
+  manager.patch(blocked.id, { brief: { status: 'blocked', updatedAt: new Date().toISOString(), results: { outcome: 'blocked', blockers: ['no access to the staging database'] } } });
+  const g = (await call('GET', '/glance')).body;
+  const by = Object.fromEntries(g.items.map((i) => [i.id, i]));
+  assert.equal(by[done.id].group, 'review');
+  assert.match(by[done.id].why[0], /^(Skim|Look|Read closely)/);
+  assert.deepEqual([by[blocked.id].group, by[blocked.id].why[0], by[blocked.id].project], ['fix', 'Blocked: no access to the staging database', 'Glance']);
+  assert.equal(g.total, g.items.length);
+  assert.match(g.line, /^\d+ agents?: /);
+  assert.match(g.markdown, /^# At a glance\n[\s\S]*## To fix \(\d+\)\n\n[\s\S]*Blocked: no access to the staging database/);
+  assert.match((await call('GET', '/glance?all=1')).body.markdown, /## Idle \(\d+\)|## (To review|To fix)/);
+  for (const a of [done, blocked]) await call('DELETE', `/agents/${a.id}?deleteWorkspace=1`);
+});
+
 test('read first: finished work waiting for review is ranked with its reasons; merged work leaves the queue', async () => {
   const mk = async (intent) => (await call('POST', '/agents', { intent, project: 'ReadFirst', start: false })).body[0];
   const [calm, risky] = [await mk('ReadFirst: a small fix'), await mk('ReadFirst: rework the billing')];

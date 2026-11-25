@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.71.0 (2026-11-24)
+
+- **At a glance.** A new **Glance** button in the top bar, and `agentmgr glance`, show every agent on one line, grouped by what it needs from you: needs you now (a prompt, a question it stopped at, a sign-in, an error, stuck), to fix (failing checks, changes requested, a merge conflict, blocked, the same files as another agent), to review (with its Read first level, or a pull request ready to merge), to answer (questions it asked without stopping), working, follow up, tidy up, and idle. Each line says why, from what the app already knows. The badge counts what needs you now and what is to fix, and a click opens the agent. `--all` lists the idle ones too, `-o` writes Markdown, and the command exits with 1 when something needs you.
+
 ## 1.70.2 (2026-11-24)
 
 - **Split screen: two views that take the lead at once end up at one size.** 1.70.1 stopped sending a view the size it had just set. When two views took the lead at the same moment, each then followed the other's size, and both stayed shrunk. Every view is sent the size the session took again, so they all end up at the last one. A view still ignores a size it sent itself a moment ago, which was the fix for 1.70.1's problem.

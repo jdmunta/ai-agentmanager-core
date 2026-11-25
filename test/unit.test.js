@@ -7104,3 +7104,51 @@ test('drop to start: links told apart (ticket, repository, requirements, design)
   assert.ok(isEmptyDrop(readDrop({})) && isEmptyDrop(readDrop({ text: '  ' })));
   assert.equal(dropSummary(readDrop({}), 1), '1 file');
 });
+
+test('at a glance: every agent grouped by what it needs from you, with why', async () => {
+  const { glance, glanceOf, glanceLine, glanceMarkdown } = await import('../public/glance.js');
+  const t = (h) => new Date(Date.now() - h * 3_600_000).toISOString();
+  const run = (extra = {}) => ({ running: true, busy: false, ...extra });
+  const views = [
+    { id: 'a1', name: 'prompted', kind: 'task', runtime: run({ attention: 'Permission prompt' }), activeAt: t(1) },
+    { id: 'a2', name: 'asks', kind: 'task', runtime: run({ waiting: { state: 'question', question: 'Which table?', summary: 's' } }), questions: [{ question: 'Keep the old API?', answer: null }, { question: 'x', answer: { text: 'y' } }], activeAt: t(1) },
+    { id: 'a3', name: 'stuck', kind: 'task', runtime: run({ busy: true }), stuck: [{ title: 'Same failure 3× in a row' }], activeAt: t(0) },
+    { id: 'a4', name: 'failing', kind: 'task', runtime: run(), prs: [{ url: 'https://github.com/o/r/pull/7', state: 'OPEN', land: 'fix', checks: { state: 'failed' }, review: 'CHANGES_REQUESTED' }], activeAt: t(2) },
+    { id: 'a5', name: 'finished', kind: 'task', runtime: {}, readFirst: { level: 'close', reasons: [{ text: '1 check of its own failed' }] }, prs: [{ number: 9, url: 'u', state: 'OPEN', land: 'ready' }], activeAt: t(3) },
+    { id: 'a6', name: 'busy', kind: 'task', runtime: run({ busy: true }), activeAt: t(0), priority: 1 },
+    { id: 'a7', name: 'quiet', kind: 'task', runtime: run(), followUp: { kind: 'followup', title: 'Quiet for 3 hours and not finished', detail: 'Blocked: no key' }, activeAt: t(3) },
+    { id: 'a8', name: 'done-open', kind: 'task', runtime: run(), followUp: { kind: 'close', title: 'Done and quiet for 3 hours, but its session is still open' }, activeAt: t(3) },
+    { id: 'a9', name: 'merged', kind: 'task', runtime: {}, prs: [{ number: 3, state: 'MERGED' }], activeAt: t(50) },
+    { id: 'a10', name: 'broken', kind: 'task', status: 'error', error: 'Failed to launch claude', runtime: {}, activeAt: t(5) },
+    { id: 'a11', name: 'blocked', kind: 'task', runtime: {}, results: { outcome: 'blocked', blockers: [{ text: 'needs a token' }] }, activeAt: t(5) },
+    { id: 'g', name: 'general', kind: 'general', runtime: run() },
+    { id: 'a12', name: 'mentioned', kind: 'task', runtime: {}, prs: [{ url: 'x', state: 'OPEN', land: 'fix', source: 'mentioned' }], activeAt: t(80) },
+  ];
+  const g = glance(views);
+  const by = Object.fromEntries(g.items.map((i) => [i.name, i]));
+  assert.equal(by.prompted.group, 'act');
+  assert.deepEqual(by.prompted.why, ['Stopped at a permission prompt']);
+  assert.deepEqual(by.asks.why, ['Asks: Which table?', '1 question it asked without stopping: Keep the old API?']);
+  assert.deepEqual(glanceOf({ runtime: {}, questions: [{ question: 'Which port?' }] }), { group: 'answer', why: ['1 question it asked without stopping: Which port?'], since: null });
+  assert.equal(by.stuck.group, 'act', 'stuck while busy still needs you');
+  assert.deepEqual(by.stuck.why, ['Looks stuck: Same failure 3× in a row']);
+  assert.equal(by.broken.group, 'act');
+  assert.deepEqual(by.failing.why, ['Pull request #7: checks failing, changes requested']);
+  assert.deepEqual(by.blocked.why, ['Blocked: needs a token']);
+  assert.deepEqual([by.finished.group, by.finished.why], ['review', ['Read closely: 1 check of its own failed', 'Pull request #9 is ready to merge']]);
+  assert.deepEqual([by.busy.group, by.busy.why], ['working', ['Working']]);
+  assert.deepEqual([by.quiet.group, by.quiet.why], ['follow', ['Quiet for 3 hours and not finished (Blocked: no key)']]);
+  assert.equal(by['done-open'].group, 'tidy');
+  assert.deepEqual([by.merged.group, by.merged.why], ['quiet', ['Pull request #3 merged']]);
+  assert.deepEqual([by.mentioned.group, by.mentioned.why], ['quiet', ['Stopped']], 'a pull request it only mentioned is not its own');
+  assert.ok(!by.general, 'general sessions are left out');
+  assert.deepEqual(g.counts, { act: 4, fix: 2, review: 1, answer: 0, working: 1, follow: 1, tidy: 1, quiet: 2 });
+  assert.deepEqual(g.items.slice(0, 4).map((i) => i.group), ['act', 'act', 'act', 'act'], 'what needs you comes first');
+  assert.equal(glanceLine(g), '12 agents: 4 need you now, 2 to fix, 1 to review, 1 working, 1 to follow up, 1 to tidy up, 2 idle.');
+  assert.equal(glanceLine(glance([])), 'No agents yet.');
+  const md = glanceMarkdown(g);
+  assert.match(md, /^# At a glance\n\n12 agents: [\s\S]*## Needs you now \(4\)\n\n[\s\S]*- \*\*prompted\*\*: Stopped at a permission prompt\n[\s\S]*- \*\*broken\*\*: Stopped with an error: Failed to launch claude\n/);
+  assert.ok(!/merged/.test(md) && /2 idle agents not listed\.$/.test(md), md);
+  assert.match(glanceMarkdown(g, { all: true }), /## Idle \(2\)\n\n- \*\*merged\*\*: Pull request #3 merged/);
+  assert.equal(glanceOf({ runtime: {}, status: 'exited' }).why[0], 'Its session ended');
+});

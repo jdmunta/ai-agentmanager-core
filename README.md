@@ -1465,6 +1465,18 @@ Agents started this way are marked **⚡ GitHub** or **⚡ webhook**, Slack aler
 }
 ```
 
+## At a glance: every agent, and what to act on
+
+**Glance** in the top bar, or `agentmgr glance`, puts every agent on one line, grouped by what it needs from you:
+
+- **Needs you now**: stopped at a prompt, stopped at a question, waiting for you to sign in, stopped with an error, or stuck.
+- **To fix**: its pull request has failing checks, requested changes or a merge conflict; it says it is blocked; or it changes the same files as another agent.
+- **To review**: finished work waiting for review, with its [Read first](#read-first-where-your-attention-goes) level, and pull requests ready to merge.
+- **To answer**: questions it asked without stopping, still unanswered (the Inbox).
+- **Working**, **Follow up** (quiet and not finished), **Tidy up** (done, but its session is still open) and **Idle**.
+
+Each line says why, from what the app already knows; no model is asked. The badge on the button counts what needs you now and what is to fix. Click a line to open the agent. `agentmgr glance --all` lists the idle agents too, `-o glance.md` writes it as Markdown, and the command exits with 1 when something needs you now or is to fix.
+
 ## Read first: where your attention goes
 
 You cannot read everything agents produce with the same care. **Read first** in the top bar, or `agentmgr read-first`, ranks finished work waiting for your review by how much it needs reading.

@@ -390,6 +390,20 @@ body.term-max .term-agent, .term-wrap:fullscreen .term-agent { display: inline-b
 .kept-private-off { margin: 4px 0; }
 .readfirst-dialog { width: min(760px, calc(100vw - 24px)); }
 #readfirst-body { max-height: min(66vh, 680px); overflow: auto; }
+#glance-body { max-height: min(70vh, 720px); overflow: auto; overflow-wrap: anywhere; }
+.gl-line { font-weight: 600; margin: 0 0 8px; }
+.gl-group h3 { font-size: 14px; margin: 12px 0 4px; }
+.gl-list { list-style: none; margin: 0; padding: 0; }
+.gl-item { padding: 6px 8px; border-left: 3px solid var(--border); border-radius: 4px; cursor: pointer; }
+.gl-item:hover, .gl-item:focus { background: var(--panel-2); outline: none; }
+.gl-item + .gl-item { margin-top: 4px; }
+.gl-act { border-left-color: var(--red); }
+.gl-fix { border-left-color: var(--yellow); }
+.gl-review { border-left-color: var(--accent); }
+.gl-answer { border-left-color: var(--muted); }
+.gl-working { border-left-color: var(--green); }
+.gl-why { margin-top: 2px; }
+.gl-more, .gl-title { font-size: 12px; }
 .rf-list { list-style: none; margin: 8px 0; padding: 0; }
 .rf-item { margin: 0 0 10px; padding: 10px 12px; border: 1px solid var(--border); border-left-width: 4px; border-radius: 8px; font-size: 13px; overflow-wrap: anywhere; }
 .rf-item.rf-close { border-left-color: var(--red); }

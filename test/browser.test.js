@@ -182,7 +182,7 @@ test('the top bar fits the window: the view buttons that do not fit go into More
       menuOk: document.querySelector('#menu-btn').getBoundingClientRect().right <= innerWidth,
     })`);
     assert.ok(r.page <= w, `${w}px: the page is ${r.page}px wide`);
-    assert.equal(r.inRow + r.inMore, 23, `${w}px: every view button is in the row or in More`);
+    assert.equal(r.inRow + r.inMore, 24, `${w}px: every view button is in the row or in More`);
     assert.ok(r.newOk && r.menuOk, `${w}px: New agents and the account menu are on screen`);
     if (w >= 1024) assert.ok(r.inRow >= 3, `${w}px: only ${r.inRow} buttons in the row`);
   }
@@ -1730,6 +1730,20 @@ test('Without you and ground rules: the level on a new agent and on one that run
   await js(`${rfd}.querySelector('[data-rf="close"]').click()`);
   await js(`document.querySelector('#readfirst-btn').click()`);
   await until(`${rfd}.open && ${rfd}.querySelectorAll('.rf-item').length >= 1 && /Finished work waiting for your review: /.test(${rfd}.textContent)`, 'the whole queue from the top bar');
+  // At a glance: this finished agent under To review, with why; a click opens it; it fits a phone.
+  await js(`${rfd}.querySelector('[data-rf="close"]').click()`);
+  await js(`document.querySelector('#glance-btn').click()`);
+  const gld = `document.querySelector('#glance-dialog')`;
+  await until(`${gld}.open && ${gld}.querySelector('.gl-review [data-gl-agent="${a.id}"], .gl-item.gl-review[data-gl-agent="${a.id}"]')`, 'this agent under To review');
+  assert.match(await js(`${gld}.querySelector('.gl-item[data-gl-agent="${a.id}"] .gl-why').textContent`), /^(Read closely|Look): /);
+  assert.match(await js(`${gld}.querySelector('.gl-line').textContent`), /^\d+ agents?: .*\d+ to review/);
+  await width(390);
+  assert.ok(await js(`${gld}.getBoundingClientRect().right <= 390 && ${gld}.scrollWidth <= ${gld}.clientWidth + 1`), 'the glance fits a phone');
+  await width(1600);
+  await js(`${gld}.querySelector('.gl-item[data-gl-agent="${a.id}"]').click()`);
+  await until(`!${gld}.open`, 'closed on opening the agent');
+  await js(`document.querySelector('#readfirst-btn').click()`);
+  await until(`${rfd}.open && ${rfd}.querySelectorAll('.rf-item').length >= 1`, 'the queue again');
   // The understanding check, from the queue: questions to answer first, the answer shown, and whether you knew it.
   await js(`${rfd}.querySelector('[data-rf-understand]').click()`);
   const ud = `document.querySelector('#understand-dialog')`;
