@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.73.1 (2026-11-26)
+
+- **Self-review: fewer answers taken on the agent's word, and a way to act on them.**
+  - **Asked** is checked against what done means, point by point. A point not met contradicts it. A point with no recorded run leaves it unbacked, even when the scorecard says ready. Before, the scorecard alone could back it while a point had nothing behind it.
+  - **Safe** is backed or contradicted by the quality bar's scan of the added lines for keys and tokens, and **Tests** by its "tests changed with the code" check, when the repository has a bar.
+  - **Written before its latest changes.** The work is fingerprinted when the agent writes its answers. If it changes the code afterwards, the list says so and Read first counts it.
+  - **Ask it to fix these.** One tap sends the agent just the answers that say No and the ones the facts contradict (`agentmgr self-review <agent> --send`). Only you can send it.
+  - **An honest No.** When the agent says No and the facts say the same, the app shows that it agrees instead of calling it contradicted.
+  - **In Glance.** A "holds" the facts contradict is named under **To review**.
+  - **Fixed: agents started before 1.73 counted as having skipped it.** They were never asked, so Read first no longer counts a missing self-review against them, and their Results say nothing about it.
+- **Fixed: a flaky test.** The Night watch check in the phone test read the setting before the page's request had saved it.
+
 ## 1.73.0 (2026-11-25)
 
 - **Self-review: a first-principles checklist, verified.** Before it calls its work done, each agent answers the same eight questions in its brief, in the same order, each with its evidence: **Asked**, **Scope**, **Works**, **Tests**, **Edges**, **Ripple**, **Safe**, **Undo**.

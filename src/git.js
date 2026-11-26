@@ -1,4 +1,5 @@
 import { execFile, spawn } from 'node:child_process';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -264,19 +265,25 @@ export async function changes(dir, baseSha) {
       }
     }
   }
+  // A fingerprint of the work as it is: the diff, and each new file's content (or size and time when big).
+  const hash = crypto.createHash('sha1').update(diff);
   for (const file of untracked.split('\n').filter(Boolean)) {
     // New files count as all lines added (skipping big or binary ones).
     let added = 0;
+    hash.update(`\0${file}\0`);
     try {
       const full = path.join(dir, file);
-      if (fs.statSync(full).size < 1_000_000) {
+      const st = fs.statSync(full);
+      if (st.size >= 1_000_000) hash.update(`${st.size}:${st.mtimeMs}`);
+      if (st.size < 1_000_000) {
         const buf = fs.readFileSync(full);
+        hash.update(buf);
         if (!buf.subarray(0, 8000).includes(0)) added = buf.toString('utf8').split('\n').filter((l, i, all) => l || i < all.length - 1).length;
       }
     } catch {}
     files[file] ??= { added, removed: 0, ranges: [[1, 1e9]], untracked: true };
   }
-  return { files };
+  return { files, sig: hash.digest('hex').slice(0, 16) };
 }
 
 const SNAPSHOT_ENV = {

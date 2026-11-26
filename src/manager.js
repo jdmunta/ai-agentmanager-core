@@ -148,7 +148,7 @@ import { awaitsReview, readFirst } from './readfirst.js';
 import { traceOf } from './trace.js';
 import { blameLine, readTranscripts } from './blame.js';
 import { fenceOf, pullBackMessage } from './fence.js';
-import { CHECKLIST_PROMPT, checklistOf } from '../public/checklist.js';
+import { CHECKLIST_PROMPT, checklistMessage, checklistOf, toFix } from '../public/checklist.js';
 import { GroundRules, groundRulesMessage } from './groundrules.js';
 import { autonomySettings, callLadder, eligible as autonomyEligible, levelOf, modelName, parseLevel } from './autonomy.js';
 import { STUCK_DEFAULTS, detectStuck } from './stuck.js';
@@ -418,7 +418,13 @@ export class AgentManager extends EventEmitter {
     const fence = NO_REPO.has(agent.kind) || agent.reviewing || agent.hunting ? null : this.fenceFor(agent);
     // Asked for only with the brief on; one written before it was turned off is still shown.
     const asked = this.config.brief && this.config.selfReview !== false;
-    const checklist = NO_REPO.has(agent.kind) || agent.reviewing || agent.hunting || (!asked && !agent.brief?.checklist?.length) ? null : checklistOf(agent, fence);
+    const awaiting = awaitsReview(agent);
+    const listed = !(NO_REPO.has(agent.kind) || agent.reviewing || agent.hunting || (!asked && !agent.brief?.checklist?.length));
+    // What done means, point by point (trace.js): for Read first and the self-review's Asked.
+    const trace = awaiting || (listed && agent.brief?.checklist?.length) ? this.traceFor(agent) : null;
+    const cs = this.changeSets.get(agent.id);
+    const mark = agent.checklistMark;
+    const checklist = listed ? checklistOf(agent, { fence, trace, stale: Boolean(mark?.sig && cs?.sig && mark.sig !== cs.sig) }) : null;
     const v = {
       ...agent,
       // Intent, spec and plan files that exist, with when each changed (task agents).
@@ -427,7 +433,7 @@ export class AgentManager extends EventEmitter {
       // Why its work is not sent outside this computer (private.js), or null.
       keptPrivate: keptPrivate(agent),
       // Finished and waiting for review: how much it needs reading, why, and where to start (readfirst.js).
-      readFirst: awaitsReview(agent) ? readFirst({ ...agent, checklist }, this.traceFor(agent)) : null,
+      readFirst: awaiting ? readFirst({ ...agent, checklist }, trace) : null,
       // Changing code outside what it was asked and planned (fence.js): { drift, allowed, judged }, or null.
       fence,
       // Its self-review, each answer set against what the app measured (checklist.js), or null.
@@ -1435,7 +1441,11 @@ export class AgentManager extends EventEmitter {
       // Value and paths: more than one way is a decision, listed with what each is worth now and later (brief.js).
       if (this.config.valueLens !== false) prompts.push(OPTIONS_PROMPT);
       // The self-review: the same first-principles questions before it calls the work done, each with its evidence (checklist.js).
-      if (this.config.selfReview !== false) prompts.push(CHECKLIST_PROMPT);
+      if (this.config.selfReview !== false) {
+        prompts.push(CHECKLIST_PROMPT);
+        // Asked for one: only then is one missing counted (agents started before were never asked).
+        if (!agent.selfReviewAsked) this.store.patch(agent.id, { selfReviewAsked: true });
+      }
       if (this.config.inbox !== false) prompts.push(questionsPrompt(path.join(dir, path.basename(questionsPath(agent.id)))));
     }
     // SPEC.md before changing code, and PLAN.md kept as it goes (unless the plan review asks for the plan).
@@ -2699,6 +2709,25 @@ export class AgentManager extends EventEmitter {
     return this.view(cur);
   }
 
+  /** The work as it is when the agent writes its self-review (git.changes' fingerprint). */
+  async markChecklist(id) {
+    const agent = this.store.get(id);
+    if (!agent) return;
+    await this.updateChanges(agent, { force: true }).catch(() => {});
+    const sig = this.changeSets.get(id)?.sig ?? null;
+    if (this.store.get(id)) this.patch(id, { checklistMark: { at: new Date().toISOString(), sig } });
+  }
+
+  /** The person sends the self-review's no's and contradicted answers back to the agent. */
+  sendChecklist(ref) {
+    const agent = this.mustGet(ref);
+    const c = this.view(agent).checklist;
+    if (!toFix(c).length) throw Object.assign(new Error('Nothing in its self-review to send: no answer says no or is contradicted'), { status: 400 });
+    this.tell(agent.id, checklistMessage(c), { source: 'self-review' });
+    this.patch(agent.id, { checklistSent: { at: new Date().toISOString(), keys: toFix(c).map((i) => i.key) } });
+    return this.view(this.store.get(agent.id));
+  }
+
   /** Pick up changes to the agent's brief file. */
   reloadBrief(id) {
     const agent = this.store.get(id);
@@ -2708,6 +2737,8 @@ export class AgentManager extends EventEmitter {
     const brief = loadBrief(id, before);
     if (brief) {
       this.patch(id, { brief });
+      // Its self-review changed: what the work was then, so a later change marks the answers as earlier.
+      if (brief.checklist?.length && JSON.stringify(brief.checklist) !== JSON.stringify(before?.checklist ?? [])) this.markChecklist(id);
       const finished = brief.status === 'done' && before?.status !== 'done';
       // Asked to improve: its next update of the brief as done is scored again (also with auto off).
       const improved = brief.status === 'done' && agent.improving && brief.updatedAt !== agent.improving.briefAt;
@@ -3704,12 +3735,12 @@ export class AgentManager extends EventEmitter {
   // ------------------------------------------------------- conflict radar
 
   /** Recompute what an agent's branch changed since it branched (needs a base commit). */
-  async updateChanges(agent) {
+  async updateChanges(agent, { force = false } = {}) {
     const baseSha = agent.baseRef?.split(' @ ')[1];
     if (!agent.workdir || !baseSha || NO_REPO.has(agent.kind) || !fs.existsSync(agent.workdir)) return;
     // A full diff against the base is heavier than git status; once a minute is enough for overlaps.
     const prev0 = this.changeSets.get(agent.id);
-    if (prev0 && Date.now() - Date.parse(prev0.at) < (this.config.conflictRefreshSec ?? 60) * 1000) return;
+    if (!force && prev0 && Date.now() - Date.parse(prev0.at) < (this.config.conflictRefreshSec ?? 60) * 1000) return;
     const res = await git.changes(agent.workdir, baseSha).catch(() => null);
     if (!res || !this.store.get(agent.id)) return;
     const prev = this.changeSets.get(agent.id);

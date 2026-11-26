@@ -1340,6 +1340,11 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
     const v = manager.view(manager.mustGet(req.params.id));
     return { name: v.name, checklist: v.checklist, ...(req.query.format === 'md' ? { markdown: checklistMarkdown(v.checklist, v.name) } : {}) };
   }));
+  // Send the answers that say no, and the ones the facts contradict, back to the agent. The person's call.
+  api.post('/agents/:id/checklist/send', wrap((req) => {
+    if (req.headers['x-agentmgr-agent']) throw fail(403, 'Sending a self-review back is for the person, not an agent');
+    return manager.sendChecklist(req.params.id);
+  }));
   api.get('/read-first', wrap((req) => {
     const items = readQueue(store.list(), (a) => manager.view(a));
     return req.query.format === 'md' ? { markdown: queueMarkdown(items) } : { items };

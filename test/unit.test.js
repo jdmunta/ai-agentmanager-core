@@ -2444,7 +2444,7 @@ test('value and paths: worth now against later, the kind of idea and the ways ra
 
 test('self-review: the same first-principles questions, read from the brief, each answer set against what the app measured', async () => {
   const { parseBrief } = await import('../src/brief.js');
-  const { CHECKLIST_PROMPT, PRINCIPLES, checklistOf, checklistLine, checklistRows, checklistMarkdown } = await import('../public/checklist.js');
+  const { CHECKLIST_PROMPT, PRINCIPLES, checklistOf, checklistLine, checklistRows, checklistMarkdown, checklistMessage, toFix } = await import('../public/checklist.js');
   const { readFirst } = await import('../src/readfirst.js');
   const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;');
   assert.deepEqual(PRINCIPLES.map((p) => p.key), ['asked', 'scope', 'works', 'tests', 'edges', 'ripple', 'safe', 'undo']);
@@ -2456,15 +2456,46 @@ test('self-review: the same first-principles questions, read from the brief, eac
 
   // Set against the facts: Not done contradicts Asked; the fence backs Scope; the proof backs Works.
   const a = { brief, proofDoc: { commands: 2, updatedAt: 't' }, proof: { proofAt: 't', results: [{ status: 'same' }] }, prs: {} };
-  const c = checklistOf(a, { drift: [], judged: true });
+  const c = checklistOf(a, { fence: { drift: [], judged: true } });
   assert.deepEqual(c.items.map((i) => [i.key, i.state, i.app?.verdict ?? null]), [['asked', 'yes', 'contradicts'], ['scope', 'yes', 'backs'], ['works', 'yes', 'backs'], ['tests', 'no', null], ['edges', 'unchecked', null], ['ripple', 'missing', null], ['safe', 'missing', null], ['undo', 'na', null]]);
   assert.equal(c.items[0].app.why, 'It lists as not done: the CSV export');
   assert.equal(checklistLine(c), '3 hold, 1 no, 1 not applicable, 3 not checked · the app backs 2, contradicts 1');
   // The facts that contradict: drift, a recorded run that differs, breaks the tests missed, failing CI.
-  const facts = checklistOf({ brief: { status: 'done', checklist: [] }, proofDoc: { commands: 1, updatedAt: 't' }, proof: { proofAt: 't', results: [{ status: 'differs' }] }, breaks: { baseline: { ok: true }, breaks: [{ status: 'missed', file: 'a.js', line: 3 }, { status: 'caught' }] }, prs: { u: { state: 'OPEN', checks: { state: 'failed' } } } }, { drift: [{ area: 'src/pay' }], judged: true });
+  const facts = checklistOf({ selfReviewAsked: true, brief: { status: 'done', checklist: [] }, proofDoc: { commands: 1, updatedAt: 't' }, proof: { proofAt: 't', results: [{ status: 'differs' }] }, breaks: { baseline: { ok: true }, breaks: [{ status: 'missed', file: 'a.js', line: 3 }, { status: 'caught' }] }, prs: { u: { state: 'OPEN', checks: { state: 'failed' } } } }, { fence: { drift: [{ area: 'src/pay' }], judged: true } });
   assert.deepEqual(facts.items.map((i) => i.app?.why ?? null), [null, 'It changed code outside its task: src/pay', '1 recorded command gave a different result when run again', '1 of 2 deliberate breaks went unnoticed by its tests: a.js:3', null, 'CI is failing on its pull request', null, null]);
   assert.equal(facts.written, false);
   assert.equal(checklistOf({ brief: { status: 'working', checklist: [] } }), null, 'nothing to say while it works and wrote none');
+  assert.equal(checklistOf({ brief: { status: 'done', checklist: [] } }), null, 'nothing said of an agent never asked for one (started before)');
+  // An honest no that the facts confirm: the app agrees, it is not a contradiction.
+  const honest = checklistOf({ ...a, brief: { ...brief, checklist: [{ key: 'asked', label: 'Asked', state: 'no', evidence: 'the CSV export is left' }] } });
+  assert.deepEqual([honest.items[0].app.verdict, honest.counts.contradicts], ['agrees', 0]);
+  assert.match(checklistRows({ checklist: honest }, esc), /<span class="tag ">The app agrees<\/span> <span class="hint">It lists as not done: the CSV export/);
+  assert.match(checklistMarkdown(honest), /- \[!\] \*\*Asked\*\*: the CSV export is left\n  - The app agrees: It lists as not done: the CSV export/);
+
+  // Asked, point by point: a point not met contradicts it; one with nothing recorded leaves it unbacked, even with the scorecard ready.
+  const yes = (key) => ({ brief: { status: 'done', checklist: [{ key, label: key, state: 'yes', evidence: 'e' }] }, docs: { scorecard: { data: { recommendation: 'ready' } } } });
+  const asked = (trace) => checklistOf(yes('asked'), { trace }).items[0].app;
+  assert.deepEqual(asked({ rows: [{ id: 'A1', text: 'Sums cents', status: 'not_met', gap: null }] }), { verdict: 'contradicts', why: '1 point of what done means is not met: A1 Sums cents' });
+  assert.equal(asked({ rows: [{ id: 'C1', text: 'x', status: 'met', gap: 'nothing recorded for it' }] }), null);
+  assert.deepEqual(asked({ rows: [{ id: 'C1', text: 'x', status: 'met', gap: null }] }), { verdict: 'backs', why: 'All 1 point of what done means shown by a recorded run' });
+  assert.equal(asked(null).why, 'The scorecard says ready');
+  // Safe and Tests from the quality bar's own checks.
+  const barred = (results) => checklistOf({ ...yes('safe'), standards: { bar: { results } } }).items.find((i) => i.key === 'safe').app;
+  assert.equal(barred([{ builtIn: 'secrets', ok: false, tail: 'a.js:3 looks like an AWS key' }]).why, 'The quality bar found what looks like a secret: a.js:3 looks like an AWS key');
+  assert.equal(barred([{ builtIn: 'secrets', ok: true }]).verdict, 'backs');
+  assert.equal(barred([]), null, 'its word only without the bar');
+  assert.equal(checklistOf({ ...yes('tests'), standards: { bar: { results: [{ builtIn: 'tests', ok: false, tail: '2 code files changed and no test file' }] } } }).items[3].app.why, 'The quality bar: 2 code files changed and no test file');
+  // Written before its latest changes, and what is sent back: the no's and the contradicted.
+  const st = checklistOf(a, { fence: { drift: [], judged: true }, stale: true });
+  assert.match(checklistLine(st), / · written before its latest changes$/);
+  assert.match(checklistRows({ checklist: st }, esc), /class="hint cl-stale">It changed the code after writing these answers/);
+  assert.deepEqual(toFix(c).map((i) => i.key), ['asked', 'tests']);
+  assert.equal(checklistMessage(c), 'Your self-review has answers to look at again:\n- Asked: you say it holds, but it lists as not done: the CSV export.\n- Tests: you say it does not hold (no test for the <empty> cart).\nFix what you can and check it again, then update ## Self-review with the evidence. If one cannot be fixed, say why there.');
+  assert.match(checklistRows({ checklist: c }, esc), /data-act="checklist-send"[^>]*>Ask it to fix these 2<\/button>/);
+  assert.match(checklistRows({ checklist: { ...c, sentAt: '2026-11-25T10:00:00Z' } }, esc), />Ask it again<\/button> <span class="hint">sent /);
+  const { glanceOf } = await import('../public/glance.js');
+  assert.ok(glanceOf({ checklist: c, fence: { drift: [] }, readFirst: { level: 'look', reasons: [] } }).why.some((w) => w === 'Its self-review is contradicted: Asked (It lists as not done: the CSV export)'), 'in Glance, to review');
+  assert.ok(!glanceOf({ checklist: c, fence: { drift: [] } }).why.some((w) => /self-review/.test(w)), 'not while it is still at work');
 
   // On the results card, escaped, open with a no; and in Read first.
   const html = checklistRows({ checklist: c }, esc);
@@ -2476,7 +2507,7 @@ test('self-review: the same first-principles questions, read from the brief, eac
   const rf = readFirst({ kind: 'task', brief, checklist: c });
   assert.ok(rf.reasons.some((r) => r.text === 'Its self-review says no to 1 principle: Tests (no test for the <empty> cart)'));
   assert.ok(rf.reasons.some((r) => r.text.startsWith("It says Asked holds, and the app's facts say otherwise: It lists as not done")));
-  const good = checklistOf({ brief: { status: 'done', results: { outcome: 'done' }, checklist: PRINCIPLES.map((p) => ({ key: p.key, label: p.label, state: 'yes', evidence: 'ok' })) }, proofDoc: { commands: 1 }, prs: {} }, { drift: [], judged: true });
+  const good = checklistOf({ selfReviewAsked: true, brief: { status: 'done', results: { outcome: 'done' }, checklist: PRINCIPLES.map((p) => ({ key: p.key, label: p.label, state: 'yes', evidence: 'ok' })) }, proofDoc: { commands: 1 }, prs: {} }, { fence: { drift: [], judged: true } });
   assert.ok(readFirst({ kind: 'task', brief: {}, checklist: good }).calm.includes("Its self-review holds on every principle, and the app's facts back 2 of them"));
 });
 
