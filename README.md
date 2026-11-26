@@ -567,6 +567,36 @@ Before it changes anything, each agent writes **Risks** in its brief: the 3 to 5
 
 **Limit.** The marks are the agent's word. "Avoided" with a command is as good as that command; [Proof](#proof-what-it-ran-and-what-it-did-not-do) lets you run it again.
 
+## Self-review: the first-principles checklist
+
+Before it calls its work done or partial, each agent adds **Self-review** to its brief. It answers the same eight questions every time, in the same order, each with its evidence (the command and what it showed, the test, the file and line):
+
+| Principle | The question |
+| --- | --- |
+| **Asked** | It does all that was asked, and what done means is met |
+| **Scope** | Nothing beyond what was asked: the smallest change that does it |
+| **Works** | Seen working: run, not only read |
+| **Tests** | A test fails if this breaks |
+| **Edges** | Empty, wrong, large and failing inputs are handled |
+| **Ripple** | What uses the changed code still works |
+| **Safe** | No secret, unchecked input or wider access added |
+| **Undo** | It can be undone without losing data |
+
+Each answer is **Holds**, **No**, **Not applicable** or **Not checked**. A "holds" with no evidence counts as not checked.
+
+- **Verified, not just said.** The app sets each answer against facts it measured itself and marks it **Backed** or **Contradicted**, with the reason:
+  - **Asked:** what it lists as not done, a partial outcome, the scorecard.
+  - **Scope:** the [scope fence](#scope-fence).
+  - **Works:** its own failed checks, its recorded proof and whether it gave the same result when run again, CI.
+  - **Tests:** [Test the tests](#test-the-tests-would-they-notice-a-mistake), and code changed with no test file.
+  - **Ripple:** CI on its pull request, and Night watch.
+  - Edges, Safe and Undo are its word only.
+- **Where you see it.** In the agent's Results, as **Self-review** ("6 hold, 1 no · the app backs 3, contradicts 1"). It is open when an answer is No, not checked, or contradicted, and those are the ones to read first. Agents are also asked to put the list in their pull request's description. `agentmgr self-review <agent>` prints it as Markdown and exits with 1 when something is No, contradicted, or missing.
+- **What it feeds.** Read first counts a No, and more so a "holds" the facts contradict.
+- **Off:** `"selfReview": false` in config.json.
+
+**Limit.** A "Backed" answer means the facts the app has agree with it, not that the work is right. Edges, Safe and Undo are only the agent's word.
+
 ## Test the tests: would they notice a mistake?
 
 Proof shows the tests ran and passed. It does not show they could have failed. Tests written by the same agent as the code can pass while checking very little.

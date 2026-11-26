@@ -61,6 +61,7 @@ import { recordMarkdown } from './record.js';
 import { Weekly } from './weekly.js';
 import { queueMarkdown, readQueue } from './readfirst.js';
 import { blameMarkdown } from './blame.js';
+import { checklistMarkdown } from '../public/checklist.js';
 import { Echo } from './echo.js';
 import { calibration, calibrationLines, calibrationMarkdown, cleanGuess } from './calibration.js';
 import { NightWatch, nightMarkdown, nightSettings } from './nightwatch.js';
@@ -1333,6 +1334,11 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
   api.get('/agents/:id/why', wrap((req) => {
     const b = manager.whyLine(req.params.id, { file: req.query.file, line: req.query.line, text: req.query.text });
     return req.query.format === 'md' ? { ...b, markdown: blameMarkdown(b, { file: b.file, lineNo: b.line, line: b.text }) } : b;
+  }));
+  // Its self-review: the first-principles checklist it wrote, each answer set against what the app measured (public/checklist.js).
+  api.get('/agents/:id/checklist', wrap((req) => {
+    const v = manager.view(manager.mustGet(req.params.id));
+    return { name: v.name, checklist: v.checklist, ...(req.query.format === 'md' ? { markdown: checklistMarkdown(v.checklist, v.name) } : {}) };
   }));
   api.get('/read-first', wrap((req) => {
     const items = readQueue(store.list(), (a) => manager.view(a));

@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.73.0 (2026-11-25)
+
+- **Self-review: a first-principles checklist, verified.** Before it calls its work done, each agent answers the same eight questions in its brief, in the same order, each with its evidence: **Asked**, **Scope**, **Works**, **Tests**, **Edges**, **Ripple**, **Safe**, **Undo**.
+  - **Backed or Contradicted.** The app sets each answer against what it measured itself: what the agent lists as not done, the scope fence, its recorded proof and whether it held when run again, its tests tested, CI and Night watch. Each one is marked with the reason.
+  - **Quick to review.** It shows in the agent's Results as **Self-review** ("6 hold, 1 no · the app backs 3, contradicts 1"), open when something needs a look.
+  - **Read first** counts a No, and more so a "holds" the facts contradict.
+  - **Also:** agents put the list in their pull request's description, and `agentmgr self-review <agent>` prints it.
+  - **Off:** `"selfReview": false`.
 ## 1.72.0 (2026-11-25)
 
 - **Try the other path.** Agents write down the paths they weighed, the one they take first. Each other path now has **Try this path** (or `agentmgr try-path <agent> <n>`). It starts a second agent from the same commit the first one started from, told to take that path and not the first, and races the two. You get the race scoreboard (outcome, checks, size, cost, time), a test command run in both, and keep the one you pick. More paths join the same race. Only you can start one, not an agent.

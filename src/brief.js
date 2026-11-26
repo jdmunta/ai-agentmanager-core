@@ -1,6 +1,7 @@
 // The agent's living brief: Problem, Solution, Diagram and Checks, written by
 // Claude to a Markdown file outside the repository and shown in the UI.
 import { parsePaths } from '../public/valuelens.js';
+import { parseChecklist } from '../public/checklist.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { paths } from './config.js';
@@ -51,6 +52,7 @@ const SECTION_ALIASES = {
   results: ['results', 'result', 'outcome', 'status and results', 'results and status'],
   risks: ['risks', 'what could go wrong', 'pre-mortem', 'premortem', 'risks named before starting'],
   options: ['options', 'paths', 'alternatives', 'options considered', 'options weighed'],
+  checklist: ['self-review', 'self review', 'self-review checklist', 'checklist', 'first principles', 'first-principles checklist'],
 };
 
 // "- **PRD**: [Title](https://...) — highlight", tolerating ":" / "-" / "–" separators and bare URLs.
@@ -123,7 +125,7 @@ export function parseConfidence(body) {
 }
 
 export function parseBrief(markdown) {
-  const out = { status: null, problem: '', solution: '', diagram: null, diagramNotes: '', checks: [], references: [], results: null, risks: [], options: null };
+  const out = { status: null, problem: '', solution: '', diagram: null, diagramNotes: '', checks: [], references: [], results: null, risks: [], options: null, checklist: [] };
   const st = markdown.split(/^##\s/m)[0].match(/^\s*\**status\**\s*:\s*\**\s*(planning|working|blocked|done)\b/im);
   if (st) out.status = st[1].toLowerCase();
   const parts = markdown.split(/^##\s+(.+?)\s*#*\s*$/m);
@@ -164,6 +166,9 @@ export function parseBrief(markdown) {
       // The ways it weighed (OPTIONS_PROMPT): preferred first, each with its value now and later, cost and risk.
       const o = parsePaths(body);
       out.options = o.paths.length || o.new ? o : null;
+    } else if (key === 'checklist') {
+      // The self-review (checklist.js): the same first-principles questions, each with its evidence.
+      out.checklist = parseChecklist(body);
     } else if (key === 'risks') {
       // The pre-mortem (RISKS_PROMPT): "- [ ] risk" as named before starting; "[x]" avoided, "[!]" happened.
       for (const line of body.split('\n')) {

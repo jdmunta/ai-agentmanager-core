@@ -148,6 +148,7 @@ import { awaitsReview, readFirst } from './readfirst.js';
 import { traceOf } from './trace.js';
 import { blameLine, readTranscripts } from './blame.js';
 import { fenceOf, pullBackMessage } from './fence.js';
+import { CHECKLIST_PROMPT, checklistOf } from '../public/checklist.js';
 import { GroundRules, groundRulesMessage } from './groundrules.js';
 import { autonomySettings, callLadder, eligible as autonomyEligible, levelOf, modelName, parseLevel } from './autonomy.js';
 import { STUCK_DEFAULTS, detectStuck } from './stuck.js';
@@ -414,6 +415,10 @@ export class AgentManager extends EventEmitter {
     usage.io = usage.input + usage.output;
     const costs = (agent.sessions ?? []).map((s) => s.cost?.usd).filter((c) => c != null);
     const prs = Object.values(agent.prs ?? {});
+    const fence = NO_REPO.has(agent.kind) || agent.reviewing || agent.hunting ? null : this.fenceFor(agent);
+    // Asked for only with the brief on; one written before it was turned off is still shown.
+    const asked = this.config.brief && this.config.selfReview !== false;
+    const checklist = NO_REPO.has(agent.kind) || agent.reviewing || agent.hunting || (!asked && !agent.brief?.checklist?.length) ? null : checklistOf(agent, fence);
     const v = {
       ...agent,
       // Intent, spec and plan files that exist, with when each changed (task agents).
@@ -422,9 +427,11 @@ export class AgentManager extends EventEmitter {
       // Why its work is not sent outside this computer (private.js), or null.
       keptPrivate: keptPrivate(agent),
       // Finished and waiting for review: how much it needs reading, why, and where to start (readfirst.js).
-      readFirst: awaitsReview(agent) ? readFirst(agent, this.traceFor(agent)) : null,
-      // Changing code outside what it was asked and planned (fence.js): { drift, allowed }, or null.
-      fence: NO_REPO.has(agent.kind) || agent.reviewing || agent.hunting ? null : this.fenceFor(agent),
+      readFirst: awaitsReview(agent) ? readFirst({ ...agent, checklist }, this.traceFor(agent)) : null,
+      // Changing code outside what it was asked and planned (fence.js): { drift, allowed, judged }, or null.
+      fence,
+      // Its self-review, each answer set against what the app measured (checklist.js), or null.
+      checklist,
       priority: agent.priority ?? 2,
       activeAt: this.activeAt(agent, rt),
       projectInfo: this.projectInfo(agent),
@@ -1427,6 +1434,8 @@ export class AgentManager extends EventEmitter {
       if (this.config.premortem !== false) prompts.push(RISKS_PROMPT);
       // Value and paths: more than one way is a decision, listed with what each is worth now and later (brief.js).
       if (this.config.valueLens !== false) prompts.push(OPTIONS_PROMPT);
+      // The self-review: the same first-principles questions before it calls the work done, each with its evidence (checklist.js).
+      if (this.config.selfReview !== false) prompts.push(CHECKLIST_PROMPT);
       if (this.config.inbox !== false) prompts.push(questionsPrompt(path.join(dir, path.basename(questionsPath(agent.id)))));
     }
     // SPEC.md before changing code, and PLAN.md kept as it goes (unless the plan review asks for the plan).
@@ -2612,7 +2621,7 @@ export class AgentManager extends EventEmitter {
     const b = agent.brief ?? {};
     const text = [agent.intent, read(intentPath), read(specPath), read(planPath), b.problem, b.solution, ...(agent.acceptance?.points ?? []).map((p) => p.text ?? p)].join('\n');
     const f = fenceOf({ files: cs.files, text, allowed });
-    const value = f.drift.length ? { drift: f.drift.map(({ area, files, lines }) => ({ area, files: files.slice(0, 8), lines })), allowed } : allowed.length ? { drift: [], allowed } : null;
+    const value = f.drift.length || allowed.length || f.judged ? { drift: f.drift.map(({ area, files, lines }) => ({ area, files: files.slice(0, 8), lines })), allowed, judged: f.judged } : null;
     this.fences.set(agent.id, { key, value });
     return value;
   }
