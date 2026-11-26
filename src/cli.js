@@ -1146,8 +1146,9 @@ export async function main(argv) {
 
   program
     .command('skills [action] [arg] [names...]')
-    .description("Claude Code's Agent Skills here: ls (default), show <id>, look <repo>, add <repo> <names...>, check <id>, update <id>, rm <id>")
-    .option('--to <place>', 'where to add: personal (default) or project:<shortcut>', 'personal')
+    .description("Claude Code's Agent Skills here: ls (default), show <id>, look <repo>, add <repo> <names...>, check <id>, update <id>, rm <id>, drift, fix <id>, check-all, accept <agent>, dismiss <agent>, history [n], policy")
+    .option('--to <place>', 'where to add: personal (default) or project:<shortcut>; for accept, its project unless given', 'personal')
+    .option('--replace', 'accept: replace a skill with the same name')
     .option('--json', 'print JSON')
     .action(async (action = 'ls', arg, names, opts) => {
       await daemon();
@@ -1161,6 +1162,38 @@ export async function main(argv) {
         }
       };
       if (action === 'ls') return print(await api('GET', '/skills'));
+      // Out of date: what each names that is gone from its project, or a newer version upstream.
+      if (action === 'drift' || action === 'check-all') {
+        const d = action === 'drift' ? await api('GET', '/skills/drift') : await api('POST', '/skills/check-all', {});
+        if (opts.json) return out(d);
+        if (!d.length) return console.log(green('No skill is out of date'));
+        for (const x of d) {
+          console.log(`${bold(x.name)} ${dim(x.id)}`);
+          for (const r of x.drift) console.log(`  ${yellow(r.ref)} ${dim(r.why)}`);
+          if (x.pending) console.log(cyan(`  pull request open: ${x.pending.pr ?? x.pending.branch}`));
+          else if (x.drift.some((r) => r.to)) console.log(dim(`  agentmgr skills fix ${x.id}  fixes the renamed paths`));
+          if (x.newer) console.log(`  ${yellow(x.newer.gone ? 'no longer in its repository' : `a newer version is there (${x.newer.latest ?? '?'})`)}`);
+        }
+        process.exitCode = 1;
+        return;
+      }
+      // Who changed which skill, when, and how (in place or by pull request).
+      if (action === 'history') {
+        const h = await api('GET', `/skills/history?limit=${Number(arg) || 50}`);
+        if (opts.json) return out(h);
+        if (!h.length) return console.log(dim('No changes to skills yet'));
+        for (const e of h) console.log(`${dim(e.at.replace('T', ' ').slice(0, 16))}  ${e.action.padEnd(18)} ${e.id ?? e.ids?.join(', ') ?? e.folder ?? ''}${e.pr ? `  ${cyan(e.pr)}` : ''}${e.from?.agentName ? dim(`  proposed by ${e.from.agentName}`) : ''}${dim(`  by ${e.by?.person || 'you'} (${e.by?.from ?? 'this computer'})`)}`);
+        return;
+      }
+      if (action === 'policy') {
+        const { policy } = await api('GET', '/skills');
+        if (opts.json) return out(policy);
+        console.log(`Places:          ${policy.places.join(', ') || 'none'}`);
+        console.log(`Project changes: ${policy.projectChanges === 'pr' ? 'pull request' : 'written in place'}`);
+        console.log(`Agent proposals: ${policy.proposals === true ? 'on' : policy.proposals === false ? 'off' : policy.proposals.join(', ')}`);
+        console.log(`Install from:    ${policy.sources === true ? 'any repository' : policy.sources === false ? 'nowhere' : policy.sources.join(', ')}`);
+        return;
+      }
       if (!arg) throw new Error(`agentmgr skills ${action} needs ${['look', 'add'].includes(action) ? 'a repository' : "a skill's id (see agentmgr skills)"}`);
       if (action === 'show') {
         const s = await api('GET', `/skills/one?id=${encodeURIComponent(arg)}`);
@@ -1177,7 +1210,7 @@ export async function main(argv) {
         if (!names.length) throw new Error('Name the skills to add (agentmgr skills look <repo> lists them)');
         const r = await api('POST', '/skills', { repo: arg, names, place: opts.to });
         if (opts.json) return out(r);
-        if (r.added.length) console.log(`${green('+')} ${r.added.join(', ')} ${dim(`in ${r.place}`)}`);
+        if (r.added.length) console.log(`${green('+')} ${r.added.join(', ')} ${dim(`in ${r.place}`)}${r.pr ? `  pull request: ${r.pr}` : ''}`);
         if (r.skipped.length) console.log(yellow(`Already there, left as they are: ${r.skipped.join(', ')} (agentmgr skills update <id> brings one up to date)`));
         return;
       }
@@ -1185,9 +1218,29 @@ export async function main(argv) {
         const c = await api('POST', '/skills/check', { id: arg });
         return opts.json ? out(c) : console.log(c.gone ? yellow('No longer in its repository') : c.changed ? yellow(`A newer version is there (${c.latest}); you have ${c.current}${c.edited ? ', edited here' : ''}`) : green('Up to date'));
       }
-      if (action === 'update') return print(await api('POST', '/skills/update', { id: arg }));
-      if (action === 'rm') return print(await api('DELETE', `/skills?id=${encodeURIComponent(arg)}`));
-      throw new Error(`Unknown action ${action} (ls, show, look, add, check, update, rm)`);
+      const withPr = (r) => (r.pr && !opts.json && console.log(`Pull request: ${r.pr}`), r);
+      if (action === 'update') return print(withPr(await api('POST', '/skills/update', { id: arg })));
+      // The paths it names that git saw renamed, put right.
+      if (action === 'fix') {
+        const r = await api('POST', '/skills/fix', { id: arg });
+        if (opts.json) return out(r);
+        for (const f of r.fixed) console.log(`${green('✓')} ${f.ref} → ${f.to}`);
+        if (r.pr) console.log(`Pull request: ${r.pr}`);
+        for (const d of r.drift) console.log(`  ${yellow(d.ref)} ${dim(`${d.why} (needs a manual fix)`)}`);
+        return;
+      }
+      if (action === 'rm') return print(withPr(await api('DELETE', `/skills?id=${encodeURIComponent(arg)}`)));
+      // An agent's "## Skill proposal": add it (to its project unless --to says) or put it off.
+      if (action === 'accept') {
+        const r = await api('POST', `/agents/${encodeURIComponent(arg)}/skill-proposal`, { place: process.argv.includes('--to') ? opts.to : undefined, replace: Boolean(opts.replace) });
+        if (opts.json) return out(r);
+        return console.log(r.via === 'pr' ? `${green('✓')} Pull request opened for ${r.id}: ${r.pr ?? '(no address returned)'}` : `${green('+')} ${r.id} ${dim(r.dir)}`);
+      }
+      if (action === 'dismiss') {
+        await api('POST', `/agents/${encodeURIComponent(arg)}/skill-proposal/dismiss`, {});
+        return console.log('Dismissed');
+      }
+      throw new Error(`Unknown action ${action} (ls, show, look, add, check, update, rm, drift, fix, check-all, accept, dismiss, history, policy)`);
     });
 
   program
@@ -2261,6 +2314,21 @@ export async function main(argv) {
         if (it.kind === 'repeat') {
           console.log(`${cyan('make it a playbook?')}  asked ${it.count} times: ${it.intent}`);
           console.log(dim(`    agentmgr playbook add "${it.name}" "${it.intent.replace(/"/g, '\\"')}" --projects ${it.projects.join(',') || '<project>'}`));
+          continue;
+        }
+        if (it.kind === 'skill') {
+          console.log(`${cyan('skill proposal')}  ${bold(it.agentName)} ${dim(it.agentId)}  ${it.proposal.folder}: ${it.proposal.description ?? ''}`);
+          const c = it.proposal.check ?? {};
+          if (c.secrets?.length) console.log(red(`    contains what looks like ${c.secrets.join(', ')}: it can't be added until that is removed`));
+          if (c.drift?.length) console.log(yellow(`    references not found in the project: ${c.drift.map((d) => d.ref).join(', ')}`));
+          if (c.existing) console.log(dim(`    replaces ${c.existing.id} (accept with --replace)`));
+          if (c.via === 'pr') console.log(dim('    accepting opens a pull request (skill policy)'));
+          console.log(dim(`    agentmgr skills accept ${it.agentId}  ·  agentmgr skills dismiss ${it.agentId}`));
+          continue;
+        }
+        if (it.kind === 'skilldrift') {
+          console.log(`${yellow('skill out of date')}  ${bold(it.name)} ${dim(it.id)}  ${it.drift.map((d) => d.ref).join(', ') || (it.newer?.gone ? 'no longer in its repository' : 'a newer version is there')}`);
+          console.log(dim('    agentmgr skills drift'));
           continue;
         }
         if (it.kind === 'autopilot') {

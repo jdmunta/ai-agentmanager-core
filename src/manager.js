@@ -148,7 +148,8 @@ import { awaitsReview, readFirst } from './readfirst.js';
 import { traceOf } from './trace.js';
 import { blameLine, readTranscripts } from './blame.js';
 import { fenceOf, pullBackMessage } from './fence.js';
-import { CHECKLIST_PROMPT, checklistMessage, checklistOf, toFix } from '../public/checklist.js';
+import { CHECKLIST_PROMPT, PRINCIPLE_KEYS, checklistMessage, checklistOf, toFix } from '../public/checklist.js';
+import { PROPOSAL_PROMPT, skillPolicy, staleSkillsPrompt } from './skills.js';
 import { GroundRules, groundRulesMessage } from './groundrules.js';
 import { autonomySettings, callLadder, eligible as autonomyEligible, levelOf, modelName, parseLevel } from './autonomy.js';
 import { STUCK_DEFAULTS, detectStuck } from './stuck.js';
@@ -204,6 +205,38 @@ const ANSI = /\x1b(\[[0-9;?<>=]*[ -\/]*[@-~]|\][^\x07\x1b]*(\x07|\x1b\\)|[()][0-
 // When a link is found from several sources, the higher-ranked source is kept.
 const SOURCE_RANK = { manual: 5, intent: 4, session: 3, branch: 2, mentioned: 1 };
 const BUSY_IDLE_MS = 3000;
+// Quiet this long after a turn before an agent is reminded of a brief it did not write.
+const BRIEF_REMIND_MS = 60_000;
+
+/** Whether the agent's last words in its session were a question (then it waits for the person, not for a reminder). */
+function endsOnQuestion(engine, agent) {
+  if (!agent.workdir || !agent.sessionId || !engine.sessionFile) return false;
+  let text = '';
+  try {
+    const file = engine.sessionFile(agent.workdir, agent.sessionId);
+    const size = fs.statSync(file).size;
+    const fd = fs.openSync(file, 'r');
+    const buf = Buffer.alloc(Math.min(size, 256 * 1024));
+    fs.readSync(fd, buf, 0, buf.length, size - buf.length);
+    fs.closeSync(fd);
+    text = buf.toString('utf8');
+  } catch {
+    return false;
+  }
+  for (const line of text.split('\n').reverse()) {
+    let rec;
+    try {
+      rec = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    const content = rec.type === 'assistant' ? rec.message?.content : null;
+    if (!Array.isArray(content)) continue;
+    const words = content.filter((c) => c.type === 'text').map((c) => c.text).join('\n').trim();
+    if (words) return /\?\W*$/.test(words.split('\n').filter((l) => l.trim()).pop() ?? '');
+  }
+  return false;
+}
 // A planning session moves into its ready repo only after this long without you typing in it.
 const HANDOFF_TYPING_MS = 15000;
 // The attention label engines give a tool permission menu (what rules can answer).
@@ -424,7 +457,9 @@ export class AgentManager extends EventEmitter {
     const trace = awaiting || (listed && agent.brief?.checklist?.length) ? this.traceFor(agent) : null;
     const cs = this.changeSets.get(agent.id);
     const mark = agent.checklistMark;
-    const checklist = listed ? checklistOf(agent, { fence, trace, stale: Boolean(mark?.sig && cs?.sig && mark.sig !== cs.sig) }) : null;
+    // The skills its session used and what is out of date in them, for its Conventions answer (set by the server).
+    const skills = listed && agent.brief?.checklist?.some((c) => c.key === 'conventions') ? this.skillFacts?.(agent) ?? null : null;
+    const checklist = listed ? checklistOf(agent, { fence, trace, stale: Boolean(mark?.sig && cs?.sig && mark.sig !== cs.sig), skills }) : null;
     const v = {
       ...agent,
       // Intent, spec and plan files that exist, with when each changed (task agents).
@@ -438,6 +473,8 @@ export class AgentManager extends EventEmitter {
       fence,
       // Its self-review, each answer set against what the app measured (checklist.js), or null.
       checklist,
+      // A procedure it proposes keeping as a skill, and what you decided (skills.js), or null.
+      skillProposal: this.proposalView(agent),
       priority: agent.priority ?? 2,
       activeAt: this.activeAt(agent, rt),
       projectInfo: this.projectInfo(agent),
@@ -1429,6 +1466,8 @@ export class AgentManager extends EventEmitter {
     const withBrief = Boolean(this.config.brief && task);
     if (this.config.reviewConventions && task) prompts.push(conventionsPrompt({ withBrief, rulesFiles: engine.rulesFiles ?? null }));
     if (withBrief) {
+      // Asked for one: reminded once if it stops without it (remindBrief).
+      if (!agent.briefAsked) this.store.patch(agent.id, { briefAsked: true });
       // Let the agent write its brief without a permission prompt: that one folder only.
       fs.mkdirSync(briefDir(agent.id), { recursive: true });
       const dir = fs.realpathSync(briefDir(agent.id));
@@ -1443,8 +1482,14 @@ export class AgentManager extends EventEmitter {
       // The self-review: the same first-principles questions before it calls the work done, each with its evidence (checklist.js).
       if (this.config.selfReview !== false) {
         prompts.push(CHECKLIST_PROMPT);
-        // Asked for one: only then is one missing counted (agents started before were never asked).
-        if (!agent.selfReviewAsked) this.store.patch(agent.id, { selfReviewAsked: true });
+        // Asked for one, and which questions: only those missing are counted (agents started before were never asked).
+        if (!agent.selfReviewAsked || String(agent.selfReviewKeys) !== String(PRINCIPLE_KEYS)) this.store.patch(agent.id, { selfReviewAsked: true, selfReviewKeys: PRINCIPLE_KEYS });
+      }
+      // A procedure worth keeping, proposed as a skill for the person to add (skills.js).
+      if (this.proposalsOn(agent)) {
+        prompts.push(PROPOSAL_PROMPT);
+        const stale = this.driftFor?.(agent) ?? [];
+        if (stale.length) prompts.push(staleSkillsPrompt(stale));
       }
       if (this.config.inbox !== false) prompts.push(questionsPrompt(path.join(dir, path.basename(questionsPath(agent.id)))));
     }
@@ -2718,6 +2763,41 @@ export class AgentManager extends EventEmitter {
     if (this.store.get(id)) this.patch(id, { checklistMark: { at: new Date().toISOString(), sig } });
   }
 
+  /** Its "## Skill proposal": { name, folder, description, changed, body, sig, decided } or null. */
+  /** Whether this agent is asked to propose skills: on, and the skill policy allows it in its project. */
+  proposalsOn(agent) {
+    if (this.config.skillProposals === false) return false;
+    const allow = skillPolicy(this.config.skillPolicy).proposals;
+    if (allow === true) return true;
+    if (allow === false) return false;
+    const info = this.projectInfo(agent);
+    return allow.includes(info.shortcut) || allow.includes(info.key);
+  }
+
+  proposalView(agent) {
+    const p = agent.brief?.skill;
+    if (!p) return null;
+    const sig = crypto.createHash('sha1').update(`${p.folder}\0${p.description ?? ''}\0${p.body}`).digest('hex').slice(0, 12);
+    const d = agent.skillDecision;
+    // Its project's skills folder, when the project has a folder here (else only yours).
+    const entry = Object.values(this.store.data.projects ?? {}).find((x) => x.key === projectOf(agent).key);
+    const project = entry?.dir && fs.existsSync(entry.dir) ? { place: `project:${entry.shortcut ?? entry.key}`, name: entry.name ?? entry.shortcut } : null;
+    // Looked at where it would go: a key in it, what it names that is not there, the skill already there (server.js).
+    const check = this.skillCheck?.(p, project?.place ?? 'personal', sig) ?? null;
+    // The same as the skill already there: nothing to decide.
+    const decided = d?.sig === sig ? d : check?.existing?.same ? { sig, state: 'same', skill: check.existing.id } : null;
+    return { ...p, sig, project, check, decided };
+  }
+
+  /** You added its proposed skill ('added', with where) or put it off ('dismissed'): the same proposal is not offered again. */
+  decideProposal(ref, state, extra = {}) {
+    const agent = this.mustGet(ref);
+    const p = this.proposalView(agent);
+    if (!p) throw Object.assign(new Error(`${agent.name} has not proposed a skill`), { status: 404 });
+    this.patch(agent.id, { skillDecision: { sig: p.sig, state, at: new Date().toISOString(), ...extra } });
+    return this.view(this.store.get(agent.id));
+  }
+
   /** The person sends the self-review's no's and contradicted answers back to the agent. */
   sendChecklist(ref) {
     const agent = this.mustGet(ref);
@@ -3679,6 +3759,34 @@ export class AgentManager extends EventEmitter {
     return this.view(this.store.get(agent.id));
   }
 
+  /**
+   * An agent asked for a brief that stopped without one, or called its work done without the
+   * self-review: told once, after a minute of quiet. Not when it ended on a question to the person.
+   */
+  remindBrief(t = Date.now()) {
+    if (!this.config.brief || this.config.briefReminder === false) return;
+    for (const [id, rt] of this.runtimes) {
+      if (!rt.turnEndedAt || !rt.pty || rt.busy || rt.attention || rt.waiting || rt.limited || rt.planning || this.outbox.get(id)?.length) continue;
+      if (t - (rt.lastOutputAt ?? 0) < BRIEF_REMIND_MS || t - (rt.toldAt ?? 0) < BRIEF_REMIND_MS || this.idleExpected?.(id)) continue;
+      const agent = this.store.get(id);
+      if (!agent?.briefAsked || agent.desktop || agent.hunting || agent.reviewing) continue;
+      const file = briefPath(id);
+      const missing = !fs.existsSync(file);
+      const done = !missing && (agent.brief?.status === 'done' || ['done', 'partial'].includes(agent.brief?.results?.outcome));
+      const kind = missing ? 'brief' : done && agent.selfReviewAsked && !agent.brief?.checklist?.length ? 'selfReview' : null;
+      if (!kind || agent.briefReminded?.[kind]) continue;
+      if (endsOnQuestion(engineOf(agent), agent)) continue;
+      this.patch(id, { briefReminded: { ...agent.briefReminded, [kind]: now() } });
+      this.tell(
+        id,
+        kind === 'brief'
+          ? `Before you stop: your brief is not written yet. Write it to ${file} as asked at the start (the Status line, its sections, the Self-review, and a Skill proposal if there is one). If you are still working, or waiting for an answer from the user, carry on and write it when you finish.`
+          : `Your brief says the work is done but has no "## Self-review" section. Add it to ${file}: each question answered [x] or [!] with its evidence, as asked at the start.`,
+        { source: 'brief' },
+      );
+    }
+  }
+
   deliverOutbox(t = Date.now()) {
     for (const [id, queue] of this.outbox) {
       const rt = this.runtimes.get(id);
@@ -4169,9 +4277,14 @@ export class AgentManager extends EventEmitter {
       const kept = keptPrivate(agent);
       if (kept && kept.from !== 'you') items.push({ kind: 'idea', key: `idea:${agent.id}`, agentId: agent.id, agentName: agent.name, priority: agent.priority ?? 2, title: kept.why, from: kept.from, at: agent.insights?.at ?? agent.brief?.updatedAt ?? null });
     }
-    // Others' items (autopilot's held backlog work).
+    // A procedure an agent proposes keeping as a skill, not decided yet (skills.js).
+    for (const agent of this.store.list()) {
+      const p = this.proposalView(agent);
+      if (p && !p.decided) items.push({ kind: 'skill', key: `skill:${agent.id}:${p.sig}`, agentId: agent.id, agentName: agent.name, priority: agent.priority ?? 2, title: `Skill proposed: ${p.folder}`, proposal: p });
+    }
+    // Others' items (autopilot's held backlog work, skills out of date).
     for (const source of this.inboxSources) items.push(...source());
-    const order = { prompt: 0, limit: 1, waiting: 1, question: 1, rule: 2, review: 2, prereview: 2, autopilot: 2, idea: 2, stuck: 3, conflict: 4, reminder: 5, repeat: 5 };
+    const order = { prompt: 0, limit: 1, waiting: 1, question: 1, rule: 2, review: 2, prereview: 2, autopilot: 2, idea: 2, stuck: 3, conflict: 4, reminder: 5, repeat: 5, skill: 4, skilldrift: 5 };
     return items.sort((a, b) => order[a.kind] - order[b.kind] || a.priority - b.priority);
   }
 
@@ -4411,11 +4524,15 @@ export class AgentManager extends EventEmitter {
         const a = this.store.get(id);
         if (a) this.changed(a);
         // A turn just ended: remember the code and conversation at this point.
-        if (a && !rt.planning && !rt.attention) this.checkpoint(id).catch(() => {});
+        if (a && !rt.planning && !rt.attention) {
+          rt.turnEndedAt = t;
+          this.checkpoint(id).catch(() => {});
+        }
       }
     }
     this.resumeLimited(t);
     this.deliverOutbox(t);
+    this.remindBrief(t);
     this.scanSignIns();
     if (this.judge.enabled) {
       const idleMs = this.judge.settings.idleSec * 1000;

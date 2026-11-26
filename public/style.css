@@ -1667,6 +1667,10 @@ table.plan-debt code { overflow-wrap: anywhere; }
 .skills-meta { display: flex; gap: 14px; flex-wrap: wrap; }
 .skills-warn { color: var(--yellow); border-color: var(--yellow); }
 .skills-ok { color: var(--green); }
+.skills-history { width: 100%; border-collapse: collapse; font-size: 0.9em; }
+.skills-history th, .skills-history td { text-align: left; vertical-align: top; padding: 6px 8px; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
+.skills-drift { margin: 4px 0; font-size: 0.9em; border-left: 3px solid var(--yellow); padding-left: 8px; overflow-wrap: anywhere; }
+.need .skill-steps { max-height: 220px; overflow: auto; white-space: pre-wrap; }
 .skills-files ul { margin: 6px 0 10px; padding-left: 18px; font-size: 13px; }
 .usage-lean { display: flex; flex-direction: column; gap: 2px; margin: 4px 0 10px; font-size: 13px; }
 .usage-lean label { margin: 0; display: flex; gap: 8px; align-items: baseline; font-weight: 400; }

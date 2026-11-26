@@ -1,6 +1,7 @@
 // Self-review checklist: before it calls its work done, the agent answers the same few
 // first-principles questions every time (does it do what was asked, only that, is it seen working,
-// would a test catch it breaking, edges, what depends on it, safety, undo), each with its evidence.
+// would a test catch it breaking, edges, what depends on it, safety, undo, the project's skills and
+// rules), each with its evidence.
 // Then the app sets each answer against what it measured itself: what done means point by point,
 // the proof it recorded and ran again, its tests tested, the files it changed against its task, the
 // quality bar's checks of the diff, CI and what it says it left out. An answer the facts back says
@@ -18,7 +19,11 @@ export const PRINCIPLES = [
   { key: 'ripple', label: 'Ripple', question: 'What uses the changed code still works' },
   { key: 'safe', label: 'Safe', question: 'No secret, unchecked input or wider access added' },
   { key: 'undo', label: 'Undo', question: 'It can be undone without losing data' },
+  { key: 'conventions', label: 'Conventions', question: 'The skills and project rules that apply were followed, and one found wrong or out of date is named' },
 ];
+// What agents started before Conventions was asked were asked (selfReviewKeys is kept from 1.74).
+const FIRST_KEYS = PRINCIPLES.slice(0, 8).map((p) => p.key);
+export const PRINCIPLE_KEYS = PRINCIPLES.map((p) => p.key);
 
 const ALIASES = {
   asked: ['asked', 'complete', 'completeness', 'requirements', 'does what was asked', 'correct'],
@@ -29,6 +34,7 @@ const ALIASES = {
   ripple: ['ripple', 'callers', 'dependents', 'compatibility', 'side effects', 'blast radius'],
   safe: ['safe', 'safety', 'security', 'secrets'],
   undo: ['undo', 'reversible', 'rollback', 'data', 'migration'],
+  conventions: ['conventions', 'convention', 'skills', 'project rules', 'rules', 'claude.md', 'style'],
 };
 
 export const CHECKLIST_PROMPT =
@@ -71,7 +77,7 @@ const clip = (s, n = 120) => {
 };
 
 /** What the app measured about one principle: { verdict: 'backs' | 'contradicts', why } or null (only its word). (On a "no" answer, a contradiction is shown as 'agrees'.) */
-function measured(key, a, { fence = null, trace = null } = {}) {
+function measured(key, a, { fence = null, trace = null, skills = null, evidence = '' } = {}) {
   const b = a.brief ?? {};
   const contra = (why) => ({ verdict: 'contradicts', why });
   const backs = (why) => ({ verdict: 'backs', why });
@@ -136,6 +142,17 @@ function measured(key, a, { fence = null, trace = null } = {}) {
     if (prs.some((p) => p.state === 'OPEN' && p.checks?.state === 'passed')) return backs('CI passes on its pull request');
     return null;
   }
+  if (key === 'conventions') {
+    // The skills its session used (skills.js), each with what the app found out of date in it.
+    if (!skills?.length) return null;
+    const named = (s) => evidence.toLowerCase().includes(s.name.toLowerCase());
+    const off = skills.filter((s) => s.drift?.length);
+    const unsaid = off.filter((s) => !named(s));
+    const one = (s) => `${s.name} (${s.drift.slice(0, 2).map((d) => `${d.ref}: ${d.why}`).join('; ')})`;
+    if (unsaid.length) return contra(`It used ${plural(unsaid.length, 'skill')} the app found out of date with the code, and does not name ${unsaid.length === 1 ? 'it' : 'them'}: ${clip(unsaid.map(one).join('; '), 200)}`);
+    if (off.length) return backs(`It names ${off.map((s) => s.name).join(', ')}, which the app also found out of date`);
+    return backs(`It used ${skills.map((s) => s.name).join(', ')}; the app found nothing out of date in ${skills.length === 1 ? 'it' : 'them'}`);
+  }
   return null;
 }
 
@@ -145,19 +162,23 @@ function measured(key, a, { fence = null, trace = null } = {}) {
  * written } or null when it wrote none and is not finished. `state` is the agent's: yes, no, na,
  * unchecked, or missing (no line for it); a "yes" with no evidence is unchecked.
  */
-export function checklistOf(a, { fence = a.fence, trace = null, stale = false } = {}) {
+export function checklistOf(a, { fence = a.fence, trace = null, stale = false, skills = null } = {}) {
   const written = a.brief?.checklist ?? [];
   const outcome = a.brief?.results?.outcome;
   const finished = a.brief?.status === 'done' || outcome === 'done' || outcome === 'partial';
   // Not written: said only of finished work that was asked for one (agents started before it was not).
   if (!written.length && (!finished || !a.selfReviewAsked)) return null;
-  const items = PRINCIPLES.map((p) => {
+  // The questions it was asked (one it answered anyway counts too).
+  const keys = a.selfReviewKeys ?? FIRST_KEYS;
+  const items = PRINCIPLES.filter((p) => keys.includes(p.key) || written.some((x) => x.key === p.key)).map((p) => {
     const w = written.find((x) => x.key === p.key);
     let state = w?.state ?? 'missing';
     if (state === 'yes' && !w.evidence) state = 'unchecked';
-    let app = state === 'na' ? null : measured(p.key, a, { fence, trace });
+    let app = state === 'na' ? null : measured(p.key, a, { fence, trace, skills, evidence: w?.evidence ?? '' });
     // It says no, and the facts say the same: they agree with the answer, not contradict it.
     if (state === 'no' && app?.verdict === 'contradicts') app = { ...app, verdict: 'agrees' };
+    // It says a skill it used is out of date, and the app found the same.
+    if (state === 'no' && p.key === 'conventions' && app?.verdict === 'backs' && skills?.some((s) => s.drift?.length)) app = { ...app, verdict: 'agrees' };
     return { key: p.key, label: p.label, question: p.question, state, evidence: w?.evidence ?? '', app };
   });
   const n = (k, v) => items.filter((i) => (k === 'app' ? i.app?.verdict === v : i.state === v)).length;

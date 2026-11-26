@@ -2447,7 +2447,7 @@ test('self-review: the same first-principles questions, read from the brief, eac
   const { CHECKLIST_PROMPT, PRINCIPLES, checklistOf, checklistLine, checklistRows, checklistMarkdown, checklistMessage, toFix } = await import('../public/checklist.js');
   const { readFirst } = await import('../src/readfirst.js');
   const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;');
-  assert.deepEqual(PRINCIPLES.map((p) => p.key), ['asked', 'scope', 'works', 'tests', 'edges', 'ripple', 'safe', 'undo']);
+  assert.deepEqual(PRINCIPLES.map((p) => p.key), ['asked', 'scope', 'works', 'tests', 'edges', 'ripple', 'safe', 'undo', 'conventions']);
   assert.match(CHECKLIST_PROMPT, /^Before you set the outcome to partial or done, review your own work from first principles and add a section "## Self-review"[\s\S]*Asked: It does all that was asked[\s\S]*Undo: It can be undone without losing data\.\n[\s\S]*"\[x\]" with no evidence counts as not checked/);
   const md = ['Status: done', '## Results', 'Outcome: done', '- Not done: the CSV export', '## Self review', '- [x] Asked: all three parts', '- [x] **Scope**: only src/cart', '* [x] Works: npm test, 42 pass', '- [!] Tests: no test for the <empty> cart', '- [-] Undo: no data changes', '- [x] Edge cases:', '- [x] Works: said twice', '- [x] Logging: nothing noisy', 'not a line'].join('\n');
   const brief = parseBrief(md);
@@ -5684,12 +5684,326 @@ test('skills: what is here, what a repository offers, adding, checking for a new
   assert.deepEqual([v.places[0].skills[1].description, v.places[0].skills[1].edited], ['Read, fill and sign PDF forms.', false]);
 
   // Removing deletes the folder, and only a skill's.
-  for (const bad of ['personal/../x', 'personal/', 'nowhere/pdf', 'personal/none']) assert.throws(() => s.remove(bad), /No such/, bad);
-  v = s.remove('personal/notes');
+  for (const bad of ['personal/../x', 'personal/', 'nowhere/pdf', 'personal/none']) await assert.rejects(() => s.remove(bad), /No such/, bad);
+  v = await s.remove('personal/notes');
   assert.deepEqual(v.places[0].skills.map((x) => x.id), ['personal/pdf']);
   assert.equal(fs.existsSync(path.join(personal, 'notes')), false);
   assert.equal(data.skills.sources['personal/notes'], undefined);
 });
+
+test('skills kept up: an agent proposes one, what a skill names that is gone, newer upstream, and the self-review\'s Conventions', async () => {
+  const { Skills, PROPOSAL_PROMPT, parseProposal, skillDrift, skillSlug, skillText, parseSkill } = await import('../src/skills.js');
+  const { parseBrief } = await import('../src/brief.js');
+  const { checklistOf, PRINCIPLES } = await import('../public/checklist.js');
+  assert.match(PROPOSAL_PROMPT, /"## Skill proposal"[\s\S]*Name: <short-kebab-case-name>\nWhen to use: [\s\S]*"Changed: <what and why>"[\s\S]*Do not write the skill into the repository or ~\/\.claude yourself/);
+
+  // The proposal as written in the brief.
+  assert.deepEqual([skillSlug('Run E2E tests!'), skillSlug('  '), skillSlug('../etc')], ['run-e2e-tests', null, 'etc']);
+  const brief = parseBrief(['Status: done', '## Skill proposal', 'Name: **Run e2e**', 'When to use: running or debugging the end-to-end tests', 'Changed: the port moved to 4800', '', '1. `npm run e2e`', '2. Read `test/out.log`'].join('\n'));
+  assert.deepEqual(brief.skill, { name: 'Run e2e', description: 'running or debugging the end-to-end tests', changed: 'the port moved to 4800', body: '1. `npm run e2e`\n2. Read `test/out.log`', folder: 'run-e2e' });
+  assert.equal(parseBrief('## Proposed skill\nName: x\nNone').skill, null, 'none is no proposal');
+  assert.equal(parseProposal('When to use: y\nsteps'), null, 'no name');
+  assert.equal(parseProposal('Name: x'), null, 'no steps');
+  assert.equal(parseBrief('## Problem\nx').skill, null);
+  const text = skillText({ folder: 'run-e2e', description: 'when "e2e"\n fails', body: 'steps\n' });
+  assert.deepEqual([parseSkill(text).name, parseSkill(text).description, parseSkill(text).body], ['run-e2e', "when 'e2e' fails", '\nsteps\n']);
+
+  // What a skill names that is gone: an npm script, a make target, a file; never a branch, a URL or a package.
+  const root = tmp();
+  const put = (file, t) => (fs.mkdirSync(path.dirname(file), { recursive: true }), fs.writeFileSync(file, t));
+  const project = path.join(root, 'web');
+  put(path.join(project, 'package.json'), JSON.stringify({ scripts: { test: 'x', 'lint:js': 'y' } }));
+  put(path.join(project, 'Makefile'), 'build:\n\techo\nlint check: x\n');
+  put(path.join(project, 'src', 'a.js'), '');
+  const sk = path.join(project, '.claude', 'skills', 'release');
+  put(path.join(sk, 'scripts', 'go.sh'), '');
+  const md = '---\nname: release\ndescription: Ship.\n---\nRun `npm run lint:js`, `npm run lint:all`, `make build`, `make check` and `make deploy`.\n```bash\nnode src/a.js && node src/gone.js:12\nbash scripts/go.sh; bash scripts/old.sh\ngit diff origin/main feat/x\ncurl https://x.com/a/b\n```\nSee `src/`, `lib/x.js`, `@scope/pkg`, `~/x/y`, `./docs/x.md`.\n';
+  put(path.join(sk, 'SKILL.md'), md);
+  assert.deepEqual(skillDrift(md, { projectDir: project, skillDir: sk }).map((d) => [d.ref, d.why]), [
+    ['src/gone.js', 'not in the project'],
+    ['scripts/old.sh', "not in the skill's folder"],
+    ['npm run lint:all', 'no script "lint:all" in package.json'],
+    ['make deploy', 'no "deploy" target in Makefile'],
+    ['./docs/x.md', 'not in the project'],
+  ]);
+  assert.deepEqual(skillDrift(md, { skillDir: sk }).map((d) => d.ref), ['scripts/old.sh', './docs/x.md'], 'yours: only its own folder');
+  assert.deepEqual(skillDrift('Run `make anything`', { projectDir: (put(path.join(root, 'p2', 'Makefile'), 'include rules.mk\n'), path.join(root, 'p2')) }), [], 'targets from other files are not known');
+
+  // In the list and in the inbox; Not now until it changes.
+  const personal = path.join(root, 'home', 'skills');
+  const repo = path.join(root, 'repo');
+  put(path.join(repo, 'skills', 'notes', 'SKILL.md'), '---\nname: notes\ndescription: Keep notes.\n---\n');
+  const session = path.join(root, 's.jsonl');
+  fs.writeFileSync(session, '{"type":"tool_use","name":"Skill","input":{"skill":"release"}}\n');
+  const data = {};
+  let now = '2026-11-26T10:00:00.000Z';
+  const s = new Skills({ store: { data, save() {} }, projects: () => [{ key: 'web', name: 'Web', dir: project }], sessions: () => [], cache: path.join(root, 'cache'), personal: () => personal, now: () => now, clone: async (url, dir) => fs.cpSync(repo, dir, { recursive: true }) });
+  let v = s.list();
+  assert.deepEqual(v.places[1].skills[0].drift.length, 5);
+  assert.deepEqual(s.inbox().map((i) => [i.kind, i.key, i.title, i.placeLabel]), [['skilldrift', 'skilldrift:project:web/release', 'Skill release is out of date with the code', 'Web']]);
+  s.dismissDrift('project:web/release');
+  assert.deepEqual(s.drifted(), [], 'put off');
+  put(path.join(project, 'package.json'), JSON.stringify({ scripts: { test: 'x', 'lint:js': 'y', 'lint:all': 'z' } }));
+  assert.deepEqual(s.drifted().map((d) => d.drift.length), [4], 'back when what it finds changes');
+  assert.throws(() => s.dismissDrift('personal/none'), /Nothing to put off/);
+
+  // A newer version upstream, found by the daily look (once per repository).
+  await s.install({ repo: 'owner/skills', names: ['notes'], place: 'personal' });
+  assert.deepEqual((await s.checkAll()).map((d) => d.id), ['project:web/release']);
+  put(path.join(repo, 'skills', 'notes', 'SKILL.md'), '---\nname: notes\ndescription: Keep better notes.\n---\n');
+  const after = await s.checkAll();
+  assert.deepEqual(after.map((d) => [d.id, Boolean(d.newer)]), [['personal/notes', true], ['project:web/release', false]]);
+  assert.equal(s.list().places[0].skills[0].newer.gone, false);
+  await s.update('personal/notes');
+  assert.deepEqual(s.drifted().map((d) => d.id), ['project:web/release'], 'up to date after the update');
+
+  // Added from an agent's proposal: written as a SKILL.md, one with that name kept unless replaced.
+  const added = await s.add({ place: 'project:web', folder: 'run-e2e', description: brief.skill.description, body: brief.skill.body, from: { agentId: 'a1', agentName: 'fix-login' } });
+  assert.equal(added.id, 'project:web/run-e2e');
+  assert.match(fs.readFileSync(path.join(project, '.claude', 'skills', 'run-e2e', 'SKILL.md'), 'utf8'), /^---\nname: run-e2e\ndescription: "running or debugging the end-to-end tests"\n---\n\n1\. `npm run e2e`/);
+  await assert.rejects(() => s.add({ place: 'project:web', folder: 'run-e2e', body: 'x' }), /already has a skill called run-e2e/);
+  await s.add({ place: 'project:web', folder: 'run-e2e', body: 'new steps', replace: true, from: { agentId: 'a2', agentName: 'other' } });
+  await assert.rejects(() => s.add({ place: 'personal', folder: '../x', body: 'x' }), /needs a name/);
+  await assert.rejects(() => s.add({ place: 'personal', folder: 'x', body: ' ' }), /no steps/);
+  const row = s.list().places[1].skills.find((x) => x.folder === 'run-e2e');
+  assert.deepEqual([row.proposedBy.agentName, row.source, row.unused], ['other', null, false]);
+  now = '2027-01-30T10:00:00.000Z';
+  assert.equal(s.list().places[1].skills.find((x) => x.folder === 'run-e2e').unused, true, 'a month and no agent used it');
+
+  // The skills a session used, for Conventions; a used skill out of date and not named contradicts "holds".
+  assert.deepEqual(s.usedIn(session, 'web').map((x) => [x.id, x.drift.length]), [['project:web/release', 4]]);
+  assert.deepEqual(s.usedIn(session, 'other'), [], 'only its own project and yours');
+  const yes = (evidence) => ({ selfReviewAsked: true, selfReviewKeys: PRINCIPLES.map((p) => p.key), brief: { status: 'done', results: { outcome: 'done' }, checklist: [{ key: 'conventions', label: 'Conventions', state: 'yes', evidence }] }, prs: {} });
+  const conv = (a, skills) => checklistOf(a, { fence: null, skills }).items.find((i) => i.key === 'conventions');
+  const used = s.usedIn(session, 'web');
+  assert.match(conv(yes('followed CLAUDE.md'), used).app.why, /^It used 1 skill the app found out of date with the code, and does not name it: release \(src\/gone\.js: not in the project; scripts\/old\.sh/);
+  assert.equal(conv(yes('followed CLAUDE.md'), used).app.verdict, 'contradicts');
+  assert.deepEqual(conv(yes('release names make deploy, which is gone'), used).app, { verdict: 'backs', why: 'It names release, which the app also found out of date' });
+  assert.deepEqual(conv(yes('ok'), [{ name: 'pdf', drift: [] }]).app, { verdict: 'backs', why: 'It used pdf; the app found nothing out of date in it' });
+  assert.equal(conv(yes('ok'), []).app, null);
+  const no = yes('release is out of date');
+  no.brief.checklist[0].state = 'no';
+  assert.equal(conv(no, [{ name: 'other', drift: [{ ref: 'x', why: 'y' }] }]).app.verdict, 'agrees');
+  assert.deepEqual(conv(no, used).app, { verdict: 'agrees', why: 'It names release, which the app also found out of date' }, 'an honest no about a stale skill');
+  // Asked before Conventions: not counted as missing; asked since: it is.
+  const old = { selfReviewAsked: true, brief: { status: 'done', results: { outcome: 'done' }, checklist: [{ key: 'asked', label: 'Asked', state: 'yes', evidence: 'e' }] }, prs: {} };
+  assert.equal(checklistOf(old).items.some((i) => i.key === 'conventions'), false);
+  assert.equal(checklistOf({ ...old, selfReviewKeys: PRINCIPLES.map((p) => p.key) }).items.at(-1).state, 'missing');
+});
+
+test('skills kept up, robust: commands run elsewhere, files a skill makes, what git says, fixes, a proposal looked at, the brief reminder', async () => {
+  const { Skills, skillDrift, fixPaths, staleSkillsPrompt } = await import('../src/skills.js');
+  const root = tmp();
+  const put = (file, t) => (fs.mkdirSync(path.dirname(file), { recursive: true }), fs.writeFileSync(file, t));
+  const project = path.join(root, 'mono');
+  const g = (...a) => execFileSync('git', ['-c', 'commit.gpgsign=false', '-c', 'user.email=t@t', '-c', 'user.name=t', '-C', project, ...a], { stdio: 'pipe' }).toString();
+  put(path.join(project, 'package.json'), JSON.stringify({ scripts: { test: 'x' } }));
+  put(path.join(project, 'web', 'package.json'), JSON.stringify({ scripts: { dev: 'x' } }));
+  put(path.join(project, 'web', 'Makefile'), 'serve:\n\tx\n');
+  put(path.join(project, 'Makefile'), '$(BIN): x\n\tcc\n');
+  put(path.join(project, 'src', 'old.js'), 'a\n');
+  put(path.join(project, 'src', 'drop.js'), 'b\n');
+  put(path.join(project, '.gitignore'), 'out/\n');
+  fs.mkdirSync(path.join(project, 'out'));
+  fs.mkdirSync(path.join(project, 'docs'));
+  g('init', '-q', '-b', 'main');
+  g('add', '-A');
+  g('commit', '-q', '-m', 'one');
+  g('mv', 'src/old.js', 'src/new.js');
+  g('rm', '-q', 'src/drop.js');
+  g('commit', '-q', '-m', 'two');
+  const at = g('rev-parse', '--short', 'HEAD').trim();
+
+  // Commands checked where they run; in a workspace or a Makefile with made-up targets, not at all.
+  const cmds = 'Run `cd web && npm run dev`, `cd web && npm run gone`, `npm --prefix web run dev`, `npm run build -w web`, `pnpm --filter web run x`, `make -C web serve`, `make -C web nope`, `make anything`, `npm run lint`.';
+  assert.deepEqual(skillDrift(cmds, { projectDir: project }).map((d) => [d.ref, d.why]), [
+    ['npm run gone', 'no script "gone" in web/package.json'],
+    ['make nope', 'no "nope" target in web/Makefile'],
+    ['npm run lint', 'no script "lint" in package.json'],
+  ]);
+
+  // A file the skill says to make, one a command writes, one git ignores: none is out of date.
+  const makes = ['Write the summary to `docs/summary.md`.', 'Then read `docs/missing.md`.', '```', 'node x.js > docs/out.txt', 'mkdir -p docs/new && touch docs/new/a', 'open out/report.html', '```'].join('\n');
+  assert.deepEqual(skillDrift(makes, { projectDir: project }).map((d) => d.ref), ['docs/missing.md']);
+
+  // Renamed (with where it went, to put right) and deleted, as git saw them.
+  const md = '---\nname: build\ndescription: Build.\n---\nEdit `src/old.js`, then run `node src/old.js` and check `src/drop.js`.\n';
+  const drift = skillDrift(md, { projectDir: project });
+  assert.deepEqual(drift, [
+    { ref: 'src/old.js', why: `renamed to src/new.js (${at})`, to: 'src/new.js' },
+    { ref: 'src/drop.js', why: `deleted from the project (${at})` },
+  ]);
+  assert.equal(fixPaths(md, drift), md.replaceAll('src/old.js', 'src/new.js'));
+  assert.equal(fixPaths('see `xsrc/old.js` and src/old.jsx', drift), 'see `xsrc/old.js` and src/old.jsx', 'only the whole path');
+
+  const personal = path.join(root, 'home', 'skills');
+  const s = new Skills({ store: { data: {}, save() {} }, projects: () => [{ key: 'mono', name: 'Mono', dir: project }], sessions: () => [], cache: path.join(root, 'cache'), personal: () => personal, now: () => '2026-11-26T10:00:00.000Z' });
+  put(path.join(project, '.claude', 'skills', 'build', 'SKILL.md'), md);
+  const fixed = await s.fixDrift('project:mono/build');
+  assert.deepEqual(fixed.fixed, [{ ref: 'src/old.js', to: 'src/new.js' }]);
+  assert.deepEqual(fixed.drift.map((d) => d.ref), ['src/drop.js'], 'what is left to fix by hand');
+  await assert.rejects(() => s.fixDrift('project:mono/build'), /no path it names was renamed/);
+
+  // Told to agents at their start.
+  assert.equal(staleSkillsPrompt([{ name: 'build', drift: fixed.drift }]), `AI Agent Manager found these skills out of date with the code here:\n- build: \`src/drop.js\` (deleted from the project (${at}))\nIf you use one, check it against the code and, once you know what works, propose its corrected version under "## Skill proposal" with a "Changed:" line.`);
+
+  // A proposal looked at before it is added: a token in it (never added), what it names, the one there now.
+  const token = `ghp_${'a'.repeat(36)}`;
+  assert.deepEqual(s.checkProposal({ folder: 'deploy', description: 'deploying', body: `export GH=${token}\nRun \`node src/gone.js\`` }, 'project:mono'), { secrets: ['a GitHub token'], drift: [{ ref: 'src/gone.js', why: 'not in the project' }], existing: null, via: 'direct', allowed: true, places: ['project', 'personal'] });
+  await assert.rejects(() => s.add({ place: 'personal', folder: 'deploy', body: `GH=${token}` }), /looks like a GitHub token/);
+  const body = parseSkillBody(fs.readFileSync(path.join(project, '.claude', 'skills', 'build', 'SKILL.md'), 'utf8'));
+  assert.deepEqual(s.checkProposal({ folder: 'build', description: 'Build.', body }, 'project:mono').existing, { id: 'project:mono/build', same: true });
+  assert.deepEqual(s.checkProposal({ folder: 'build', description: 'Build.', body: 'other' }, 'project:mono').existing, { id: 'project:mono/build', same: false });
+
+  // The brief reminder: once, after a quiet minute, to an agent asked for a brief that stopped without one; not on a question.
+  const cfg = path.join(root, 'claude');
+  const prev = process.env.CLAUDE_CONFIG_DIR;
+  process.env.CLAUDE_CONFIG_DIR = cfg;
+  try {
+    const id = `remind-${Date.now()}`;
+    const agent = { id, name: 'sizes', briefAsked: true, workdir: project, sessionId: 'sid-1' };
+    const told = [];
+    const rt = { pty: {}, turnEndedAt: 1, lastOutputAt: 1000 };
+    const me = { config: { brief: true }, runtimes: new Map([[id, rt]]), outbox: new Map(), store: { get: () => agent }, patch: (_, p) => Object.assign(agent, p), tell: (_, text, o) => told.push([text, o.source]) };
+    const remind = (t) => AgentManager.prototype.remindBrief.call(me, t);
+    const transcript = claude.sessionFile(project, 'sid-1');
+    put(transcript, `${JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'Which unit should 1.5KB round to?' }] } })}\n`);
+    remind(30_000);
+    assert.equal(told.length, 0, 'not yet a minute');
+    remind(70_000);
+    assert.equal(told.length, 0, 'it asked the person something');
+    fs.appendFileSync(transcript, `${JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'Done: size.js parses KB and MB.' }] } })}\n`);
+    remind(70_000);
+    assert.equal(told.length, 1);
+    assert.match(told[0][0], /^Before you stop: your brief is not written yet\. Write it to .*brief/);
+    assert.equal(told[0][1], 'brief');
+    assert.ok(agent.briefReminded.brief);
+    remind(200_000);
+    assert.equal(told.length, 1, 'once');
+    agent.briefReminded = null;
+    agent.briefAsked = false;
+    remind(200_000);
+    assert.equal(told.length, 1, 'never asked for a brief: not reminded');
+  } finally {
+    if (prev === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+    else process.env.CLAUDE_CONFIG_DIR = prev;
+  }
+});
+
+test('skills for a team: the skill policy, plugins that refuse or listen, the history, and changes to a project as pull requests', async () => {
+  const { Skills, skillPolicy } = await import('../src/skills.js');
+  const { Plugins } = await import('../src/plugins.js');
+  assert.deepEqual(skillPolicy({}), { places: ['project', 'personal'], projectChanges: 'direct', proposals: true, sources: true });
+  assert.deepEqual(skillPolicy({ places: ['project', 'nope'], projectChanges: 'pr', proposals: ['web'], sources: ['github.com/acme/'] }), { places: ['project'], projectChanges: 'pr', proposals: ['web'], sources: ['github.com/acme/'] });
+  assert.deepEqual(skillPolicy({ proposals: false, sources: false, projectChanges: 'x' }), { places: ['project', 'personal'], projectChanges: 'direct', proposals: false, sources: false });
+
+  const root = tmp();
+  const g = (cwd, ...a) => execFileSync('git', ['-c', 'commit.gpgsign=false', '-c', 'user.email=t@t', '-c', 'user.name=t', '-C', cwd, ...a], { stdio: 'pipe' }).toString().trim();
+  // A project with an origin to push to.
+  const origin = path.join(root, 'origin.git');
+  g(root, 'init', '-q', '--bare', '-b', 'main', origin);
+  const project = path.join(root, 'web');
+  fs.mkdirSync(path.join(project, '.claude', 'skills', 'deploy'), { recursive: true });
+  fs.writeFileSync(path.join(project, '.claude', 'skills', 'deploy', 'SKILL.md'), '---\nname: deploy\ndescription: Deploy.\n---\nRun `scripts/old.sh`.\n');
+  fs.mkdirSync(path.join(project, 'scripts'));
+  fs.writeFileSync(path.join(project, 'scripts', 'old.sh'), 'x\n');
+  g(project, 'init', '-q', '-b', 'main');
+  g(project, 'config', 'user.email', 't@t');
+  g(project, 'config', 'user.name', 't');
+  g(project, 'config', 'commit.gpgsign', 'false');
+  g(project, 'add', '-A');
+  g(project, 'commit', '-q', '-m', 'one');
+  g(project, 'mv', 'scripts/old.sh', 'scripts/new.sh');
+  g(project, 'commit', '-q', '-m', 'two');
+  g(project, 'remote', 'add', 'origin', origin);
+  g(project, 'push', '-q', '-u', 'origin', 'main');
+  g(project, 'remote', 'set-head', 'origin', 'main');
+
+  let policy = { projectChanges: 'pr' };
+  const plugins = new Plugins({ log: () => {} });
+  const heard = [];
+  let refuse = null;
+  plugins.policies.push({ name: 'acme', fn: (action, d) => (refuse && action === refuse ? { allow: false, reason: `No ${action} in ${d.place}` } : undefined) });
+  plugins.listeners.push({ name: 'audit', fn: (event, e) => heard.push([event, e.id ?? e.ids?.[0] ?? e.folder, e.via ?? null]) });
+  const prs = [];
+  const s = new Skills({
+    store: { data: {}, save() {} },
+    projects: () => [{ key: 'web', name: 'Web', dir: project }],
+    cache: path.join(root, 'cache'),
+    personal: () => path.join(root, 'home', 'skills'),
+    policy: () => policy,
+    plugins,
+    openPr: async (o) => (prs.push(o), `https://github.com/acme/web/pull/${prs.length}`),
+  });
+  const by = { person: 'Pat Lee <pat@example.com>', from: 'this computer' };
+  const local = () => fs.readFileSync(path.join(project, '.claude', 'skills', 'deploy', 'SKILL.md'), 'utf8');
+
+  // A change to a project's skill, by pull request: its own branch from origin's main; your checkout untouched.
+  assert.deepEqual(s.list().places.map((p) => [p.id, p.allowed, p.via]), [['personal', true, 'direct'], ['project:web', true, 'pr']]);
+  const fixed = await s.fixDrift('project:web/deploy', { by });
+  assert.deepEqual([fixed.via, fixed.pr, fixed.fixed, fixed.drift], ['pr', 'https://github.com/acme/web/pull/1', [{ ref: 'scripts/old.sh', to: 'scripts/new.sh' }], []]);
+  assert.match(local(), /scripts\/old\.sh/, 'the checkout is not changed');
+  assert.equal(g(project, 'status', '--porcelain'), '');
+  assert.equal(g(project, 'worktree', 'list').split('\n').length, 1, 'the worktree it used is gone');
+  assert.match(prs[0].branch, /^skills\/fix-deploy-[0-9a-f]{6}$/);
+  assert.deepEqual([prs[0].base, prs[0].title], ['main', 'Skill deploy: fix renamed paths']);
+  assert.match(g(project, 'show', `origin/${prs[0].branch}:.claude/skills/deploy/SKILL.md`), /Run `scripts\/new\.sh`/, 'pushed with the fix');
+  assert.equal(g(project, 'log', '-1', '--format=%s', `origin/${prs[0].branch}`), 'Skill deploy: fix renamed paths');
+  // Shown as open on the skill until the change is in the project.
+  assert.deepEqual(s.list().places[1].skills[0].pending, { pr: 'https://github.com/acme/web/pull/1', branch: prs[0].branch, at: s.list().places[1].skills[0].pending.at });
+  assert.equal(s.drifted()[0].pending.pr, 'https://github.com/acme/web/pull/1');
+  g(project, 'merge', '-q', `origin/${prs[0].branch}`);
+  assert.equal(s.list().places[1].skills[0].pending, null, 'merged and pulled: no longer open');
+  assert.deepEqual(s.drifted(), []);
+
+  // A proposal added by pull request; nothing to change is said so.
+  const added = await s.add({ place: 'project:web', folder: 'run-tests', description: 'running the tests', body: 'Run `npm test`.', from: { agentId: 'a1', agentName: 'sizes', changed: 'the script moved' }, by });
+  assert.deepEqual([added.via, added.pr], ['pr', 'https://github.com/acme/web/pull/2']);
+  assert.equal(prs[1].title, 'Skill run-tests: add (proposed by sizes)');
+  assert.equal(prs[1].body, 'When to use: running the tests\n\nChanged: the script moved');
+  assert.equal(fs.existsSync(path.join(project, '.claude', 'skills', 'run-tests')), false, 'not in the checkout until merged');
+  g(project, 'push', '-q', 'origin', 'main');
+  const removed = await s.remove('project:web/deploy', { by });
+  assert.deepEqual([removed.via, removed.pr, prs[2].title], ['pr', 'https://github.com/acme/web/pull/3', 'Skill deploy: remove']);
+  assert.ok(fs.existsSync(path.join(project, '.claude', 'skills', 'deploy')), 'still here until merged');
+
+  // No origin: said plainly.
+  g(project, 'remote', 'remove', 'origin');
+  await assert.rejects(() => s.add({ place: 'project:web', folder: 'x', body: 'y' }), /has no "origin" remote, and the skill policy asks for a pull request/);
+
+  // The policy: where changes may go, and where skills may be installed from.
+  policy = { places: ['project'], sources: ['github.com/acme/'] };
+  await assert.rejects(() => s.add({ place: 'personal', folder: 'x', body: 'y' }), (e) => e.status === 403 && /does not allow changes to your own skills/.test(e.message));
+  await assert.rejects(() => s.install({ repo: 'someone/skills', names: ['x'], place: 'project:web' }), (e) => e.status === 403 && /does not allow installing skills from https:\/\/github\.com\/someone\/skills/.test(e.message));
+  await assert.rejects(() => s.preview('https://gitlab.com/acme/skills'), /does not allow installing/);
+  assert.equal(s.list().places[0].allowed, false);
+  // A plugin's policy refuses too, with its reason.
+  policy = {};
+  refuse = 'skill.add';
+  await assert.rejects(() => s.add({ place: 'project:web', folder: 'x', body: 'y' }), (e) => e.status === 403 && /No skill\.add in project:web \(acme\)/.test(e.message));
+  refuse = null;
+  await s.add({ place: 'personal', folder: 'notes', body: 'Keep notes.', by });
+
+  // The history: what, where, by whom, how; and plugins heard the same.
+  const h = s.history();
+  assert.deepEqual(h.map((e) => [e.action, e.id, e.via, e.pr ?? null]), [
+    ['added', 'personal/notes', 'direct', null],
+    ['removed', 'project:web/deploy', 'pr', 'https://github.com/acme/web/pull/3'],
+    ['added', 'project:web/run-tests', 'pr', 'https://github.com/acme/web/pull/2'],
+    ['fixed', 'project:web/deploy', 'pr', 'https://github.com/acme/web/pull/1'],
+  ]);
+  assert.deepEqual(h[2].from, { agentId: 'a1', agentName: 'sizes' });
+  assert.deepEqual(h[0].by, by);
+  await new Promise((r) => setTimeout(r, 10));
+  assert.deepEqual(heard, [['skill.fixed', 'project:web/deploy', 'pr'], ['skill.added', 'project:web/run-tests', 'pr'], ['skill.removed', 'project:web/deploy', 'pr'], ['skill.added', 'personal/notes', 'direct']]);
+  assert.equal(s.history({ limit: 1 }).length, 1);
+
+  // Agents are asked to propose skills only where the policy says.
+  const on = (config, info = { shortcut: 'web', key: 'k1' }) => AgentManager.prototype.proposalsOn.call({ config, projectInfo: () => info }, {});
+  assert.deepEqual([on({}), on({ skillProposals: false }), on({ skillPolicy: { proposals: false } }), on({ skillPolicy: { proposals: ['web'] } }), on({ skillPolicy: { proposals: ['api'] } })], [true, false, false, true, false]);
+});
+
+const parseSkillBody = (text) => text.replace(/^---\n[\s\S]*?\n---\n/, '');
 
 test('lanes: a range of ports and a name ending for each agent, what it says to the agent, and what listens where', async () => {
   const { LANE_DEFAULTS, laneEnv, laneOf, lanePrompt, laneSettings, nextLane, parseLsof, parseSs, portsBySession, treePids } = await import('../src/lanes.js');

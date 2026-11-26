@@ -569,7 +569,7 @@ Before it changes anything, each agent writes **Risks** in its brief: the 3 to 5
 
 ## Self-review: the first-principles checklist
 
-Before it calls its work done or partial, each agent adds **Self-review** to its brief. It answers the same eight questions every time, in the same order, each with its evidence (the command and what it showed, the test, the file and line):
+Before it calls its work done or partial, each agent adds **Self-review** to its brief. It answers the same nine questions every time, in the same order, each with its evidence (the command and what it showed, the test, the file and line):
 
 | Principle | The question |
 | --- | --- |
@@ -581,6 +581,7 @@ Before it calls its work done or partial, each agent adds **Self-review** to its
 | **Ripple** | What uses the changed code still works |
 | **Safe** | No secret, unchecked input or wider access added |
 | **Undo** | It can be undone without losing data |
+| **Conventions** | The skills and project rules that apply were followed, and one found wrong or out of date is named |
 
 Each answer is **Holds**, **No**, **Not applicable** or **Not checked**. A "holds" with no evidence counts as not checked.
 
@@ -591,14 +592,49 @@ Each answer is **Holds**, **No**, **Not applicable** or **Not checked**. A "hold
   - **Tests:** [Test the tests](#test-the-tests-would-they-notice-a-mistake), and the quality bar's "tests changed with the code" (or code changed with no test file).
   - **Safe:** the quality bar's scan of the added lines for keys and tokens, when the bar has it.
   - **Ripple:** CI on its pull request, and Night watch.
+  - **Conventions:** the skills its session used, and whether the app found any of them [out of date with the code](#skills-kept-up). A "holds" that does not name a used skill the app found out of date is contradicted.
   - Edges and Undo are its word only.
 - **Written before its latest changes.** The work is fingerprinted when the agent writes its answers. If it changes the code afterwards, the list says so: the answers may speak for an earlier version.
 - **Where you see it.** In the agent's Results, as **Self-review** ("6 hold, 1 no · the app backs 3, contradicts 1"). It is open when an answer is No, not checked, contradicted, or written before its latest changes, and those are the ones to read first. A "holds" the facts contradict is also named under **To review** in Glance. Agents are also asked to put the list in their pull request's description. `agentmgr self-review <agent>` prints it as Markdown and exits with 1 when something is No, contradicted, or missing.
 - **Ask it to fix these.** One tap sends the agent just the answers that say No and the ones the facts contradict, asking it to fix them and answer again (`agentmgr self-review <agent> --send`). Only you can send it.
-- **What it feeds.** Read first counts a No, and more so a "holds" the facts contradict. An agent started before 1.73 was never asked for a self-review, so a missing one is not counted against it.
+- **What it feeds.** Read first counts a No, and more so a "holds" the facts contradict. An agent started before 1.73 was never asked for a self-review, so a missing one is not counted against it; one started before 1.74 was not asked about Conventions.
 - **Off:** `"selfReview": false` in config.json.
 
+## Skills kept up
+
+Skills are what agents know how to do in a project. They go stale when the code moves on, and the procedures agents work out are lost unless someone writes them down.
+
+- **Proposed by the agent.** When it finishes, an agent that worked out a procedure of several steps the next agent will need (running a kind of test, a release step, a migration) writes it under **Skill proposal** in its brief: a name, when to use it, and the steps it ran. One that found a skill wrong proposes the corrected version, with what changed. It never writes the skill itself.
+- **You decide.** The proposal is a card in the inbox, **Skill proposal**, with the steps to read. **Add skill** writes `.claude/skills/<name>/SKILL.md` in its project (a file in the repository, to commit) or in yours; **Dismiss** puts it away. One with the same name is kept unless you tick **Replace**. Only you can add one, not an agent. Also `agentmgr skills accept <agent> [--to personal]` and `agentmgr skills dismiss <agent>`.
+- **Out of date with the code.** Each skill is read for what it names: an npm script, a make target, a file or folder. One that is no longer in the project is listed under the skill in **Skills**, and the skill gets a card in the inbox, **Skill out of date**. No model is asked. Also `agentmgr skills drift`. To keep false alarms out:
+  - A path counts only when its first folder is in the project (or it starts with `./`), so branches, URLs and packages are not taken for files. Your own skills are only checked against their own folder.
+  - A file the skill says to make ("write the summary to `docs/summary.md`", `> out.txt`, `mkdir -p`) is not expected to be there, and neither is one git ignores (a build's output).
+  - A command is checked where it runs: `cd web && npm run dev` and `npm --prefix web run dev` against `web/package.json`, `make -C web serve` against `web/Makefile`. Workspace commands (`-w`, `--filter`) and Makefiles with targets from patterns, variables or included files are not checked.
+- **Renamed or deleted.** Git says what happened to a missing file: "renamed to tools/check.sh" or "deleted from the project", with the commit. **Fix renamed paths** on the card (or `agentmgr skills fix <id>`) puts renamed ones right in the skill.
+- **Ask an agent.** For the rest, **Ask an agent…** on a project skill's card opens a new task: find what works now and propose the corrected skill. You add it as above.
+- **Told at the start.** An agent starting in a project is told which of its skills are out of date and what is wrong in each, and asked to propose a corrected one if it uses it.
+- **Looked at before you add it.** A proposed skill with what looks like a key or token is not added until that is out. The card also says what it names that is not in the project, and which skill it replaces. One the same as the skill already there is not offered.
+- **A newer version upstream.** Once a day the app looks at each repository skills were added from (one fetch each) and says which have a newer version. **Check all** in Skills, or `agentmgr skills check-all`, looks now.
+- **Not used lately.** A skill no agent has used in a month says so: its description may not say when to use it.
+- **In the self-review.** **Conventions** asks the agent whether it followed the skills that apply, and to name one it found wrong. The app checks the answer against the skills its session used.
+- **Dismiss** on an out-of-date skill puts it away until what is found changes.
+- **A brief not written.** An agent asked for a brief that stops without one, or says it is done without its self-review, is reminded once after a quiet minute. Not when its last words were a question for you.
+- **Off:** `"skillProposals": false`, `"skillDrift": { "enabled": false }` (or `"upstream": false` for no daily look), and `"briefReminder": false`.
+
 **Limit.** A "Backed" answer means the facts the app has agree with it, not that the work is right. Edges and Undo are only the agent's word, and so is Safe without the quality bar.
+
+### Skill policy, history and pull requests
+
+For a team, skills are shared instructions that every agent follows, so changes to them are controlled like code.
+
+- **Changes as pull requests.** With `"skillPolicy": { "projectChanges": "pr" }`, every change to a project's skills is a pull request: adding a proposed skill, fixing renamed paths, installing, updating, removing. The app makes the change on its own branch (`skills/<what>-<id>`) from the project's default branch on `origin`, in a temporary worktree, pushes it and opens the pull request with `gh`. Your checkout is never touched. The skill shows **pull request open** until the change is merged and pulled. Buttons say **Open pull request** instead of **Add skill**.
+- **Where changes may go.** `"places": ["project"]` allows changes to projects' skills only, not to people's own (`~/.claude/skills`); `["personal"]` the reverse. A place that allows no changes shows as **read-only**.
+- **Where skills come from.** `"sources": ["github.com/acme/"]` allows installing and updating only from those addresses; `false` allows none.
+- **Which projects' agents propose skills.** `"proposals": ["web", "api"]` (project shortcuts), or `false` for none.
+- **Agents can't change skills.** Adding, installing, updating, fixing, removing and dismissing are refused (403) when an agent asks; only the person can.
+- **History.** Every change is recorded: what, which skill, in place or by pull request (with its address), the agent that proposed it, and who made it (the git name and email here, and the device). **History** in Skills, `agentmgr skills history`, or `GET /api/skills/history`. The last 1,000 changes are kept.
+- **Plugins.** A plugin can refuse any change (`skill.add`, `skill.install`, `skill.update`, `skill.remove`, `skill.fix`) and hears each one (`skill.added`, …), to forward to an audit log. `config.json` is the person's own file; an organization enforces its policy with a plugin. See [docs/plugins.md](docs/plugins.md).
+- `agentmgr skills policy` shows the policy in effect.
 
 ## Test the tests: would they notice a mistake?
 

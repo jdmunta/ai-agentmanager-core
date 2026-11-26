@@ -55,7 +55,20 @@ const DEFAULTS = {
   proof: true,
   // With the brief: ask for a pre-mortem (## Risks: how the task could go wrong, named before starting and marked at the end).
   premortem: true,
+  // With the brief: a self-review (## Self-review) against the same first-principles questions before it calls the work done.
   selfReview: true,
+  // An agent that stops without its brief, or calls the work done without the self-review, is reminded once.
+  briefReminder: true,
+  // With the brief: a procedure worth keeping proposed as a skill (## Skill proposal), yours to add or not.
+  skillProposals: true,
+  // Skills checked for what they name that is gone from the project, and for newer versions upstream (once a day).
+  skillDrift: { enabled: true, upstream: true },
+  // Who may change skills, and how (an organization sets this; see README "Skill policy"):
+  //   places: where skills may be added or changed ("project", "personal")
+  //   projectChanges: "direct" writes into the project folder; "pr" opens a pull request instead
+  //   proposals: agents propose skills: true, false, or a list of project shortcuts
+  //   sources: installing from repositories: true, false, or address prefixes ("github.com/acme/")
+  skillPolicy: { places: ['project', 'personal'], projectChanges: 'direct', proposals: true, sources: true },
   // With the brief: when there is more than one way, ask for the options ranked by value now and later (## Options).
   valueLens: true,
   // Insights (why, what, how, now; value now and later, the kind of idea, the paths ranked) made by itself when an agent finishes.
