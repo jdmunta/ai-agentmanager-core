@@ -2105,7 +2105,8 @@ test('1.72 on a phone: Why on a review line, Try this path, the guess, and Glanc
   await until(`${gl}.querySelector('[data-nw="enabled"]')`, 'night watch');
   assert.equal(await js(`${gl}.querySelector('[data-nw="enabled"]').checked`), false, 'off until turned on');
   await js(`(() => { const c = ${gl}.querySelector('[data-nw="enabled"]'); c.checked = true; c.dispatchEvent(new Event('change', { bubbles: true })); })()`);
-  await until(`${gl}.querySelector('[data-nw="enabled"]')?.checked`, 'turned on');
+  // The box is ticked at once; the setting is saved when the page's request reaches the daemon.
+  for (let i = 0; i < 30 && !(await api('GET', '/night-watch')).settings.enabled; i++) await sleep(100);
   assert.equal((await api('GET', '/night-watch')).settings.enabled, true);
   await js(`(() => { const s = ${gl}.querySelector('[data-nw="hour"]'); s.value = '5'; s.dispatchEvent(new Event('change', { bubbles: true })); })()`);
   for (let i = 0; i < 30 && (await api('GET', '/night-watch')).settings.hour !== 5; i++) await sleep(100);

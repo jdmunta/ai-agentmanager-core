@@ -2646,10 +2646,15 @@ export async function main(argv) {
     .command('self-review')
     .description("The agent's self-review: the same first-principles questions it answers before calling its work done (asked, scope, works, tests, edges, ripple, safe, undo), each with its evidence and whether the app's own facts back or contradict it")
     .argument('<agent>')
+    .option('--send', 'send it the answers that say no and the ones the facts contradict, to fix and answer again')
     .option('--json', 'print JSON')
     .action(async (ref, o) => {
       await daemon();
       const a = await resolveAgent(ref);
+      if (o.send) {
+        await api('POST', `/agents/${a.id}/checklist/send`);
+        console.log(`${green('✓')} sent: it looks at those answers again`);
+      }
       const b = await api('GET', `/agents/${a.id}/checklist?format=md`);
       if (o.json) return console.log(JSON.stringify(b.checklist, null, 2));
       console.log(b.markdown);

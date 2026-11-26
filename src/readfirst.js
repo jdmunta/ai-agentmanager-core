@@ -107,7 +107,8 @@ export function readFirst(agent, trace = null) {
     if (no.length) add(Math.min(20, 8 * no.length), `Its self-review says no to ${plural(no.length, 'principle')}: ${clip(no.map((i) => `${i.label}${i.evidence ? ` (${i.evidence})` : ''}`).join('; '), 120)}`);
     if (contra.length) add(Math.min(24, 12 * contra.length), `It says ${contra.map((i) => i.label).join(', ')} ${contra.length === 1 ? 'holds' : 'hold'}, and the app's facts say otherwise: ${clip(contra.map((i) => i.app.why).join('; '), 120)}`);
     if (unanswered.length >= 3) add(5, `Its self-review leaves ${plural(unanswered.length, 'principle')} unchecked`);
-    if (!no.length && !contra.length && !unanswered.length && cl.counts.backs >= 2) calm.push(`Its self-review holds on every principle, and the app's facts back ${cl.counts.backs} of them`);
+    if (cl.stale) add(5, 'Its self-review was written before its latest changes');
+    if (!no.length && !contra.length && !unanswered.length && !cl.stale && cl.counts.backs >= 2) calm.push(`Its self-review holds on every principle, and the app's facts back ${cl.counts.backs} of them`);
   } else if (cl) add(5, 'It wrote no self-review');
   const conf = b.results?.confidence?.percent;
   if (!Number.isFinite(conf)) add(5, 'It gave no confidence');

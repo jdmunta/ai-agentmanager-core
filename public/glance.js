@@ -64,6 +64,9 @@ export function glanceOf(a) {
   // To review: finished, or a pull request ready to merge.
   if (a.readFirst) out.review.push(`${LEVEL[a.readFirst.level]}${a.readFirst.reasons?.[0] ? `: ${clip(a.readFirst.reasons[0].text, 120)}` : ''}`);
   for (const p of open.filter((p) => p.land === 'ready')) out.review.push(`Pull request ${prNo(p)} is ready to merge`);
+  // Its self-review says a principle holds and the app's facts say otherwise (checklist.js): read those first, once the work waits for review. A drift is said under To fix.
+  const contra = (a.checklist?.items ?? []).filter((i) => i.state === 'yes' && i.app?.verdict === 'contradicts' && !(i.key === 'scope' && a.fence?.drift?.length));
+  if (contra.length && a.readFirst) out.review.push(`Its self-review is contradicted: ${clip(contra.map((i) => `${i.label} (${i.app.why})`).join('; '), 140)}`);
 
   // To answer: questions it asked without stopping (the Inbox), still unanswered.
   const asked = (a.questions ?? []).filter((q) => !q.answer);

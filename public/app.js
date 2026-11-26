@@ -4294,6 +4294,11 @@ $('#detail-body').addEventListener('click', async (e) => {
         upsert(await api('POST', `/agents/${a.id}/echo`, { lesson: btn.dataset.lesson, act: btn.dataset.act === 'echo-tell' ? 'tell' : 'dismiss' }));
         toast(btn.dataset.act === 'echo-tell' ? 'Told: it checks and fixes it' : 'Marked as not the same');
       });
+    case 'checklist-send':
+      return act(async () => {
+        upsert(await api('POST', `/agents/${a.id}/checklist/send`));
+        toast('Sent: it looks at those answers again');
+      });
     case 'fence-allow':
     case 'fence-pull':
       return act(async () => {

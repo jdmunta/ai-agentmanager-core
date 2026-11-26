@@ -585,17 +585,20 @@ Before it calls its work done or partial, each agent adds **Self-review** to its
 Each answer is **Holds**, **No**, **Not applicable** or **Not checked**. A "holds" with no evidence counts as not checked.
 
 - **Verified, not just said.** The app sets each answer against facts it measured itself and marks it **Backed** or **Contradicted**, with the reason:
-  - **Asked:** what it lists as not done, a partial outcome, the scorecard.
+  - **Asked:** what it lists as not done, a partial outcome, what done means point by point (a point not met contradicts it; a point with no recorded run leaves it unbacked), the scorecard.
   - **Scope:** the [scope fence](#scope-fence).
   - **Works:** its own failed checks, its recorded proof and whether it gave the same result when run again, CI.
-  - **Tests:** [Test the tests](#test-the-tests-would-they-notice-a-mistake), and code changed with no test file.
+  - **Tests:** [Test the tests](#test-the-tests-would-they-notice-a-mistake), and the quality bar's "tests changed with the code" (or code changed with no test file).
+  - **Safe:** the quality bar's scan of the added lines for keys and tokens, when the bar has it.
   - **Ripple:** CI on its pull request, and Night watch.
-  - Edges, Safe and Undo are its word only.
-- **Where you see it.** In the agent's Results, as **Self-review** ("6 hold, 1 no · the app backs 3, contradicts 1"). It is open when an answer is No, not checked, or contradicted, and those are the ones to read first. Agents are also asked to put the list in their pull request's description. `agentmgr self-review <agent>` prints it as Markdown and exits with 1 when something is No, contradicted, or missing.
-- **What it feeds.** Read first counts a No, and more so a "holds" the facts contradict.
+  - Edges and Undo are its word only.
+- **Written before its latest changes.** The work is fingerprinted when the agent writes its answers. If it changes the code afterwards, the list says so: the answers may speak for an earlier version.
+- **Where you see it.** In the agent's Results, as **Self-review** ("6 hold, 1 no · the app backs 3, contradicts 1"). It is open when an answer is No, not checked, contradicted, or written before its latest changes, and those are the ones to read first. A "holds" the facts contradict is also named under **To review** in Glance. Agents are also asked to put the list in their pull request's description. `agentmgr self-review <agent>` prints it as Markdown and exits with 1 when something is No, contradicted, or missing.
+- **Ask it to fix these.** One tap sends the agent just the answers that say No and the ones the facts contradict, asking it to fix them and answer again (`agentmgr self-review <agent> --send`). Only you can send it.
+- **What it feeds.** Read first counts a No, and more so a "holds" the facts contradict. An agent started before 1.73 was never asked for a self-review, so a missing one is not counted against it.
 - **Off:** `"selfReview": false` in config.json.
 
-**Limit.** A "Backed" answer means the facts the app has agree with it, not that the work is right. Edges, Safe and Undo are only the agent's word.
+**Limit.** A "Backed" answer means the facts the app has agree with it, not that the work is right. Edges and Undo are only the agent's word, and so is Safe without the quality bar.
 
 ## Test the tests: would they notice a mistake?
 

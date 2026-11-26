@@ -1679,6 +1679,23 @@ test('proof: the agent is told to record it; what it recorded is shown with what
   assert.ok(v.readFirst.reasons.some((r) => /^Its self-review says no to 1 principle: Tests \(no test reads the version\)/.test(r.text)) && v.readFirst.reasons.some((r) => /^It says Asked holds, and the app's facts say otherwise: It lists as not done: the changelog entry/.test(r.text)), 'counted in Read first');
   const cl = (await call('GET', `/agents/${a.id}/checklist?format=md`)).body;
   assert.match(cl.markdown, /^# Self-review: .*\n\n2 hold, 1 no, 5 not checked · the app backs [12], contradicts 1\n\n- \[x\] \*\*Asked\*\*: the version file, as asked\n  - \*\*Contradicted\*\* by the app: It lists as not done: the changelog entry/);
+  // Written before its latest changes: the work is fingerprinted when it writes its answers.
+  await waitFor(async () => (await agentNow(a.id)).checklistMark?.sig, 15000, 'the work fingerprinted');
+  assert.equal((await agentNow(a.id)).checklist.stale, false);
+  fs.writeFileSync(path.join(ready.workdir, 'VERSION'), '1.2.4\n');
+  await manager.updateChanges(manager.get(a.id), { force: true });
+  assert.equal((await agentNow(a.id)).checklist.stale, true, 'changed after it answered');
+  fs.writeFileSync(path.join(ready.workdir, 'VERSION'), '1.2.3\n');
+  await manager.updateChanges(manager.get(a.id), { force: true });
+  assert.equal((await agentNow(a.id)).checklist.stale, false, 'back to what it answered for');
+  // Sent back by the person, not an agent: the no and the contradicted one.
+  assert.equal((await call('POST', `/agents/${a.id}/checklist/send`, {}, { 'x-agentmgr': '1', 'x-agentmgr-agent': a.id })).status, 403);
+  const rec = recordTold();
+  const sent = await call('POST', `/agents/${a.id}/checklist/send`, {});
+  rec.restore();
+  assert.equal(sent.status, 200);
+  assert.match(rec.told[0], /^Your self-review has answers to look at again:\n- Asked: you say it holds, but it lists as not done: the changelog entry\.\n- Tests: you say it does not hold \(no test reads the version\)\./);
+  assert.deepEqual(sent.body.checklistSent.keys, ['asked', 'tests']);
   // Requirement trace: with points agreed, each is followed to the checks recorded for it.
   manager.patch(a.id, { acceptance: { status: 'agreed', agreedAt: new Date().toISOString(), points: [{ id: 'A1', text: 'The file holds the version' }, { id: 'A2', text: 'The changelog has an entry' }] } });
   const trace = (await call('GET', `/agents/${a.id}/trace`)).body;
