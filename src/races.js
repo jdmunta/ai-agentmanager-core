@@ -68,6 +68,60 @@ export class Races extends EventEmitter {
     return this.view(id);
   }
 
+  /**
+   * Try the other path: an agent wrote down the ways it weighed (## Options, its preferred one
+   * first, the one it takes). Path `n` is started as a second agent from the same base commit,
+   * told to take that path, and the two are raced: the scoreboard, a test command run in both,
+   * and picking the one to keep. A path already being tried is not started twice.
+   */
+  tryPath(agentId, n) {
+    const src = this.manager.mustGet(agentId);
+    const paths = src.brief?.options?.paths ?? [];
+    n = Number(n);
+    if (!paths.length) throw err(409, 'It has not written the paths it weighed (## Options in its brief)');
+    if (!Number.isInteger(n) || n < 2 || n > paths.length) throw err(400, `Pick a path from 2 to ${paths.length}: path 1 is the one it takes`);
+    if (src.kind !== 'task' || src.team) throw err(409, 'Only a task agent of its own can try another path');
+    // In a race: only the one its own Try this path started (not a race of variants, nor one where it is the other path).
+    if (src.raceId && this.store.data.races[src.raceId] && this.store.data.races[src.raceId].tryOf !== src.id) throw err(409, 'It is already in a race');
+    const repoDir = src.sourceDir ?? src.workdir;
+    if (!src.repo && !repoDir) throw err(409, 'It has no repository to start another agent in');
+    const label = `path-${n}`;
+    let race = src.raceId ? this.store.data.races[src.raceId] : null;
+    if (race && race.members.some((m) => this.manager.get(m)?.variant?.label === label)) throw err(409, `Path ${n} is already being tried`);
+    const p = paths[n - 1];
+    const first = paths[0];
+    const say = (x) => `"${x.name}"${x.what ? ` (${x.what})` : ''}`;
+    const raceId = race?.id ?? `r${crypto.randomBytes(3).toString('hex')}`;
+    const instructions = `Take path ${n}, ${say(p)}. Another agent is taking path 1, ${say(first)}: do not take that one. In ## Options, put the path you take first.`;
+    const a = this.manager.create({
+      intent: `${src.intent}\n\nApproach for this attempt: ${instructions}`,
+      name: `${src.name}-path${n}`,
+      ...(src.repo ? { repo: src.repo } : { dir: repoDir }),
+      worktree: true,
+      // The commit the first agent started from (its branch would carry its own path).
+      base: src.baseRef?.split(' @ ')[1] ?? undefined,
+      permissionMode: src.permissionMode ?? undefined,
+      model: src.model ?? undefined,
+      engine: src.engine ?? undefined,
+      project: src.project ?? undefined,
+      priority: src.priority,
+      autonomy: src.autonomy?.level ?? undefined,
+      designDoc: src.designDoc ?? undefined,
+      // (It starts at once: what done means was agreed for the task with the first agent.)
+      acceptance: false,
+      race: { id: raceId, variant: { label, model: src.model ?? null, instructions: `Path ${n}: ${p.name}` } },
+    });
+    // The race is made once the agent is: a refused one leaves none behind.
+    if (!race) {
+      race = { id: raceId, intent: src.intent, testCommand: null, createdAt: now(), members: [src.id], tests: {}, winner: null, tryOf: src.id };
+      this.store.data.races[raceId] = race;
+      this.manager.patch(src.id, { raceId, variant: { label: 'path-1', model: src.model ?? null, instructions: `Path 1: ${first.name}` } });
+    }
+    race.members.push(a.id);
+    this.save(race);
+    return this.view(race.id);
+  }
+
   get(id) {
     const race = this.store.data.races[id];
     if (!race) throw err(404, `No race ${id}`);

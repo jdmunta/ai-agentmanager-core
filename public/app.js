@@ -228,7 +228,7 @@ initWorklog({ api, esc, toast, $ });
 initWeekly({ api, esc, toast, $, md: (t) => md(t) });
 const understandUi = initUnderstand({ $, esc, api, toast: (m, ms) => toast(m, ms), openChanges: (id) => (showTab('agents'), select(id), reviewUi.open(id)), agentOf: (id) => agents.get(id) });
 const readFirstUi = initReadFirst({ $, esc, ago: (t) => ago(t), agents, openAgent: (id) => (showTab('agents'), select(id)), openChanges: (id) => (showTab('agents'), select(id), reviewUi.open(id)), projectOf: (a) => a.projectInfo?.name ?? null, api, toast: (m, ms) => toast(m, ms), understand: (id) => understandUi.open(id) });
-const glanceUi = initGlance({ $, esc, ago: (t) => ago(t), agents, openAgent: (id) => (showTab('agents'), select(id)), readFirst: () => readFirstUi.open() });
+const glanceUi = initGlance({ $, esc, ago: (t) => ago(t), agents, openAgent: (id) => (showTab('agents'), select(id)), readFirst: () => readFirstUi.open(), api });
 initSetup({ api, esc, $ });
 const updateUi = initUpdate({ api, esc, toast, $ });
 initMenu({ api, esc, toast, $ });
@@ -1125,8 +1125,10 @@ function resultsCard(a) {
     ${r.confidence ? `<p class="own-conf"><span class="tag conf-${esc(r.confidence.level)}" title="The agent's own confidence in what it built, as it wrote it in its brief. The review scorecard is the separate check.">Its own confidence: ${r.confidence.percent}%</span> ${esc(r.confidence.why)}</p>` : r.fromAgent && ['done', 'partial'].includes(r.outcome) ? '<p class="hint own-conf">The agent has not said how confident it is in this.</p>' : ''}
     ${r.blockers.length ? `<ul class="blockers">${r.blockers.map((x) => item(x, 'blocker')).join('')}</ul>` : ''}
     ${readFirstRow(a, esc)}
+    ${fenceRow(a)}
+    ${echoRow(a)}
     ${privateRow(a, esc)}
-    ${optionsRows(a, esc)}
+    ${optionsRows(a, esc, pathTries(a))}
     ${proofRows(a, esc)}
     ${r.delivered.length ? `<ul class="delivered">${r.delivered.map((x) => item(x, 'delivered')).join('')}</ul>` : '<p class="hint">Nothing delivered yet.</p>'}
     ${r.notes ? `<div class="md">${md(r.notes)}</div>` : ''}
@@ -2444,6 +2446,39 @@ function raceBanner(a) {
   const n = r?.rows.length ?? 0;
   return `<div class="bl-banner race">🏁 Race attempt${a.variant?.label ? ` <b>${esc(a.variant.label)}</b>` : ''}${n ? ` · ${n} attempts` : ''}${r?.winner === a.id ? ' · <b>winner</b>' : ''}
     <span class="spacer"></span><button class="small primary" data-race-open="${a.raceId}">Compare</button></div>`;
+}
+
+/** In its Results: a lesson of the repository its changes look like they repeat (echo.js). */
+function echoRow(a) {
+  const open = Object.entries(a.echoes ?? {}).filter(([, e]) => e.repeats && e.state === 'open');
+  if (!open.length) return '';
+  return `<div class="fence-row echo-row"><b>Repeats a past mistake?</b> <span class="hint">A lesson of this repository, learned from a change that went wrong; a model read its changes against it.</span>
+    <ul>${open.map(([id, e]) => `<li><span>${esc(e.lesson)}</span>${e.where ? ` <code>${esc(e.where)}</code>` : ''}${e.why ? `<div class="hint">${esc(e.why)}</div>` : ''}
+      <button class="small" data-act="echo-tell" data-lesson="${esc(id)}" title="Send it the lesson and where it looks repeated">Tell it</button> <button class="small ghost" data-act="echo-dismiss" data-lesson="${esc(id)}">Not the same</button></li>`).join('')}</ul></div>`;
+}
+
+/** In its Results: changing code outside its task (fence.js), with Allow and Pull it back. */
+function fenceRow(a) {
+  const drift = a.fence?.drift ?? [];
+  if (!drift.length) return '';
+  return `<div class="fence-row"><b>Outside its task</b> <span class="hint">It changes code that what it was asked and planned does not name.</span>
+    <ul>${drift.map((d) => `<li><code>${esc(d.area)}</code> <span class="hint">${d.files.length} file${d.files.length === 1 ? '' : 's'}, ${d.lines} lines: ${esc(d.files.slice(0, 3).join(', '))}${d.files.length > 3 ? '…' : ''}</span> <button class="small" data-act="fence-allow" data-area="${esc(d.area)}" title="It belongs to the task: in scope from now on">Allow</button></li>`).join('')}</ul>
+    <button class="small" data-act="fence-pull" title="Tell it to stay within the task and undo those changes unless they are needed">Pull it back</button></div>`;
+}
+
+/**
+ * Its other paths being tried ({ n: { id, name } }), for Try this path in its Results; null when
+ * none can be tried here (no repository, in a race of another kind, or itself trying a path).
+ */
+function pathTries(a) {
+  const own = /^path-(\d+)$/.exec(a.variant?.label ?? '');
+  if (a.kind !== 'task' || a.team || !(a.repo || a.workdir) || (a.raceId && !own) || (own && own[1] !== '1')) return null;
+  const tries = {};
+  for (const o of agents.values()) {
+    const m = o.id !== a.id && a.raceId && o.raceId === a.raceId && /^path-(\d+)$/.exec(o.variant?.label ?? '');
+    if (m) tries[m[1]] = { id: o.id, name: o.name };
+  }
+  return tries;
 }
 
 function openRace(id) {
@@ -4245,6 +4280,26 @@ $('#detail-body').addEventListener('click', async (e) => {
       });
     case 'readfirst-open':
       return readFirstUi.open(a.id);
+    case 'try-path':
+      return act(async () => {
+        const race = await api('POST', `/agents/${a.id}/try-path`, { path: Number(btn.dataset.path) });
+        toast(`${race.rows.at(-1)?.name ?? 'An agent'} takes path ${btn.dataset.path}: compare them in the race`);
+        openRace(race.id);
+      });
+    case 'echo-tell':
+    case 'echo-dismiss':
+      return act(async () => {
+        upsert(await api('POST', `/agents/${a.id}/echo`, { lesson: btn.dataset.lesson, act: btn.dataset.act === 'echo-tell' ? 'tell' : 'dismiss' }));
+        toast(btn.dataset.act === 'echo-tell' ? 'Told: it checks and fixes it' : 'Marked as not the same');
+      });
+    case 'fence-allow':
+    case 'fence-pull':
+      return act(async () => {
+        upsert(await api('POST', `/agents/${a.id}/fence`, btn.dataset.act === 'fence-allow' ? { allow: btn.dataset.area } : { pull: true }));
+        toast(btn.dataset.act === 'fence-allow' ? `${btn.dataset.area} is in scope for it now` : 'Told to stay within its task');
+      });
+    case 'try-path-open':
+      return select(btn.dataset.agent);
     case 'proof-open':
       return proofUi.open(a.id);
     case 'auto-open':
@@ -4666,6 +4721,7 @@ $('#new-form').addEventListener('submit', async (e) => {
       autonomy: f.get('autonomy') || undefined,
       designDoc: Boolean(f.get('designDoc')),
       start: Boolean(f.get('start')),
+      guess: f.get('guessFinish') || f.get('guessHours') || f.get('guessReview') ? { finish: f.get('guessFinish') || undefined, hours: f.get('guessHours') || undefined, review: f.get('guessReview') || undefined } : undefined,
       ...containerChoice(e.target),
     });
     created.forEach((a) => agents.set(a.id, a));
@@ -4996,11 +5052,16 @@ $('#compose').addEventListener('submit', (e) => {
   const box = $('#compose-text');
   const text = box.value;
   if (!text.trim()) return;
-  term.send({ t: 'i', d: text });
-  // Enter separately, so Claude reads the text as typed input and then submits it.
-  setTimeout(() => term.send({ t: 'i', d: '\r' }), 150);
+  if (!term.agentId) return;
+  // The daemon types it and presses Enter once the program has taken it in, and again if it is
+  // still in the input box (manager.typeIn): sent from here as two keystrokes, the Enter could
+  // arrive too early and a long message stayed unsent.
   box.value = '';
   box.style.height = '';
+  api('POST', `/agents/${term.agentId}/term/send`, { text, kind: term.kind }).catch((err) => {
+    box.value ||= text;
+    toast(`Not sent: ${err.message}`, 6000);
+  });
 });
 $('#compose-text').addEventListener('keydown', (e) => {
   if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {

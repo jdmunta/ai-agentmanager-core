@@ -1769,7 +1769,7 @@ test('Without you and ground rules: the level on a new agent and on one that run
   await until(`document.querySelector('.results .read-first-row')`, 'back in the queue');
   await js(`${rfd}.querySelector('[data-rf="close"]').click()`);
   // The ways it weighed, preferred first; and Insights with what it is worth now and later, the kind of idea and the paths.
-  assert.match(await js(`document.querySelector('.results .vl-options').textContent.replace(/\\s+/g, ' ')`), /Paths it weighed 2, preferred first: Cache in memory ?Preferred Cache in memory one process ?now high ?later low ?cost small ?risk low ?Pick when: one server is enough ?Shared cache a service ?now medium ?later high ?cost large ?risk medium ?Pick when: a second server is planned ?Why the first it ships <now>/);
+  assert.match(await js(`document.querySelector('.results .vl-options').textContent.replace(/\\s+/g, ' ')`), /Paths it weighed 2, preferred first: Cache in memory ?Preferred Cache in memory one process ?now high ?later low ?cost small ?risk low ?Pick when: one server is enough ?Shared cache a service ?now medium ?later high ?cost large ?risk medium ?Pick when: a second server is planned ?Try this path ?Why the first it ships <now>/);
   await js(`document.querySelector('[data-act="insights"]').click()`);
   await until(`document.querySelector('.insight-wide .insight.paths .vl-paths')`, 'Insights, with the decision cards', 30_000);
   const wideCards = await js(`Object.fromEntries([...document.querySelectorAll('.insight-wide .insight')].map((c) => [c.querySelector('h4').textContent, c.textContent.replace(/\\s+/g, ' ').trim()]))`);
@@ -2020,5 +2020,100 @@ test('Acceptance: what done means waits in the inbox, the points changed and agr
   await until(`${row} && /2 of 3 met, 1 not met/.test(${row}.textContent)`, 'on the agent: 2 of 3 met');
   assert.ok(await js(`${row}.querySelector('.tag').classList.contains('acc-bad')`));
   await api('DELETE', `/agents/${a.id}`).catch(() => {});
+  assert.deepEqual(errors, [], 'no errors on the page');
+});
+
+test('1.72 on a phone: Why on a review line, Try this path, the guess, and Glance with Your calibration and Night watch', { skip }, async () => {
+  const repo = path.join(home, 'r172');
+  fs.mkdirSync(repo, { recursive: true });
+  const g = (cwd, ...args) => execFileSync('git', ['-c', 'commit.gpgsign=false', '-c', 'user.email=t@t', '-c', 'user.name=t', ...args], { cwd });
+  g(repo, 'init', '-q', '-b', 'main');
+  fs.writeFileSync(path.join(repo, 'README.md'), '# cart\n');
+  g(repo, 'add', '.');
+  g(repo, 'commit', '-q', '-m', 'init');
+
+  // The guess, in New agent: given with it, kept on it.
+  await js(`document.querySelector('#new-btn')?.click()`);
+  await until(`document.querySelector('#new-dialog').open`, 'New agent');
+  assert.deepEqual(await js(`[...document.querySelectorAll('#new-dialog .guess-row select')].map((s) => s.name)`), ['guessFinish', 'guessHours', 'guessReview']);
+  await js(`document.querySelector('#new-dialog').close()`);
+  const [a] = await api('POST', '/agents', { intents: ['Fix the cart total'], dir: repo, worktree: true, guess: { finish: 'yes', hours: 2, review: 'look' } });
+  assert.deepEqual([a.guess.finish, a.guess.hours, a.guess.review], ['yes', 2, 'look']);
+  let ra;
+  for (let i = 0; i < 100 && !(ra = await api('GET', `/agents/${a.id}`)).workdir; i++) await sleep(200);
+  for (let i = 0; i < 100 && (await api('GET', `/agents/${a.id}`)).status !== 'running'; i++) await sleep(200);
+  ra = await api('GET', `/agents/${a.id}`);
+  // Its change, and the edit that wrote it in its conversation.
+  fs.writeFileSync(path.join(ra.workdir, 'cart.js'), 'export const total = (xs) =>\n  xs.reduce((n, x) => n + x.cents, 0);\n');
+  const prev = process.env.CLAUDE_CONFIG_DIR;
+  process.env.CLAUDE_CONFIG_DIR = path.join(home, 'claude');
+  const { transcriptPath } = await import('../src/tracker.js');
+  const file = transcriptPath(ra.workdir, ra.sessionId);
+  process.env.CLAUDE_CONFIG_DIR = prev;
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const at = new Date().toISOString();
+  fs.appendFileSync(file, `${JSON.stringify({ type: 'user', timestamp: at, message: { content: 'Sum the cart in <cents>' } })}\n${JSON.stringify({ type: 'assistant', timestamp: at, message: { content: [{ type: 'text', text: 'Cents avoid rounding.' }, { type: 'tool_use', id: 't1', name: 'Write', input: { file_path: path.join(ra.workdir, 'cart.js'), content: 'export const total = (xs) =>\n  xs.reduce((n, x) => n + x.cents, 0);\n' } }] } })}\n`);
+
+  await js(`document.querySelector('[data-tab="agents"]').click()`);
+  await until(`document.querySelector('#agent-list li[data-id="${a.id}"]')`, 'listed');
+  await js(`document.querySelector('#agent-list li[data-id="${a.id}"]').click()`);
+  await until(`document.querySelector('[data-act="changes"]:not([disabled])')`, 'Review changes');
+  await js(`document.querySelector('[data-act="changes"]').click()`);
+  const rv = `document.querySelector('#review-dialog')`;
+  await until(`${rv}.open && ${rv}.querySelector('tr.rv-add .rv-why')`, 'an added line with its ?', 20_000);
+  await width(390);
+  await js(`${rv}.querySelector('tr.rv-add:nth-of-type(2) .rv-why, tr.rv-add .rv-why').click()`);
+  await until(`${rv}.querySelector('.rv-why-body') || ${rv}.querySelector('.rv-why-row .hint:not(:empty)')?.textContent.includes('No edit')`, 'why it is there', 15_000);
+  const why = await js(`${rv}.querySelector('.rv-why-row').textContent.replace(/\\s+/g, ' ')`);
+  assert.match(why, /Why is this line here\? Written by Write.* What it was asked ?Sum the cart in <cents> What it said just before ?Cents avoid rounding\./);
+  assert.ok(await js(`${rv}.querySelector('.rv-why-row').getBoundingClientRect().right <= 390 + 1 && document.documentElement.scrollWidth <= 390`), 'fits a phone');
+  await js(`${rv}.querySelector('[data-rv-why-close]').click()`);
+  await until(`!${rv}.querySelector('.rv-why-row')`, 'closed');
+  await width(1600);
+  await js(`${rv}.close()`);
+
+  // Try this path: on the path it did not take, starting a race.
+  const briefs = path.join(home, 'briefs', a.id);
+  for (let i = 0; i < 50 && !fs.existsSync(path.join(briefs, 'BRIEF.md')); i++) await sleep(200);
+  await sleep(300);
+  fs.writeFileSync(path.join(briefs, 'BRIEF.md'), 'Status: working\n## Problem\nx\n## Options\n1. Sum in cents: one pass | now: high | later: medium | cost: small | risk: low | when: always\n2. Money type: a class | now: low | later: high | cost: medium | risk: medium | when: more currencies\n- Preferred: 1, because it is small\n## Results\nOutcome: in progress\n');
+  await until(`document.querySelector('.results [data-act="try-path"][data-path="2"]')`, 'Try this path on path 2', 20_000);
+  assert.equal(await js(`document.querySelectorAll('.results [data-act="try-path"]').length`), 1, 'not on the path it takes');
+  await js(`document.querySelector('.results [data-act="try-path"]').click()`);
+  await until(`document.querySelector('#race-dialog').open`, 'the race opens');
+  await until(`document.querySelector('.results [data-act="try-path-open"]')`, 'being tried, by whom');
+  const race = (await api('GET', `/agents/${a.id}`)).raceId;
+  const other = (await api('GET', `/races/${race}`)).rows.find((r) => r.id !== a.id);
+  await js(`document.querySelector('#race-dialog').close()`);
+
+  // Glance on a phone: your calibration, and night watch turned on and off.
+  await width(390);
+  await js(`document.querySelector('#glance-btn').click()`);
+  const gl = `document.querySelector('#glance-dialog')`;
+  await until(`${gl}.open && ${gl}.querySelector('.gl-line')`, 'the glance');
+  await js(`${gl}.querySelector('[data-gl="calibration"]').click()`);
+  await until(`${gl}.querySelector('.cal-lines')`, 'your calibration');
+  assert.match(await js(`${gl}.querySelector('.cal-lines').textContent`), /No guess has settled yet|Whether it finishes/);
+  assert.ok(await js(`${gl}.scrollWidth <= ${gl}.clientWidth + 1 && ${gl}.getBoundingClientRect().right <= 390`), 'calibration fits a phone');
+  await js(`${gl}.querySelector('[data-gl-back]').click()`);
+  await until(`${gl}.querySelector('.gl-line')`, 'back to the glance');
+  await js(`${gl}.querySelector('[data-gl="night"]').click()`);
+  await until(`${gl}.querySelector('[data-nw="enabled"]')`, 'night watch');
+  assert.equal(await js(`${gl}.querySelector('[data-nw="enabled"]').checked`), false, 'off until turned on');
+  await js(`(() => { const c = ${gl}.querySelector('[data-nw="enabled"]'); c.checked = true; c.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+  await until(`${gl}.querySelector('[data-nw="enabled"]')?.checked`, 'turned on');
+  assert.equal((await api('GET', '/night-watch')).settings.enabled, true);
+  await js(`(() => { const s = ${gl}.querySelector('[data-nw="hour"]'); s.value = '5'; s.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+  for (let i = 0; i < 30 && (await api('GET', '/night-watch')).settings.hour !== 5; i++) await sleep(100);
+  assert.equal((await api('GET', '/night-watch')).settings.hour, 5);
+  await js(`${gl}.querySelector('[data-nw="run"]').click()`);
+  await until(`/Last run/.test(${gl}.textContent)`, 'run now', 20_000);
+  assert.ok(await js(`${gl}.scrollWidth <= ${gl}.clientWidth + 1 && ${gl}.getBoundingClientRect().right <= 390`), 'night watch fits a phone');
+  await api('PUT', '/night-watch', { enabled: false });
+  await js(`${gl}.querySelector('[data-gl="close"]').click()`);
+  await width(1600);
+
+  await api('DELETE', `/races/${race}`).catch(() => {});
+  for (const id of [other.id, a.id]) await api('DELETE', `/agents/${id}?deleteWorkspace=1`).catch(() => {});
   assert.deepEqual(errors, [], 'no errors on the page');
 });

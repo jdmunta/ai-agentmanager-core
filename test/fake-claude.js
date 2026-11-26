@@ -293,6 +293,11 @@ if (args.includes('--input-format') && args.includes('stream-json')) {
       const reply = ok ? claimsReply(input) : null;
       return reply ? json(reply) : process.exit(1);
     }
+    if (input.startsWith('A lesson was learned in this repository from a change that went wrong.')) {
+      // Bug echo: a diff with "REPEAT-ME" in an added line repeats the lesson.
+      const hit = section('diff').split('\n').find((l) => l.startsWith('+') && l.includes('REPEAT-ME'));
+      return json(hit ? { repeats: true, where: 'src/pay.js:2', why: `it adds ${hit.slice(1).trim()}` } : { repeats: false, where: '', why: 'nothing like it' });
+    }
     if (input.startsWith('Write one lesson for AI coding agents')) {
       process.stdout.write(`"Check ${/Pull request (#\d+)/.exec(input)?.[1] ?? 'it'} again: ${section('what_happened').split('\n')[1] ?? ''}"`, () => process.exit(0));
       return;

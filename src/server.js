@@ -60,6 +60,10 @@ import { Quality } from './quality.js';
 import { recordMarkdown } from './record.js';
 import { Weekly } from './weekly.js';
 import { queueMarkdown, readQueue } from './readfirst.js';
+import { blameMarkdown } from './blame.js';
+import { Echo } from './echo.js';
+import { calibration, calibrationLines, calibrationMarkdown, cleanGuess } from './calibration.js';
+import { NightWatch, nightMarkdown, nightSettings } from './nightwatch.js';
 import { glance, glanceLine, glanceMarkdown } from '../public/glance.js';
 import { traceMarkdown, traceOf } from './trace.js';
 import { PRIVATE_MESSAGE, keptPrivate, mustBeShareable } from './private.js';
@@ -359,6 +363,16 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
   const quality = new Quality({ manager, store, config, who: me, onChange: () => pushQuality() });
   // Standards per repository: lessons from what went wrong, high-risk paths, and the quality bar (standards.js).
   const standards = new Standards({ manager, store, config, quality, onChange: () => pushQuality() });
+  // Night watch: merged work's recorded commands run again against the latest main (nightwatch.js). Off until turned on.
+  const nightWatch = new NightWatch({ manager, store, quality, run: runCheck, config, log: (m) => console.log(`[agentmgr] ${m}`) });
+  setInterval(() => nightWatch.tick(), 10 * 60_000).unref();
+  // Bug echo: a lesson accepted, the agents at work in that repository checked for the same mistake (echo.js).
+  const echo = new Echo({ manager, standards, review, log: (m) => console.log(`[agentmgr] ${m}`) });
+  const echoLesson = (key, lesson) => {
+    if (config.echo?.enabled === false || config.standards?.enabled === false || lesson?.state !== 'accepted') return lesson;
+    echo.run(key, lesson).catch((e) => console.log(`[agentmgr] bug echo: ${e.message}`));
+    return lesson;
+  };
   // A week's work and achievements on one page, for management (weekly.js); written as a draft file when the week is over.
   const weekly = new Weekly({ manager, store, worklog, value, quality, who: me, config });
   // AI News: the frontier labs' latest releases, summarized (news.js).
@@ -625,7 +639,13 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
       // Agents the assistant's own session starts: its limits apply, and they are marked as its.
       const extra = assistant.admit(req.headers['x-agentmgr-agent'], list, opts);
       if (extra.startedBy) proposed.refuseSetAside(list);
-      const created = manager.createMany(list, { ...opts, ...extra });
+      // Your guess (calibration.js): yours only, so not on the ones the assistant starts. Checked first.
+      const guess = extra.startedBy ? null : cleanGuess(opts.guess);
+      let created = manager.createMany(list, { ...opts, ...extra });
+      if (guess) {
+        for (const a of created) manager.patch(a.id, { guess });
+        created = created.map((a) => manager.view(store.get(a.id) ?? a));
+      }
       if (!extra.startedBy) repeats.record(created.map((a) => ({ text: a.intent, projectKey: projectOf(store.get(a.id) ?? a).key })));
       if (extra.startedBy) {
         for (const a of created) notifier.send('assistant', a, `was started by the assistant: ${a.intent.replace(/\s+/g, ' ').slice(0, 160)}`);
@@ -1101,6 +1121,11 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
   // Attachments: copied once to a shared folder and listed in the request every attempt gets.
   const withFiles = ({ attachments, ...body } = {}) => ({ ...body, intent: manager.withSharedAttachments(body.intent, attachments) });
   api.post('/races', wrap((req) => races.create(withFiles(req.body ?? {}))));
+  // Try the other path: the path it weighed and did not take, raced against the one it took (races.js).
+  api.post('/agents/:id/try-path', wrap((req) => {
+    if (req.headers['x-agentmgr-agent']) throw fail(403, 'Another path is tried when the person asks, not an agent');
+    return races.tryPath(req.params.id, req.body?.path);
+  }));
   api.get('/races/:id', wrap((req) => races.view(req.params.id)));
   api.post('/races/:id/tests', wrap((req) => races.runTests(req.params.id, req.body ?? {})));
   api.get('/races/:id/diff/:agent', wrap((req) => races.diff(req.params.id, req.params.agent)));
@@ -1281,6 +1306,34 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
     const g = glance(store.list().map((a) => manager.view(a)));
     return { ...g, line: glanceLine(g), markdown: glanceMarkdown(g, { all: req.query.all === '1' }) };
   }));
+  // Scope fence: allow an area it changes outside its task, or pull it back (fence.js).
+  api.post('/agents/:id/fence', wrap((req) => {
+    if (req.headers['x-agentmgr-agent']) throw fail(403, 'What is in scope is said by the person, not by an agent');
+    return manager.setFence(req.params.id, req.body ?? {});
+  }));
+  // Your calibration: your guesses at the start against what happened (calibration.js).
+  // The Read first level is gone once the work is reviewed: it is kept with the guess first.
+  const keepActual = (v) => {
+    if (v?.guess && v.readFirst && v.guess.actual?.review !== v.readFirst.level) manager.patch(v.id, { guess: { ...v.guess, actual: { review: v.readFirst.level } } });
+  };
+  api.put('/agents/:id/guess', wrap((req) => {
+    if (req.headers['x-agentmgr-agent']) throw fail(403, 'A guess is yours, not an agent\'s');
+    const a = manager.mustGet(req.params.id);
+    const guess = cleanGuess(req.body ?? {});
+    manager.patch(a.id, { guess: guess ? { ...guess, ...(a.guess?.actual ? { actual: a.guess.actual } : {}) } : null });
+    return manager.view(manager.get(a.id));
+  }));
+  api.get('/calibration', wrap((req) => {
+    const views = store.list().map((a) => manager.view(a));
+    for (const v of views) keepActual(v);
+    const c = calibration(store.list().map((a) => manager.view(a)));
+    return { ...c, lines: calibrationLines(c), ...(req.query.format === 'md' ? { markdown: calibrationMarkdown(c) } : {}) };
+  }));
+  // Why is this line here: the moment in the agent's conversation that wrote it (blame.js).
+  api.get('/agents/:id/why', wrap((req) => {
+    const b = manager.whyLine(req.params.id, { file: req.query.file, line: req.query.line, text: req.query.text });
+    return req.query.format === 'md' ? { ...b, markdown: blameMarkdown(b, { file: b.file, lineNo: b.line, line: b.text }) } : b;
+  }));
   api.get('/read-first', wrap((req) => {
     const items = readQueue(store.list(), (a) => manager.view(a));
     return req.query.format === 'md' ? { markdown: queueMarkdown(items) } : { items };
@@ -1294,7 +1347,10 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
     if (b.agent) ids = [manager.mustGet(b.agent).id];
     else if (Number(b.olderThanDays) > 0) ids = readQueue(store.list(), (a) => manager.view(a)).filter((i) => Date.parse(i.finishedAt) < Date.now() - Number(b.olderThanDays) * 86_400_000).map((i) => i.agentId);
     else throw fail(400, 'Give agent, or olderThanDays');
-    for (const id of ids) manager.patch(id, { reviewed: b.reviewed === false ? null : { at } });
+    for (const id of ids) {
+      keepActual(manager.view(manager.get(id)));
+      manager.patch(id, { reviewed: b.reviewed === false ? null : { at } });
+    }
     return { marked: ids.length, items: readQueue(store.list(), (a) => manager.view(a)) };
   }));
   // Weekly summary (weekly.js): a week's work and achievements on one page, for management. A draft: nothing is sent.
@@ -1442,8 +1498,48 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
   };
   api.get('/standards', wrap(() => standards.view()));
   api.put('/standards/repo', wrap((req) => standards.update(standards.find(String(yours(req).key ?? '')), { risk: req.body.risk, bar: req.body.bar })));
-  api.post('/standards/lessons', wrap((req) => standards.addLesson(standards.find(String(yours(req).key ?? '')), req.body.text)));
-  api.put('/standards/lessons/:id', wrap((req) => standards.setLesson(standards.find(String(yours(req).key ?? '')), req.params.id, { state: req.body.state, text: req.body.text })));
+  api.post('/standards/lessons', wrap((req) => {
+    const key = standards.find(String(yours(req).key ?? ''));
+    return echoLesson(key, standards.addLesson(key, req.body.text));
+  }));
+  api.put('/standards/lessons/:id', wrap((req) => {
+    const key = standards.find(String(yours(req).key ?? ''));
+    const was = standards.lesson(key, req.params.id).state;
+    const l = standards.setLesson(key, req.params.id, { state: req.body.state, text: req.body.text });
+    return was === 'accepted' && req.body.text === undefined ? l : echoLesson(key, l);
+  }));
+  // Check the agents at work against an accepted lesson again (bug echo), or act on one flagged.
+  api.post('/standards/lessons/:id/echo', wrap(async (req) => {
+    const key = standards.find(String(yours(req).key ?? ''));
+    const l = standards.lesson(key, req.params.id);
+    if (l.state !== 'accepted') throw fail(409, 'Only an accepted lesson is checked against the agents at work');
+    return { checked: await echo.run(key, l) };
+  }));
+  api.get('/night-watch', wrap((req) => {
+    const v = nightWatch.view();
+    return req.query.format === 'md' ? { ...v, markdown: nightMarkdown(v) } : v;
+  }));
+  api.post('/night-watch/run', wrap(async (req) => {
+    if (req.headers['x-agentmgr-agent']) throw fail(403, "Night watch runs agents' commands: the person starts it, not an agent");
+    const p = nightWatch.runAll();
+    if (req.body?.wait !== false) return p;
+    p.catch((e) => console.log(`[agentmgr] night watch: ${e.message}`));
+    return nightWatch.view();
+  }));
+  api.put('/night-watch', wrap((req) => {
+    if (req.headers['x-agentmgr-agent']) throw fail(403, 'Night watch is set by the person, not by an agent');
+    const b = req.body ?? {};
+    const next = { ...config.nightWatch };
+    if (typeof b.enabled === 'boolean') next.enabled = b.enabled;
+    for (const k of ['hour', 'days']) if (b[k] !== undefined) next[k] = Number(b[k]);
+    config.nightWatch = nightSettings({ nightWatch: next });
+    saveConfig({ nightWatch: config.nightWatch });
+    return nightWatch.view();
+  }));
+  api.post('/agents/:id/echo', wrap((req) => {
+    if (req.headers['x-agentmgr-agent']) throw fail(403, 'The person acts on a flagged mistake, not an agent');
+    return echo.act(req.params.id, String(req.body?.lesson ?? ''), req.body?.act);
+  }));
   api.delete('/standards/lessons/:id', wrap((req) => (yours(req), standards.removeLesson(standards.find(String(req.query.key ?? '')), req.params.id))));
   api.post('/standards/lessons/:id/draft', wrap((req) => standards.draft(standards.find(String(yours(req).key ?? '')), req.params.id)));
   api.get('/agents/:id/standards', wrap((req) => standards.assess(req.params.id)));
@@ -1909,6 +2005,16 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
       const agent = termAgent(req.params.id);
       if (typeof req.body?.d !== 'string') throw fail(400, 'd (string) is required');
       manager.write(agent.id, req.body.d, termKind(req.body.kind));
+      return { ok: true };
+    }),
+  );
+  // The box under the terminal: text typed and submitted by the daemon (manager.typeIn).
+  api.post(
+    '/agents/:id/term/send',
+    wrap((req) => {
+      const agent = termAgent(req.params.id);
+      if (typeof req.body?.text !== 'string') throw fail(400, 'text (string) is required');
+      manager.typeIn(agent.id, req.body.text, termKind(req.body.kind));
       return { ok: true };
     }),
   );

@@ -60,7 +60,7 @@ const BIG = 600; // files with more changed lines start collapsed
 export function initReview({ api, esc, toast, agents, $ }) {
   const dlg = $('#review-dialog');
   const body = $('#review-body');
-  const st = { id: null, data: null, files: [], comments: [], collapsed: new Set(), editing: null, loading: false, step: null };
+  const st = { id: null, data: null, files: [], comments: [], collapsed: new Set(), editing: null, loading: false, step: null, why: null };
   const walk = () => walkthroughOf(agents.get(st.id), st.data?.diffHash);
 
   const key = (id) => `agentmgr.review.${id}`;
@@ -145,8 +145,9 @@ export function initReview({ api, esc, toast, agents, $ }) {
         const line = side === 'old' ? l.old : l.new;
         const k = lineKey(f.path, side, line);
         rows.push(`<tr class="rv-${l.t}" data-rv-line="${esc(k)}">
-          <td class="rv-no">${l.old ?? ''}</td><td class="rv-no">${l.new ?? ''}<button type="button" class="rv-plus" title="Comment on this line">+</button></td>
+          <td class="rv-no">${l.old ?? ''}</td><td class="rv-no">${l.new ?? ''}<button type="button" class="rv-plus" title="Comment on this line">+</button>${l.t === 'add' && l.text.trim() ? '<button type="button" class="rv-why" title="Why is this line here? The moment in its conversation that wrote it">?</button>' : ''}</td>
           <td class="rv-code"><span class="rv-sign">${l.t === 'add' ? '+' : l.t === 'del' ? '−' : ' '}</span>${esc(l.text)}</td></tr>`);
+        if (st.why?.key === k) rows.push(`<tr class="rv-note rv-why-row"><td colspan="3">${whyHtml(st.why)}</td></tr>`);
         st.comments.forEach((c, i) => {
           if (c.file === f.path && c.side === side && c.line === line) {
             rows.push(`<tr class="rv-note"><td colspan="3">${st.editing?.index === i ? formHtml(c.text) : commentHtml(c, i)}</td></tr>`);
@@ -156,6 +157,23 @@ export function initReview({ api, esc, toast, agents, $ }) {
       }
     }
     return `<div class="rv-file" id="rv-${encodeURIComponent(f.path)}">${head}<table class="rv-table">${rows.join('')}</table></div>`;
+  }
+
+  /** Why is this line here (blame.js): what it was asked, what it said, what it ran, and the edit. */
+  function whyHtml(w) {
+    const close = '<button type="button" class="link" data-rv-why-close>Close</button>';
+    if (w.loading) return '<p class="hint">Looking in its conversation…</p>';
+    if (w.error) return `<p class="error">${esc(w.error)}</p> ${close}`;
+    const b = w.data;
+    if (!b.found) return `<p class="hint">${esc(b.why)}</p> ${close}`;
+    const when = b.at ? new Date(b.at).toLocaleString() : '';
+    return `<div class="rv-why-body">
+      <p><b>Why is this line here?</b> <span class="hint">Written by ${esc(b.tool)}${when ? ` on ${esc(when)}` : ''}${b.times > 1 ? `, ${b.times} times in all` : ''}</span></p>
+      ${b.prompt ? `<p class="rv-why-label">What it was asked</p><blockquote>${esc(b.prompt)}</blockquote>` : ''}
+      ${b.said.length ? `<p class="rv-why-label">What it said just before</p>${b.said.map((x) => `<blockquote>${esc(x)}</blockquote>`).join('')}` : ''}
+      ${b.ran.length ? `<p class="rv-why-label">Commands it had just run</p><ul>${b.ran.map((c) => `<li><code>${esc(c)}</code></li>`).join('')}</ul>` : ''}
+      ${close}
+    </div>`;
   }
 
   /** The review scorecard at the top: scores, verdict and where to look, or the button to score. */
@@ -314,6 +332,26 @@ export function initReview({ api, esc, toast, agents, $ }) {
 
   body.addEventListener('click', async (e) => {
     const t = e.target;
+    if (t.closest('[data-rv-why-close]')) return keepInputs(), (st.why = null), render();
+    const why = t.closest('.rv-why');
+    if (why) {
+      const row = why.closest('[data-rv-line]');
+      const key = row.dataset.rvLine;
+      if (st.why?.key === key) return keepInputs(), (st.why = null), render();
+      const file = key.split('\t')[0];
+      const text = row.querySelector('.rv-code').textContent.slice(1);
+      keepInputs();
+      st.why = { key, loading: true };
+      render();
+      try {
+        const data = await api('GET', `/agents/${st.id}/why?${new URLSearchParams({ file, text })}`);
+        if (st.why?.key === key) st.why = { key, data };
+      } catch (err) {
+        if (st.why?.key === key) st.why = { key, error: err.message };
+      }
+      keepInputs();
+      return render();
+    }
     if (t.closest('[data-rv-reload]')) return keepInputs(), reload();
     const stepBtn = t.closest('[data-rv-step]');
     if (stepBtn) return step(Number(stepBtn.dataset.rvStep));

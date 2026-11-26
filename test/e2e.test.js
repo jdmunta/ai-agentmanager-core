@@ -853,6 +853,14 @@ test('remote access: HTTPS, token sign-in, local-only management, SSE terminal, 
     m.some((x) => x.t === 'o' && x.d.includes('echo:from-phone')),
   );
   assert.equal(msgs[0].t, 'hello');
+  // The box under the terminal: the daemon types the text and presses Enter after it.
+  setTimeout(() => httpsReq(rport, 'POST', `/api/agents/${a.id}/term/send`, { headers: { ...json, cookie }, body: { text: 'from-the-box' } }), 500);
+  const boxed = await sseUntil(rport, `/api/agents/${a.id}/term/stream`, cookie, (m) => {
+    const out = m.filter((x) => x.t === 'o').map((x) => x.d).join('');
+    return out.includes('echo:from-the-box') && out.slice(out.indexOf('echo:from-the-box')).includes('echo:\r');
+  });
+  assert.ok(boxed.length > 1);
+  assert.equal((await httpsReq(rport, 'POST', `/api/agents/${a.id}/term/send`, { headers: { ...json, cookie }, body: { text: '  ' } })).status, 400, 'nothing to send');
   const events = await sseUntil(rport, '/api/events/stream', cookie, (m) => m.some((x) => x.t === 'snapshot'));
   assert.ok(events[0].agents.some((x) => x.id === a.id));
   await call('POST', `/agents/${a.id}/stop`);
@@ -4043,6 +4051,149 @@ test('races: variants, scoreboard, tests in each worktree, diff, pick a winner a
   assert.deepEqual(picked.rows.map((r) => r.id), [p.id]);
   await call('DELETE', `/races/${race.id}`);
   await call('DELETE', `/agents/${p.id}?deleteWorkspace=1`);
+});
+
+test('your calibration: a guess given at the start, kept through review, set against what happened', async () => {
+  const [a] = (await call('POST', '/agents', { intent: 'Calibrate: fix the cart total', project: 'Calibrate', start: false, guess: { finish: 'yes', hours: 1, review: 'skim' } })).body;
+  assert.deepEqual([a.guess.finish, a.guess.hours, a.guess.review], ['yes', 1, 'skim']);
+  assert.equal((await call('POST', '/agents', { intent: 'Calibrate: bad', start: false, guess: { hours: 'soon' } })).status, 400);
+  assert.equal((await call('PUT', `/agents/${a.id}/guess`, { review: 'look' }, { 'x-agentmgr': '1', 'x-agentmgr-agent': a.id })).status, 403, 'a guess is yours');
+  // Started three hours ago, finished an hour ago.
+  const created = Date.now() - 3 * 3_600_000;
+  manager.patch(a.id, { createdAt: new Date(created).toISOString(), brief: { status: 'done', updatedAt: new Date(created + 2 * 3_600_000).toISOString(), checks: [{ state: 'failed', text: 'x' }], risks: [], results: { outcome: 'done', confidence: { percent: 50 }, notDone: ['refunds'], notDoneSaid: true } } });
+  const level = (await agentNow(a.id)).readFirst.level;
+  assert.notEqual(level, 'skim');
+  // Reviewed: the Read first level is gone from the agent, but kept with the guess.
+  await call('POST', '/read-first/reviewed', { agent: a.id });
+  assert.equal((await agentNow(a.id)).readFirst, null);
+  const c = (await call('GET', '/calibration?format=md')).body;
+  const row = c.rows.find((r) => r.id === a.id);
+  assert.deepEqual(row.actual, { finish: 'yes', hours: 2, review: level });
+  assert.ok(c.lines.some((l) => /^Time: it takes 2× what you guess/.test(l)), c.lines.join('\n'));
+  assert.match(c.markdown, /^# Your calibration\n/);
+  await call('DELETE', `/agents/${a.id}`);
+});
+
+test('bug echo: a lesson accepted, the agents at work in that repository checked for the same mistake', async () => {
+  const origin = makeOrigin('echo');
+  const mk = async (intent) => (await call('POST', '/agents', { intent, repo: `file://${origin}`, start: false })).body[0];
+  const [x, y, z] = [await mk('Echo: charge the card'), await mk('Echo: refund the card'), await mk('Echo: nothing yet')];
+  const ready = (id) => waitFor(async () => ((await agentNow(id)).status === 'stopped' ? agentNow(id) : null), 20000, 'ready');
+  const [rx, ry] = [await ready(x.id), await ready(y.id), await ready(z.id)];
+  fs.mkdirSync(path.join(rx.workdir, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(rx.workdir, 'src', 'pay.js'), 'export const charge = (c) =>\n  c.amount * 100; // REPEAT-ME: float cents\n');
+  fs.mkdirSync(path.join(ry.workdir, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(ry.workdir, 'src', 'refund.js'), 'export const refund = (c) => Math.round(c.cents);\n');
+  const key = (await call('GET', '/standards')).body.repos.find((r) => r.key.endsWith('/echo')).key;
+  const lesson = (await call('POST', '/standards/lessons', { key, text: 'Keep money in integer cents: never multiply a float amount' })).body;
+  const flagged = await waitFor(async () => {
+    const [vx, vy] = [await agentNow(x.id), await agentNow(y.id)];
+    return vx.echoes?.[lesson.id] && vy.echoes?.[lesson.id] ? [vx, vy] : null;
+  }, 20000, 'both checked');
+  assert.deepEqual([flagged[0].echoes[lesson.id].repeats, flagged[0].echoes[lesson.id].where, flagged[0].echoes[lesson.id].state], [true, 'src/pay.js:2', 'open']);
+  assert.deepEqual([flagged[1].echoes[lesson.id].repeats, flagged[1].echoes[lesson.id].state], [false, 'clear']);
+  assert.equal((await agentNow(z.id)).echoes, undefined, 'no changes: nothing to check');
+  const g = (await call('GET', '/glance')).body.items.find((i) => i.id === x.id);
+  assert.deepEqual([g.group, g.why[0]], ['fix', 'Repeats a past mistake: Keep money in integer cents: never multiply a float amount (at src/pay.js:2)']);
+  // Checked again: the same diff is not asked about twice.
+  assert.equal((await call('POST', `/standards/lessons/${lesson.id}/echo`, { key })).body.checked, 0);
+  assert.equal((await call('POST', `/agents/${x.id}/echo`, { lesson: lesson.id, act: 'tell' }, { 'x-agentmgr': '1', 'x-agentmgr-agent': x.id })).status, 403);
+  assert.equal((await call('POST', `/agents/${y.id}/echo`, { lesson: lesson.id, act: 'tell' })).status, 404, 'nothing flagged there');
+  const told = (await call('POST', `/agents/${x.id}/echo`, { lesson: lesson.id, act: 'tell' })).body;
+  assert.deepEqual([told.echoes[lesson.id].state, told.outbox], ['told', 1]);
+  assert.ok(!(await call('GET', '/glance')).body.items.find((i) => i.id === x.id).why.some((w) => /^Repeats/.test(w)), 'acted on: off the list');
+  await call('DELETE', `/standards/lessons/${lesson.id}?key=${encodeURIComponent(key)}`);
+  for (const a of [x, y, z]) await call('DELETE', `/agents/${a.id}?deleteWorkspace=1`);
+});
+
+test('scope fence: drifting out of its task shows, is allowed or pulled back, by the person only', async () => {
+  const [a] = (await call('POST', '/agents', { intent: 'Fix the login redirect after the session expires', project: 'Fence', start: false })).body;
+  manager.changeSets.set(a.id, { at: new Date().toISOString(), files: { 'src/auth/login.js': { added: 30, removed: 2 }, 'src/payments/charge.js': { added: 50, removed: 10 }, 'src/payments/refund.js': { added: 5, removed: 0 }, 'test/login.test.js': { added: 40, removed: 0 } } });
+  const v = await agentNow(a.id);
+  assert.deepEqual(v.fence.drift.map((d) => [d.area, d.files.length, d.lines]), [['src/payments', 2, 65]]);
+  const g = (await call('GET', '/glance')).body.items.find((i) => i.id === a.id);
+  assert.deepEqual([g.group, g.why[0]], ['fix', 'Drifting: changes src/payments (2 files, 65 lines), not in its task']);
+  assert.equal((await call('POST', `/agents/${a.id}/fence`, { allow: 'src/payments' }, { 'x-agentmgr': '1', 'x-agentmgr-agent': a.id })).status, 403, 'the person says what is in scope');
+  assert.equal((await call('POST', `/agents/${a.id}/fence`, {})).status, 400);
+  const pulled = (await call('POST', `/agents/${a.id}/fence`, { pull: true })).body;
+  assert.ok(pulled.scope.pulledAt);
+  assert.equal(pulled.outbox, 1, 'told, once it runs');
+  const allowed = (await call('POST', `/agents/${a.id}/fence`, { allow: 'src/payments' })).body;
+  assert.deepEqual([allowed.fence.drift, allowed.fence.allowed], [[], ['src/payments']]);
+  assert.equal((await call('POST', `/agents/${a.id}/fence`, { pull: true })).status, 409, 'nothing left to pull back');
+  manager.changeSets.delete(a.id);
+  await call('DELETE', `/agents/${a.id}`);
+});
+
+test('why is this line here: the moment in its conversation that wrote it, from the daemon', async () => {
+  const origin = makeOrigin('why');
+  const [a] = (await call('POST', '/agents', { intent: 'Fix the refund total', repo: `file://${origin}` })).body;
+  const ra = await runningAgent(a.id);
+  fs.mkdirSync(path.join(ra.workdir, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(ra.workdir, 'src', 'cart.js'), 'export const total = (xs) =>\n  xs.reduce((n, x) => n + x.price, 0); // refunds are negative\n');
+  const { transcriptPath } = await import('../src/tracker.js');
+  const file = transcriptPath(ra.workdir, ra.sessionId);
+  await waitFor(() => fs.existsSync(file), 8000, 'its transcript');
+  const at = new Date().toISOString();
+  fs.appendFileSync(file, `${[
+    { type: 'user', timestamp: at, message: { content: 'Refunds come in as negative prices' } },
+    { type: 'assistant', timestamp: at, message: { content: [{ type: 'text', text: 'Summing prices covers refunds.' }, { type: 'tool_use', id: 'w1', name: 'Write', input: { file_path: path.join(ra.workdir, 'src', 'cart.js'), content: 'export const total = (xs) =>\n  xs.reduce((n, x) => n + x.price, 0); // refunds are negative\n' } }] } },
+  ].map((e) => JSON.stringify(e)).join('\n')}\n`);
+  const b = (await call('GET', `/agents/${a.id}/why?file=src/cart.js&line=2&format=md`)).body;
+  assert.deepEqual([b.found, b.tool, b.prompt, b.said, b.text], [true, 'Write', 'Refunds come in as negative prices', ['Summing prices covers refunds.'], '  xs.reduce((n, x) => n + x.price, 0); // refunds are negative']);
+  assert.match(b.markdown, /^# Why is this line here\?\n\n`src\/cart\.js:2`/);
+  const byText = (await call('GET', `/agents/${a.id}/why?${new URLSearchParams({ file: 'src/cart.js', text: 'export const total = (xs) =>' })}`)).body;
+  assert.equal(byText.found, true);
+  assert.equal((await call('GET', `/agents/${a.id}/why?${new URLSearchParams({ file: 'src/cart.js', text: 'not here' })}`)).body.found, false);
+  assert.equal((await call('GET', `/agents/${a.id}/why?file=../../etc/passwd&line=1`)).status, 400, 'only its own folder');
+  assert.equal((await call('GET', `/agents/${a.id}/why?file=src/cart.js&line=9`)).status, 400);
+  assert.equal((await call('GET', `/agents/${a.id}/why?file=src/nope.js&line=1`)).status, 404);
+  fs.symlinkSync(path.join(home, 'config.json'), path.join(ra.workdir, 'outside.json'));
+  assert.equal((await call('GET', `/agents/${a.id}/why?file=outside.json&line=1`)).status, 400, 'a link out of its folder is not followed');
+  await call('DELETE', `/agents/${a.id}?deleteWorkspace=1`);
+});
+
+test('try the other path: a path it weighed and did not take, started from the same commit and raced against it', async () => {
+  const origin = makeOrigin('paths');
+  const [a] = (await call('POST', '/agents', { intent: 'Cache the prices', repo: `file://${origin}`, model: 'sonnet' })).body;
+  const ra = await runningAgent(a.id);
+  const options = { paths: [{ rank: 1, name: 'Shared cache' }, { rank: 2, name: 'Cache in memory' }, { rank: 3, name: 'No cache' }], preferred: '', new: '' };
+  // Its paths, in its brief as an agent writes them (after the stand-in's own brief, which would replace it).
+  const dir = path.join(home, 'briefs', a.id);
+  await waitFor(() => fs.existsSync(path.join(dir, 'BRIEF.md')), 15000, "the stand-in's brief");
+  await new Promise((r) => setTimeout(r, 300));
+  assert.equal((await call('POST', `/agents/${a.id}/try-path`, { path: 2 })).status, 409, 'no paths written yet');
+  fs.writeFileSync(path.join(dir, 'BRIEF.md'), 'Status: working\n## Problem\nx\n## Options\n1. Cache in memory: one process | now: high | later: low | cost: small | risk: low | when: one server\n2. Shared cache: a service | now: medium | later: high | cost: large | risk: medium | when: more servers\n3. No cache: make the query faster | now: medium | later: medium | cost: medium | risk: low | when: the query can be fixed\n- Preferred: 1, because it ships now\n## Results\nOutcome: in progress\n');
+  manager.reloadBrief(a.id);
+  assert.equal((await agentNow(a.id)).brief.options.paths.length, 3);
+  assert.equal((await call('POST', `/agents/${a.id}/try-path`, { path: 1 })).status, 400, 'path 1 is the one it takes');
+  assert.equal((await call('POST', `/agents/${a.id}/try-path`, { path: 4 })).status, 400);
+  assert.equal((await call('POST', `/agents/${a.id}/try-path`, { path: 2 }, { 'x-agentmgr': '1', 'x-agentmgr-agent': a.id })).status, 403, 'the person asks, not an agent');
+  // A commit on the first agent's branch: the other path starts from the base, not from its work.
+  fs.writeFileSync(path.join(ra.workdir, 'mine.txt'), 'path 1\n');
+  execFileSync('git', ['add', '.'], { cwd: ra.workdir });
+  execFileSync('git', ['-c', 'commit.gpgsign=false', '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '-m', 'path 1'], { cwd: ra.workdir });
+  const race = (await call('POST', `/agents/${a.id}/try-path`, { path: 2 })).body;
+  assert.deepEqual(race.rows.map((r) => [r.id === a.id, r.variant.label, r.variant.instructions]), [[true, 'path-1', 'Path 1: Cache in memory'], [false, 'path-2', 'Path 2: Shared cache']]);
+  const b = race.rows[1];
+  assert.equal(b.name, `${a.name}-path2`);
+  const nb = await agentNow(b.id);
+  assert.match(nb.intent, /^Cache the prices\n\nApproach for this attempt: Take path 2, "Shared cache" \(a service\)\. Another agent is taking path 1, "Cache in memory" \(one process\): do not take that one\./);
+  assert.deepEqual([nb.model, nb.repo, nb.raceId], ['sonnet', `file://${origin}`, race.id]);
+  const rb = await runningAgent(b.id);
+  assert.notEqual(rb.workdir, ra.workdir);
+  assert.ok(!fs.existsSync(path.join(rb.workdir, 'mine.txt')), 'started from the commit the first one started from');
+  assert.equal(rb.baseRef.split(' @ ')[1], ra.baseRef.split(' @ ')[1]);
+  assert.equal((await call('POST', `/agents/${a.id}/try-path`, { path: 2 })).status, 409, 'already being tried');
+  // The agent trying path 2 does not start paths of its own in that race.
+  manager.patch(b.id, { brief: { ...nb.brief, options } });
+  assert.equal((await call('POST', `/agents/${b.id}/try-path`, { path: 3 })).status, 409);
+  // A third path joins the same race.
+  const more = (await call('POST', `/agents/${a.id}/try-path`, { path: 3 })).body;
+  assert.equal(more.id, race.id);
+  assert.deepEqual(more.rows.map((r) => r.variant.label), ['path-1', 'path-2', 'path-3']);
+  await call('DELETE', `/races/${race.id}`);
+  for (const r of more.rows) await call('DELETE', `/agents/${r.id}?deleteWorkspace=1`);
 });
 
 test('teams, separate agents: analyst and critic align, implementer, tester and reviewer loop, you finalize at the end', async () => {
