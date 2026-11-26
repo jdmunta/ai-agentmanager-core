@@ -1,5 +1,27 @@
 # Changelog
 
+## 1.74.0 (2026-11-26)
+
+- **Skills kept up.** See [Skills kept up](README.md#skills-kept-up).
+  - **Proposed by the agent.** When it finishes, an agent that worked out a procedure the next one will need writes it as a **Skill proposal** in its brief: a name, when to use it, and the steps it ran. It can also propose a corrected version of a skill it found wrong. It never writes the skill itself.
+  - **You decide.** A **Skill proposal** card in the inbox shows the steps. **Add skill** writes the SKILL.md to its project or to yours, and **Dismiss** puts it away. Only you can add one. Also `agentmgr skills accept|dismiss <agent>`.
+  - **Out of date with the code.** A skill that names an npm script, make target, file or folder no longer in its project is flagged in Skills and gets a **Skill out of date** card in the inbox. No model is asked. Also `agentmgr skills drift`.
+  - **A newer version upstream** is looked for once a day, one fetch per repository; **Check all** in Skills looks now.
+  - **Not used lately:** a skill no agent has used in a month says so.
+  - **Fewer false alarms.** A file the skill says to make, or one git ignores, is not flagged. Commands are checked where they run (`cd web &&`, `--prefix`, `make -C`), and workspace commands are not checked.
+  - **Renamed or deleted, from git.** **Fix renamed paths** (`agentmgr skills fix <id>`) puts renamed files right in the skill. **Ask an agent…** opens a task to find what works and propose the corrected skill.
+  - **Told at the start.** Agents are told which skills in their project are out of date.
+  - **Looked at before you add it.** A proposal with what looks like a key or token is not added. The card says what it names that is missing and which skill it replaces. One the same as the skill there is not offered.
+- **Skills for a team.** See [Skill policy, history and pull requests](README.md#skill-policy-history-and-pull-requests).
+  - **Changes as pull requests:** with `"skillPolicy": { "projectChanges": "pr" }`, every change to a project's skills opens a pull request from its own branch, made in a temporary worktree. Your checkout is never touched.
+  - **Policy:** where changes may go (`places`), where skills may be installed from (`sources`), and which projects' agents propose skills (`proposals`). `agentmgr skills policy` shows it.
+  - **History:** every change, with who made it, from where, the agent that proposed it, and the pull request. **History** in Skills, `agentmgr skills history`, `GET /api/skills/history`.
+  - **Plugins** can refuse skill changes (`skill.add`, `skill.install`, `skill.update`, `skill.remove`, `skill.fix`) and hear each one (`skill.added`, …).
+  - **Agents can't change skills:** installing, updating, removing, fixing and dismissing are refused when an agent asks.
+  - **Clearer wording** on the skill cards: "Skill proposal", "Dismiss", "References not found in the project".
+- **Brief reminder.** An agent asked for a brief that stops without one, or says done without its self-review, is reminded once after a quiet minute. Not when it ended on a question. Off with `"briefReminder": false`.
+- **Self-review: Conventions.** A ninth question: the skills and project rules that apply were followed, and one found wrong or out of date is named. The app checks it against the skills the agent's session used: a "holds" that leaves out a used skill the app found out of date is contradicted. Agents started before this were not asked, so it is not counted as missing for them.
+
 ## 1.73.1 (2026-11-26)
 
 - **Self-review: fewer answers taken on the agent's word, and a way to act on them.**

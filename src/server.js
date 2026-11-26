@@ -468,6 +468,9 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
   // Skills: Claude Code's Agent Skills here, and adding more from a repository (skills.js).
   const skills = new Skills({
     store,
+    policy: () => config.skillPolicy,
+    plugins: manager.plugins,
+    openPr: async ({ dir, branch, base, title, body }) => git.run(ghBin(), ['pr', 'create', '--head', branch, '--base', base, '--title', title, '--body', body], { cwd: dir, timeout: 120_000 }),
     projects: () => manager.listProjects().filter((p) => p.dir).map((p) => ({ key: p.shortcut ?? p.key, name: p.name ?? p.shortcut, dir: p.dir })),
     sessions: () => manager.store.list().filter((a) => engineOf(a).id === 'claude' && a.workdir && a.sessionId).map((a) => ({ id: a.id, name: a.name, file: engineOf(a).sessionFile(a.workdir, a.sessionId) })),
   });
@@ -502,6 +505,65 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
     projects: () => Object.fromEntries(Object.values(store.data.projects ?? {}).map((p) => [p.key, p.shortcut || p.name])),
   });
   manager.inboxSources.push(() => repeats.inbox());
+  // Skills that name what is gone from the project, or have a newer version upstream (skills.js).
+  const driftOn = config.skillDrift?.enabled !== false;
+  // Read again every half hour and after each change to skills; the inbox uses the last reading.
+  let drift = [];
+  if (driftOn) manager.inboxSources.push(() => skills.inbox(drift));
+  const pushDrift = () => {
+    if (!driftOn) return [];
+    const items = skills.drifted();
+    if (JSON.stringify(items) !== JSON.stringify(drift)) broadcast({ t: 'skilldrift', skillDrift: items });
+    drift = items;
+    return items;
+  };
+  setInterval(pushDrift, 30 * 60_000).unref();
+  // Told to each agent at its start: the out-of-date skills it may use (yours, and its project's).
+  manager.driftFor = (a) => {
+    if (!driftOn) return [];
+    const info = manager.projectInfo(a);
+    // Read now: its project may be new here since the last reading.
+    return pushDrift().filter((d) => d.drift.length && (d.place === 'personal' || d.place === `project:${info.shortcut ?? info.key}`));
+  };
+  // Once a day, a look at the repositories skills came from (one fetch each).
+  if (driftOn && config.skillDrift?.upstream !== false) setInterval(() => skills.checkAll().then(pushDrift, () => {}), 24 * 3_600_000).unref();
+  // The skills an agent's session used, with what is out of date in each: its self-review's Conventions.
+  const factsCache = new Map(); // agent id -> { key, at, facts }
+  manager.skillFacts = (a) => {
+    if (engineOf(a).id !== 'claude' || !a.workdir || !a.sessionId) return null;
+    const file = engineOf(a).sessionFile(a.workdir, a.sessionId);
+    let key;
+    try {
+      const st = fs.statSync(file);
+      key = `${st.mtimeMs}:${st.size}`;
+    } catch {
+      return null;
+    }
+    const hit = factsCache.get(a.id);
+    if (hit?.key === key && Date.now() - hit.at < 60_000) return hit.facts;
+    const info = manager.projectInfo(a);
+    const facts = skills.usedIn(file, info.shortcut ?? info.key);
+    factsCache.set(a.id, { key, at: Date.now(), facts });
+    return facts;
+  };
+  // A proposal looked at once for where it would go, until the skill there changes (skills.checkProposal).
+  const proposalChecks = new Map();
+  manager.skillCheck = (p, place, sig) => {
+    let mtime = 0;
+    try {
+      mtime = fs.statSync(path.join(skills.place(place).dir, p.folder, 'SKILL.md')).mtimeMs;
+    } catch {}
+    const key = `${sig}:${place}:${mtime}`;
+    const hit = proposalChecks.get(key);
+    if (hit && Date.now() - hit.at < 10 * 60_000) return hit.check;
+    let check = null;
+    try {
+      check = skills.checkProposal(p, place);
+    } catch {}
+    proposalChecks.set(key, { at: Date.now(), check });
+    if (proposalChecks.size > 500) proposalChecks.delete(proposalChecks.keys().next().value);
+    return check;
+  };
   const memory = new Memory({ manager, config });
   const updates = new Updates({ config });
   let remoteServer = null;
@@ -1594,13 +1656,59 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
     return usageView();
   }));
   // Skills: the list; one to read (?id=); what a repository offers; adding, checking, updating and removing.
-  api.get('/skills', wrap(() => skills.list()));
+  // Each change, and each look at the list, brings the inbox's out-of-date skills up to date.
+  const andDrift = (fn) => async (req) => {
+    const r = await fn(req);
+    pushDrift();
+    return r;
+  };
+  // Who made a change to skills, for their history: the person here, and from where. Agents may not.
+  const skillBy = async (req, what = 'Changing skills') => {
+    if (req.headers['x-agentmgr-agent']) throw fail(403, `${what} is for the person, not an agent`);
+    return { person: (await me) || null, from: viewer(req) };
+  };
+  api.get('/skills', wrap(andDrift(() => skills.list())));
   api.get('/skills/one', wrap((req) => skills.show(String(req.query.id ?? ''))));
+  api.get('/skills/history', wrap((req) => skills.history({ limit: req.query.limit })));
   api.post('/skills/preview', wrap((req) => skills.preview(req.body?.repo)));
-  api.post('/skills', wrap((req) => skills.install(req.body ?? {})));
-  api.post('/skills/check', wrap((req) => skills.check(String(req.body?.id ?? ''))));
-  api.post('/skills/update', wrap((req) => skills.update(String(req.body?.id ?? ''))));
-  api.delete('/skills', wrap((req) => skills.remove(String(req.query.id ?? ''))));
+  api.post('/skills', wrap(andDrift(async (req) => skills.install({ ...(req.body ?? {}), by: await skillBy(req, 'Installing skills') }))));
+  api.post('/skills/check', wrap(andDrift((req) => skills.check(String(req.body?.id ?? '')))));
+  api.post('/skills/update', wrap(andDrift(async (req) => skills.update(String(req.body?.id ?? ''), { by: await skillBy(req, 'Updating a skill') }))));
+  api.delete('/skills', wrap(andDrift(async (req) => skills.remove(String(req.query.id ?? ''), { by: await skillBy(req, 'Removing a skill') }))));
+  // Skills out of date: what each names that is gone, or a newer version upstream; Not now; look upstream now.
+  api.get('/skills/drift', wrap(() => skills.drifted()));
+  api.post('/skills/drift/dismiss', wrap(async (req) => {
+    skills.dismissDrift(String(req.body?.id ?? ''), { by: await skillBy(req, 'Dismissing a skill alert') });
+    return pushDrift();
+  }));
+  // Paths it names that git saw renamed, put right in the skill.
+  api.post('/skills/fix', wrap(andDrift(async (req) => skills.fixDrift(String(req.body?.id ?? ''), { by: await skillBy(req, 'Changing a skill') }))));
+  api.post('/skills/check-all', wrap(async () => {
+    await skills.checkAll();
+    return pushDrift();
+  }));
+  // An agent's proposed skill: add it (to its project, or yours) or put it off. The person's call.
+  const proposalOf = (req) => {
+    if (req.headers['x-agentmgr-agent']) throw fail(403, 'Adding a skill is for the person, not an agent');
+    const a = manager.mustGet(req.params.id);
+    const p = manager.view(a).skillProposal;
+    if (!p) throw fail(404, `${a.name} has not proposed a skill`);
+    return { a, p };
+  };
+  api.post('/agents/:id/skill-proposal', wrap(async (req) => {
+    const { a, p } = proposalOf(req);
+    const by = await skillBy(req, 'Adding a skill');
+    const place = String(req.body?.place ?? p.project?.place ?? 'personal');
+    const added = await skills.add({ place, folder: p.folder, description: p.description, body: p.body, replace: req.body?.replace === true, from: { agentId: a.id, agentName: a.name, changed: p.changed }, by });
+    pushDrift();
+    return { ...added, agent: manager.decideProposal(a.id, 'added', { place: added.place, skill: added.id, via: added.via, pr: added.pr }) };
+  }));
+  api.post('/agents/:id/skill-proposal/dismiss', wrap(async (req) => {
+    const { a, p } = proposalOf(req);
+    skills.audit('proposal.dismissed', { folder: p.folder, from: { agentId: a.id, agentName: a.name } }, await skillBy(req, 'Dismissing a skill proposal'));
+    skills.store.save();
+    return manager.decideProposal(a.id, 'dismissed');
+  }));
   api.get('/runbooks', wrap(() => runbooks.list()));
   api.post('/runbooks', wrap((req) => runbooks.create(req.body ?? {})));
   api.get('/runbooks/:id', (req, res) => {
@@ -2115,6 +2223,7 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
   reports.on('change', () => broadcast({ t: 'built', reports: reports.list() }));
   manager.rules.on('change', (rules) => broadcast({ t: 'rules', rules }));
   repeats.on('change', (view) => broadcast({ t: 'repeats', repeats: view }));
+  pushDrift();
   manager.on('removed', (id) => {
     broadcast({ t: 'removed', id });
     live.closeAgent(id).catch(() => {});
@@ -2164,7 +2273,7 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
     const url = new URL(req.url, 'http://x');
     if (url.pathname === '/ws/events') {
       eventClients.add(ws);
-      ws.send(JSON.stringify({ t: 'snapshot', agents: manager.list(), backlog: backlog.view(), goals: goals.list(), projects: manager.listProjects(), races: races.list(), teams: teams.list(), built: reports.list(), rules: manager.rules.view(), repeats: repeats.view() }));
+      ws.send(JSON.stringify({ t: 'snapshot', agents: manager.list(), backlog: backlog.view(), goals: goals.list(), projects: manager.listProjects(), races: races.list(), teams: teams.list(), built: reports.list(), rules: manager.rules.view(), repeats: repeats.view(), skillDrift: drift }));
       ws.on('close', () => eventClients.delete(ws));
       return;
     }

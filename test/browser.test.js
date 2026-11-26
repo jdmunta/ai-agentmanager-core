@@ -1043,6 +1043,15 @@ test('Skills: the skills Claude Code has here with their scripts flagged, one re
   await js(`document.querySelector('[data-skills="refresh"]').click()`);
   await until(`!document.querySelector('[data-skill="personal/pdf"]') && /No skills here/.test(document.querySelector('[data-skills-place="personal"]').textContent)`, 'the skill gone');
   assert.equal(fs.existsSync(dir), false);
+  // The history: who removed it, from where.
+  await js(`document.querySelector('[data-skills="history"]').click()`);
+  await until(`document.querySelector('.skills-history tbody tr')`, 'the skills history');
+  assert.match(await js(`document.querySelector('.skills-history tbody tr').textContent.replace(/\\s+/g, ' ')`), /Removed\s*personal\/pdf.*this computer/);
+  await width(390);
+  assert.ok(await js(`document.querySelector('#skills-dialog').scrollWidth <= document.querySelector('#skills-dialog').clientWidth + 1`), 'the history fits a phone');
+  await width(1600);
+  await js(`document.querySelector('[data-skills="history-close"]').click()`);
+  await until(`document.querySelector('[data-skills-place="personal"]')`, 'back to the skills');
   await js(`document.querySelector('[data-skills="close"]').click()`);
   assert.deepEqual(errors, [], 'no errors on the page');
 });
@@ -1714,9 +1723,23 @@ test('Without you and ground rules: the level on a new agent and on one that run
   assert.match(await js(`document.querySelector('.results .risks').textContent.replace(/\\s+/g, ' ')`), /Risks it named before starting 1 avoided, 1 not checked ?Avoided A stale entry is served: avoided, the expiry test passes ?Not checked The cache grows without <limit>/);
   assert.ok(await js(`document.querySelector('.results .risks').open`), 'open when one was not checked');
   // Its self-review: the same first-principles questions, each answer set against what the app measured.
-  assert.match(await js(`document.querySelector('.results .checklist summary').textContent.replace(/\\s+/g, ' ')`), /Self-review 2 hold, 1 no, 1 not applicable, 4 not checked · the app backs 1, contradicts 1/);
+  assert.match(await js(`document.querySelector('.results .checklist summary').textContent.replace(/\\s+/g, ' ')`), /Self-review 2 hold, 1 no, 1 not applicable, 5 not checked · the app backs 1, contradicts 1/);
   assert.match(await js(`document.querySelector('.results .checklist li.cl-contra').textContent.replace(/\\s+/g, ' ')`), /Holds Asked the cache, as asked ?Contradicted It lists as not done: eviction when <full>/);
   assert.ok(await js(`document.querySelector('.results .checklist').open && document.querySelector('.results .checklist').scrollWidth <= document.querySelector('.results .checklist').clientWidth + 1`), 'open, and fits');
+  // A procedure it proposes keeping as a skill: a card in the inbox, Not now puts it away.
+  fs.appendFileSync(path.join(briefs, 'BRIEF.md'), `## Skill proposal\nName: warm-cache\nWhen to use: filling the <cache> before a load test\n1. \`echo ok\`\n2. check it answers with TOKEN=ghp_${'a'.repeat(36)}\n`);
+  await js(`document.querySelector('[data-tab="inbox"]').click()`);
+  const sk = `document.querySelector('#inbox-view [data-need^="skill:${a.id}:"]')`;
+  await until(`${sk}`, 'the proposal in the inbox', 30_000);
+  assert.match(await js(`${sk}.textContent.replace(/\\s+/g, ' ')`), /Skill proposal.*Proposed skill: warm-cache Use when: filling the <cache> before a load test 1\. `echo ok`[\s\S]*Contains what looks like a GitHub token\. It can't be added until that is removed[\s\S]*in your own skills\. Review the steps/);
+  assert.ok(await js(`${sk}.querySelector('[data-ib="skill-add"]').disabled`), 'a token in it: Add is off');
+  await width(390);
+  assert.ok(await js(`${sk}.getBoundingClientRect().right <= 390 && ${sk}.scrollWidth <= ${sk}.clientWidth + 1`), 'the card fits a phone');
+  await width(1600);
+  await js(`${sk}.querySelector('[data-ib="skill-dismiss"]').click()`);
+  await until(`!${sk}`, 'put away');
+  assert.equal((await api('GET', `/agents/${a.id}`)).skillProposal.decided.state, 'dismissed');
+  await js(`document.querySelector('[data-tab="agents"]').click()`);
   // Read first: how much this finished work needs reading, why, and the queue in the top bar.
   await until(`document.querySelector('.results .read-first-row .tag')`, 'the review level in its Results');
   assert.match(await js(`document.querySelector('.results .read-first-row').textContent.replace(/\\s+/g, ' ')`), /^Review (Read closely|Look) .* Why$/);

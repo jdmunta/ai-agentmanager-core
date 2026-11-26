@@ -1653,6 +1653,7 @@ test('proof: the agent is told to record it; what it recorded is shown with what
   assert.ok(sys.includes('Before you change anything, add a section "## Risks" to the brief'), 'the pre-mortem is asked for');
   assert.ok(sys.includes('add a section "## Self-review" to the brief') && sys.includes('Ripple: What uses the changed code still works.'), 'the self-review is asked for');
   assert.ok(sys.includes('When there is more than one reasonable way to solve this, add a section "## Options" to the brief'), 'the options, ranked, are asked for');
+  assert.ok(sys.includes('Conventions: The skills and project rules that apply were followed') && sys.includes('add a section "## Skill proposal" to the brief'), 'Conventions and a skill proposal are asked for');
   const ready = await waitFor(async () => {
     const v = await agentNow(a.id);
     return v.workdir && v.status === 'running' ? v : null;
@@ -1664,7 +1665,7 @@ test('proof: the agent is told to record it; what it recorded is shown with what
   fs.writeFileSync(path.join(ready.workdir, 'VERSION'), '1.2.3\n');
   await waitFor(() => fs.existsSync(path.join(dir, 'BRIEF.md')), 15000, "the stand-in's brief");
   await new Promise((r) => setTimeout(r, 300));
-  fs.writeFileSync(path.join(dir, 'BRIEF.md'), 'Status: done\n## Risks\n- [x] The version has a trailing space: avoided, cat -A shows none\n- [ ] Another tool reads version.txt\n## Checks\n- [x] the file holds the version\n- [x] the old file is gone\n## Results\nOutcome: done\n- Delivered: VERSION\n- Not done: the changelog entry\nConfidence: 80% - read it back\n## Self-review\n- [x] Asked: the version file, as asked\n- [x] Works: cat VERSION shows 1.2.3\n- [!] Tests: no test reads the version\n');
+  fs.writeFileSync(path.join(dir, 'BRIEF.md'), 'Status: done\n## Risks\n- [x] The version has a trailing space: avoided, cat -A shows none\n- [ ] Another tool reads version.txt\n## Checks\n- [x] the file holds the version\n- [x] the old file is gone\n## Results\nOutcome: done\n- Delivered: VERSION\n- Not done: the changelog entry\nConfidence: 80% - read it back\n## Self-review\n- [x] Asked: the version file, as asked\n- [x] Works: cat VERSION shows 1.2.3\n- [!] Tests: no test reads the version\n## Skill proposal\nName: Bump version\nWhen to use: changing the version number\n1. Write `VERSION`\n2. `cat VERSION` shows it\n');
   fs.writeFileSync(
     path.join(dir, 'PROOF.md'),
     ['## The file holds the version', 'Command: `cat VERSION`', 'Exit: 0', '```', '1.2.3', '```', '## The old file is gone', 'Command: cat version.txt', 'Exit: 0', '```', '(nothing)', '```', '## Cleaned up', 'Command: rm -f VERSION.bak', 'Exit: 0', '## Read the docs', 'Command: none', 'Looked at README.md.'].join('\n'),
@@ -1678,7 +1679,7 @@ test('proof: the agent is told to record it; what it recorded is shown with what
   assert.deepEqual(v.checklist.items.filter((i) => i.key !== 'scope').slice(0, 3).map((i) => [i.key, i.state, i.app?.verdict ?? null]), [['asked', 'yes', 'contradicts'], ['works', 'yes', 'backs'], ['tests', 'no', null]]);
   assert.ok(v.readFirst.reasons.some((r) => /^Its self-review says no to 1 principle: Tests \(no test reads the version\)/.test(r.text)) && v.readFirst.reasons.some((r) => /^It says Asked holds, and the app's facts say otherwise: It lists as not done: the changelog entry/.test(r.text)), 'counted in Read first');
   const cl = (await call('GET', `/agents/${a.id}/checklist?format=md`)).body;
-  assert.match(cl.markdown, /^# Self-review: .*\n\n2 hold, 1 no, 5 not checked · the app backs [12], contradicts 1\n\n- \[x\] \*\*Asked\*\*: the version file, as asked\n  - \*\*Contradicted\*\* by the app: It lists as not done: the changelog entry/);
+  assert.match(cl.markdown, /^# Self-review: .*\n\n2 hold, 1 no, 6 not checked · the app backs [12], contradicts 1\n\n- \[x\] \*\*Asked\*\*: the version file, as asked\n  - \*\*Contradicted\*\* by the app: It lists as not done: the changelog entry/);
   // Written before its latest changes: the work is fingerprinted when it writes its answers.
   await waitFor(async () => (await agentNow(a.id)).checklistMark?.sig, 15000, 'the work fingerprinted');
   assert.equal((await agentNow(a.id)).checklist.stale, false);
@@ -1696,6 +1697,24 @@ test('proof: the agent is told to record it; what it recorded is shown with what
   assert.equal(sent.status, 200);
   assert.match(rec.told[0], /^Your self-review has answers to look at again:\n- Asked: you say it holds, but it lists as not done: the changelog entry\.\n- Tests: you say it does not hold \(no test reads the version\)\./);
   assert.deepEqual(sent.body.checklistSent.keys, ['asked', 'tests']);
+  // Its skill proposal: in the inbox, added or put off by the person only, then not offered again.
+  assert.deepEqual([v.skillProposal.folder, v.skillProposal.description, v.skillProposal.decided], ['bump-version', 'changing the version number', null]);
+  assert.ok((await call('GET', '/inbox')).body.some((i) => i.key === `skill:${a.id}:${v.skillProposal.sig}` && i.title === 'Skill proposed: bump-version'), 'in the inbox');
+  assert.equal((await call('POST', `/agents/${a.id}/skill-proposal`, { place: 'personal' }, { 'x-agentmgr': '1', 'x-agentmgr-agent': a.id })).status, 403);
+  assert.equal((await call('POST', `/agents/${a.id}/skill-proposal/dismiss`, {}, { 'x-agentmgr': '1', 'x-agentmgr-agent': a.id })).status, 403);
+  assert.equal((await call('POST', '/skills/fix', { id: 'personal/x' }, { 'x-agentmgr': '1', 'x-agentmgr-agent': a.id })).status, 403);
+  assert.deepEqual(v.skillProposal.check, { secrets: [], drift: [], existing: null, via: 'direct', allowed: true, places: ['project', 'personal'] }, 'looked at where it would go: nothing in the way');
+  const addedSkill = await call('POST', `/agents/${a.id}/skill-proposal`, { place: 'personal' });
+  assert.equal(addedSkill.status, 200, JSON.stringify(addedSkill.body));
+  assert.deepEqual([addedSkill.body.id, addedSkill.body.agent.skillProposal.decided.state], ['personal/bump-version', 'added']);
+  assert.ok(!(await call('GET', '/inbox')).body.some((i) => i.kind === 'skill' && i.agentId === a.id), 'decided: not offered again');
+  assert.match(fs.readFileSync(path.join(home, 'claude', 'skills', 'bump-version', 'SKILL.md'), 'utf8'), /^---\nname: bump-version\ndescription: "changing the version number"\n---\n\n1\. Write `VERSION`/);
+  assert.equal((await call('POST', `/agents/${a.id}/skill-proposal`, { place: 'personal' })).status, 409, 'one with that name is kept');
+  const hist = (await call('GET', '/skills/history')).body[0];
+  assert.deepEqual([hist.action, hist.id, hist.via, hist.from, hist.by.from], ['added', 'personal/bump-version', 'direct', { agentId: a.id, agentName: a.name }, 'this computer'], 'in the skills history');
+  const listed = (await call('GET', '/skills')).body.places.find((p) => p.id === 'personal').skills.find((x) => x.folder === 'bump-version');
+  assert.deepEqual([listed.proposedBy.agentId, listed.drift], [a.id, []]);
+  fs.rmSync(path.join(home, 'claude', 'skills', 'bump-version'), { recursive: true, force: true });
   // Requirement trace: with points agreed, each is followed to the checks recorded for it.
   manager.patch(a.id, { acceptance: { status: 'agreed', agreedAt: new Date().toISOString(), points: [{ id: 'A1', text: 'The file holds the version' }, { id: 'A2', text: 'The changelog has an entry' }] } });
   const trace = (await call('GET', `/agents/${a.id}/trace`)).body;

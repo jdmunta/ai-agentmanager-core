@@ -2,6 +2,7 @@
 // Claude to a Markdown file outside the repository and shown in the UI.
 import { parsePaths } from '../public/valuelens.js';
 import { parseChecklist } from '../public/checklist.js';
+import { parseProposal } from './skills.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { paths } from './config.js';
@@ -53,6 +54,7 @@ const SECTION_ALIASES = {
   risks: ['risks', 'what could go wrong', 'pre-mortem', 'premortem', 'risks named before starting'],
   options: ['options', 'paths', 'alternatives', 'options considered', 'options weighed'],
   checklist: ['self-review', 'self review', 'self-review checklist', 'checklist', 'first principles', 'first-principles checklist'],
+  skill: ['skill proposal', 'proposed skill', 'skill to add', 'new skill'],
 };
 
 // "- **PRD**: [Title](https://...) — highlight", tolerating ":" / "-" / "–" separators and bare URLs.
@@ -125,7 +127,7 @@ export function parseConfidence(body) {
 }
 
 export function parseBrief(markdown) {
-  const out = { status: null, problem: '', solution: '', diagram: null, diagramNotes: '', checks: [], references: [], results: null, risks: [], options: null, checklist: [] };
+  const out = { status: null, problem: '', solution: '', diagram: null, diagramNotes: '', checks: [], references: [], results: null, risks: [], options: null, checklist: [], skill: null };
   const st = markdown.split(/^##\s/m)[0].match(/^\s*\**status\**\s*:\s*\**\s*(planning|working|blocked|done)\b/im);
   if (st) out.status = st[1].toLowerCase();
   const parts = markdown.split(/^##\s+(.+?)\s*#*\s*$/m);
@@ -169,6 +171,9 @@ export function parseBrief(markdown) {
     } else if (key === 'checklist') {
       // The self-review (checklist.js): the same first-principles questions, each with its evidence.
       out.checklist = parseChecklist(body);
+    } else if (key === 'skill') {
+      // A procedure worth keeping, proposed as a skill for the person to add (skills.js).
+      out.skill = parseProposal(body);
     } else if (key === 'risks') {
       // The pre-mortem (RISKS_PROMPT): "- [ ] risk" as named before starting; "[x]" avoided, "[!]" happened.
       for (const line of body.split('\n')) {

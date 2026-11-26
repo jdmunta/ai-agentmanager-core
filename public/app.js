@@ -248,6 +248,7 @@ $('#new-playbook').onclick = () => {
 $('#triggers-open').onclick = () => triggersUi.open();
 let builtReports = []; // agents built with agentkit that report here (runs, approvals)
 let repeatsState = { suggestions: [] }; // requests you keep making, offered as playbooks (src/repeats.js)
+let skillDriftState = []; // skills out of date with the code, or with a newer version upstream (src/skills.js)
 let rulesState = { allowed: [], suggestions: [] }; // approval rules learned from your answers (src/rules.js)
 const builtUi = initBuilt({
   api, esc, toast, $,
@@ -1629,7 +1630,7 @@ function loadLimitEngines() {
     })
     .catch(() => (limitEngines = null));
 }
-const NEED_ORDER = { approval: 0, prompt: 0, limit: 1, waiting: 1, plan: 1, acceptance: 1, question: 1, team: 1, rule: 2, auto: 2, review: 2, prereview: 2, autopilot: 2, stuck: 3, conflict: 4, reminder: 5, close: 5, repeat: 5, update: 4 , idea: 2 };
+const NEED_ORDER = { approval: 0, prompt: 0, limit: 1, waiting: 1, plan: 1, acceptance: 1, question: 1, team: 1, rule: 2, auto: 2, review: 2, prereview: 2, autopilot: 2, stuck: 3, conflict: 4, reminder: 5, close: 5, repeat: 5, update: 4 , idea: 2, skill: 4, skilldrift: 5 };
 /** What an agent needs from the user. `both`: overlaps on both agents (detail), else only the one that should rebase (inbox). */
 function needsFor(a, { both = false } = {}) {
   const items = [];
@@ -1648,6 +1649,8 @@ function needsFor(a, { both = false } = {}) {
   if (updateWaits(a)) items.push({ a, kind: 'update', key: `update:${a.id}` });
   if (a.followUp) items.push({ a, kind: a.followUp.kind === 'close' ? 'close' : 'reminder', key: `reminder:${a.id}`, r: a.followUp });
   for (const g of a.conflicts ?? []) if (both || g.mergeFirst !== a.id) items.push({ a, kind: 'conflict', key: `conflict:${a.id}:${g.agent.id}`, g });
+  // A procedure it proposes keeping as a skill, not decided yet (skills.js).
+  if (a.skillProposal && !a.skillProposal.decided) items.push({ a, kind: 'skill', key: `skill:${a.id}:${a.skillProposal.sig}`, p: a.skillProposal });
   return items;
 }
 /** Teams waiting on you (approved, or stuck on a disagreement), shown on the lead or the implementer. */
@@ -1677,12 +1680,16 @@ function autopilotNeeds() {
 function repeatNeeds() {
   return repeatsState.suggestions.map((r) => ({ a: { id: 'repeats', name: r.projects.join(', ') || 'Requests', priority: 3 }, kind: 'repeat', key: `repeat:${r.key}`, r }));
 }
+/** Skills that name what is gone from their project, or have a newer version. */
+function skillDriftNeeds() {
+  return skillDriftState.map((d) => ({ a: { id: 'skills', name: d.placeLabel, priority: 3 }, kind: 'skilldrift', key: `skilldrift:${d.id}`, d }));
+}
 function inboxItems() {
-  return [...approvalNeeds(), ...[...agents.values()].flatMap((a) => needsFor(a)), ...teamNeeds(), ...ruleNeeds(), ...autopilotNeeds(), ...repeatNeeds()]
+  return [...approvalNeeds(), ...[...agents.values()].flatMap((a) => needsFor(a)), ...teamNeeds(), ...ruleNeeds(), ...autopilotNeeds(), ...repeatNeeds(), ...skillDriftNeeds()]
     .sort((x, y) => NEED_ORDER[x.kind] - NEED_ORDER[y.kind] || (x.a.priority ?? 2) - (y.a.priority ?? 2));
 }
 
-const NEED_LABEL = { update: 'Update to send', limit: 'Limit', reminder: 'Follow up', close: 'Close session?', repeat: 'Make it a playbook?', autopilot: 'Autopilot held', rule: 'Always allow?', approval: 'Approval', team: 'Team', prompt: 'Needs input', waiting: 'Waiting on you', acceptance: 'Done means', auto: 'Done for you', plan: 'Plan review', question: 'Question', review: 'AI review', prereview: 'Not approved', stuck: 'Stuck?', conflict: 'Overlap' , idea: 'Possibly patentable' };
+const NEED_LABEL = { update: 'Update to send', limit: 'Limit', reminder: 'Follow up', close: 'Close session?', repeat: 'Make it a playbook?', skill: 'Skill proposal', skilldrift: 'Skill out of date', autopilot: 'Autopilot held', rule: 'Always allow?', approval: 'Approval', team: 'Team', prompt: 'Needs input', waiting: 'Waiting on you', acceptance: 'Done means', auto: 'Done for you', plan: 'Plan review', question: 'Question', review: 'AI review', prereview: 'Not approved', stuck: 'Stuck?', conflict: 'Overlap' , idea: 'Possibly patentable' };
 /** Why the AI judge thinks so, as a small tag. */
 const aiTag = (confidence, what = 'AI') => `<span class="tag ai" title="Judged by a model from the agent's activity; your reactions tune later calls">🤖 ${what}${confidence != null ? ` ${Math.round(confidence * 100)}%` : ''}</span>`;
 /** What a permission prompt asks about: the command, file or tool. */
@@ -1715,7 +1722,7 @@ function needCard(it, { inDetail = false } = {}) {
     ? `<a href="#" class="need-agent" data-ib="built-open">⚙ ${esc(a.name)}</a> <span class="hint">${esc(it.r.host)}</span>`
     : it.kind === 'rule'
     ? `<span class="need-agent" title="${esc(it.r.repo)}">${esc(a.name)}</span>`
-    : it.kind === 'repeat'
+    : it.kind === 'repeat' || it.kind === 'skilldrift'
     ? `<span class="need-agent">${esc(a.name)}</span>`
     : `<a href="#${a.id}" class="need-agent" data-goto="${a.id}">${prioChip(a.priority ?? 2)}${esc(a.name)}</a>${a.projectInfo?.name ? ` <span class="hint">${esc(a.projectInfo.name)}</span>` : ''}`;
   const head = `<div class="need-head"><span class="need-kind ${it.kind}">${NEED_LABEL[it.kind]}</span>${who}</div>`;
@@ -1732,6 +1739,34 @@ function needCard(it, { inDetail = false } = {}) {
       <ul class="need-files">${r.examples.map((x) => `<li>${esc(x.length > 140 ? `${x.slice(0, 140)}…` : x)}</li>`).join('')}</ul>
       <p class="hint">Save it as a playbook to run it again in one click, or on a schedule.</p>
       <div class="need-actions"><button class="small primary" data-ib="repeat-save">Save as playbook…</button><button class="small" data-ib="repeat-dismiss">Not now</button></div>`;
+  } else if (it.kind === 'skill') {
+    const p = it.p;
+    const c = p.check ?? {};
+    const places = c.places ?? ['project', 'personal'];
+    const mine = places.includes('project') ? p.project?.name : null;
+    const yours = places.includes('personal');
+    const pr = mine && c.via === 'pr';
+    const where = mine ? (pr ? `a pull request to ${esc(mine)}` : `${esc(mine)} (a file in the repository, to commit)`) : 'your own skills';
+    body = `<p class="need-title">Proposed skill: <b>${esc(p.folder)}</b></p>
+      <p class="hint">${p.description ? `Use when: ${esc(p.description)}` : 'No description of when to use it.'}</p>
+      ${p.changed ? `<p class="hint">Changes: ${esc(p.changed)}</p>` : ''}
+      <pre class="need-input skill-steps">${esc(p.body)}</pre>
+      ${c.secrets?.length ? `<p class="hint warn">Contains what looks like ${esc(c.secrets.join(', '))}. It can't be added until that is removed; ask the agent to remove it.</p>` : ''}
+      ${c.drift?.length ? `<p class="hint warn">References not found in the project: ${c.drift.slice(0, 4).map((x) => `<code>${esc(x.ref)}</code> (${esc(x.why)})`).join(', ')}${c.drift.length > 4 ? ` and ${c.drift.length - 4} more` : ''}.</p>` : ''}
+      ${c.existing ? `<p class="hint">Replaces the existing skill <b>${esc(c.existing.id)}</b>.</p>` : ''}
+      ${!mine && !yours ? '<p class="hint warn">The skill policy allows no place to add it.</p>' : `<p class="hint">Saved as <code>.claude/skills/${esc(p.folder)}/SKILL.md</code> in ${where}. Review the steps before adding: agents follow them.</p>`}
+      <div class="need-actions">${mine && yours ? `<select data-skill-to aria-label="Where to add it"><option value="">This project (${esc(mine)})${pr ? ': pull request' : ''}</option><option value="personal">Your own skills (every project)</option></select>` : ''}<label class="check"><input type="checkbox" data-skill-replace ${c.existing ? 'checked' : ''} /> Replace an existing skill with this name</label><button class="small primary" data-ib="skill-add" data-skill-place="${mine ? '' : 'personal'}" ${c.secrets?.length || (!mine && !yours) ? 'disabled' : ''}>${pr ? 'Open pull request' : 'Add skill'}</button><button class="small" data-ib="skill-dismiss">Dismiss</button></div>`;
+  } else if (it.kind === 'skilldrift') {
+    const d = it.d;
+    // A pull request with a change to it is open: not a second one.
+    const fixable = d.pending ? 0 : d.drift.filter((x) => x.to).length;
+    const proj = d.place.startsWith('project:');
+    body = `<p class="need-title"><b>${esc(d.name)}</b> ${d.drift.length ? 'references things no longer in the project' : 'has a newer version in its source repository'}</p>
+      ${d.drift.length ? `<ul class="need-files">${d.drift.slice(0, 6).map((x) => `<li><code>${esc(x.ref)}</code> <span class="hint">${esc(x.why)}</span></li>`).join('')}${d.drift.length > 6 ? `<li class="hint">and ${d.drift.length - 6} more</li>` : ''}</ul>` : ''}
+      ${d.newer ? `<p class="hint">${d.newer.gone ? 'It is no longer in its source repository.' : `A newer version is available${d.newer.latest ? ` (${esc(d.newer.latest)})` : ''}${d.edited ? '; updating replaces local edits' : ''}.`}</p>` : ''}
+      ${d.pending ? `<p class="hint">A pull request with a change to it is open${d.pending.pr ? `: <a href="${esc(d.pending.pr)}" target="_blank" rel="noopener">${esc(d.pending.pr.replace(/^https:\/\/github\.com\//, ''))}</a>` : ` (${esc(d.pending.branch)})`}.</p>` : ''}
+      <p class="hint">Agents that follow it may run commands or open files that no longer exist. ${fixable ? 'Renamed paths can be fixed automatically. ' : ''}${proj ? 'An agent can work out what is correct now and propose a corrected skill.' : 'Edit the skill, or ask an agent to propose a corrected one.'}</p>
+      <div class="need-actions">${fixable ? `<button class="small primary" data-ib="skilldrift-fix">Fix ${fixable} renamed path${fixable === 1 ? '' : 's'}</button>` : ''}${d.drift.length && proj ? `<button class="small${fixable ? '' : ' primary'}" data-ib="skilldrift-agent">Ask an agent…</button>` : ''}<button class="small" data-ib="skilldrift-open">Open Skills</button><button class="small" data-ib="skilldrift-dismiss">Dismiss</button></div>`;
   } else if (it.kind === 'autopilot') {
     body = `<p class="need-title">${esc(it.it.title)}</p>
       <p class="hint">${esc(it.it.autopilot.note ?? '')}</p>
@@ -2016,6 +2051,48 @@ async function onNeed(e) {
       const r = repeatsState.suggestions.find((x) => `repeat:${x.key}` === key);
       return r && playbooksUi.open({ name: r.name, intent: r.intent, projects: r.projects });
     }
+    case 'skill-add': {
+      const place = card.querySelector('[data-skill-to]')?.value || card.querySelector('[data-skill-place]')?.dataset.skillPlace || undefined;
+      const replace = Boolean(card.querySelector('[data-skill-replace]')?.checked);
+      return act(async () => {
+        const r = await api('POST', `/agents/${id}/skill-proposal`, { place, replace });
+        upsert(r.agent);
+        renderInbox();
+        toast(r.via === 'pr' ? `Pull request opened${r.pr ? `: ${r.pr}` : ''}. Agents get the skill once it is merged.` : 'Skill added. Agents started from now on will use it.', 6000);
+      });
+    }
+    case 'skill-dismiss':
+      return act(async () => {
+        upsert(await api('POST', `/agents/${id}/skill-proposal/dismiss`, {}));
+        renderInbox();
+      }, 'Dismissed. It is offered again only if the agent changes it');
+    case 'skilldrift-open':
+      return skillsUi.open();
+    case 'skilldrift-fix':
+      return act(async () => {
+        const r = await api('POST', '/skills/fix', { id: key.slice('skilldrift:'.length) });
+        skillDriftState = await api('GET', '/skills/drift');
+        renderInbox();
+        toast(r.via === 'pr' ? `Pull request opened${r.pr ? `: ${r.pr}` : ''}` : `Fixed: ${r.fixed.map((f) => `${f.ref} → ${f.to}`).join(', ')}`, 6000);
+      });
+    case 'skilldrift-agent': {
+      const d = skillDriftState.find((x) => `skilldrift:${x.id}` === key);
+      const proj = d && projectsState.find((p) => d.place === `project:${p.shortcut ?? p.key}` || d.place === `project:${p.key}`);
+      if (!d) return;
+      openNewDialog('now');
+      dialog.querySelector('textarea[name="intents"]').value = staleSkillIntent(d);
+      if (proj) {
+        dialog.querySelector('input[name="project"]').value = proj.shortcut ?? '';
+        if (proj.dir && !dialog.querySelector('input[name="dir"]').value) dialog.querySelector('input[name="dir"]').value = proj.dir;
+      }
+      syncIntentCount();
+      return;
+    }
+    case 'skilldrift-dismiss':
+      return act(async () => {
+        skillDriftState = await api('POST', '/skills/drift/dismiss', { id: key.slice('skilldrift:'.length) });
+        renderInbox();
+      }, 'Dismissed until what is found changes');
     case 'repeat-dismiss':
       return act(async () => {
         repeatsState = await api('POST', '/repeats/dismiss', { key: key.slice('repeat:'.length) });
@@ -4503,6 +4580,11 @@ function renderProjectOptions() {
     .join('');
 }
 
+/** The task for an agent to put a skill right: find what works now, and propose it (the person adds it). */
+const staleSkillIntent = (d) =>
+  `The skill "${d.name}" (.claude/skills/${d.id.split('/').pop()}/SKILL.md) is out of date with the code: ${d.drift.map((x) => `${x.ref} (${x.why})`).join('; ')}. ` +
+  'Read it, find what works in the project now by running it, and propose its corrected version under "## Skill proposal" in your brief, with a "Changed:" line. Do not edit the skill yourself.';
+
 function openNewDialog(mode = 'now') {
   renderProjectOptions();
   newDrop.reset();
@@ -4882,6 +4964,7 @@ function handleEvent(msg) {
     builtReports = msg.built ?? [];
     if (msg.rules) rulesState = msg.rules;
     if (msg.repeats) repeatsState = msg.repeats;
+    skillDriftState = msg.skillDrift ?? [];
     builtUi.render();
     msg.agents.forEach(watchDocs);
     if (selectedId && !agents.has(selectedId)) selectedId = null;
@@ -5003,6 +5086,8 @@ function handleEvent(msg) {
     rulesState = msg.rules;
   } else if (msg.t === 'repeats') {
     repeatsState = msg.repeats;
+  } else if (msg.t === 'skilldrift') {
+    skillDriftState = msg.skillDrift;
   } else if (msg.t === 'built') {
     builtReports = msg.reports;
     builtUi.render();

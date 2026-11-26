@@ -60,12 +60,31 @@ Policies are synchronous so every code path can call them. Keep them fast; do sl
 | `terminal.open` | Before a live terminal is attached (browser, CLI `attach`, hub) | `agent`, `kind` (`claude` or `shell:N`); for **Open Terminal** (a shell on the machine, not tied to an agent) `agent` is null and `kind` is `machine` |
 | `agent.files` | Before the studio changes a file in an agent's folder | `agent`, `op` (`write`, `create`, `rename` or `delete`), `path`, and `to` for a rename |
 | `hub.action` | Before an action the hub asked for, after this machine's own `hub.allow` check | `action`, `agent` |
+| `skill.add` | Before a skill an agent proposed is added (inbox, `agentmgr skills accept`) | `id`, `folder`, `replace`, `from` (the agent), `place`, `project`, `via` (`direct` or `pr`) |
+| `skill.install` | Before skills are installed from a repository | `repo`, `names`, `place`, `project`, `via` |
+| `skill.update` | Before a skill is replaced with its repository's current version | `id`, `repo`, `place`, `project`, `via` |
+| `skill.remove` | Before a skill is removed | `id`, `place`, `project`, `via` |
+| `skill.fix` | Before renamed paths are fixed in a skill | `id`, `fixed` (`[{ ref, to }]`), `place`, `project`, `via` |
 
 `agent` is a summary: id, name, kind, engine, intent, repo, workdir, branch, permissionMode, model, project, status.
 
 ## Daemon events (listeners)
 
 `agent.created`, `agent.starting`, `agent.stopping`, `agent.message`, `agent.removed`, `agent.commit` (with `sha`), `agent.pr` (with `url`), `agent.merge`, `hub.action`, `mcp.run`, each with the same `agent` summary and an `at` timestamp.
+
+Skills: `skill.added`, `skill.replaced`, `skill.installed`, `skill.updated`, `skill.removed`, `skill.fixed`, `skill.drift.dismissed` and `skill.proposal.dismissed`. Each is the entry written to the skills history: `action`, `id` (or `ids`), `place`, `via` (`direct` or `pr`), `pr` (the pull request's address), `from` (the agent that proposed it), `by` (`{ person, from }`: the person's git name and email, and the device), and `at`. The same history is at `GET /api/skills/history` and `agentmgr skills history`.
+
+An organization that wants a skill policy people can't change for themselves enforces it with a plugin. For example, only skills from its own repositories, and no changes to people's own skills:
+
+```js
+export default function register(api) {
+  api.policy((action, d) => {
+    if (action === 'skill.install' && !String(d.repo).startsWith('https://github.com/acme/')) return { allow: false, reason: 'Skills come from github.com/acme only' };
+    if (action.startsWith('skill.') && d.place === 'personal') return { allow: false, reason: 'Skills are kept in projects, under review' };
+  });
+  api.on((event, e) => event.startsWith('skill.') && sendToAuditLog(e));
+}
+```
 
 ## Engines
 
