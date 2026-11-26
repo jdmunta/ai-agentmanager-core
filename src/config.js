@@ -55,6 +55,7 @@ const DEFAULTS = {
   proof: true,
   // With the brief: ask for a pre-mortem (## Risks: how the task could go wrong, named before starting and marked at the end).
   premortem: true,
+  selfReview: true,
   // With the brief: when there is more than one way, ask for the options ranked by value now and later (## Options).
   valueLens: true,
   // Insights (why, what, how, now; value now and later, the kind of idea, the paths ranked) made by itself when an agent finishes.

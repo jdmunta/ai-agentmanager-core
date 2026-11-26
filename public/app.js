@@ -63,6 +63,7 @@ import { initProof, proofRows } from '/proof.js';
 import { initWeekly } from '/weekly.js';
 import { initReadFirst, readFirstRow } from '/readfirst.js';
 import { initGlance } from '/glance.js';
+import { checklistRows } from '/checklist.js';
 import { initUnderstand } from '/understand.js';
 import { kindHtml, optionsRows, parseKind, parsePaths, parseValue, pathsHtml, privateRow, valueHtml } from '/valuelens.js';
 
@@ -1125,6 +1126,7 @@ function resultsCard(a) {
     ${r.confidence ? `<p class="own-conf"><span class="tag conf-${esc(r.confidence.level)}" title="The agent's own confidence in what it built, as it wrote it in its brief. The review scorecard is the separate check.">Its own confidence: ${r.confidence.percent}%</span> ${esc(r.confidence.why)}</p>` : r.fromAgent && ['done', 'partial'].includes(r.outcome) ? '<p class="hint own-conf">The agent has not said how confident it is in this.</p>' : ''}
     ${r.blockers.length ? `<ul class="blockers">${r.blockers.map((x) => item(x, 'blocker')).join('')}</ul>` : ''}
     ${readFirstRow(a, esc)}
+    ${checklistRows(a, esc)}
     ${fenceRow(a)}
     ${echoRow(a)}
     ${privateRow(a, esc)}

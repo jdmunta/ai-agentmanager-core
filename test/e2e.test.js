@@ -1651,6 +1651,7 @@ test('proof: the agent is told to record it; what it recorded is shown with what
   const dir = fs.realpathSync(path.join(home, 'briefs', a.id));
   assert.ok(sys.includes(`Keep the proof of your checks in ${path.join(dir, 'PROOF.md')}`) && sys.includes('"- Not done: nothing" when there is none'), sys);
   assert.ok(sys.includes('Before you change anything, add a section "## Risks" to the brief'), 'the pre-mortem is asked for');
+  assert.ok(sys.includes('add a section "## Self-review" to the brief') && sys.includes('Ripple: What uses the changed code still works.'), 'the self-review is asked for');
   assert.ok(sys.includes('When there is more than one reasonable way to solve this, add a section "## Options" to the brief'), 'the options, ranked, are asked for');
   const ready = await waitFor(async () => {
     const v = await agentNow(a.id);
@@ -1663,7 +1664,7 @@ test('proof: the agent is told to record it; what it recorded is shown with what
   fs.writeFileSync(path.join(ready.workdir, 'VERSION'), '1.2.3\n');
   await waitFor(() => fs.existsSync(path.join(dir, 'BRIEF.md')), 15000, "the stand-in's brief");
   await new Promise((r) => setTimeout(r, 300));
-  fs.writeFileSync(path.join(dir, 'BRIEF.md'), 'Status: done\n## Risks\n- [x] The version has a trailing space: avoided, cat -A shows none\n- [ ] Another tool reads version.txt\n## Checks\n- [x] the file holds the version\n- [x] the old file is gone\n## Results\nOutcome: done\n- Delivered: VERSION\n- Not done: the changelog entry\nConfidence: 80% - read it back\n');
+  fs.writeFileSync(path.join(dir, 'BRIEF.md'), 'Status: done\n## Risks\n- [x] The version has a trailing space: avoided, cat -A shows none\n- [ ] Another tool reads version.txt\n## Checks\n- [x] the file holds the version\n- [x] the old file is gone\n## Results\nOutcome: done\n- Delivered: VERSION\n- Not done: the changelog entry\nConfidence: 80% - read it back\n## Self-review\n- [x] Asked: the version file, as asked\n- [x] Works: cat VERSION shows 1.2.3\n- [!] Tests: no test reads the version\n');
   fs.writeFileSync(
     path.join(dir, 'PROOF.md'),
     ['## The file holds the version', 'Command: `cat VERSION`', 'Exit: 0', '```', '1.2.3', '```', '## The old file is gone', 'Command: cat version.txt', 'Exit: 0', '```', '(nothing)', '```', '## Cleaned up', 'Command: rm -f VERSION.bak', 'Exit: 0', '## Read the docs', 'Command: none', 'Looked at README.md.'].join('\n'),
@@ -1672,6 +1673,12 @@ test('proof: the agent is told to record it; what it recorded is shown with what
   const v = await agentNow(a.id);
   assert.deepEqual([v.proofDoc.entries, v.proofDoc.commands, v.results.notDone, v.results.notDoneSaid], [4, 3, ['the changelog entry'], true]);
   assert.deepEqual(v.brief.risks.map((r) => r.state), ['avoided', 'open'], 'its pre-mortem, read from the brief');
+  // Its self-review, each answer set against what the app measured: the proof backs Works, Not done contradicts Asked.
+  // (Scope is left out: whether the fence backs it depends on when its changed files were last measured.)
+  assert.deepEqual(v.checklist.items.filter((i) => i.key !== 'scope').slice(0, 3).map((i) => [i.key, i.state, i.app?.verdict ?? null]), [['asked', 'yes', 'contradicts'], ['works', 'yes', 'backs'], ['tests', 'no', null]]);
+  assert.ok(v.readFirst.reasons.some((r) => /^Its self-review says no to 1 principle: Tests \(no test reads the version\)/.test(r.text)) && v.readFirst.reasons.some((r) => /^It says Asked holds, and the app's facts say otherwise: It lists as not done: the changelog entry/.test(r.text)), 'counted in Read first');
+  const cl = (await call('GET', `/agents/${a.id}/checklist?format=md`)).body;
+  assert.match(cl.markdown, /^# Self-review: .*\n\n2 hold, 1 no, 5 not checked · the app backs [12], contradicts 1\n\n- \[x\] \*\*Asked\*\*: the version file, as asked\n  - \*\*Contradicted\*\* by the app: It lists as not done: the changelog entry/);
   // Requirement trace: with points agreed, each is followed to the checks recorded for it.
   manager.patch(a.id, { acceptance: { status: 'agreed', agreedAt: new Date().toISOString(), points: [{ id: 'A1', text: 'The file holds the version' }, { id: 'A2', text: 'The changelog has an entry' }] } });
   const trace = (await call('GET', `/agents/${a.id}/trace`)).body;

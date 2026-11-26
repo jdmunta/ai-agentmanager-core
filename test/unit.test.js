@@ -2442,6 +2442,44 @@ test('value and paths: worth now against later, the kind of idea and the ways ra
   assert.match(ip, /not legal advice, and you have not searched for prior art: when unsure between two kinds, give the lower one/);
 });
 
+test('self-review: the same first-principles questions, read from the brief, each answer set against what the app measured', async () => {
+  const { parseBrief } = await import('../src/brief.js');
+  const { CHECKLIST_PROMPT, PRINCIPLES, checklistOf, checklistLine, checklistRows, checklistMarkdown } = await import('../public/checklist.js');
+  const { readFirst } = await import('../src/readfirst.js');
+  const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;');
+  assert.deepEqual(PRINCIPLES.map((p) => p.key), ['asked', 'scope', 'works', 'tests', 'edges', 'ripple', 'safe', 'undo']);
+  assert.match(CHECKLIST_PROMPT, /^Before you set the outcome to partial or done, review your own work from first principles and add a section "## Self-review"[\s\S]*Asked: It does all that was asked[\s\S]*Undo: It can be undone without losing data\.\n[\s\S]*"\[x\]" with no evidence counts as not checked/);
+  const md = ['Status: done', '## Results', 'Outcome: done', '- Not done: the CSV export', '## Self review', '- [x] Asked: all three parts', '- [x] **Scope**: only src/cart', '* [x] Works: npm test, 42 pass', '- [!] Tests: no test for the <empty> cart', '- [-] Undo: no data changes', '- [x] Edge cases:', '- [x] Works: said twice', '- [x] Logging: nothing noisy', 'not a line'].join('\n');
+  const brief = parseBrief(md);
+  assert.deepEqual(brief.checklist.map((x) => [x.key, x.state, x.evidence]), [['asked', 'yes', 'all three parts'], ['scope', 'yes', 'only src/cart'], ['works', 'yes', 'npm test, 42 pass'], ['tests', 'no', 'no test for the <empty> cart'], ['undo', 'na', 'no data changes'], ['edges', 'yes', ''], [null, 'yes', 'nothing noisy']], 'aliases; the first of a repeated one; its own lines kept');
+  assert.deepEqual([parseBrief('## Problem\nx').checklist, parseBrief('## Checks\n- [x] Works: y').checklist], [[], []], 'checks are not the self-review');
+
+  // Set against the facts: Not done contradicts Asked; the fence backs Scope; the proof backs Works.
+  const a = { brief, proofDoc: { commands: 2, updatedAt: 't' }, proof: { proofAt: 't', results: [{ status: 'same' }] }, prs: {} };
+  const c = checklistOf(a, { drift: [], judged: true });
+  assert.deepEqual(c.items.map((i) => [i.key, i.state, i.app?.verdict ?? null]), [['asked', 'yes', 'contradicts'], ['scope', 'yes', 'backs'], ['works', 'yes', 'backs'], ['tests', 'no', null], ['edges', 'unchecked', null], ['ripple', 'missing', null], ['safe', 'missing', null], ['undo', 'na', null]]);
+  assert.equal(c.items[0].app.why, 'It lists as not done: the CSV export');
+  assert.equal(checklistLine(c), '3 hold, 1 no, 1 not applicable, 3 not checked · the app backs 2, contradicts 1');
+  // The facts that contradict: drift, a recorded run that differs, breaks the tests missed, failing CI.
+  const facts = checklistOf({ brief: { status: 'done', checklist: [] }, proofDoc: { commands: 1, updatedAt: 't' }, proof: { proofAt: 't', results: [{ status: 'differs' }] }, breaks: { baseline: { ok: true }, breaks: [{ status: 'missed', file: 'a.js', line: 3 }, { status: 'caught' }] }, prs: { u: { state: 'OPEN', checks: { state: 'failed' } } } }, { drift: [{ area: 'src/pay' }], judged: true });
+  assert.deepEqual(facts.items.map((i) => i.app?.why ?? null), [null, 'It changed code outside its task: src/pay', '1 recorded command gave a different result when run again', '1 of 2 deliberate breaks went unnoticed by its tests: a.js:3', null, 'CI is failing on its pull request', null, null]);
+  assert.equal(facts.written, false);
+  assert.equal(checklistOf({ brief: { status: 'working', checklist: [] } }), null, 'nothing to say while it works and wrote none');
+
+  // On the results card, escaped, open with a no; and in Read first.
+  const html = checklistRows({ checklist: c }, esc);
+  assert.match(html, /^<details class="checklist" open><summary><b>Self-review<\/b>/);
+  assert.match(html, /<li class="cl-contra"><span class="tag proof-ok">Holds<\/span> <b title="[^"]+">Asked<\/b> all three parts<div class="cl-app"><span class="tag proof-bad">Contradicted<\/span>/);
+  assert.ok(html.includes('no test for the &lt;empty> cart'));
+  assert.match(checklistRows({ checklist: facts }, esc), /has not reviewed its work against the checklist/);
+  assert.match(checklistMarkdown(c, 'cart'), /^# Self-review: cart\n\n.*\n\n- \[x\] \*\*Asked\*\*: all three parts\n  - \*\*Contradicted\*\* by the app: It lists as not done: the CSV export\n- \[x\] \*\*Scope\*\*: only src\/cart\n  - Backed by the app/);
+  const rf = readFirst({ kind: 'task', brief, checklist: c });
+  assert.ok(rf.reasons.some((r) => r.text === 'Its self-review says no to 1 principle: Tests (no test for the <empty> cart)'));
+  assert.ok(rf.reasons.some((r) => r.text.startsWith("It says Asked holds, and the app's facts say otherwise: It lists as not done")));
+  const good = checklistOf({ brief: { status: 'done', results: { outcome: 'done' }, checklist: PRINCIPLES.map((p) => ({ key: p.key, label: p.label, state: 'yes', evidence: 'ok' })) }, proofDoc: { commands: 1 }, prs: {} }, { drift: [], judged: true });
+  assert.ok(readFirst({ kind: 'task', brief: {}, checklist: good }).calm.includes("Its self-review holds on every principle, and the app's facts back 2 of them"));
+});
+
 test('pre-mortem: the risks an agent names before starting are read from its brief, shown with how each ended, and told to the scorecard', async () => {
   const { parseBrief, riskCounts, RISKS_PROMPT } = await import('../src/brief.js');
   const { riskRows, proofRows } = await import('../public/proof.js');

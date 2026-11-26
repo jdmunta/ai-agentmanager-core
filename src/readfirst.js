@@ -98,6 +98,17 @@ export function readFirst(agent, trace = null) {
   const open = (b.risks ?? []).filter((r) => r.state === 'open');
   if (happened.length) add(Math.min(20, 10 * happened.length), `${plural(happened.length, 'risk')} it named happened: ${clip(happened.map((r) => r.text).join('; '), 120)}`);
   if (open.length) add(Math.min(15, 5 * open.length), `${plural(open.length, 'risk')} it named ${open.length === 1 ? 'was' : 'were'} not checked: ${clip(open.map((r) => r.text).join('; '), 120)}`);
+  // Its self-review (checklist.js): what it answers no, and what the app's facts contradict.
+  const cl = agent.checklist;
+  if (cl?.written) {
+    const no = cl.items.filter((i) => i.state === 'no');
+    const contra = cl.items.filter((i) => i.app?.verdict === 'contradicts' && i.state === 'yes');
+    const unanswered = cl.items.filter((i) => i.state === 'missing' || i.state === 'unchecked');
+    if (no.length) add(Math.min(20, 8 * no.length), `Its self-review says no to ${plural(no.length, 'principle')}: ${clip(no.map((i) => `${i.label}${i.evidence ? ` (${i.evidence})` : ''}`).join('; '), 120)}`);
+    if (contra.length) add(Math.min(24, 12 * contra.length), `It says ${contra.map((i) => i.label).join(', ')} ${contra.length === 1 ? 'holds' : 'hold'}, and the app's facts say otherwise: ${clip(contra.map((i) => i.app.why).join('; '), 120)}`);
+    if (unanswered.length >= 3) add(5, `Its self-review leaves ${plural(unanswered.length, 'principle')} unchecked`);
+    if (!no.length && !contra.length && !unanswered.length && cl.counts.backs >= 2) calm.push(`Its self-review holds on every principle, and the app's facts back ${cl.counts.backs} of them`);
+  } else if (cl) add(5, 'It wrote no self-review');
   const conf = b.results?.confidence?.percent;
   if (!Number.isFinite(conf)) add(5, 'It gave no confidence');
   else if (conf < 65) add(15, `Its own confidence is ${conf}%${b.results.confidence.why ? `: ${clip(b.results.confidence.why, 100)}` : ''}`);

@@ -2643,6 +2643,21 @@ export async function main(argv) {
     });
 
   program
+    .command('self-review')
+    .description("The agent's self-review: the same first-principles questions it answers before calling its work done (asked, scope, works, tests, edges, ripple, safe, undo), each with its evidence and whether the app's own facts back or contradict it")
+    .argument('<agent>')
+    .option('--json', 'print JSON')
+    .action(async (ref, o) => {
+      await daemon();
+      const a = await resolveAgent(ref);
+      const b = await api('GET', `/agents/${a.id}/checklist?format=md`);
+      if (o.json) return console.log(JSON.stringify(b.checklist, null, 2));
+      console.log(b.markdown);
+      const c = b.checklist;
+      if (c && (!c.written || c.counts.no || c.counts.contradicts)) process.exitCode = 1;
+    });
+
+  program
     .command('try-path')
     .description('Try the other path: the agent wrote down the ways it weighed (## Options, the one it takes first). Start path N as a second agent from the same base commit, raced against the first: compare them with agentmgr race show, and keep one with agentmgr race pick')
     .argument('<agent>')
