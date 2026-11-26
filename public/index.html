@@ -368,6 +368,20 @@
             </select>
           </label>
         </div>
+        <details class="guess-row">
+          <summary>Your guess <span class="hint">(private: set against what happens, in Your calibration)</span></summary>
+          <div class="row">
+            <label class="check">Finishes?
+              <select name="guessFinish"><option value="">–</option><option value="yes">Yes</option><option value="no">No</option></select>
+            </label>
+            <label class="check">Takes
+              <select name="guessHours"><option value="">–</option><option value="0.5">under an hour</option><option value="2">a few hours</option><option value="8">a day</option><option value="24">longer</option></select>
+            </label>
+            <label class="check">Reading it needs
+              <select name="guessReview"><option value="">–</option><option value="skim">skim</option><option value="look">look</option><option value="close">read closely</option></select>
+            </label>
+          </div>
+        </details>
         <div class="race-only" hidden>
           <label>
             Variants <span class="hint">one per line: <code>model</code>, <code>model | approach</code>, or <code>| approach</code>. At least two.</span>
@@ -464,7 +478,7 @@
     <dialog id="glance-dialog" class="update-dialog readfirst-dialog" aria-label="At a glance">
       <h2>At a glance</h2>
       <div id="glance-body"></div>
-      <div class="dialog-actions"><span class="spacer"></span><button type="button" class="small primary" data-gl="close">Close</button></div>
+      <div class="dialog-actions"><button type="button" class="small" data-gl="calibration" title="Your guesses when you started agents, against what happened">Your calibration</button><button type="button" class="small" data-gl="night" title="Does merged work still hold on the latest main? Its recorded checks, run again">Night watch</button><span class="spacer"></span><button type="button" class="small primary" data-gl="close">Close</button></div>
     </dialog>
     <dialog id="readfirst-dialog" class="update-dialog readfirst-dialog" aria-label="Read first">
       <h2>Read first</h2>

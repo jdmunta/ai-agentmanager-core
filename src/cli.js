@@ -2560,6 +2560,102 @@ export async function main(argv) {
       table(cps.map((c) => [`#${c.n}`, c.at.replace('T', ' ').slice(0, 19), c.sha.slice(0, 9), (c.prompt ?? '').slice(0, 60)]), ['N', 'AT', 'SNAPSHOT', 'PROMPT']);
     });
 
+  program
+    .command('guess')
+    .description('Your guess for an agent, kept private and set against what happens (agentmgr calibration): whether it finishes, how many hours it takes, how much reading it needs')
+    .argument('<agent>')
+    .option('--finish <yes|no>', 'whether it finishes')
+    .option('--hours <n>', 'how long it takes, in hours')
+    .option('--review <skim|look|close>', 'how much reading its work needs')
+    .action(async (ref, o) => {
+      await daemon();
+      const a = await resolveAgent(ref);
+      const v = await api('PUT', `/agents/${a.id}/guess`, { finish: o.finish, hours: o.hours, review: o.review });
+      console.log(v.guess ? `${green('✓')} guessed for ${bold(v.name)}: ${[v.guess.finish && `finishes: ${v.guess.finish}`, v.guess.hours && `${v.guess.hours} h`, v.guess.review && `reading: ${v.guess.review}`].filter(Boolean).join(', ')}` : dim('guess cleared'));
+    });
+  program
+    .command('calibration')
+    .description("Your calibration: your guesses when agents started, against what happened (finishing, time, the reading their work needed), by kind of work, next to how the agents' own confidence held up. Private to this computer")
+    .option('--json', 'print JSON')
+    .action(async (o) => {
+      await daemon();
+      const c = await api('GET', '/calibration?format=md');
+      if (o.json) return console.log(JSON.stringify(c, null, 2));
+      console.log(c.markdown);
+    });
+
+  program
+    .command('night-watch')
+    .description("Does merged work still hold on the latest main? For work merged in the last days, the agent's recorded commands are run again against the latest main in a checkout of its own; one that no longer holds names the commits since that changed the same files. Off until turned on (--on); --run runs it now. Exit 1 when something no longer holds")
+    .option('--run', 'run it now (it waits until done)')
+    .option('--on', 'run it every night')
+    .option('--off', 'stop running it at night')
+    .option('--hour <h>', 'the hour it runs at (0-23)')
+    .option('--days <n>', 'how far back merged work is watched')
+    .option('--json', 'print JSON')
+    .action(async (o) => {
+      await daemon();
+      if (o.on || o.off || o.hour || o.days) await api('PUT', '/night-watch', { ...(o.on ? { enabled: true } : o.off ? { enabled: false } : {}), ...(o.hour ? { hour: o.hour } : {}), ...(o.days ? { days: o.days } : {}) });
+      if (o.run) await api('POST', '/night-watch/run', {});
+      const v = await api('GET', '/night-watch?format=md');
+      if (o.json) return console.log(JSON.stringify(v, null, 2));
+      console.log(dim(`${v.settings.enabled ? `On: every night from ${v.settings.hour}:00` : 'Off at night (agentmgr night-watch --on)'}, merged work of the last ${v.settings.days} days`));
+      console.log(v.markdown);
+      if (v.broken) process.exitCode = 1;
+    });
+
+  program
+    .command('fence')
+    .description('Scope fence: the areas of code it changes that what it was asked and planned does not name (tests, docs and config never count). Allow an area, or pull it back. Exit 1 while it drifts')
+    .argument('<agent>')
+    .option('--allow <area>', 'that area belongs to the task: in scope from now on')
+    .option('--pull', 'tell it to stay within its task and undo those changes unless they are needed')
+    .action(async (ref, o) => {
+      await daemon();
+      let a = await resolveAgent(ref);
+      if (o.allow || o.pull) a = await api('POST', `/agents/${a.id}/fence`, o.allow ? { allow: o.allow } : { pull: true });
+      const drift = a.fence?.drift ?? [];
+      if (o.pull) console.log(`${green('✓')} told to stay within its task`);
+      if (!drift.length) return console.log(dim(`${a.name}: nothing outside its task${a.fence?.allowed?.length ? ` (allowed: ${a.fence.allowed.join(', ')})` : ''}`));
+      console.log(`${yellow('Outside its task')} ${bold(a.name)}`);
+      for (const d of drift) console.log(`  ${bold(d.area)} ${dim(`${d.files.length} files, ${d.lines} lines: ${d.files.slice(0, 4).join(', ')}`)}`);
+      console.log(dim(`  agentmgr fence ${a.id} --allow <area>   ·   agentmgr fence ${a.id} --pull`));
+      process.exitCode = 1;
+    });
+
+  program
+    .command('why')
+    .description("Why is this line here: the moment in the agent's conversation that wrote it (what it was asked, what it said just before, the commands it had just run, and the edit), from its own transcripts")
+    .argument('<agent>')
+    .argument('<place>', 'file:line, a path in its folder')
+    .option('-t, --text <text>', 'the line\'s text instead of a line number')
+    .option('--json', 'print JSON')
+    .action(async (ref, place, o) => {
+      await daemon();
+      const a = await resolveAgent(ref);
+      const m = /^(.+?)(?::(\d+))?$/.exec(place);
+      if (!m[2] && !o.text) throw new Error('Give file:line, or --text');
+      const q = new URLSearchParams({ file: m[1], format: 'md', ...(m[2] ? { line: m[2] } : {}), ...(o.text ? { text: o.text } : {}) });
+      const b = await api('GET', `/agents/${a.id}/why?${q}`);
+      if (o.json) return console.log(JSON.stringify(b, null, 2));
+      console.log(b.markdown);
+      if (!b.found) process.exitCode = 1;
+    });
+
+  program
+    .command('try-path')
+    .description('Try the other path: the agent wrote down the ways it weighed (## Options, the one it takes first). Start path N as a second agent from the same base commit, raced against the first: compare them with agentmgr race show, and keep one with agentmgr race pick')
+    .argument('<agent>')
+    .argument('<path>', 'the number of the path, 2 or more')
+    .action(async (ref, n) => {
+      await daemon();
+      const a = await resolveAgent(ref);
+      const race = await api('POST', `/agents/${a.id}/try-path`, { path: Number(n) });
+      const added = race.rows.at(-1);
+      console.log(`${green('+')} ${bold(added.name)} ${dim(added.id)} takes ${added.variant?.instructions ?? `path ${n}`}`);
+      console.log(dim(`  raced against ${a.name} in ${race.id}: agentmgr race show ${race.id}`));
+    });
+
   const raceCmd = program.command('race').description('Several agents try the same intent; compare and keep the best');
   raceCmd
     .command('start')

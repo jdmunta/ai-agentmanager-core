@@ -1465,6 +1465,30 @@ Agents started this way are marked **⚡ GitHub** or **⚡ webhook**, Slack aler
 }
 ```
 
+## Try the other path
+
+Agents write down the paths they weighed before building, the one they take first (**Paths it weighed** in their Results). Each other path has **Try this path**, or `agentmgr try-path <agent> <n>`. It starts a second agent from the commit the first one started from, told to take that path, and races the two: the [race](#races) scoreboard, a test command run in both, and **Pick** to keep one. More paths join the same race. Only you start one, not an agent.
+
+## Why is this line here?
+
+In **Review changes**, each added line has a **?**. It shows the moment in the agent's conversation that wrote the line: what it had been asked, what it said just before, the commands it had just run, and how many times it wrote that line. `agentmgr why <agent> src/cart.js:42` prints the same, with the edit. It is read from the agent's own transcripts (and its subagents'), so a line no edit wrote is reported as not found rather than guessed. Claude Code agents for now.
+
+## Scope fence
+
+An agent asked to fix login that starts rewriting payments is not stuck; it is wandering. The areas of code it changes (a folder such as `src/payments`) are set against what it was asked and planned: its intent, spec, plan and brief. An area none of them names, changed in more than a line or two, shows in Glance and its Results as drifting. Tests, docs and config never count. **Allow** puts an area in scope; **Pull it back** tells it to stay within the task. `agentmgr fence <agent> [--allow <area> | --pull]`. No model is asked.
+
+## Bug echo
+
+Accepting a lesson in a repository's standards gives it to every later agent there. Bug echo also checks the agents already at work: a model reads each one's diff against the lesson, and one that repeats the mistake shows in Glance with where, to **Tell it** or mark **Not the same**. Off with `"echo": { "enabled": false }` in config.json.
+
+## Night watch
+
+Does merged work still hold? For work merged in the last 14 days, the agent's recorded proof commands are run again against the latest main, in a checkout of their own. One that no longer gives the recorded result shows in Glance, with the commits since its merge that changed the same files. Off until you turn it on: **Night watch** at the foot of Glance (on or off, the hour, **Run now**, and what it found), or `agentmgr night-watch --on` (every night at 3, `--hour` to change) and `--run` to run it now. Commands that change things are never run.
+
+## Your calibration
+
+Under **Your guess** in New agent (or `agentmgr guess <agent> --finish yes --hours 2 --review look`), say whether it will finish, how long it will take, and how much reading its work will need. Once the work settles, **Your calibration** (at the foot of Glance, or `agentmgr calibration`) sets your guesses against what happened, names the kind of work you misjudge most, and shows how the agents' own confidence held up on the same work. Private to this computer.
+
 ## At a glance: every agent, and what to act on
 
 **Glance** in the top bar, or `agentmgr glance`, puts every agent on one line, grouped by what it needs from you:

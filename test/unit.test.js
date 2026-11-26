@@ -7152,3 +7152,232 @@ test('at a glance: every agent grouped by what it needs from you, with why', asy
   assert.match(glanceMarkdown(g, { all: true }), /## Idle \(2\)\n\n- \*\*merged\*\*: Pull request #3 merged/);
   assert.equal(glanceOf({ runtime: {}, status: 'exited' }).why[0], 'Its session ended');
 });
+
+test('a message typed into an agent is submitted: Enter after it is taken in, and again while it still sits in the box', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { AgentManager } = await import('../src/manager.js');
+  const run = (screen, text, rtExtra = {}) => {
+    const writes = [];
+    const rt = { pty: { write: (d) => writes.push(d) }, busy: false, attention: null, tail: '', ...rtExtra };
+    const fake = { screenText: () => screen() };
+    AgentManager.prototype.submitTold.call(fake, rt, text);
+    return { writes, rt };
+  };
+  // Short: Enter after 250 ms; gone from the box, nothing more.
+  const a = run(() => '❯ ', 'fix the login bug');
+  t.mock.timers.tick(200);
+  assert.deepEqual(a.writes, []);
+  t.mock.timers.tick(100);
+  assert.deepEqual(a.writes, ['\r']);
+  t.mock.timers.tick(10_000);
+  assert.deepEqual(a.writes, ['\r'], 'sent: no second Enter');
+  // Long and pasted: a later Enter, and again while "[Pasted text]" still waits in the box.
+  const long = `Bug OPS-7 to take up:\n${'details of the bug '.repeat(60)}`;
+  const b = run(() => '│ > [Pasted text #1 +60 lines] │\n? for shortcuts', long);
+  t.mock.timers.tick(250 + Math.min(1250, Math.round(long.length / 4)));
+  assert.deepEqual(b.writes, ['\r']);
+  t.mock.timers.tick(4500);
+  assert.deepEqual(b.writes, ['\r', '\r'], 'pressed again once its own echo has settled');
+  t.mock.timers.tick(3500);
+  t.mock.timers.tick(10_000);
+  assert.deepEqual(b.writes, ['\r', '\r', '\r'], 'pressed again, twice at most');
+  assert.ok(b.rt.toldAt > 0, 'the next queued message waits');
+  // Typed out and wrapped in the box: the end of it is found across the line break.
+  const c = run(() => '❯ please take up the bug about the cart total be\ning wrong after a refund', 'please take up the bug about the cart total being wrong after a refund');
+  t.mock.timers.tick(4800);
+  assert.deepEqual(c.writes, ['\r', '\r']);
+  // Working on it already: left alone.
+  const d = run(() => '❯ [Pasted text #1 +3 lines]', 'x\ny\nz', { busy: true });
+  t.mock.timers.tick(10_000);
+  assert.deepEqual(d.writes, ['\r']);
+  // Sent: shown in the conversation above an empty box, or by a program with no input box at all.
+  const e = run(() => '> please take up the bug about the cart total\n⏺ On it.\n────\n❯ \n────', 'please take up the bug about the cart total');
+  const f = run(() => 'echo:please take up the bug about the cart total', 'please take up the bug about the cart total');
+  t.mock.timers.tick(10_000);
+  assert.deepEqual([e.writes, f.writes], [['\r'], ['\r']]);
+  // An older Claude Code: the box drawn with "│ >".
+  const g = run(() => '╭───╮\n│ > [Pasted text #2 +40 lines] │\n╰───╯', 'a\nb');
+  t.mock.timers.tick(4800);
+  assert.deepEqual(g.writes, ['\r', '\r']);
+});
+
+test('try the other path: each path it did not take gets a button, or the agent already trying it', async () => {
+  const { optionsRows } = await import('../public/valuelens.js');
+  const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+  const a = { brief: { options: { paths: [{ rank: 1, name: 'Cache in memory' }, { rank: 2, name: 'Shared <cache>' }, { rank: 3, name: 'No cache' }], preferred: '', new: '' } } };
+  assert.ok(!/try-path/.test(optionsRows(a, esc)), 'none where nothing can be tried');
+  const html = optionsRows(a, esc, { 3: { id: 'b1', name: 'cache-path3' } });
+  assert.deepEqual([...html.matchAll(/data-act="try-path" data-path="(\d)"/g)].map((m) => m[1]), ['2'], 'not on the path it takes, nor on one being tried');
+  assert.match(html, /Being tried by <button class="link" data-act="try-path-open" data-agent="b1">cache-path3<\/button>/);
+  assert.match(html, /Shared &lt;cache>/);
+});
+
+test('conversation blame: the moment in the conversation that wrote a line', async () => {
+  const { blameLine, blameMarkdown, parseTranscript } = await import('../src/blame.js');
+  const wd = '/w/shop';
+  const user = (text, at, extra = {}) => ({ type: 'user', timestamp: at, message: { content: text }, ...extra });
+  const tool = (name, input, at, said) => ({ type: 'assistant', timestamp: at, message: { content: [...(said ? [{ type: 'text', text: said }] : []), { type: 'tool_use', name, input }] } });
+  const result = (at) => ({ type: 'user', timestamp: at, message: { content: [{ type: 'tool_result', tool_use_id: 'x', content: 'ok' }] } });
+  const entries = [
+    user('Add a refund to the cart total', '2026-11-20T10:00:00Z'),
+    tool('Bash', { command: 'npm test -- cart' }, '2026-11-20T10:00:05Z', 'Let me see the failing test first.'),
+    result('2026-11-20T10:00:06Z'),
+    tool('Write', { file_path: `${wd}/src/cart.js`, content: 'export function total(items) {\n  return items.reduce((n, i) => n + i.price, 0);\n}\n' }, '2026-11-20T10:01:00Z', 'The total ignores refunds; writing it fresh.'),
+    result('2026-11-20T10:01:01Z'),
+    user('<system-reminder>a note</system-reminder>', '2026-11-20T10:02:00Z', { isMeta: true }),
+    user('Refunds are negative prices; keep tax out of them', '2026-11-20T10:03:00Z'),
+    tool('Bash', { command: 'grep -n tax src/cart.js' }, '2026-11-20T10:03:10Z'),
+    result('2026-11-20T10:03:11Z'),
+    tool('Edit', { file_path: 'src/cart.js', old_string: '  return items.reduce((n, i) => n + i.price, 0);', new_string: '  // A refund is a negative price; tax is not refunded.\n  return items.reduce((n, i) => n + i.price, 0);' }, '2026-11-20T10:04:00Z', 'Adding a note about refunds.'),
+  ];
+  const t = [{ session: 's1', entries }];
+  // The line the Edit added: its own moment. The line it only carried along: the Write's.
+  const a = blameLine(t, { file: 'src/cart.js', line: '  // A refund is a negative price; tax is not refunded.', workdir: wd });
+  assert.equal(a.found, true);
+  assert.deepEqual([a.tool, a.at, a.times], ['Edit', '2026-11-20T10:04:00Z', 1]);
+  assert.equal(a.prompt, 'Refunds are negative prices; keep tax out of them', 'the meta note is not the prompt');
+  assert.deepEqual(a.said, ['Adding a note about refunds.']);
+  assert.deepEqual(a.ran, ['grep -n tax src/cart.js']);
+  const r = blameLine(t, { file: 'src/cart.js', line: '    return items.reduce((n, i) => n + i.price, 0);', workdir: wd });
+  assert.deepEqual([r.tool, r.at, r.times], ['Write', '2026-11-20T10:01:00Z', 1]);
+  const b = blameLine(t, { file: 'src/cart.js', line: 'export function total(items) {', workdir: wd });
+  assert.deepEqual([b.tool, b.prompt, b.said, b.ran, b.edit.before], ['Write', 'Add a refund to the cart total', ['Let me see the failing test first.', 'The total ignores refunds; writing it fresh.'], ['npm test -- cart'], null]);
+  assert.equal(blameLine(t, { file: 'src/other.js', line: 'export function total(items) {', workdir: wd }).found, false, 'another file');
+  assert.match(blameLine(t, { file: 'src/cart.js', line: 'const tax = 0.2;', workdir: wd }).why, /^No edit in its conversation wrote this line/);
+  assert.equal(blameLine(t, { file: 'src/cart.js', line: '   ', workdir: wd }).found, false);
+  const md = blameMarkdown(a, { file: 'src/cart.js', lineNo: 2, line: '// A refund…' });
+  assert.match(md, /^# Why is this line here\?\n\n`src\/cart\.js:2`[\s\S]*Written by Edit at 2026-11-20T10:04:00Z\.[\s\S]*## What it was asked\n\nRefunds are negative[\s\S]*## Commands it had just run\n\n- `grep -n tax src\/cart\.js`[\s\S]*```diff\n-   return items[\s\S]*\n\+   \/\/ A refund/);
+  assert.equal(parseTranscript('{"a":1}\nnot json\n\n{"b":2}').length, 2);
+  // A later edit that only carries the line along as context did not write it.
+  const ctx = [...entries, user('Make it 2', '2026-11-20T10:05:00Z'), tool('Edit', { file_path: 'src/cart.js', old_string: 'export function total(items) {\n  return 1;', new_string: 'export function total(items) {\n  return 2;' }, '2026-11-20T10:05:10Z')];
+  const kept = blameLine([{ session: 's1', entries: ctx }], { file: 'src/cart.js', line: 'export function total(items) {', workdir: wd });
+  assert.deepEqual([kept.tool, kept.prompt], ['Write', 'Add a refund to the cart total']);
+});
+
+test('scope fence: areas changed that what it was asked and planned does not name', async () => {
+  const { areaOf, incidental, fenceOf, pullBackMessage } = await import('../src/fence.js');
+  assert.deepEqual(['src/auth/login.js', 'src/a.js', 'lib/x/y/z.js', 'tools/gen.js', 'main.go'].map(areaOf), ['src/auth', 'src', 'lib/x', 'tools', '(top)']);
+  assert.deepEqual(['test/auth.test.js', 'src/auth/login.spec.ts', 'docs/x.md', 'package.json', 'vite.config.ts', 'README.md', 'src/auth/login.js'].map(incidental), [true, true, true, true, true, true, false]);
+  const files = {
+    'src/auth/login.js': { added: 40, removed: 5 },
+    'src/auth/session.js': { added: 3, removed: 0 },
+    'test/auth.test.js': { added: 60, removed: 0 },
+    'src/payments/charge.js': { added: 50, removed: 20 },
+    'src/payments/refund.js': { added: 10, removed: 0 },
+    'src/util/format.js': { added: 2, removed: 1 },
+    'package.json': { added: 1, removed: 1 },
+  };
+  const f = fenceOf({ files, text: 'Fix the login: a session that expires must send you back to the login page.' });
+  assert.equal(f.judged, true);
+  assert.deepEqual(f.drift.map((d) => [d.area, d.files.length, d.lines]), [['src/payments', 2, 80]], 'a small touch elsewhere is not drift; tests and config never are');
+  assert.deepEqual(f.areas.find((a) => a.area === 'src/auth').why, 'named in what it was asked or planned');
+  // Named in the plan instead: in scope.
+  assert.deepEqual(fenceOf({ files, text: 'Fix the login.\n## Plan\n1. Refund the charge in src/payments when a session expires mid-checkout' }).drift, []);
+  // Allowed by the person.
+  const allowed = fenceOf({ files, text: 'Fix the login', allowed: ['src/payments'] });
+  assert.deepEqual([allowed.drift, allowed.areas.find((a) => a.area === 'src/payments').why], [[], 'allowed by you']);
+  // A vague task that names no area: nothing can be judged, nothing is said.
+  assert.deepEqual(fenceOf({ files, text: 'Make it better' }), { judged: false, areas: fenceOf({ files, text: 'Make it better' }).areas, drift: [] });
+  assert.match(pullBackMessage(f.drift), /^You have been changing code outside what you were asked and planned: src\/payments \(2 files, 80 lines\)\. Stay within the task\./);
+});
+
+test('bug echo: the answer read, the open work picked, and the message it is told', async () => {
+  const { parseEcho, openWork, echoMessage, echoPrompt } = await import('../src/echo.js');
+  assert.deepEqual(parseEcho('Sure: {"repeats": true, "where": "src/a.js:3", "why": "multiplies a float"} done'), { repeats: true, where: 'src/a.js:3', why: 'multiplies a float' });
+  assert.equal(parseEcho('{"repeats": "yes"}'), null);
+  assert.equal(parseEcho('no json'), null);
+  const t = (id, extra = {}) => ({ id, kind: 'task', workdir: `/w/${id}`, prs: {}, ...extra });
+  const agents = [t('a'), t('b', { prs: { u: { state: 'MERGED' } } }), t('c', { workdir: null }), t('d', { reviewing: { url: 'x' } }), t('e', { prs: { u: { state: 'OPEN' }, m: { state: 'MERGED', source: 'mentioned' } } }), { id: 'f', kind: 'general', workdir: '/w/f' }];
+  assert.deepEqual(openWork(agents).map((a) => a.id), ['a', 'e']);
+  assert.deepEqual(openWork(agents, 'a').map((a) => a.id), ['e'], 'not the agent the lesson came from');
+  assert.match(echoMessage({ lesson: 'Keep cents integer', where: 'src/a.js:3', why: 'it multiplies a float' }), /^A lesson was learned in this repository from a change that went wrong: "Keep cents integer"\. Your changes look like they repeat it at src\/a\.js:3: it multiplies a float\./);
+  assert.match(echoPrompt({ lesson: 'L', diff: 'x'.repeat(50_000), intent: 'I' }), /\[cut: the diff is longer\]\n<\/diff>$/);
+});
+
+test('night watch: merged work checked again on the latest main, and what changed the same files since', async () => {
+  const { NightWatch, due, watchList, nightSettings, nightMarkdown } = await import('../src/nightwatch.js');
+  const { runCheck } = await import('../src/standards.js');
+  // When it runs: on, at its hour, once a day.
+  const s = nightSettings({ nightWatch: { enabled: true, hour: 3 } });
+  assert.deepEqual([s.days, s.maxAgents], [14, 12]);
+  assert.equal(nightSettings({}).enabled, false, 'off until turned on');
+  assert.equal(due(s, null, new Date(2026, 10, 25, 2)), false);
+  assert.equal(due(s, null, new Date(2026, 10, 25, 3)), true);
+  assert.equal(due(s, new Date(2026, 10, 25, 3, 5).toISOString(), new Date(2026, 10, 25, 9)), false, 'once a day');
+  assert.equal(due(s, new Date(2026, 10, 24, 3).toISOString(), new Date(2026, 10, 25, 4)), true);
+  const t = Date.parse('2026-11-25T12:00:00Z');
+  const item = (n, daysAgo, extra = {}) => ({ url: `u${n}`, number: n, agentId: `a${n}`, mergedAt: new Date(t - daysAgo * 86_400_000).toISOString(), facts: { mergeCommit: 'x' }, ...extra });
+  assert.deepEqual(watchList([item(1, 2), item(2, 20), item(3, 1), item(4, 1, { agentId: null })], s, t).map((i) => i.number), [3, 1]);
+
+  // A repository: work merged with a passing check, then a later commit breaks it.
+  const repo = tmp();
+  const g = (...a) => execFileSync('git', ['-c', 'user.email=t@t', '-c', 'user.name=t', '-c', 'commit.gpgsign=false', ...a], { cwd: repo }).toString().trim();
+  g('init', '-q', '-b', 'main');
+  fs.writeFileSync(path.join(repo, 'total.sh'), 'echo 42\n');
+  fs.writeFileSync(path.join(repo, 'other.txt'), 'x\n');
+  g('add', '.');
+  g('commit', '-q', '-m', 'Add the total');
+  const merged = g('rev-parse', 'HEAD');
+  fs.writeFileSync(path.join(repo, 'other.txt'), 'y\n');
+  g('commit', '-qam', 'Touch something else');
+  const proof = '## The total is 42\nCommand: sh total.sh | grep -q 42\nExit: 0\n```\n```\n## Cleans up\nCommand: rm -rf build\nExit: 0\n';
+  const patches = [];
+  const agents = { a1: { id: 'a1', name: 'total', sourceDir: repo, workdir: repo } };
+  const store = { data: {}, get: (id) => agents[id], save: () => {} };
+  const quality = { view: () => ({ items: [{ url: 'https://github.com/o/r/pull/1', number: 1, title: 'Add the total', agentId: 'a1', mergedAt: new Date().toISOString(), facts: { mergeCommit: merged, base: 'main', files: ['total.sh'] } }] }) };
+  const nw = new NightWatch({ manager: { patch: (id, p) => patches.push([id, p]) }, store, quality, run: runCheck, readProof: () => proof });
+  let v = await nw.runAll();
+  assert.equal(v.runs[0].status, 'holds');
+  assert.deepEqual(v.runs[0].results.map((r) => [r.title, r.status]), [['The total is 42', 'same'], ['Cleans up', 'skipped']], 'a command that changes things is not run');
+  // Broken on main since: the commit that changed the same file is named, the other is not.
+  fs.writeFileSync(path.join(repo, 'total.sh'), 'echo 41\n');
+  g('commit', '-qam', 'Round the total');
+  v = await nw.runAll();
+  assert.equal(v.runs[0].status, 'broken');
+  assert.equal(v.broken, 1);
+  assert.deepEqual(v.runs[0].suspects.map((x) => x.subject), ['Round the total']);
+  assert.deepEqual(patches.at(-1)[1].nightWatch.broken, ['The total is 42']);
+  assert.ok(!fs.readdirSync(os.tmpdir()).some((d) => d.startsWith('agentmgr-night-') && fs.existsSync(path.join(os.tmpdir(), d, 'total.sh'))), 'its checkout is removed');
+  assert.match(nightMarkdown(v), /## No longer holds: #1 Add the total\n\n- Differs: The total is 42 `sh total\.sh \| grep -q 42` \(exit 1\)[\s\S]*Changed the same files since it merged:\n- [0-9a-f]+ Round the total/);
+  // No proof recorded: skipped, saying why.
+  const none = new NightWatch({ manager: { patch: () => {} }, store: { ...store, data: {} }, quality, run: runCheck, readProof: () => { throw new Error('none'); } });
+  assert.deepEqual([(await none.runAll()).runs[0].status, (await none.runAll()).runs[0].why], ['skipped', 'It recorded no commands']);
+});
+
+test('your calibration: guesses at the start against what happened, by kind, next to the agents\' confidence', async () => {
+  const { cleanGuess, actualOf, calibration, calibrationLines, calibrationMarkdown } = await import('../src/calibration.js');
+  assert.equal(cleanGuess({}), null);
+  assert.deepEqual((({ at, ...g }) => g)(cleanGuess({ finish: 'yes', hours: '2', review: 'look' })), { finish: 'yes', hours: 2, review: 'look' });
+  assert.throws(() => cleanGuess({ hours: -1 }), /hours is a number above 0/);
+  assert.throws(() => cleanGuess({ review: 'maybe' }), /review is skim, look or close/);
+  const start = '2026-11-20T10:00:00Z';
+  const at = (h) => new Date(Date.parse(start) + h * 3_600_000).toISOString();
+  const a = (id, intent, guess, brief, extra = {}) => ({ id, name: id, intent, createdAt: start, guess, brief, prs: {}, ...extra });
+  assert.equal(actualOf(a('x', 'Add', {}, { status: 'writing' })), null, 'not settled yet');
+  assert.equal(actualOf(a('x', 'Add', {}, { status: 'working', results: { outcome: 'in progress' } })), null, 'in progress is not settled');
+  assert.equal(actualOf(a('x', 'Add', {}, { status: 'done', updatedAt: at(0.01), results: { outcome: 'done' } })).hours, 0.1, 'never zero hours');
+  const views = [
+    a('f1', 'Fix the login crash', { finish: 'yes', hours: 1, review: 'skim' }, { status: 'done', updatedAt: at(3), results: { outcome: 'done', confidence: { percent: 90 } } }, { readFirst: { level: 'close' } }),
+    a('f2', 'Fix the refund bug', { finish: 'yes', hours: 2, review: 'skim' }, { status: 'done', updatedAt: at(5), results: { outcome: 'partial', confidence: { percent: 85 } } }, { guess: { finish: 'yes', hours: 2, review: 'skim', actual: { review: 'look' } } }),
+    a('d1', 'Update the README', { finish: 'yes', hours: 1, review: 'skim' }, { status: 'done', updatedAt: at(1), results: { outcome: 'done', confidence: { percent: 95 } } }, { readFirst: { level: 'skim' } }),
+    a('n1', 'Add dark mode', { review: 'look' }, { status: 'writing' }),
+    a('m1', 'Add export', null, { status: 'done', updatedAt: at(2), results: { outcome: 'done', confidence: { percent: 80 } } }),
+  ];
+  views[1].guess = { finish: 'yes', hours: 2, review: 'skim', actual: { review: 'look' } };
+  const c = calibration(views);
+  assert.deepEqual(c.rows.map((r) => [r.id, r.kind, r.actual]), [['f1', 'fix', { finish: 'yes', hours: 3, review: 'close' }], ['f2', 'fix', { finish: 'no', hours: 5, review: 'look' }], ['d1', 'docs', { finish: 'yes', hours: 1, review: 'skim' }]]);
+  assert.deepEqual(c.finish, { right: 2, of: 3 });
+  assert.deepEqual(c.time, { ratio: 2.5, of: 3 });
+  assert.deepEqual(c.review, { right: 1, heavier: 2, lighter: 0, of: 3 });
+  assert.deepEqual(c.kinds[0], { kind: 'fix', label: 'Bug fixes', of: 2, missed: 2 });
+  assert.deepEqual(c.agents, { held: 3, of: 4 }, 'their 80% or more, on settled work');
+  assert.deepEqual(calibrationLines(c), [
+    'Whether it finishes: right 2 of 3 times.',
+    'Time: it takes 2.5× what you guess (the middle of 3).',
+    'Reading it needs: right 1 of 3; 2 needed more than you guessed.',
+    'Most often off: bug fixes (2 of 2). Spend your attention there, or write those briefs more fully.',
+    "For comparison, the agents' own confidence of 80% or more held up 3 of 4 times.",
+  ]);
+  assert.match(calibrationMarkdown(c), /\| f1 \| Bug fixes \| yes → yes \| 1 → 3 \| skim → read closely \|/);
+  assert.match(calibrationLines(calibration([]))[0], /^No guess has settled yet/);
+});

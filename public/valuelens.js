@@ -77,8 +77,19 @@ export function kindHtml(k, esc) {
     ${k.kind === 'patent' ? '<p class="hint">A first read, not legal advice. Publishing before filing can cost the right to a patent: keep it private until you have talked to a patent attorney.</p>' : ''}`;
 }
 
-export function pathsHtml(p, esc) {
+/**
+ * The paths, preferred first. `tries` (in an agent's Results): each other path gets a Try this
+ * path button, or the agent already trying it: { 2: { id, name } }.
+ */
+export function pathsHtml(p, esc, tries = null) {
   if (!p?.paths.length) return '';
+  const tryOf = (i) => {
+    if (!tries || i === 0) return '';
+    const t = tries[i + 1];
+    return t
+      ? `<div class="vl-try hint">Being tried by <button class="link" data-act="try-path-open" data-agent="${esc(t.id)}">${esc(t.name)}</button></div>`
+      : `<div class="vl-try"><button class="small" data-act="try-path" data-path="${i + 1}" title="Start this path as a second agent from the same commit, and compare the two">Try this path</button></div>`;
+  };
   const chip = (label, l, good) => (l ? `<span class="vl-chip ${good.includes(l) ? 'vl-good' : l === 'medium' ? '' : 'vl-poor'}">${label} ${l}</span>` : '');
   return `<ol class="vl-paths">${p.paths
     .map(
@@ -86,18 +97,22 @@ export function pathsHtml(p, esc) {
         <div class="vl-name">${i === 0 ? '<span class="tag vl-pick">Preferred</span> ' : ''}<b>${esc(x.name)}</b>${x.what ? ` <span class="hint">${esc(x.what)}</span>` : ''}</div>
         <div class="vl-chips">${chip('now', x.now, ['high'])}${chip('later', x.later, ['high'])}${chip('cost', x.cost, ['small'])}${chip('risk', x.risk, ['low'])}</div>
         ${x.when ? `<div class="hint">Pick when: ${esc(x.when)}</div>` : ''}
+        ${tryOf(i)}
       </li>`,
     )
     .join('')}</ol>
     ${p.preferred ? `<p class="vl-line"><b>Why the first</b> ${esc(p.preferred)}</p>` : ''}`;
 }
 
-/** In the agent's Results: the ways it weighed before building, preferred first. */
-export function optionsRows(a, esc) {
+/**
+ * In the agent's Results: the ways it weighed before building, preferred first. `tries`: the
+ * agents trying its other paths ({ n: { id, name } }), or null where none can be tried.
+ */
+export function optionsRows(a, esc, tries = null) {
   const o = a.brief?.options;
   if (!o?.paths?.length && !o?.new) return '';
   return `<details class="vl-options"${o.new ? ' open' : ''}><summary><b>Paths it weighed</b> <span class="hint">${o.paths.length ? `${o.paths.length}, preferred first${o.paths[0] ? `: ${esc(o.paths[0].name)}` : ''}` : ''}</span></summary>
-    ${pathsHtml(o, esc)}
+    ${pathsHtml(o, esc, tries)}
     ${o.new ? `<p class="vl-line"><span class="tag vl-kind vl-kind-paper">Possibly new</span> ${esc(o.new)} <span class="hint">Kept inside the repository; whether it is worth a paper or a patent is yours to decide.</span></p>` : ''}
   </details>`;
 }

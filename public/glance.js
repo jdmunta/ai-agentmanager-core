@@ -54,6 +54,12 @@ export function glanceOf(a) {
   for (const p of open.filter((p) => p.land === 'fix' || fixWhy(p) !== 'needs fixes')) out.fix.push(`Pull request ${prNo(p)}: ${fixWhy(p)}`);
   if (outcome === 'blocked') out.fix.push(`Blocked${a.results?.blockers?.[0]?.text ? `: ${clip(a.results.blockers[0].text)}` : ''}`);
   for (const c of a.conflicts ?? []) out.fix.push(`Changes the same files as ${c.agent?.name ?? 'another agent'}`);
+  // Merged, and its recorded checks no longer pass on the latest main (nightwatch.js).
+  if (a.nightWatch?.status === 'broken') out.fix.push(`No longer holds on main: ${clip(a.nightWatch.broken.join('; '), 100)}${a.nightWatch.suspects?.[0] ? ` (since ${clip(`${a.nightWatch.suspects[0].sha} ${a.nightWatch.suspects[0].subject}`, 80)})` : ''}`);
+  // Repeats a mistake a lesson of the repository was learned from (echo.js).
+  for (const e of Object.values(a.echoes ?? {}).filter((e) => e.repeats && e.state === 'open')) out.fix.push(`Repeats a past mistake: ${clip(e.lesson, 100)}${e.where ? ` (at ${e.where})` : ''}`);
+  // Changing code outside what it was asked and planned (fence.js).
+  for (const d of a.fence?.drift ?? []) out.fix.push(`Drifting: changes ${d.area} (${plural(d.files.length, 'file')}, ${plural(d.lines, 'line')}), not in its task`);
 
   // To review: finished, or a pull request ready to merge.
   if (a.readFirst) out.review.push(`${LEVEL[a.readFirst.level]}${a.readFirst.reasons?.[0] ? `: ${clip(a.readFirst.reasons[0].text, 120)}` : ''}`);
@@ -129,9 +135,42 @@ export function glanceMarkdown(g, { all = false } = {}) {
   return out.join('\n').trimEnd();
 }
 
-export function initGlance({ $, esc, ago, agents, openAgent, readFirst }) {
+/** Your calibration (calibration.js), in the Glance dialog. */
+export function calibrationHtml(c, esc) {
+  const word = { skim: 'skim', look: 'look', close: 'read closely', yes: 'yes', no: 'no' };
+  const cell = (g, a, unit = '') => (g == null ? '–' : `${esc(word[g] ?? `${g}${unit}`)} → ${a == null ? '?' : esc(word[a] ?? `${a}${unit}`)}`);
+  return `<p><button class="link" data-gl-back>‹ Back to the glance</button></p>
+    <h3>Your calibration</h3>
+    <ul class="cal-lines">${c.lines.map((l) => `<li>${esc(l)}</li>`).join('')}</ul>
+    ${c.rows.length ? `<table class="cal-table"><tr><th>Agent</th><th>Finishes</th><th>Hours</th><th>Reading</th></tr>${c.rows.map((r) => `<tr><td>${esc(r.name)}</td><td>${cell(r.guess.finish, r.actual.finish)}</td><td>${cell(r.guess.hours, r.actual.hours, 'h')}</td><td>${cell(r.guess.review, r.actual.review)}</td></tr>`).join('')}</table>` : ''}
+    <p class="hint">Your guesses stay on this computer. Guess when you start an agent: New agent, Your guess.</p>`;
+}
+
+/** Night watch (nightwatch.js), in the Glance dialog: on or off, its hour, Run now, and what it found. */
+export function nightHtml(v, esc, ago) {
+  const st = { broken: 'No longer holds', holds: 'Holds', skipped: 'Not checked' };
+  const hours = Array.from({ length: 24 }, (_, h) => `<option value="${h}"${h === v.settings.hour ? ' selected' : ''}>${String(h).padStart(2, '0')}:00</option>`).join('');
+  return `<p><button class="link" data-gl-back>‹ Back to the glance</button></p>
+    <h3>Night watch</h3>
+    <p class="hint">Merged work of the last ${v.settings.days} days: the agent's recorded checks run again against the latest main, in a checkout of their own. Commands that change things are never run.</p>
+    <div class="row nw-controls">
+      <label class="check"><input type="checkbox" data-nw="enabled"${v.settings.enabled ? ' checked' : ''} /> Every night at</label>
+      <select data-nw="hour" aria-label="The hour it runs at">${hours}</select>
+      <button class="small" data-nw="run"${v.running ? ' disabled' : ''}>${v.running ? 'Running…' : 'Run now'}</button>
+    </div>
+    <p class="hint">${v.lastRunAt ? `Last run ${esc(ago(v.lastRunAt))}: ${v.broken} of ${v.runs.length} no longer hold on main.` : 'Not run yet.'}</p>
+    ${v.runs.length ? `<ul class="gl-list">${v.runs.map((r) => `<li class="gl-item ${r.status === 'broken' ? 'gl-fix' : r.status === 'holds' ? 'gl-working' : ''}"${r.agentId ? ` data-gl-agent="${esc(r.agentId)}" tabindex="0"` : ''}>
+        <div class="gl-head"><b>${st[r.status] ?? esc(r.status)}</b> <span class="hint">${r.number ? `#${r.number} ` : ''}${esc(r.title ?? r.url)}</span></div>
+        ${r.why ? `<div class="gl-why hint">${esc(r.why)}</div>` : ''}
+        ${(r.results ?? []).filter((x) => x.status === 'differs').map((x) => `<div class="gl-why">${esc(x.title)} <code>${esc(x.command)}</code> exit ${x.code}</div>`).join('')}
+        ${r.suspects?.length ? `<div class="gl-more hint">Changed the same files since: ${r.suspects.slice(0, 3).map((x) => esc(`${x.sha} ${x.subject}`)).join(' · ')}</div>` : ''}
+      </li>`).join('')}</ul>` : ''}`;
+}
+
+export function initGlance({ $, esc, ago, agents, openAgent, readFirst, api }) {
   const dlg = $('#glance-dialog');
   let showIdle = false;
+  let aside = null; // 'calibration' or 'night' showing instead of the glance: live updates leave it be
 
   function render() {
     const g = glance(agents.values());
@@ -139,7 +178,7 @@ export function initGlance({ $, esc, ago, agents, openAgent, readFirst }) {
     const badge = $('#glance-count');
     badge.textContent = n || '';
     badge.title = n ? `${g.counts.act} need you now, ${g.counts.fix} to fix` : '';
-    if (!dlg.open) return;
+    if (!dlg.open || aside) return;
     const row = (i) => `<li class="gl-item gl-${i.group}" data-gl-agent="${esc(i.id)}" tabindex="0">
         <div class="gl-head"><b>${esc(i.name)}</b> <span class="hint">${esc(i.project ?? '')}${i.since ? ` · ${ago(i.since)}` : ''}${i.running ? ' · open' : ''}</span></div>
         <div class="gl-why">${esc(i.why[0])}</div>
@@ -156,17 +195,44 @@ export function initGlance({ $, esc, ago, agents, openAgent, readFirst }) {
   }
 
   function open() {
+    aside = null;
     if (!dlg.open) dlg.showModal();
     render();
   }
   $('#glance-btn').onclick = () => open();
-  dlg.addEventListener('click', (e) => {
+  dlg.addEventListener('click', async (e) => {
     if (e.target.closest('[data-gl="close"]')) return dlg.close();
+    if (e.target.closest('[data-gl="calibration"]')) return show('calibration');
+    if (e.target.closest('[data-gl="night"]')) return show('night');
+    if (e.target.closest('[data-nw="run"]')) {
+      e.target.disabled = true;
+      e.target.textContent = 'Running…';
+      return show('night', () => api('POST', '/night-watch/run', {}));
+    }
+    if (e.target.closest('[data-gl-back]')) return ((aside = null), render());
     if (e.target.closest('[data-gl-idle]')) return ((showIdle = true), render());
     if (e.target.closest('[data-gl-readfirst]')) return (dlg.close(), readFirst());
     const it = e.target.closest('[data-gl-agent]');
     if (it) return (dlg.close(), openAgent(it.dataset.glAgent));
   });
+  // Night watch settings: saved as they change.
+  dlg.addEventListener('change', (e) => {
+    const k = e.target.dataset?.nw;
+    if (k === 'enabled' || k === 'hour') show('night', () => api('PUT', '/night-watch', k === 'enabled' ? { enabled: e.target.checked } : { hour: Number(e.target.value) }));
+  });
+
+  /** Calibration or night watch in place of the glance; `first`: a change to make before showing it. */
+  async function show(what, first = null) {
+    aside = what;
+    if (!first) $('#glance-body').innerHTML = `<p class="hint">${what === 'night' ? 'Reading the night watch…' : 'Reading your guesses…'}</p>`;
+    try {
+      const v = (await first?.()) ?? (await api('GET', what === 'night' ? '/night-watch' : '/calibration'));
+      if (aside === what) $('#glance-body').innerHTML = what === 'night' ? nightHtml(v, esc, ago) : calibrationHtml(v, esc);
+    } catch (err) {
+      if (aside === what) $('#glance-body').innerHTML = `<p><button class="link" data-gl-back>‹ Back to the glance</button></p><p class="error">${esc(err.message)}</p>`;
+    }
+  }
+
   dlg.addEventListener('keydown', (e) => {
     const it = e.target.closest?.('[data-gl-agent]');
     if (it && e.key === 'Enter') (dlg.close(), openAgent(it.dataset.glAgent));

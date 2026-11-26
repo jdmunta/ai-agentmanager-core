@@ -146,6 +146,8 @@ import { PROOF_FILE, proofBlock, proofFacts, proofPrompt } from './proof.js';
 import { PRIVATE_MESSAGE, ideaPatch, keptPrivate, mustBeShareable } from './private.js';
 import { awaitsReview, readFirst } from './readfirst.js';
 import { traceOf } from './trace.js';
+import { blameLine, readTranscripts } from './blame.js';
+import { fenceOf, pullBackMessage } from './fence.js';
 import { GroundRules, groundRulesMessage } from './groundrules.js';
 import { autonomySettings, callLadder, eligible as autonomyEligible, levelOf, modelName, parseLevel } from './autonomy.js';
 import { STUCK_DEFAULTS, detectStuck } from './stuck.js';
@@ -169,7 +171,9 @@ import {
   prDetails,
   prFromUrl,
   prsForBranch,
+  subagentTranscripts,
   sumUsage,
+  transcriptPath,
 } from './tracker.js';
 
 // Per-session markers a parent Claude Code session sets. Inherited, they make the
@@ -331,6 +335,7 @@ export class AgentManager extends EventEmitter {
     this.refreshing = new Map(); // agent id -> the refresh in progress
     this.lastPrCheck = new Map();
     this.changeSets = new Map(); // agent id -> { files, baseSha, at }: what its branch changed (conflict radar)
+    this.fences = new Map(); // agent id -> { key, value }: its scope fence, kept until its changes or brief change (fence.js)
     this.conflicts = new Map(); // agent id -> [conflict]
     this.activity = new Map(); // session id -> transcript activity window (stuck detection)
     this.stuck = new Map(); // agent id -> [finding]
@@ -418,6 +423,8 @@ export class AgentManager extends EventEmitter {
       keptPrivate: keptPrivate(agent),
       // Finished and waiting for review: how much it needs reading, why, and where to start (readfirst.js).
       readFirst: awaitsReview(agent) ? readFirst(agent, this.traceFor(agent)) : null,
+      // Changing code outside what it was asked and planned (fence.js): { drift, allowed }, or null.
+      fence: NO_REPO.has(agent.kind) || agent.reviewing || agent.hunting ? null : this.fenceFor(agent),
       priority: agent.priority ?? 2,
       activeAt: this.activeAt(agent, rt),
       projectInfo: this.projectInfo(agent),
@@ -1943,6 +1950,7 @@ export class AgentManager extends EventEmitter {
     if (agent.workdir && fs.existsSync(agent.workdir)) await git.deleteRefs(agent.workdir, `refs/agentmgr/${agent.id}/`).catch(() => {});
     else if (agent.sourceDir && fs.existsSync(agent.sourceDir)) await git.deleteRefs(agent.sourceDir, `refs/agentmgr/${agent.id}/`).catch(() => {});
     this.changeSets.delete(agent.id);
+    this.fences.delete(agent.id);
     for (const k of this.clashVerdicts.keys()) if (k.split('|').includes(agent.id)) this.clashVerdicts.delete(k);
     this.stuck.delete(agent.id);
     this.outbox.delete(agent.id);
@@ -2087,7 +2095,24 @@ export class AgentManager extends EventEmitter {
     this.termRuntime(id, kind)?.pty?.write(data);
   }
 
-  /** Resize a session. `from`: the viewer that asked, which is not sent its own size back. */
+  /**
+   * Text from the box under the terminal, typed and submitted here rather than by the page: the
+   * Enter is pressed once the program has taken the text in, and again if it still sits in the
+   * input box (submitTold). Sent by the page as two keystrokes, a phone's separate requests could
+   * bring the Enter too early, and a long message stayed unsent.
+   */
+  typeIn(id, text, kind = 'claude') {
+    const rt = this.termRuntime(id, kind);
+    if (!rt?.pty) throw Object.assign(new Error('The session is not running'), { status: 409 });
+    text = String(text ?? '');
+    if (!text.trim()) throw Object.assign(new Error('Message is empty'), { status: 400 });
+    this.inputAt.set(id, Date.now());
+    if (shellNumber(kind)) return rt.pty.write(`${text}\r`);
+    rt.pty.write(text.includes('\n') ? `\x1b[200~${text}\x1b[201~` : text);
+    this.submitTold(rt, text);
+  }
+
+  /** Resize a session; every viewer is sent the size it took. */
   resize(id, cols, rows, kind = 'claude') {
     const rt = this.termRuntime(id, kind);
     if (!rt || !(cols > 0 && rows > 0)) return;
@@ -2559,6 +2584,93 @@ export class AgentManager extends EventEmitter {
   }
 
   /** The requirement trace of an agent (trace.js), from its proof as it is on disk. */
+  /**
+   * The scope fence (fence.js), worked out again only when its changes, brief or allowed areas
+   * change: { drift: [{ area, files, lines }], allowed }, or null when there is nothing to say.
+   */
+  fenceFor(agent) {
+    const cs = this.changeSets.get(agent.id);
+    if (!cs?.files || !Object.keys(cs.files).length) return null;
+    const allowed = agent.scope?.allowed ?? [];
+    const mtime = (f) => {
+      try {
+        return fs.statSync(f(agent.id)).mtimeMs;
+      } catch {
+        return 0;
+      }
+    };
+    const key = `${cs.at}|${agent.brief?.updatedAt}|${allowed.join(',')}|${mtime(intentPath)}|${mtime(specPath)}|${mtime(planPath)}|${agent.acceptance?.points?.length ?? 0}|${agent.intent?.length}`;
+    const hit = this.fences.get(agent.id);
+    if (hit?.key === key) return hit.value;
+    const read = (f) => {
+      try {
+        return fs.readFileSync(f(agent.id), 'utf8');
+      } catch {
+        return '';
+      }
+    };
+    const b = agent.brief ?? {};
+    const text = [agent.intent, read(intentPath), read(specPath), read(planPath), b.problem, b.solution, ...(agent.acceptance?.points ?? []).map((p) => p.text ?? p)].join('\n');
+    const f = fenceOf({ files: cs.files, text, allowed });
+    const value = f.drift.length ? { drift: f.drift.map(({ area, files, lines }) => ({ area, files: files.slice(0, 8), lines })), allowed } : allowed.length ? { drift: [], allowed } : null;
+    this.fences.set(agent.id, { key, value });
+    return value;
+  }
+
+  /** The person on the fence: `allow` an area (in scope from now on), or `pull` it back (it is told). */
+  setFence(ref, { allow, pull } = {}) {
+    const agent = this.mustGet(ref);
+    if (allow) {
+      const area = String(allow).trim();
+      if (!area) throw Object.assign(new Error('Which area?'), { status: 400 });
+      this.patch(agent.id, { scope: { ...agent.scope, allowed: [...new Set([...(agent.scope?.allowed ?? []), area])] } });
+    } else if (pull) {
+      const drift = this.fenceFor(agent)?.drift ?? [];
+      if (!drift.length) throw Object.assign(new Error('It is not changing anything outside its task'), { status: 409 });
+      this.tell(agent.id, pullBackMessage(drift), { source: 'fence' });
+      this.patch(agent.id, { scope: { ...agent.scope, pulledAt: now() } });
+    } else throw Object.assign(new Error('allow (an area) or pull is required'), { status: 400 });
+    return this.view(this.store.get(agent.id));
+  }
+
+  /**
+   * Why is this line here (blame.js): the moment in its conversation that wrote line `lineNo` of
+   * `file` (or the given `text`), from its sessions' transcripts and their subagents'.
+   */
+  whyLine(ref, { file, line: lineNo, text } = {}) {
+    const agent = this.mustGet(ref);
+    if ((agent.engine ?? DEFAULT_ENGINE) !== 'claude') throw Object.assign(new Error('Only for Claude Code agents for now'), { status: 409 });
+    if (!agent.workdir) throw Object.assign(new Error('It has no folder yet'), { status: 409 });
+    file = String(file ?? '').replace(/^\.?\//, '');
+    const abs = path.resolve(agent.workdir, file);
+    const inside = (p, root) => p.startsWith(`${root}${path.sep}`);
+    if (!file || !inside(abs, path.resolve(agent.workdir))) throw Object.assign(new Error('A file in its folder is required'), { status: 400 });
+    // A link inside its folder that leads out of it is not followed.
+    const root = fs.realpathSync(agent.workdir);
+    let real = path.resolve(root, file);
+    try {
+      real = fs.realpathSync(abs);
+    } catch {}
+    if (!inside(real, root)) throw Object.assign(new Error('A file in its folder is required'), { status: 400 });
+    if (text == null) {
+      const n = Number(lineNo);
+      if (!Number.isInteger(n) || n < 1) throw Object.assign(new Error('line (a number from 1) or text is required'), { status: 400 });
+      let lines;
+      try {
+        lines = fs.readFileSync(abs, 'utf8').split('\n');
+      } catch {
+        throw Object.assign(new Error(`No file ${file} in its folder`), { status: 404 });
+      }
+      if (n > lines.length) throw Object.assign(new Error(`${file} has ${lines.length} lines`), { status: 400 });
+      text = lines[n - 1];
+    }
+    const files = (agent.sessions ?? []).flatMap((s) => [
+      { session: s.id, file: transcriptPath(agent.workdir, s.id) },
+      ...subagentTranscripts(agent.workdir, s.id).map((f) => ({ session: s.id, file: f })),
+    ]);
+    return { file, line: lineNo == null ? null : Number(lineNo), text, ...blameLine(readTranscripts(files), { file, line: text, workdir: agent.workdir }) };
+  }
+
   traceFor(agent) {
     if (!this.proof || (agent.acceptance?.status !== 'agreed' && !agent.docs?.scorecard?.data?.criteria?.length)) return null;
     const p = this.proof.forScore(agent);
@@ -3541,9 +3653,42 @@ export class AgentManager extends EventEmitter {
       rt.toldAt = t;
       // Bracketed paste keeps a multi-line message as one message instead of submitting each line.
       rt.pty.write(text.includes('\n') ? `\x1b[200~${text}\x1b[201~` : text);
-      setTimeout(() => rt.pty?.write('\r'), 250);
+      this.submitTold(rt, text);
       const a = this.store.get(id);
       if (a) this.changed(a);
+    }
+  }
+
+  /**
+   * Press Enter on a message just typed, and again if it is still sitting in the input box. A long
+   * message takes the program a moment to take in (Claude Code folds it into "[Pasted text]"), and
+   * an Enter that comes before then is lost or becomes a line break. Still in the box a moment
+   * later, and the agent not working: Enter again (twice at most).
+   */
+  submitTold(rt, text, { waits = [4500, 8000] } = {}) {
+    // The longer the message, the longer it takes in: 250 ms, up to 1.5 s for a long one.
+    const first = 250 + Math.min(1250, Math.round(text.length / 4));
+    setTimeout(() => rt.pty?.write('\r'), first);
+    // (The box wraps long lines anywhere, so spaces are left out when comparing.)
+    const snippet = text.replace(/\s+/g, '').slice(-24);
+    const unsent = () => {
+      if (!rt.pty || rt.busy || rt.attention) return false;
+      // What is in the input box: after its prompt mark, the last one on the screen ("❯", or
+      // "│ >" in older versions). The message shown anywhere else (sent, in the conversation) is not.
+      const bottom = this.screenText(rt).slice(-600).replace(/\s+/g, '');
+      const box = Math.max(bottom.lastIndexOf('❯'), bottom.lastIndexOf('│>'));
+      if (box < 0) return false;
+      const inBox = bottom.slice(box);
+      return /\[Pastedtext#\d+/.test(inBox) || (snippet.length >= 8 && inBox.includes(snippet));
+    };
+    // (The text's own echo keeps it busy for a few seconds, so the first look is after that. While
+    // pressing again, the next queued message waits.)
+    for (const ms of waits) {
+      setTimeout(() => {
+        if (!unsent()) return;
+        rt.pty.write('\r');
+        rt.toldAt = Date.now();
+      }, first + ms);
     }
   }
 
