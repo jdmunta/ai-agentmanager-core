@@ -85,8 +85,22 @@ export function drawLogical({ data, box, warn, esc, describing = false, pick = n
     : `<p class="hint design-summary">These are the top-level folders. ${data.describe ? '<b>Find components with AI</b> groups the files by what they do, from any folder, and names the data on each link.' : ''}</p>`;
   const c = V.counts;
   const facts = `${plural(comps.length, 'component')} from ${plural(c.files, 'file')}${c.tests ? ` (${plural(c.tests, 'test file')} left out)` : ''}; ${plural(c.routes, 'HTTP route')} served, ${plural(c.calls, 'call')} to them found in the code${data.agent && c.changed ? `; ${c.changed} changed by the agent` : ''}. Read from ${esc(data.from?.name ?? 'an agent')}'s folder${data.read?.capped ? ` (the first ${data.read.files} files)` : ''}.`;
+  const F = V.flow;
+  const feats = V.features ?? [];
+  const featurePick = feats.length
+    ? `<label class="design-agent">Follow <select data-logical-feature aria-label="Follow a feature through the code"><option value="">a feature…</option>${[...feats].sort((a, b) => (a.kind !== b.kind ? (a.kind === 'start' ? 1 : -1) : a.name.localeCompare(b.name))).map((f) => `<option value="${esc(f.key)}" ${f.key === F?.key ? 'selected' : ''}>${esc(f.name)}${f.routes ? ` (${plural(f.routes, 'route')})` : ''}</option>`).join('')}</select></label>`
+    : '';
+  const open = (file, line, text) => `<button class="link" data-logical-open="${esc(JSON.stringify([file, line]))}" title="${esc(`Open ${file} at line ${line}`)}">${text}</button>`;
   let below = '';
-  if (pick?.kind === 'box' && byId[pick.id]) {
+  if (F && !pick) {
+    const reach = [...F.outside.services, ...F.outside.runs.map((r) => `runs ${r}`), ...F.outside.hosts, F.outside.reads || F.outside.writes ? [F.outside.reads && 'reads', F.outside.writes && 'writes'].filter(Boolean).join(' and ') + ' files' : ''].filter(Boolean);
+    below = `<div class="design-panel logical-panel logical-flow"><div class="design-panel-row"><b>${esc(F.name)}</b>${F.what ? ` <span>${esc(F.what)}</span>` : ''}<span class="spacer"></span><button class="small" data-logical-unfollow>Close</button></div>
+      ${F.callers.length ? `<div><span class="hint">Called from</span><ul class="logical-links">${F.callers.map((c) => `<li>${open(c.file, c.line, `<code>${esc(c.file)}</code>${c.name ? ` ${esc(c.name)}()` : ''}`)} <span class="hint">${esc(name(c.comp))}</span></li>`).join('')}</ul></div>` : F.kind === 'http' ? '<p class="hint">No page or command in this repository calls its routes (another program may).</p>' : ''}
+      ${F.routes.length ? `<div><span class="hint">Routes</span> ${F.routes.map((r) => `<code>${esc(r)}</code>`).join(' ')}</div>` : ''}
+      <div><span class="hint">Through the code</span><ul class="logical-steps">${F.steps.map((st) => `<li style="padding-left:${st.depth * 14}px">${open(st.file, st.line, `<code>${esc(st.file)}</code> ${esc(st.name)}${st.route ? '' : '()'}`)} <span class="hint">${esc(name(st.comp))}${st.does ? ` · ${esc(st.does)}` : ''}</span></li>`).join('')}</ul></div>
+      ${reach.length ? `<div><span class="hint">Reaches</span> ${reach.map(esc).join(' · ')}</div>` : ''}
+      <p class="hint">Followed by the names of the functions called; calls through variables, callbacks and events are not followed.</p></div>`;
+  } else if (pick?.kind === 'box' && byId[pick.id]) {
     const b = byId[pick.id];
     const ins = V.edges.filter((e) => e.to === b.id);
     const outs = V.edges.filter((e) => e.from === b.id);
@@ -108,9 +122,18 @@ export function drawLogical({ data, box, warn, esc, describing = false, pick = n
         ${e.evidence.length ? `<details><summary class="hint">Where in the code</summary><ul class="logical-routes">${e.evidence.map((x) => `<li><code>${esc(x)}</code></li>`).join('')}</ul></details>` : ''}</div>`;
     }
   }
-  const { edges, hidden } = mainEdges(V, all);
+  let { edges, hidden } = mainEdges(V, all);
+  // Following a feature: only its hops, the components it goes through lit, the rest dimmed.
+  const onPath = new Set(F ? [...F.comps, ...F.outsideIds] : []);
+  if (F) {
+    edges = F.hops.map(([a, b]) => {
+      const e = V.edges.find((x) => x.from === a && x.to === b) ?? V.edges.find((x) => x.from === b && x.to === a);
+      return { ...(e ?? { found: '', routes: [], routeCount: 0, data: null, flow: null, guessed: false, evidence: [], weight: 1 }), from: a, to: b, flow: e && e.from === a ? e.flow : null, follow: true };
+    });
+    hidden = 0;
+  }
   const toggle = hidden || all ? `<button class="small" data-logical-all aria-pressed="${all}" title="${all ? 'Only HTTP, live streams, outside systems and each component\'s biggest code links' : 'Every link the code shows, and the files read and written'}">${all ? 'Main links only' : `Show all ${V.edges.length} links`}</button>` : '';
-  warn.innerHTML = `<div class="design-head"><span class="design-crumbs"><b>Components</b></span>${agentPick}${toggle}${describe}</div>${about}<p class="hint design-facts">${facts}${hidden ? ` Showing the main links; ${plural(hidden, 'more link')} in each box (tap it) or with Show all.` : ''}</p>${below}`;
+  warn.innerHTML = `<div class="design-head"><span class="design-crumbs"><b>Components</b></span>${agentPick}${featurePick}${F ? '' : toggle}${describe}</div>${about}<p class="hint design-facts">${facts}${hidden ? ` Showing the main links; ${plural(hidden, 'more link')} in each box (tap it) or with Show all.` : ''}</p>${below}`;
   if (!V.components.length) {
     box.innerHTML = '<p class="hint map-empty">No source files here.</p>';
     return;
@@ -118,7 +141,7 @@ export function drawLogical({ data, box, warn, esc, describing = false, pick = n
   const W = box.clientWidth;
   // The outside systems with no link drawn are left out.
   const linked = new Set(edges.flatMap((e) => [e.from, e.to]));
-  const boxes = V.components.filter((b) => b.kind !== 'external' || linked.has(b.id));
+  const boxes = V.components.filter((b) => b.kind !== 'external' || linked.has(b.id) || onPath.has(b.id));
   const { pos, height } = layout(boxes, V.rank, W, BOX_H, GAP_Y);
   box.style.height = `${height}px`;
   const max = Math.max(1, ...edges.map((e) => e.weight));
@@ -148,13 +171,13 @@ export function drawLogical({ data, box, warn, esc, describing = false, pick = n
         const cut = W < 600 ? 18 : 26;
         text = `<text class="logical-label ${cls}" x="${x.toFixed(0)}" y="${y.toFixed(0)}" text-anchor="middle" dominant-baseline="middle">${esc(label.length > cut ? `${label.slice(0, cut - 1)}…` : label)}</text>`;
       }
-      return `<path class="design-arrow logical-arrow ${cls} ${down ? '' : 'back'} ${on ? 'on' : ''}" d="${d}" stroke-width="${sw}" ${end} ${start}><title>${esc(tip)}</title></path><path class="design-hit" d="${d}" data-logical-edge="${esc(JSON.stringify([e.from, e.to]))}"><title>${esc(tip)}</title></path>${text}`;
+      return `<path class="design-arrow logical-arrow ${cls} ${down ? '' : 'back'} ${on ? 'on' : ''} ${e.follow ? 'follow' : ''}" d="${d}" stroke-width="${sw}" ${end} ${start}><title>${esc(tip)}</title></path><path class="design-hit" d="${d}" data-logical-edge="${esc(JSON.stringify([e.from, e.to]))}"><title>${esc(tip)}</title></path>${text}`;
     })
     .join('');
   const tiles = boxes
     .map((b) => {
       const p = pos[b.id];
-      const cls = ['design-box', 'logical-box', b.kind, b.unplaced ? 'unplaced' : '', b.changed.length ? 'changed' : '', pick?.kind === 'box' && pick.id === b.id ? 'picked' : ''].join(' ');
+      const cls = ['design-box', 'logical-box', b.kind, b.unplaced ? 'unplaced' : '', b.changed.length ? 'changed' : '', pick?.kind === 'box' && pick.id === b.id ? 'picked' : '', F ? (onPath.has(b.id) ? 'on-path' : 'off-path') : ''].join(' ');
       const tags = [
         b.entry.length ? `<span class="design-tag entry" title="${esc(`Starts here: ${b.entry.join(', ')}`)}">start</span>` : '',
         b.serves ? `<span class="design-tag http">serves ${b.serves}</span>` : '',

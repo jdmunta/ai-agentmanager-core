@@ -88,6 +88,7 @@ export function initCodeMap({ api, $, esc, agents, openAgent, openBugs, openCode
   // The Logical view: the box or arrow tapped ({ kind: 'box', id } or { kind: 'edge', from, to }).
   let logicalPick = null;
   let logicalAll = false;
+  let logicalFeature = null; // the feature followed through the code
   let findingParts = false;
   try {
     project = localStorage.getItem(SAVED) || null;
@@ -138,7 +139,7 @@ export function initCodeMap({ api, $, esc, agents, openAgent, openBugs, openCode
   async function loadLogical() {
     const before = JSON.stringify(data);
     try {
-      const q = new URLSearchParams({ ...(project ? { project } : {}), ...(designAgent ? { agent: designAgent } : {}) });
+      const q = new URLSearchParams({ ...(project ? { project } : {}), ...(designAgent ? { agent: designAgent } : {}), ...(logicalFeature ? { feature: logicalFeature } : {}) });
       data = await api('GET', `/logical${q.size ? `?${q}` : ''}`);
       if (data.project && data.project.key !== project) project = data.project.key;
       designAgent = data.agent;
@@ -153,7 +154,7 @@ export function initCodeMap({ api, $, esc, agents, openAgent, openBugs, openCode
     findingParts = true;
     draw();
     try {
-      data = await api('POST', '/logical/describe', { project, ...(designAgent ? { agent: designAgent } : {}) });
+      data = await api('POST', '/logical/describe', { project, ...(designAgent ? { agent: designAgent } : {}), ...(logicalFeature ? { feature: logicalFeature } : {}) });
       logicalPick = null;
     } catch (e) {
       toast?.(e.message, 6000);
@@ -694,6 +695,13 @@ export function initCodeMap({ api, $, esc, agents, openAgent, openBugs, openCode
       if (e.target.closest('[data-logical-describe]') && !findingParts) return findComponents();
       if (e.target.closest('[data-logical-close]')) return (logicalPick = null), draw();
       if (e.target.closest('[data-logical-all]')) return (logicalAll = !logicalAll), draw();
+      if (e.target.closest('[data-logical-unfollow]')) return (logicalFeature = null), load();
+      const at = e.target.closest('[data-logical-open]');
+      if (at && data?.from) {
+        const [file, line] = JSON.parse(at.dataset.logicalOpen);
+        show(false);
+        return openCode(data.from.id, file, line > 1 ? line : undefined);
+      }
       const edge = e.target.closest('[data-logical-edge]');
       if (edge) {
         const [from, to] = JSON.parse(edge.dataset.logicalEdge);
@@ -773,6 +781,11 @@ export function initCodeMap({ api, $, esc, agents, openAgent, openBugs, openCode
   view.addEventListener('pointerup', endDrag);
   view.addEventListener('pointercancel', endDrag);
   view.addEventListener('change', (e) => {
+    if (e.target.matches('[data-logical-feature]')) {
+      logicalFeature = e.target.value || null;
+      logicalPick = null;
+      return load();
+    }
     if (e.target.matches('[data-logical-agent]')) {
       designAgent = e.target.value || null;
       return load();
@@ -792,6 +805,7 @@ export function initCodeMap({ api, $, esc, agents, openAgent, openBugs, openCode
     designEdits.clear();
     designPanel = null;
     logicalPick = null;
+    logicalFeature = null;
     try {
       localStorage.setItem(SAVED, project);
     } catch {}
@@ -803,6 +817,7 @@ export function initCodeMap({ api, $, esc, agents, openAgent, openBugs, openCode
     if (layer === 'design' && designPanel) return (designPanel = null), draw();
     if (layer === 'design' && designEdit?.pick) return (designEdit.pick = null), draw();
     if (layer === 'logical' && logicalPick) return (logicalPick = null), draw();
+    if (layer === 'logical' && logicalFeature) return (logicalFeature = null), load();
     show(false);
   });
   let resizeTimer = null;

@@ -31,6 +31,7 @@ const WRITE_JS = /\b(?:fs|fsp|fse|promises)\.(?:writeFileSync|writeFile|appendFi
 const READ_BARE = /(?<![.\w])(?:readFileSync|readFile|createReadStream|readdirSync|readdir)\(/g;
 const WRITE_BARE = /(?<![.\w])(?:writeFileSync|writeFile|appendFileSync|appendFile|createWriteStream|mkdirSync|renameSync|rmSync|unlinkSync)\(/g;
 const count = (text, re) => [...text.matchAll(re)].length;
+export const FS_IMPORT = /from\s+['"](?:node:)?fs(?:\/promises)?['"]|require\(\s*['"](?:node:)?fs(?:\/promises)?['"]\s*\)/;
 // Worked out once for each graph (a graph is built again when the code changes): the calls matched
 // to routes, and the parts.
 const memo = { http: new WeakMap(), units: new WeakMap() };
@@ -38,6 +39,8 @@ const memo = { http: new WeakMap(), units: new WeakMap() };
 /** A URL path as a pattern: placeholders as '*', no query; null when it is not one. */
 export function pathPattern(raw) {
   const p = String(raw)
+    // A path like /layers followed by ${query}: what follows a word is a query string, not a part of it.
+    .replace(/([\w.-])\$\{.*$/, '$1')
     .replace(/\$\{[^}]*\}?/g, '*')
     .replace(/\{[^}/]*\}|<[^>/]*>/g, '*')
     .split(/[?#]/)[0]
@@ -46,44 +49,12 @@ export function pathPattern(raw) {
   return p.split('/').slice(1).map((s) => (s.startsWith(':') || s.includes('*') ? '*' : s)).join('/');
 }
 
-/** What one file shows of its links to other parts and the outside (see the top). */
-export function linksOf(file, text) {
-  const lang = langOf(file);
-  const out = { routes: [], calls: [], runs: [], hosts: [], services: [], reads: 0, writes: 0, live: null };
-  if (!lang || !text) return out;
-  const server = SERVER.test(text);
-  if (server) {
-    // Where each router is mounted: app.use('/api', api), include_router(r, prefix=…), r.Group("/v1").
-    const mounts = {};
-    for (const m of text.matchAll(/\b\w+\.use\(\s*['"](\/[^'"]*)['"]\s*,\s*(\w+)\s*[,)]/g)) mounts[m[2]] = m[1];
-    for (const m of text.matchAll(/(\w+)\s*=\s*(?:APIRouter|Blueprint)\([^)]*(?:url_)?prefix\s*=\s*['"]([^'"]+)['"]/g)) mounts[m[1]] = m[2];
-    for (const m of text.matchAll(/\b(?:include_router|register_blueprint)\(\s*(\w+)[^)]*?(?:url_)?prefix\s*=\s*['"]([^'"]+)['"]/g)) mounts[m[1]] = m[2];
-    for (const m of text.matchAll(/(\w+)\s*:?=\s*\w+\.Group\(\s*"([^"]*)"/g)) mounts[m[1]] = m[2];
-    const add = (method, p, router = null) => {
-      const prefix = router && mounts[router] ? pathPattern(mounts[router]) : null;
-      // The root of a router ('/') is a route at its mount.
-      const local = /^\/?$/.test(p) && prefix ? '' : pathPattern(p);
-      if (local == null) return;
-      const full = [prefix, local].filter(Boolean).join('/');
-      out.routes.push({ method: method.toUpperCase(), path: `/${full}`, local: `/${local}` });
-    };
-    for (const m of text.matchAll(/@?\b(\w+)\.(get|post|put|patch|delete|all|route|head|options|websocket)\(\s*f?['"`](\/[^'"`\s]*)['"`]([^\n]*)/g)) {
-      if (CLIENT_NAMES.test(m[1])) continue;
-      const method = m[2] === 'route' ? m[4].match(/methods\s*=\s*\[\s*['"](\w+)/)?.[1] ?? 'ANY' : m[2] === 'all' ? 'ANY' : m[2] === 'websocket' ? 'WS' : m[2];
-      add(method, m[3], m[1]);
-    }
-    for (const m of text.matchAll(/\b(?:HandleFunc|Handle)\(\s*"(?:(GET|POST|PUT|PATCH|DELETE)\s+)?(\/[^"]*)"/g)) add(m[1] ?? 'ANY', m[2]);
-    for (const m of text.matchAll(/\b(\w+)\.(GET|POST|PUT|PATCH|DELETE|Any|Get|Post|Put|Patch|Delete)\(\s*"(\/[^"]*)"/g)) add(m[2] === 'Any' ? 'ANY' : m[2], m[3], m[1]);
-    // A plain server: if (pathname === '/ws/events').
-    for (const m of text.matchAll(/\b(?:pathname|url|path)\s*===?\s*['"](\/[A-Za-z][^'"]*)['"]/g)) add('ANY', m[1]);
-  }
-  // URL paths written in the code: calls, once matched to a route somewhere else.
-  const calls = new Set();
-  for (const m of text.matchAll(/['"`](?:\$\{[^}`]*\}|\{[\w.]*\}|https?:\/\/[^/'"`\s]+)?(\/[A-Za-z_:{$][^'"`\s?#]*)/g)) {
-    const pat = pathPattern(m[1]);
-    if (pat && calls.size < 3000) calls.add(pat);
-  }
-  out.calls = [...calls];
+/**
+ * What a piece of code does outside itself: programs run, hosts called, files read and written.
+ * fsImported: the file imports fs, so a bare readFileSync() is one.
+ */
+export function effectsOf(lang, text, { fsImported = false } = {}) {
+  const out = { runs: [], hosts: [], reads: 0, writes: 0 };
   const runs = new Set();
   if (lang === 'js') for (const re of [SPAWN_JS, SHELL_JS]) for (const m of text.matchAll(re)) runs.add(m[1]);
   if (lang === 'py') for (const m of text.matchAll(SPAWN_PY)) runs.add(m[1] ?? m[2]);
@@ -96,9 +67,8 @@ export function linksOf(file, text) {
   }
   out.hosts = [...hosts].slice(0, 10);
   if (lang === 'js') {
-    const bare = /from\s+['"](?:node:)?fs(?:\/promises)?['"]|require\(\s*['"](?:node:)?fs(?:\/promises)?['"]\s*\)/.test(text);
-    out.reads = count(text, READ_JS) + (bare ? count(text, READ_BARE) : 0);
-    out.writes = count(text, WRITE_JS) + (bare ? count(text, WRITE_BARE) : 0);
+    out.reads = count(text, READ_JS) + (fsImported ? count(text, READ_BARE) : 0);
+    out.writes = count(text, WRITE_JS) + (fsImported ? count(text, WRITE_BARE) : 0);
   } else if (lang === 'py') {
     const opens = [...text.matchAll(/\bopen\(([^)\n]*)\)/g)];
     const writing = opens.filter((m) => /['"][rb]*[wax][bt+]*['"]/.test(m[1])).length;
@@ -108,6 +78,96 @@ export function linksOf(file, text) {
     out.reads = count(text, /\bos\.(?:ReadFile|Open|ReadDir)\(/g);
     out.writes = count(text, /\bos\.(?:WriteFile|Create|MkdirAll|Mkdir|Rename|Remove|RemoveAll|OpenFile)\(/g);
   }
+  return out;
+}
+
+/**
+ * Where the call starting at `at` ends: its closing parenthesis, skipping strings (a rough read; a
+ * Python decorator's function, or a Go handler func, ends at the next blank line after its body).
+ */
+function closeOf(text, at) {
+  const open = text.indexOf('(', at);
+  if (open === -1) return at;
+  let depth = 0;
+  let quote = null;
+  const stop = Math.min(text.length, open + 40_000);
+  for (let i = open; i < stop; i++) {
+    const ch = text[i];
+    if (quote) {
+      if (ch === '\\') i++;
+      else if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === "'" || ch === '"' || ch === '`') quote = ch;
+    else if (ch === '(') depth++;
+    else if (ch === ')' && --depth === 0) {
+      // A decorator: its function follows, to the next line not indented.
+      if (/^\s*\n\s*(?:async\s+)?def\b/.test(text.slice(i + 1, i + 200))) {
+        const m = /\n(?=\S)/g;
+        m.lastIndex = text.indexOf('def', i);
+        return m.exec(text)?.index ?? text.length;
+      }
+      return i;
+    }
+  }
+  return stop;
+}
+
+/** What one file shows of its links to other parts and the outside (see the top). */
+export function linksOf(file, text) {
+  const lang = langOf(file);
+  const out = { routes: [], calls: [], callAt: {}, runs: [], hosts: [], services: [], reads: 0, writes: 0, live: null };
+  if (!lang || !text) return out;
+  // The line of a place in the text.
+  const starts = [0];
+  for (let i = text.indexOf('\n'); i !== -1; i = text.indexOf('\n', i + 1)) starts.push(i + 1);
+  const lineAt = (at) => {
+    let lo = 0;
+    let hi = starts.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi + 1) >> 1;
+      if (starts[mid] <= at) lo = mid;
+      else hi = mid - 1;
+    }
+    return lo + 1;
+  };
+  const server = SERVER.test(text);
+  if (server) {
+    // Where each router is mounted: app.use('/api', api), include_router(r, prefix=…), r.Group("/v1").
+    const mounts = {};
+    for (const m of text.matchAll(/\b\w+\.use\(\s*['"](\/[^'"]*)['"]\s*,\s*(\w+)\s*[,)]/g)) mounts[m[2]] = m[1];
+    for (const m of text.matchAll(/(\w+)\s*=\s*(?:APIRouter|Blueprint)\([^)]*(?:url_)?prefix\s*=\s*['"]([^'"]+)['"]/g)) mounts[m[1]] = m[2];
+    for (const m of text.matchAll(/\b(?:include_router|register_blueprint)\(\s*(\w+)[^)]*?(?:url_)?prefix\s*=\s*['"]([^'"]+)['"]/g)) mounts[m[1]] = m[2];
+    for (const m of text.matchAll(/(\w+)\s*:?=\s*\w+\.Group\(\s*"([^"]*)"/g)) mounts[m[1]] = m[2];
+    const add = (method, p, router = null, at = 0) => {
+      const prefix = router && mounts[router] ? pathPattern(mounts[router]) : null;
+      // The root of a router ('/') is a route at its mount.
+      const local = /^\/?$/.test(p) && prefix ? '' : pathPattern(p);
+      if (local == null) return;
+      const full = [prefix, local].filter(Boolean).join('/');
+      out.routes.push({ method: method.toUpperCase(), path: `/${full}`, local: `/${local}`, line: lineAt(at), end: lineAt(closeOf(text, at)) });
+    };
+    for (const m of text.matchAll(/@?\b(\w+)\.(get|post|put|patch|delete|all|route|head|options|websocket)\(\s*f?['"`](\/[^'"`\s]*)['"`]([^\n]*)/g)) {
+      if (CLIENT_NAMES.test(m[1])) continue;
+      const method = m[2] === 'route' ? m[4].match(/methods\s*=\s*\[\s*['"](\w+)/)?.[1] ?? 'ANY' : m[2] === 'all' ? 'ANY' : m[2] === 'websocket' ? 'WS' : m[2];
+      add(method, m[3], m[1], m.index);
+    }
+    for (const m of text.matchAll(/\b(?:HandleFunc|Handle)\(\s*"(?:(GET|POST|PUT|PATCH|DELETE)\s+)?(\/[^"]*)"/g)) add(m[1] ?? 'ANY', m[2], null, m.index);
+    for (const m of text.matchAll(/\b(\w+)\.(GET|POST|PUT|PATCH|DELETE|Any|Get|Post|Put|Patch|Delete)\(\s*"(\/[^"]*)"/g)) add(m[2] === 'Any' ? 'ANY' : m[2], m[3], m[1], m.index);
+    // A plain server: if (pathname === '/ws/events').
+    for (const m of text.matchAll(/\b(?:pathname|url|path)\s*===?\s*['"](\/[A-Za-z][^'"]*)['"]/g)) add('ANY', m[1], null, m.index);
+  }
+  // URL paths written in the code: calls, once matched to a route somewhere else.
+  const calls = new Set();
+  for (const m of text.matchAll(/['"`](?:\$\{[^}`]*\}|\{[\w.]*\}|https?:\/\/[^/'"`\s]+)?(\/[A-Za-z_:{$][^'"`\s?#]*)/g)) {
+    const pat = pathPattern(m[1]);
+    if (!pat || calls.size >= 3000) continue;
+    calls.add(pat);
+    const at = (out.callAt[pat] ??= []);
+    if (at.length < 10) at.push(lineAt(m.index));
+  }
+  out.calls = [...calls];
+  Object.assign(out, effectsOf(lang, text, { fsImported: FS_IMPORT.test(text) }));
   // Databases in the standard library, which the packages imported don't show.
   if ((lang === 'py' && /^\s*(?:import|from)\s+sqlite3\b/m.test(text)) || (lang === 'js' && /['"]node:sqlite['"]/.test(text))) out.services.push('SQLite');
   if (lang === 'go' && /"database\/sql"/.test(text)) out.services.push('SQL database');
@@ -122,6 +182,18 @@ export function addLinks(graph, sources) {
   return graph;
 }
 
+/** A call's path parts fit a route's: '*' matches any one part, at least one fixed part the same. */
+export function pathFits(call, segs) {
+  if (call.length !== segs.length) return false;
+  let fixed = 0;
+  for (let i = 0; i < segs.length; i++) {
+    if (call[i] === '*' || segs[i] === '*') continue;
+    if (call[i] !== segs[i]) return false;
+    fixed++;
+  }
+  return fixed > 0;
+}
+
 /**
  * The calls from one file to a route in another: Map("caller\nserver" -> Set("GET /api/x")). A
  * call matches a route's full path or its path inside its router, '*' matching any one part, with
@@ -134,16 +206,7 @@ export function httpLinks(graph) {
   const routes = [];
   for (const [f, info] of Object.entries(graph.files)) for (const r of info.links?.routes ?? []) routes.push({ file: f, ...r, full: r.path.split('/').slice(1), inner: r.local.split('/').slice(1) });
   if (!routes.length) return out;
-  const fits = (call, segs) => {
-    if (call.length !== segs.length) return false;
-    let fixed = 0;
-    for (let i = 0; i < segs.length; i++) {
-      if (call[i] === '*' || segs[i] === '*') continue;
-      if (call[i] !== segs[i]) return false;
-      fixed++;
-    }
-    return fixed > 0;
-  };
+  const fits = pathFits;
   for (const [f, info] of Object.entries(graph.files)) {
     for (const c of info.links?.calls ?? []) {
       const call = c.split('/');
@@ -328,7 +391,7 @@ const foundFlow = (l) => (l.to === EXT_FILES ? (l.reads && l.writes ? 'both' : l
  * box too. Each edge: what the code shows (routes, imports, programs run…), what data the model
  * says it carries and which way, and a few lines of evidence. `notes` is what the model wrote.
  */
-export function logicalView(graph, { notes = null, changed = [] } = {}) {
+export function logicalView(graph, { notes = null, changed = [], features = [], flow = null } = {}) {
   const units = logicalUnits(graph);
   const comps = componentsOf(graph, units, notes);
   const compOf = new Map();
@@ -457,7 +520,30 @@ export function logicalView(graph, { notes = null, changed = [] } = {}) {
     rank,
     counts: { files: Object.keys(graph.files).length - tests, tests, routes, calls: [...http.values()].reduce((s, v) => s + v.size, 0), changed: comps.reduce((s, c) => s + c.files.filter((f) => changedSet.has(f)).length, 0) },
     described: Boolean(notes?.components?.length),
+    features: features.map((f) => ({ key: f.key, kind: f.kind, routes: f.routes.length, name: notes?.features?.[f.key]?.name || (f.kind === 'start' ? `Starts: ${f.file}` : f.key), what: notes?.features?.[f.key]?.what ?? '' })),
+    flow: flowIn(flow?.((f) => compOf.get(f) ?? null), { notes, keepExt, used, OTHER }),
   };
+}
+
+/**
+ * A feature's flow (flows.js) placed on the view: its name, and each step's work outside the code
+ * as a hop to that outside box.
+ */
+function flowIn(fl, { notes, keepExt, used, OTHER }) {
+  if (!fl) return null;
+  const ext = (id) => (keepExt.has(id) ? id : used.has(OTHER) ? OTHER : null);
+  const hops = fl.hops.map(([a, b]) => [a, b]);
+  const outside = new Set();
+  for (const s of fl.steps) {
+    if (!s.comp || !s.effects) continue;
+    const ids = [...(s.effects.services ?? []).map((x) => `x:svc:${x}`), ...s.effects.runs.map((r) => `x:run:${r}`), ...s.effects.hosts.map((h) => `x:host:${h}`), ...(s.effects.reads || s.effects.writes ? [EXT_FILES] : [])].map(ext).filter(Boolean);
+    for (const id of ids) {
+      outside.add(id);
+      if (!hops.some(([a, b]) => a === s.comp && b === id)) hops.push([s.comp, id]);
+    }
+  }
+  const named = notes?.features?.[fl.key];
+  return { ...fl, name: named?.name || (fl.kind === 'start' ? `Starts: ${fl.steps[0]?.file}` : fl.key), what: named?.what ?? '', hops, outsideIds: [...outside] };
 }
 
 // ------------------------------------------------------------------ found by a model
@@ -470,7 +556,7 @@ export function logicalSig(graph) {
 }
 
 /** The prompt: each part with what it defines and what the code shows it does, and the links between parts. */
-export function logicalPrompt(graph, { project }) {
+export function logicalPrompt(graph, { project, features = [] }) {
   const units = logicalUnits(graph);
   const unitOf = new Map();
   for (const u of units) for (const f of u.files) unitOf.set(f, u.id);
@@ -512,12 +598,15 @@ export function logicalPrompt(graph, { project }) {
     'Links to outside systems:',
     ...(outside.length ? outside.slice(0, 120) : ['(none)']),
     '',
+    ...(features.length ? ['Features: its HTTP routes grouped by their main part, and where the program starts:', ...features, ''] : []),
     'Reply with only a JSON object:',
     '{"summary": "<one or two sentences: what the system is and how its main pieces fit together>",',
     ' "components": [{"name": "<1-3 words>", "purpose": "<what it does, under 16 words>", "members": ["<part id exactly as listed>", ...]}],',
-    ' "flows": [{"from": "<component name>", "to": "<component name or outside system>", "data": "<what data moves, under 8 words>", "direction": "to" | "from" | "both"}]}',
+    ' "flows": [{"from": "<component name>", "to": "<component name or outside system>", "data": "<what data moves, under 8 words>", "direction": "to" | "from" | "both"}],',
+    ' "features": [{"key": "<feature key exactly as listed>", "name": "<what a user would call it, 1-4 words>", "what": "<what it does for them, under 14 words>"}]}',
     'Put every part in exactly one component: 4 to 12 components, each a piece of the system with one job (a user interface, an API, a store, a background worker, a feature area, shared helpers…), named for what it does, not where it is. A component can take parts from different folders, and one folder can be split.',
     `Flows: one for each pair of components (or a component and an outside system${systems.length ? `: ${systems.slice(0, 20).join(', ')}` : ''}) that the links connect, saying what data moves; direction "to" when it moves from "from" to "to", "from" the other way, "both" when both ways. Add a flow the links don't show only when the names make it clear, at most 5.`,
+    ...(features.length ? ['Features: one for each listed, named for what it does for the people using it (e.g. "Agent timeline" for "timeline").'] : []),
     "Say only what the names, definitions and links show.",
   ].join('\n');
   if (text.length > 80_000) text = `${text.slice(0, 80_000)}\n…`;
@@ -525,7 +614,7 @@ export function logicalPrompt(graph, { project }) {
 }
 
 /** The model's reply checked against what is there: { summary, components, flows }. */
-export function logicalNotesFrom(reply, graph) {
+export function logicalNotesFrom(reply, graph, { featureKeys = [] } = {}) {
   const ids = new Set(logicalUnits(graph).map((u) => u.id));
   const line = (s, n) => String(s ?? '').replace(/\s+/g, ' ').trim().slice(0, n);
   const seen = new Set();
@@ -541,5 +630,11 @@ export function logicalNotesFrom(reply, graph) {
     .map((f) => ({ from: line(f?.from, 60), to: line(f?.to, 60), data: line(f?.data, 80), direction: ['to', 'from', 'both'].includes(f?.direction) ? f.direction : 'both' }))
     .filter((f) => f.from && f.to && f.data)
     .slice(0, 80);
-  return { summary: line(reply?.summary, 400), components, flows };
+  const keys = new Set(featureKeys);
+  const features = {};
+  for (const f of Array.isArray(reply?.features) ? reply.features : []) {
+    const key = String(f?.key ?? '');
+    if (keys.has(key) && line(f?.name, 40)) features[key] = { name: line(f.name, 40), what: line(f?.what, 160) };
+  }
+  return { summary: line(reply?.summary, 400), components, flows, features };
 }

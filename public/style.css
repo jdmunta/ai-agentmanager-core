@@ -1569,6 +1569,13 @@ kbd { display: inline-block; min-width: 1.6em; padding: 1px 5px; border: 1px sol
 .logical-routes { columns: 2 260px; font-size: 12px; }
 .logical-links .link { padding: 0; }
 .map-warn .logical-links li, .map-warn .logical-routes li { padding: 1px 0; margin: 0; border: 0; border-radius: 0; background: none; }
+.logical-arrow.follow { stroke-width: 3px; }
+.design-box.off-path { opacity: .35; }
+.design-box.on-path { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent); }
+.logical-flow { border-color: var(--accent); }
+.logical-steps { list-style: none; margin: 2px 0 0; padding: 0; font-size: 12.5px; max-height: 340px; overflow: auto; }
+.logical-steps .link, .logical-flow .logical-links .link { padding: 0; text-align: left; }
+.map-warn .logical-steps li { padding: 1px 0; margin: 0; border: 0; border-radius: 0; background: none; }
 .map-key.logical-http { height: 0; border-top: 2px solid var(--accent); border-radius: 0; }
 .map-key.logical-code { height: 0; border-top: 2px solid var(--muted); border-radius: 0; }
 .map-key.logical-ext { height: 0; border-top: 2px dashed #8b5cf6; border-radius: 0; }

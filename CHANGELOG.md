@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.81.0 (2026-11-27)
+
+- **Follow a feature** in Map's Logical view. See "Logical view" in the [README](README.md). The **Follow** picker lists the project's features: its HTTP routes grouped by their main path part (`/api/agents/:id/timeline` is "timeline"), and each file where the program starts. Picking one shows it as a flow:
+  - **Called from:** each page function or CLI command whose code calls the feature's routes.
+  - **Through the code:** each function it passes through, by depth, with its component and what it does outside the code (uses SQLite, runs git, writes files…). Each step opens in the Code tab at its line.
+  - **Reaches:** the outside systems at the end. On the diagram, the components on the path and the hops between them are lit; the rest are dimmed.
+  - **Find components with AI** now also names each feature in plain words ("Agent timeline: Show what an agent did over time").
+  - Calls are followed by name, within a file, the files it imports, the file named like what it's called on, or the same Go package. Calls through variables, callbacks and events aren't followed.
+  - `GET /api/logical?feature=<key>`.
+
 ## 1.80.0 (2026-11-27)
 
 - **Logical view.** Map's new **Logical** tab draws a project as components and the links between them that imports don't show. See "Logical view" in the [README](README.md).
