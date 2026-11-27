@@ -1476,6 +1476,27 @@ kbd { display: inline-block; min-width: 1.6em; padding: 1px 5px; border: 1px sol
   .standup-text { font-size: 16px; }
 }
 
+/* ---------- Timeline: an agent's milestones in a thread */
+.timeline-dialog { width: min(760px, calc(100vw - 32px)); }
+#timeline-body { max-height: min(68vh, 720px); overflow-y: auto; }
+.tl { list-style: none; margin: 12px 0 4px; padding: 0 0 0 22px; position: relative; }
+.tl::before { content: ''; position: absolute; left: 6px; top: 6px; bottom: 6px; width: 2px; background: var(--border); }
+.tl-node { position: relative; padding: 0 0 16px; }
+.tl-node::before { content: ''; position: absolute; left: -21px; top: 4px; width: 10px; height: 10px; border-radius: 50%; background: var(--panel); border: 2px solid var(--border-strong); box-sizing: border-box; }
+.tl-start::before, .tl-ask::before { border-color: var(--accent); }
+.tl-ask.open::before { background: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent); }
+.tl-pr::before { border-color: var(--green); }
+.tl-pr.merged::before, .tl-done::before { background: var(--green); border-color: var(--green); }
+.tl-pr.closed::before { border-color: var(--red); }
+.tl-talk::before { width: 8px; height: 8px; left: -20px; top: 5px; }
+.tl-head { display: flex; align-items: baseline; gap: 10px; font-size: 12px; }
+.tl-head time { color: var(--muted); font-variant-numeric: tabular-nums; min-width: 96px; }
+.tl-head b.muted { color: var(--muted); font-weight: 500; }
+.tl-title { margin-top: 2px; font-weight: 500; overflow-wrap: anywhere; }
+.tl-node details > summary { margin-top: 2px; cursor: pointer; overflow-wrap: anywhere; }
+.tl-sub { margin: 6px 0 0; padding-left: 16px; font-size: 13px; display: grid; gap: 3px; }
+.tl-sub code { font-size: 12px; }
+
 /* ---------- Map: where agents are in the code */
 body.mapping .layout, body.mapping .watch-view { display: none; }
 .map-view { flex: 1; min-height: 0; overflow: auto; padding: 10px 16px 16px; background: var(--bg); display: flex; flex-direction: column; }

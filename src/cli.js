@@ -846,6 +846,18 @@ export async function main(argv) {
     });
 
   program
+    .command('timeline')
+    .description("An agent's work from its start to now as dated milestones: each ask closed (with the files it changed, its commits and the agent's last word on it) and each pull request opened, merged or closed. Asks that changed nothing are folded together. From its session transcripts, branch and pull requests; no model is called.")
+    .argument('<agent>')
+    .option('--json', 'print JSON')
+    .action(async (ref, o) => {
+      await daemon();
+      const a = await resolveAgent(ref);
+      if (o.json) console.log(JSON.stringify(await api('GET', `/agents/${a.id}/timeline`), null, 2));
+      else console.log((await api('GET', `/agents/${a.id}/timeline?format=md`)).markdown);
+    });
+
+  program
     .command('understand')
     .description("Understanding check: two or three questions about what an agent's changes do (what happens on a failure, an empty input, what else depends on it), to answer before you approve them. Without --answers it prints the questions only; the answers come with --answers (one-off model call).")
     .argument('<agent>')

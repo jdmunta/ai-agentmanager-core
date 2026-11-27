@@ -67,6 +67,7 @@ import { calibration, calibrationLines, calibrationMarkdown, cleanGuess } from '
 import { NightWatch, nightMarkdown, nightSettings } from './nightwatch.js';
 import { glance, glanceLine, glanceMarkdown } from '../public/glance.js';
 import { traceMarkdown, traceOf } from './trace.js';
+import { timelineMarkdown, timelineOf } from './timeline.js';
 import { PRIVATE_MESSAGE, keptPrivate, mustBeShareable } from './private.js';
 import { Standards, runCheck } from './standards.js';
 import { Proof, proofMarkdown } from './proof.js';
@@ -828,6 +829,13 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
     const p = manager.proof.forScore(a);
     const t = traceOf(a, p.entries, p.rerun);
     return req.query.format === 'md' ? { markdown: traceMarkdown(a.name, t) } : t;
+  }));
+  // Timeline (timeline.js): the asks closed and pull requests, dated, from its start to now.
+  api.get('/agents/:id/timeline', wrap(async (req) => {
+    const a = manager.mustGet(req.params.id);
+    const rt = manager.runtimes.get(a.id);
+    const tl = await timelineOf(a, { busy: Boolean(rt?.pty && rt.busy) });
+    return req.query.format === 'md' ? { markdown: timelineMarkdown(tl) } : tl;
   }));
   // Test the tests (mutate.js): changed lines broken one at a time, the tests run on each. The
   // person's call only: it runs commands here and changes the agent's files for a moment.

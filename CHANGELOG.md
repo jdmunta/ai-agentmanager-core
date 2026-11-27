@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.76.0 (2026-11-27)
+
+- **Timeline.** See [Timeline](README.md#timeline). **Timeline** on an agent's page, or `agentmgr timeline <agent>`, shows its work from its start to now as dated milestones in a thread, each dated when it closed:
+  - **Started:** the request, with its branch.
+  - **Ask done:** each ask that changed something. Open it for what the agent said, the files changed and the commits.
+  - **Asks with no changes:** questions and chat, folded into one line.
+  - **Pull requests** opened, merged or closed, with their links.
+  - **Finished**, and **Now · Working on** while it works.
+  - **Copy as Markdown** for a status update or a pull request; `--json` and `GET /api/agents/<id>/timeline` give the data.
+  - From the session transcripts (Claude Code), the branch's commits and the pull requests; no model is called. Other engines show their commits and pull requests.
+- **Pull request close dates** are recorded from now on.
+
 ## 1.75.2 (2026-11-27)
 
 - **Map in the pane at the right.** In the three columns Map shows beside the agent list, like the other views, instead of over the list too; picking a view or an agent takes the pane back.
