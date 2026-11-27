@@ -4,6 +4,9 @@
 // The Bugs view colours each folder by the bugs hunts found there (worst weigh most) and how much it
 // changed lately, draws the paths through the code those bugs take as arrows between folders, and
 // hatches the folders no hunt has looked at. Click a folder or an arrow for its bugs, or Hunt here.
+// The Design view (design.js) draws the code itself in layers, an agent's changes lit up.
+
+import { drawDesign } from './design.js';
 
 const SAVED = 'agentmgr.mapProject';
 const LAYER = 'agentmgr.mapLayer';
@@ -58,7 +61,7 @@ export function squarify(items, x, y, w, h) {
   return out;
 }
 
-export function initCodeMap({ api, $, esc, agents, openAgent, openBugs, toast }) {
+export function initCodeMap({ api, $, esc, agents, openAgent, openBugs, openCode, toast }) {
   const view = $('#map-view');
   let open = false;
   let data = null;
@@ -66,15 +69,22 @@ export function initCodeMap({ api, $, esc, agents, openAgent, openBugs, toast })
   let project = null;
   let layer = 'agents';
   let picked = null; // in the Bugs and Speed views: { module } or { from, to }
+  // The Design view: the layer shown (a folder or file, '' for the system), the agent whose changes
+  // are lit up, and whether to go to where its changes are on the next load.
+  let designAt = '';
+  let designAgent = null;
+  let designFocus = false;
+  let designOnly = true; // with an agent picked: only its changes and what uses them, in a busy layer
   try {
     project = localStorage.getItem(SAVED) || null;
-    layer = ['bugs', 'speed'].includes(localStorage.getItem(LAYER)) ? localStorage.getItem(LAYER) : 'agents';
+    layer = ['bugs', 'speed', 'design'].includes(localStorage.getItem(LAYER)) ? localStorage.getItem(LAYER) : 'agents';
   } catch {}
 
   const nameOf = (id) => data?.map.agents.find((a) => a.id === id)?.name ?? agents.get(id)?.name ?? id;
   const color = (id) => `hsl(${hue(id)} 70% 55%)`;
 
   async function load() {
+    if (layer === 'design') return loadDesign();
     try {
       const q = new URLSearchParams({ ...(project ? { project } : {}), ...(layer !== 'agents' ? { layer } : {}) });
       data = await api('GET', `/codemap${q.size ? `?${q}` : ''}`);
@@ -83,6 +93,22 @@ export function initCodeMap({ api, $, esc, agents, openAgent, openBugs, toast })
       toast?.(e.message, 5000);
     }
     draw();
+  }
+
+  async function loadDesign() {
+    const before = JSON.stringify(data);
+    try {
+      const q = new URLSearchParams({ ...(project ? { project } : {}), ...(designAgent ? { agent: designAgent } : {}), ...(designFocus ? { focus: '1' } : designAt ? { at: designAt } : {}) });
+      data = await api('GET', `/layers${q.size ? `?${q}` : ''}`);
+      if (data.project && data.project.key !== project) project = data.project.key;
+      designFocus = false;
+      designAt = data.layer?.at ?? '';
+      designAgent = data.agent;
+    } catch (e) {
+      toast?.(e.message, 5000);
+    }
+    // The refresh every few seconds draws again only when something changed (a picker left open stays).
+    if (JSON.stringify(data) !== before || !$('#map-box').childElementCount) draw();
   }
 
   function sentence(l) {
@@ -101,8 +127,10 @@ export function initCodeMap({ api, $, esc, agents, openAgent, openBugs, toast })
     $('#map-bar').innerHTML = `
       <b>Map</b>
       ${projects.length ? `<select data-map-set="project" aria-label="Project">${projects.map((p) => `<option value="${esc(p.key)}" ${p.key === data?.project?.key ? 'selected' : ''}>${esc(p.name)} (${p.running} running)</option>`).join('')}</select>` : ''}
-      <span class="chips map-layers" role="tablist"><button class="chip ${layer === 'agents' ? 'active' : ''}" data-map-layer="agents" role="tab" aria-selected="${layer === 'agents'}">Agents</button><button class="chip ${layer === 'bugs' ? 'active' : ''}" data-map-layer="bugs" role="tab" aria-selected="${layer === 'bugs'}" title="Where hunts found bugs, and the paths through the code they take">Bugs</button><button class="chip ${layer === 'speed' ? 'active' : ''}" data-map-layer="speed" role="tab" aria-selected="${layer === 'speed'}" title="Modules where speed matters: micro benchmarks for the Jira issues that change them">Speed</button></span>
-      ${layer === 'speed'
+      <span class="chips map-layers" role="tablist"><button class="chip ${layer === 'agents' ? 'active' : ''}" data-map-layer="agents" role="tab" aria-selected="${layer === 'agents'}">Agents</button><button class="chip ${layer === 'bugs' ? 'active' : ''}" data-map-layer="bugs" role="tab" aria-selected="${layer === 'bugs'}" title="Where hunts found bugs, and the paths through the code they take">Bugs</button><button class="chip ${layer === 'speed' ? 'active' : ''}" data-map-layer="speed" role="tab" aria-selected="${layer === 'speed'}" title="Modules where speed matters: micro benchmarks for the Jira issues that change them">Speed</button><button class="chip ${layer === 'design' ? 'active' : ''}" data-map-layer="design" role="tab" aria-selected="${layer === 'design'}" title="The code in layers, from the system in: its parts and the imports between them, an agent's changes and what uses them lit up">Design</button></span>
+      ${layer === 'design'
+        ? '<span class="map-legend"><span class="map-key design-changed"></span>changed by the agent <span class="map-key design-dependent"></span>uses what it changed <span class="map-key arrow"></span>uses (callers above)</span>'
+        : layer === 'speed'
         ? `<span class="map-legend"><span class="map-key watched"></span>benchmarked <span class="map-key slower"></span>last issue made it over ${data?.speed?.slowerPct ?? 5}% slower <span class="map-key faster"></span>faster</span>`
         : layer === 'bugs'
         ? '<span class="map-legend"><span class="map-key heat"></span>bugs (worst weigh most) and recent changes <span class="map-key arrow"></span>path a bug takes <span class="map-key cold"></span>no hunt has looked here</span>'
@@ -112,6 +140,10 @@ export function initCodeMap({ api, $, esc, agents, openAgent, openBugs, toast })
       <button class="small" data-map="close" title="Back (Esc)">Close</button>`;
     if (layer === 'bugs') return drawBugs();
     if (layer === 'speed') return drawSpeed();
+    if (layer === 'design') {
+      $('#map-agents').innerHTML = '';
+      return drawDesign({ data, box: $('#map-box'), warn: $('#map-warn'), esc, only: designOnly });
+    }
     const warn = (m?.links ?? []).filter((l) => l.kind !== 'near');
     $('#map-warn').innerHTML = warn.length ? `<ul>${warn.map(sentence).join('')}</ul>` : m?.agents.length ? '<p class="hint">No agents are on the same code.</p>' : '';
     const box = $('#map-box');
@@ -438,6 +470,17 @@ export function initCodeMap({ api, $, esc, agents, openAgent, openBugs, toast })
       const mod = e.target.closest('[data-map-mod]');
       if (mod?.dataset.mapMod) return (picked = picked?.module === mod.dataset.mapMod ? null : { module: mod.dataset.mapMod }), draw();
     }
+    if (layer === 'design') {
+      const at = e.target.closest('[data-design-at]');
+      if (at) return (designAt = at.dataset.designAt), load();
+      if (e.target.closest('[data-design-focus]')) return (designFocus = true), load();
+      if (e.target.closest('[data-design-only]')) return (designOnly = !designOnly), draw();
+      const code = e.target.closest('[data-design-code]');
+      if (code && data?.layer?.file && data.from) {
+        show(false);
+        return openCode(data.from.id, data.layer.file.path, Number(code.dataset.designCode) > 1 ? Number(code.dataset.designCode) : undefined);
+      }
+    }
     if (layer === 'speed') {
       const un = e.target.closest('[data-bench-unwatch]');
       if (un) return benchUnwatch(un.dataset.benchUnwatch);
@@ -460,10 +503,20 @@ export function initCodeMap({ api, $, esc, agents, openAgent, openBugs, toast })
     e.preventDefault();
     benchWatch(f);
   });
+  view.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && e.target.matches?.('[data-design-at]')) e.target.click();
+  });
   view.addEventListener('change', (e) => {
+    if (e.target.matches('[data-design-agent]')) {
+      designAgent = e.target.value || null;
+      designFocus = Boolean(designAgent);
+      return load();
+    }
     if (e.target.dataset.mapSet !== 'project') return;
     project = e.target.value;
     picked = null;
+    designAt = '';
+    designAgent = null;
     try {
       localStorage.setItem(SAVED, project);
     } catch {}
@@ -478,5 +531,17 @@ export function initCodeMap({ api, $, esc, agents, openAgent, openBugs, toast })
     resizeTimer = setTimeout(draw, 100);
   });
 
-  return { show, isOpen: () => open };
+  return {
+    show,
+    isOpen: () => open,
+    /** The Design view at where an agent's changes are, lit up. */
+    showDesign(agentId) {
+      layer = 'design';
+      designAgent = agentId;
+      designFocus = true;
+      project = null;
+      if (open) return load();
+      show(true);
+    },
+  };
 }

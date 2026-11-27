@@ -418,7 +418,8 @@ export function initCode({ api, esc, toast, $, agents, isOpen }) {
     for (const s of states.values()) for (const f of s.files.values()) if (isDirty(f)) return void e.preventDefault();
   });
 
-  async function open(id) {
+  /** Its files, and `path` open at `line` when given. */
+  async function open(id, { path = null, line } = {}) {
     agentId = id;
     const s = st();
     if (!editorsChecked && !document.body.classList.contains('remote')) {
@@ -440,6 +441,7 @@ export function initCode({ api, esc, toast, $, agents, isOpen }) {
         host.hidden = true;
       }
       say(agents.get(id)?.workdir ?? '');
+      if (path) await openFile(path, { line });
     } catch (err) {
       tree.innerHTML = `<p class="hint" style="padding:8px">${esc(err.message)}</p>`;
     }

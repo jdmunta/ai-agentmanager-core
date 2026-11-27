@@ -288,7 +288,7 @@ let groupsUi = null;
 $('#watch-btn').onclick = () => (mapUi.isOpen() && mapUi.show(false), watchUi.show(!watchUi.isOpen()));
 
 // Map: where each agent is in the code, and who is about to collide.
-const mapUi = initCodeMap({ api, $, esc, agents, toast: (m, ms, a) => toast(m, ms, a), openAgent: (id) => (showTab('agents'), select(id)), openBugs: () => bugsUi.open({ show: 'open' }) });
+const mapUi = initCodeMap({ api, $, esc, agents, toast: (m, ms, a) => toast(m, ms, a), openAgent: (id) => (showTab('agents'), select(id)), openBugs: () => bugsUi.open({ show: 'open' }), openCode: (id, path, line) => (showTab('agents'), select(id), term.openCode(id, { path, line })) });
 $('#map-btn').onclick = () => (watchUi.isOpen() && watchUi.show(false), mapUi.isOpen() || columns?.showPage(), mapUi.show(!mapUi.isOpen()));
 
 // The standup: each agent's news read aloud, stopping on the ones that need you.
@@ -2772,6 +2772,7 @@ function renderDetail() {
           <button type="button" data-act="more" aria-haspopup="menu" aria-expanded="${moreFor === a.id}" title="More for this agent: a new session, the desktop app, Debug, Security audit, Reverse engineer, MCP tools, Fork, Refresh, Keep, Delete">More ▾</button>
           <div class="menu" role="menu" ${moreFor === a.id ? '' : 'hidden'}>
             <button data-act="fresh" ${running || a.status === 'preparing' ? 'disabled' : ''} title="Start over with a new session ID (old ones are kept)">New session</button>
+            ${noRepo(a) ? '' : `<button data-act="design-map" ${a.workdir && a.status !== 'preparing' ? '' : 'disabled'} title="Map's Design view at the folder holding its changes: where they sit in the code, and what else uses what it changed">Where its changes sit</button>`}
             ${(a.engine ?? 'claude') === 'claude' && a.isolation !== 'container' && !a.movedTo && !REMOTE ? `<button data-act="desktop" ${a.sessionId && a.workdir && a.status !== 'preparing' ? '' : 'disabled'} title="Continue this conversation in the Claude desktop app. Its session here closes; Resume here later picks up what was said there">Open in Claude desktop</button>` : ''}
             <button data-act="debug" class="desk-only" ${a.workdir && a.status !== 'preparing' ? '' : 'disabled'} title="Debug with this agent: say what to debug (a failure, instability at scale, slowness under load). It investigates in its session and writes a report beside it: animated diagrams of the code path and data flow, findings and recommended fixes">Debug${a.specDocs?.debug ? ' <span class="count">report</span>' : ''}</button>
             <button data-act="security" class="desk-only" ${a.workdir && a.status !== 'preparing' ? '' : 'disabled'} title="Security audit with this agent: it maps where untrusted input comes in, follows it through the code, checks each finding a second time, and writes a report beside its session: the attack surface, findings by severity with evidence and fixes, and what was not covered. It changes no code until you ask for fixes">Security audit${a.specDocs?.security ? ' <span class="count">report</span>' : ''}</button>
@@ -3185,7 +3186,7 @@ const term = {
   frames: new Map(), // "<agent>:<n>" -> iframe
 
   // Code: the agent's files in an editor, in place of the terminal (like a browser tab).
-  openCode(id) {
+  openCode(id, at = {}) {
     history.replaceState(null, '', `#${id}/code`);
     liveView.close();
     $('#term-wrap').hidden = false;
@@ -3200,7 +3201,7 @@ const term = {
     $('#term-overlay').hidden = true;
     this.renderTabs();
     $('#term-title').textContent = agents.get(id)?.workdir ?? '';
-    codeUi.open(id);
+    codeUi.open(id, at);
   },
 
   openBrowser(id, kind) {
@@ -4429,6 +4430,8 @@ $('#detail-body').addEventListener('click', async (e) => {
       return proofUi.open(a.id);
     case 'timeline':
       return timelineUi.open(a.id);
+    case 'design-map':
+      return mapUi.showDesign(a.id);
     case 'auto-open':
       return autoUi.open(a.id);
     case 'accept-skip':

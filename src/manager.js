@@ -143,6 +143,7 @@ import { CONTAINER_ENGINES, claudeToken, containerName, containerRunning, engine
 import { conflictMessage, findConflicts, related, repoKey, summarize as summarizeConflicts } from './conflicts.js';
 import { answerMessage, loadQuestions, questionsPath, questionsPrompt } from './inbox.js';
 import { PROOF_FILE, proofBlock, proofFacts, proofPrompt } from './proof.js';
+import { LIMITS as LAYER_LIMITS, buildGraph, commonFolder, designFiles, layerView } from './layers.js';
 import { PRIVATE_MESSAGE, ideaPatch, keptPrivate, mustBeShareable } from './private.js';
 import { awaitsReview, readFirst } from './readfirst.js';
 import { traceOf } from './trace.js';
@@ -1092,6 +1093,85 @@ export class AgentManager extends EventEmitter {
       });
     }
     return out;
+  }
+
+  /**
+   * Design layers (layers.js) of a project's code, read from an agent's folder (the shared clone may
+   * have no files checked out): the boxes inside `at`, with the agent's changes and what depends on
+   * them marked when `agentId` is given. The graph is built again only when the folder changed.
+   */
+  async codeLayers(projectKey, { agentId = null, at = '' } = {}) {
+    // at null: where the agent's changes are (the folder holding them all).
+    const withCode = this.store.list().filter((a) => a.workdir && !NO_REPO.has(a.kind) && fs.existsSync(a.workdir));
+    const groups = new Map();
+    for (const a of withCode) {
+      const p = this.projectInfo(a);
+      if (!p) continue;
+      (groups.get(p.key) ?? groups.set(p.key, { key: p.key, name: p.name, agents: [] }).get(p.key)).agents.push(a);
+    }
+    const running = (g) => g.agents.filter((a) => this.runtimes.get(a.id)?.pty).length;
+    const projects = [...groups.values()].sort((x, y) => running(y) - running(x) || y.agents.length - x.agents.length);
+    const picked = agentId ? withCode.find((a) => a.id === agentId) : null;
+    const g = (picked && groups.get(this.projectInfo(picked)?.key)) || (projectKey && groups.get(projectKey)) || projects[0];
+    const list = projects.map((p) => ({ key: p.key, name: p.name, agents: p.agents.length, running: running(p) }));
+    if (!g) return { project: null, projects: list, agents: [], layer: null };
+    const agent = picked && g.agents.includes(picked) ? picked : null;
+    const from = agent ?? [...g.agents].sort((x, y) => Date.parse(y.activeAt ?? y.createdAt) - Date.parse(x.activeAt ?? x.createdAt))[0];
+    const dir = from.workdir;
+    if (agent) await this.updateChanges(agent);
+    const graph = await this.designGraph(dir);
+    const churn = {};
+    for (const c of await this.churn(dir)) for (const f of c) churn[f] = (churn[f] ?? 0) + 1;
+    const changed = agent ? Object.keys(this.changeSets.get(agent.id)?.files ?? {}) : [];
+    return {
+      project: { key: g.key, name: g.name },
+      projects: list,
+      agents: g.agents.map((a) => ({ id: a.id, name: a.name, changed: Object.keys(this.changeSets.get(a.id)?.files ?? {}).length })).sort((x, y) => y.changed - x.changed),
+      agent: agent?.id ?? null,
+      from: { id: from.id, name: from.name },
+      read: { files: Object.keys(graph.files).length, capped: graph.capped },
+      layer: layerView(graph, { at: at === null ? commonFolder(changed.filter((f) => graph.files[f])) : String(at).replace(/^\/+|\/+$/g, ''), changed, churn }),
+    };
+  }
+
+  /** The import graph of the code in a folder, kept until its commit or working files change. */
+  async designGraph(dir) {
+    this.designGraphs ??= new Map();
+    const opts = { cwd: dir, timeout: 30_000 };
+    const [head, status] = await Promise.all([git.run('git', ['rev-parse', 'HEAD'], opts).catch(() => ''), git.run('git', ['status', '--porcelain'], opts).catch(() => '')]);
+    const key = `${head}\n${status}`;
+    const hit = this.designGraphs.get(dir);
+    if (hit?.key === key) return hit.graph;
+    const listed = (await git.run('git', ['ls-files', '--cached', '--others', '--exclude-standard'], opts).catch(() => '')).split('\n').filter(Boolean);
+    const wanted = designFiles(listed);
+    const sources = [];
+    for (const p of wanted) {
+      let text = null;
+      try {
+        const full = path.join(dir, p);
+        if (fs.statSync(full).size <= LAYER_LIMITS.MAX_BYTES) text = fs.readFileSync(full, 'utf8');
+      } catch {}
+      sources.push({ path: p, text });
+    }
+    const readJson = (f) => {
+      try {
+        return JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'));
+      } catch {
+        return null;
+      }
+    };
+    const goModules = [];
+    for (const f of listed.filter((x) => /(^|\/)go\.mod$/.test(x) && !/(^|\/)(vendor|node_modules)\//.test(x)).slice(0, 50)) {
+      try {
+        const module = fs.readFileSync(path.join(dir, f), 'utf8').match(/^module\s+(\S+)/m)?.[1];
+        if (module) goModules.push({ dir: f.split('/').slice(0, -1).join('/'), module });
+      } catch {}
+    }
+    const graph = buildGraph(sources, { goModules, pkgJson: readJson('package.json') });
+    graph.capped = wanted.length >= LAYER_LIMITS.MAX_FILES;
+    this.designGraphs.set(dir, { key, graph });
+    if (this.designGraphs.size > 20) this.designGraphs.delete(this.designGraphs.keys().next().value);
+    return graph;
   }
 
   /**

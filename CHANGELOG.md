@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.77.0 (2026-11-27)
+
+- **Design layers.** Map's new **Design** view draws a project's code as nested boxes, from the outside in. See "Design layers" in the [README](README.md).
+  - **System:** the top-level parts, where the program starts, and what it talks to (PostgreSQL, Redis, AWS, HTTP APIs…, from the packages it imports).
+  - **One layer in at a click,** down to a file's functions and classes; the crumbs go back out. **Open the code**, or a function, opens the agent's Code tab at that line.
+  - **Arrows** are the imports between boxes, thicker for more, callers above what they use.
+  - **An agent's changes:** pick it under **Changes of**, or **More → Where its changes sit** on its page. What it changed is filled; code that uses what it changed, but that it did not touch, gets a yellow edge, and the arrows into its change turn yellow. In a busy layer only those show (**Show all** for the rest).
+  - From the code's imports (JavaScript and TypeScript, Python, Go, Java, Kotlin); no model is called. `GET /api/layers`.
+- **Code tab** can open a file at a line.
+
 ## 1.76.0 (2026-11-27)
 
 - **Timeline.** See [Timeline](README.md#timeline). **Timeline** on an agent's page, or `agentmgr timeline <agent>`, shows its work from its start to now as dated milestones in a thread, each dated when it closed:
