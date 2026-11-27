@@ -1,4 +1,4 @@
-// Map's Logical view: the project's components (what each piece of the system does, from any
+// Architecture's Logical view: the project's components (what each piece of the system does, from any
 // folders) and the links between them that imports don't show: HTTP routes called, live streams,
 // programs run, files read and written, outside services. Before Describe with AI the components
 // are the top-level folders; after it, named components, with the data each link carries and which
@@ -144,7 +144,7 @@ export function drawLogical({ data, box, warn, esc, describing = false, pick = n
     const linkLi = (e, other, dir) => `<li><button class="link" data-logical-edge="${esc(JSON.stringify([e.from, e.to]))}">${dir} ${esc(name(other))}</button> <span class="hint">${esc([e.data, e.found || (e.guessed ? 'guessed by the model' : '')].filter(Boolean).join(' · '))}</span></li>`;
     below = `<div class="design-panel logical-panel"><div class="design-panel-row"><b>${esc(b.name)}</b>${b.kind === 'external' ? ' <span class="hint">outside the code</span>' : ` <span class="hint">${plural(b.files, 'file')} · ${lines(b.lines)} lines${b.serves ? ` · serves ${plural(b.serves, 'route')}` : ''}</span>`}<span class="spacer"></span>${b.kind === 'component' ? changeBtn({ kind: 'box', id: b.id }) : ''}<button class="small" data-logical-close>Close</button></div>
       ${b.purpose ? `<p>${esc(b.purpose)}</p>` : ''}
-      ${b.members.length ? `<div><span class="hint">In it (open in the Design view):</span> <span class="logical-members">${b.members.map((m) => `<button class="link" data-logical-code="${esc(m)}"><code>${esc(m)}</code></button>`).join(' ')}</span></div>` : ''}
+      ${b.members.length ? `<div><span class="hint">In it (open in the Code view):</span> <span class="logical-members">${b.members.map((m) => `<button class="link" data-logical-code="${esc(m)}"><code>${esc(m)}</code></button>`).join(' ')}</span></div>` : ''}
       ${b.changed.length ? `<div><span class="design-tag changed">${b.changed.length} changed</span> <span class="hint">${esc(b.changed.slice(0, 8).join(', '))}${b.changed.length > 8 ? ', …' : ''}</span></div>` : ''}
       ${outs.length ? `<div><span class="hint">Uses</span><ul class="logical-links">${outs.map((e) => linkLi(e, e.to, '→')).join('')}</ul></div>` : ''}
       ${ins.length ? `<div><span class="hint">Used by</span><ul class="logical-links">${ins.map((e) => linkLi(e, e.from, '←')).join('')}</ul></div>` : ''}</div>`;

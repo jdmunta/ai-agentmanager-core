@@ -21,6 +21,7 @@ export const SHORTCUTS = [
     [['w'], 'Watch: agents side by side', 'watch'],
     [['p'], 'Play the standup', 'standup'],
     [['m'], 'Map: where agents are in the code', 'map'],
+    [['A'], "Architecture: the system's components, features and code layers", 'architecture'],
     [['i'], 'Jira: issues waiting for your review', 'issues'],
     [['o'], "Actions: what's asked of you in Slack and meetings", 'actions'],
     [['h'], 'Assistant', 'assistant'],
@@ -80,11 +81,11 @@ export const SHORTCUTS = [
 // A single key, as an event names it, to its action.
 export const SINGLE = {
   j: 'next', k: 'prev', Enter: 'terminal', t: 'terminal',
-  r: 'changes', s: 'start', X: 'stop', e: 'edit', n: 'new', a: 'ask', '/': 'filter', w: 'watch', p: 'standup', m: 'map', i: 'issues', o: 'actions', h: 'assistant', ',': 'settings', d: 'designs', g: 'reviews', v: 'value', Q: 'quality', l: 'news', c: 'plan', u: 'os', B: 'board', q: 'decide', z: 'usage', y: 'today', b: 'bugs', S: 'screen', T: 'machine', '?': 'help',
+  r: 'changes', s: 'start', X: 'stop', e: 'edit', n: 'new', a: 'ask', '/': 'filter', w: 'watch', p: 'standup', m: 'map', A: 'architecture', i: 'issues', o: 'actions', h: 'assistant', ',': 'settings', d: 'designs', g: 'reviews', v: 'value', Q: 'quality', l: 'news', c: 'plan', u: 'os', B: 'board', q: 'decide', z: 'usage', y: 'today', b: 'bugs', S: 'screen', T: 'machine', '?': 'help',
   1: 'tab:agents', 2: 'tab:inbox', 3: 'tab:backlog', 4: 'tab:land', 5: 'tab:built',
 };
 // While Watch is open: only what makes sense there.
-const ON_WATCH = new Set(['today', 'new', 'ask', 'watch', 'standup', 'map', 'issues', 'actions', 'assistant', 'settings', 'designs', 'reviews', 'value', 'quality', 'news', 'plan', 'os', 'board', 'decide', 'usage', 'bugs', 'screen', 'machine', 'help']);
+const ON_WATCH = new Set(['today', 'new', 'ask', 'watch', 'standup', 'map', 'architecture', 'issues', 'actions', 'assistant', 'settings', 'designs', 'reviews', 'value', 'quality', 'news', 'plan', 'os', 'board', 'decide', 'usage', 'bugs', 'screen', 'machine', 'help']);
 
 /** Typing somewhere: a field, an editor or a terminal (xterm types through a textarea). */
 const typing = (el) => Boolean(el?.closest?.('input, textarea, select, [contenteditable=""], [contenteditable="true"], .xterm, .cm-editor'));

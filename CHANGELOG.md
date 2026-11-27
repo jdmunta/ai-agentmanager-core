@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.83.0 (2026-11-27)
+
+- **Architecture** is its own button at the top, beside Map (`A`, or `#architecture`), with the **Logical** view and the **Code** view (what was Map's Design view). Map keeps Agents, Bugs and Speed. Each button opens on the view it was last on; an agent's **Where its changes sit** opens Architecture's Code view.
+
 ## 1.82.0 (2026-11-27)
 
 - **What an agent's changes touch,** in Map's Logical view. See "Logical view" in the [README](README.md). With an agent picked under **Changes of**, its code is compared with its code when it started (its changed files read from the base commit):
