@@ -127,9 +127,10 @@
             <input type="number" id="recent-days" min="1" max="3650" value="7" aria-label="Days"> days
             <span class="spacer"></span><span id="recent-hidden"></span>
             <select id="list-project" aria-label="Project" title="Show only one project's agents" hidden></select>
-            <select id="list-order" aria-label="Order" title="Open sessions are always on top: needing you, then working, then waiting for a prompt. Below them, Recently used: the agents created or worked in most recently first. Newest first: by creation date, the newest first. By project: grouped, projects with open sessions first.">
+            <select id="list-order" aria-label="Order" title="Open sessions are always on top: needing you, then working, then waiting for a prompt. Below them, Recently used: the agents created or worked in most recently first. Newest first: by creation date, the newest first. By priority: P0 first, open sessions first within each. By project: grouped, projects with open sessions first.">
               <option value="recent">Recently used</option>
               <option value="created">Newest first</option>
+              <option value="priority">By priority</option>
               <option value="project">By project</option>
             </select>
           </div>

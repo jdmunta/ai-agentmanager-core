@@ -293,6 +293,23 @@ test('three columns: the views at the left in groups, back in the top bar by the
   await until(`document.querySelector('#today-dialog.docked[open]')`, 'Today again');
   await js(`document.querySelector('#agent-list li[data-id="${id}"]').click()`);
   await until(`!document.querySelector('#today-dialog').open`, 'the agent in the pane');
+  // Map takes the same pane, the list beside it; a view or an agent picked takes it back.
+  const map = () => js(`(() => { const r = document.querySelector('#map-view').getBoundingClientRect(); const side = document.querySelector('.sidebar').getBoundingClientRect();
+    return { open: document.body.classList.contains('mapping'), list: side.width > 0, beside: Math.round(r.left) === Math.round(side.right), toRight: Math.round(r.right) === innerWidth }; })()`);
+  await js(`document.querySelector('#map-btn').click()`);
+  await until(`document.body.classList.contains('mapping')`, 'Map open');
+  assert.deepEqual(await map(), { open: true, list: true, beside: true, toRight: true });
+  await js(`document.querySelector('#today-btn').click()`);
+  await until(`document.querySelector('#today-dialog.docked[open]') && !document.body.classList.contains('mapping')`, 'Today instead of Map');
+  await js(`document.querySelector('#map-btn').click()`);
+  await until(`document.body.classList.contains('mapping') && !document.querySelector('#today-dialog').open`, 'Map instead of Today');
+  await js(`document.querySelector('#agent-list li[data-id="${id}"]').click()`);
+  await until(`!document.body.classList.contains('mapping')`, 'the agent instead of Map');
+  // Closed and opened again at once (its close event comes after): it stays in the pane.
+  await js(`document.querySelector('#today-btn').click(); document.querySelector('#today-dialog').close(); document.querySelector('#today-btn').click()`);
+  await sleep(200);
+  assert.deepEqual(await today(), { open: true, modal: false, beside: true, toRight: true, active: true });
+  await js(`document.querySelector('#today-dialog').close()`);
   // With the views in the top bar, or on a narrower window, a view opens over the page as before.
   await js(`document.querySelector('#nav-toggle').click()`);
   await js(`document.querySelector('#today-btn').click()`);
@@ -309,6 +326,23 @@ test('three columns: the views at the left in groups, back in the top bar by the
   await js(`location.hash = ''`);
   await reload();
   await until(`document.querySelectorAll('#agent-list li[data-id]').length === 3`, 'the agents listed again');
+});
+
+test('agent list by priority: P0 first, each with its priority shown, remembered', { skip }, async () => {
+  const ids = `[...document.querySelectorAll('#agent-list li[data-id]')].map((l) => l.dataset.id)`;
+  const before = await js(ids);
+  const [a, b, c] = before;
+  await api('PATCH', `/agents/${c}`, { priority: 0 });
+  await api('PATCH', `/agents/${a}`, { priority: 3 });
+  await js(`(() => { const s = document.querySelector('#list-order'); s.value = 'priority'; s.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+  await until(`JSON.stringify(${ids}) === ${JSON.stringify(JSON.stringify([c, b, a]))}`, 'P0, P2, P3', undefined, ids);
+  assert.deepEqual(await js(`[...document.querySelectorAll('#agent-list li[data-id] .line1 .prio')].map((p) => p.textContent)`), ['P0', 'P2', 'P3']);
+  await reload();
+  await until(`document.querySelector('#list-order').value === 'priority' && JSON.stringify(${ids}) === ${JSON.stringify(JSON.stringify([c, b, a]))}`, 'remembered');
+  await api('PATCH', `/agents/${c}`, { priority: 2 });
+  await api('PATCH', `/agents/${a}`, { priority: 2 });
+  await js(`(() => { const s = document.querySelector('#list-order'); s.value = 'recent'; s.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+  await until(`JSON.stringify(${ids}) === ${JSON.stringify(JSON.stringify(before))}`, 'Recently used again', undefined, ids);
 });
 
 test('split screen: split, load, type, follow sizes, keys, reload, close', { skip }, async () => {

@@ -133,7 +133,7 @@ const saveRecent = () => {
 };
 // How the agents list is ordered: recently used (the default) or newest first, one list each; or grouped by project.
 // In each, open sessions come first: needing you, working, then waiting for a prompt.
-const ORDERS = ['recent', 'created', 'project'];
+const ORDERS = ['recent', 'created', 'priority', 'project'];
 let listOrder = (() => {
   try {
     const v = localStorage.getItem('agentmgr.listOrder');
@@ -286,7 +286,7 @@ $('#watch-btn').onclick = () => (mapUi.isOpen() && mapUi.show(false), watchUi.sh
 
 // Map: where each agent is in the code, and who is about to collide.
 const mapUi = initCodeMap({ api, $, esc, agents, toast: (m, ms, a) => toast(m, ms, a), openAgent: (id) => (showTab('agents'), select(id)), openBugs: () => bugsUi.open({ show: 'open' }) });
-$('#map-btn').onclick = () => (watchUi.isOpen() && watchUi.show(false), mapUi.show(!mapUi.isOpen()));
+$('#map-btn').onclick = () => (watchUi.isOpen() && watchUi.show(false), mapUi.isOpen() || columns?.showPage(), mapUi.show(!mapUi.isOpen()));
 
 // The standup: each agent's news read aloud, stopping on the ones that need you.
 const standupUi = initStandup({
@@ -1263,7 +1263,7 @@ function agentItem(a, { project = false } = {}) {
   const idle = !isActive(a);
   const p = project && a.projectInfo && !['other', 'general', 'assistant'].includes(a.projectInfo.key) ? a.projectInfo : null;
   return `<li data-id="${a.id}" ${a.kind === 'general' || a.kind === 'assistant' ? '' : 'draggable="true" '}class="agent pr${a.priority ?? 2} ${a.id === selectedId ? 'selected' : ''} ${idle ? 'idle' : ''} ${a.runtime.running ? `running ${st}` : ''}">
-    <div class="line1">${prioChip(a.priority ?? 2)}${a.results?.outcome === 'blocked' ? '<span class="outcome-mark blocked" title="Blocked" aria-label="Blocked"></span>' : a.results?.outcome === 'done' ? '<span class="outcome-mark done" title="Done" aria-label="Done"></span>' : ''}<span class="name" title="${esc(describeTitle(a) || (a.kind === 'assistant' ? 'Finds new work and starts agents for it' : 'General session'))}">${esc(a.name)}</span>${flags(a)}<span class="pill ${st}">${pillText(st)}</span></div>
+    <div class="line1">${prioChip(a.priority ?? 2, { always: listOrder === 'priority' })}${a.results?.outcome === 'blocked' ? '<span class="outcome-mark blocked" title="Blocked" aria-label="Blocked"></span>' : a.results?.outcome === 'done' ? '<span class="outcome-mark done" title="Done" aria-label="Done"></span>' : ''}<span class="name" title="${esc(describeTitle(a) || (a.kind === 'assistant' ? 'Finds new work and starts agents for it' : 'General session'))}">${esc(a.name)}</span>${flags(a)}<span class="pill ${st}">${pillText(st)}</span></div>
     ${a.status === 'preparing' && a.progress ? `<div class="progress-line">${esc(progressText(a.progress))}</div>` : ''}
     <div class="meta">
       <span class="mono">${a.id}</span>
@@ -1335,11 +1335,13 @@ function projectGroups(list) {
   );
 }
 
-/** One list: open sessions first (needing you, working, waiting), then most recently used (Newest first: by creation). */
+/** One list: open sessions first (needing you, working, waiting), then most recently used (Newest first: by
+ *  creation). By priority: P0 first, and within each priority the same as Recently used. */
 const usedAt = (a) => a.activeAt ?? a.createdAt ?? '';
 function orderedAgents(list) {
   const at = listOrder === 'created' ? (a) => a.createdAt ?? '' : usedAt;
-  return [...list].sort((a, b) => rank(a) - rank(b) || at(b).localeCompare(at(a)));
+  const prio = listOrder === 'priority' ? (a) => a.priority ?? 2 : () => 0;
+  return [...list].sort((a, b) => prio(a) - prio(b) || rank(a) - rank(b) || at(b).localeCompare(at(a)));
 }
 
 /** The project picker: every project with agents, by name; a project that's gone falls back to all. */
@@ -5810,7 +5812,9 @@ columns = initColumns({
     }
   },
 });
-dock = initDock({ $, onDock: () => columns.showPage() });
+// Map takes the same pane in the three columns; a view or an agent picked there closes it.
+const closeMap = () => mapUi.isOpen() && mapUi.show(false);
+dock = initDock({ $, onDock: () => (columns.showPage(), closeMap()), onCloseAll: () => dock.columns() && closeMap() });
 
 boot();
 setInterval(renderDetail, 30_000); // keep "x ago" labels fresh

@@ -1,12 +1,13 @@
 // In the three-column layout a view opens in the pane at the right, beside the agent list, as a page
 // does in Claude's app, instead of over the page. Its dialog opens non-modal and docked there; the
 // view's own code is unchanged. On a narrower window, a phone, or with the views in the top bar,
-// they open over the page as before. Its expand button (f) also covers the agent list.
+// they open over the page as before. Its expand button (f) also covers the agent list. Map has its own
+// view, not a dialog; the CSS puts it in the same pane and onDock/onCloseAll close it.
 
 // The views' dialogs; each one's button in the nav is `<name>-btn`.
 const VIEWS = new Set(['today', 'glance', 'readfirst', 'assistant', 'board', 'reviews', 'designs', 'issues', 'bugs', 'actions', 'decide', 'plan', 'standup', 'spend', 'value', 'quality', 'news', 'mcp', 'os', 'machine', 'screen'].map((v) => `${v}-dialog`));
 
-export function initDock({ $, onDock }) {
+export function initDock({ $, onDock, onCloseAll }) {
   const wide = matchMedia('(min-width: 1100px)');
   const columns = () => wide.matches && !document.body.classList.contains('nav-top');
   const docked = () => [...document.querySelectorAll('dialog.docked[open]')];
@@ -24,13 +25,15 @@ export function initDock({ $, onDock }) {
   };
   for (const id of VIEWS) {
     const d = document.getElementById(id);
+    // The close event comes a moment after: a view opened again meanwhile keeps its place.
     d?.addEventListener('close', () => {
+      if (d.open) return;
       d.classList.remove('docked');
       buttonOf(d)?.classList.remove('active');
     });
   }
 
-  const closeAll = () => docked().forEach((d) => d.close());
+  const closeAll = () => (docked().forEach((d) => d.close()), onCloseAll?.());
   // Another view in the nav takes the pane (Watch and Map too); the view's own button still toggles it.
   $('#top-nav').addEventListener(
     'click',
