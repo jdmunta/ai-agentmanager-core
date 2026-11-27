@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.75.0 (2026-11-27)
+
+- **A more professional look.** See "Three columns" in the [README](README.md).
+  - **Three columns, as in Claude's app:** on a wide window the views are a column at the left, in groups (Work, Review, Plan, Insights, This computer) with their counts, beside the agent list and the agent's page. The button left of the logo puts them back in the top bar; each device remembers. Narrower windows and phones are unchanged.
+  - **An agent's actions:** the main ones in its bar (Open terminal, Close session, Open shell, Review changes, Edit); the rest under **More**, with Delete last and set apart.
+  - **Calmer colors and controls:** a softer palette with one indigo accent, light buttons with a thin border, a focus ring for the keyboard, one button size, a faint shadow on cards; the same in dark.
+  - **Top bar:** the name on one line with a logo mark, "Connected" for the connection, the views as quiet navigation, **+ New agents** the one button that stands out.
+  - **Fewer emoji:** Debug, Security audit, Reverse engineer and Keep have plain labels; Done and Blocked are small colored marks in the list and a colored label in Results. Open sessions have a green edge instead of a green background, and the list's counts stay on one line.
+
 ## 1.74.0 (2026-11-26)
 
 - **Skills kept up.** See [Skills kept up](README.md#skills-kept-up).

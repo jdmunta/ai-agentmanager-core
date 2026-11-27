@@ -1,6 +1,7 @@
 // The top bar's view buttons fit the window: the ones that don't fit move, in order, into a
 // "More" menu at the end of the row (as VS Code does with tabs). The buttons themselves move, so
 // their handlers, counts and shortcuts keep working; a count on a moved one shows as a dot on More.
+// On a wide window the same nav is the column at the left (its group names show); nothing moves then.
 
 export function initTopNav({ $ }) {
   const nav = $('#top-nav');
@@ -8,6 +9,8 @@ export function initTopNav({ $ }) {
   const btn = $('#top-more-btn');
   const menu = $('#top-more-menu');
   const order = [...nav.querySelectorAll(':scope > button')];
+  // The buttons and the group names between them, put back in this order.
+  const all = [...nav.children].filter((el) => el !== wrap);
   let fitting = false;
 
   const counted = (b) => [...b.querySelectorAll('.badge')].some((x) => x.textContent.trim()) || Boolean(b.querySelector('.assistant-dot:not([hidden])'));
@@ -17,7 +20,7 @@ export function initTopNav({ $ }) {
     fitting = true;
     observer.disconnect();
     // Everything back in the row, in order; then move the last ones out until the row fits.
-    for (const b of order) nav.insertBefore(b, wrap);
+    for (const el of all) nav.insertBefore(el, wrap);
     wrap.hidden = false;
     const moved = [];
     while (nav.scrollWidth > nav.clientWidth + 1) {
