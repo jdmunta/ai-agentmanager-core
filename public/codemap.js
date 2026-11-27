@@ -4,16 +4,32 @@
 // The Bugs view colours each folder by the bugs hunts found there (worst weigh most) and how much it
 // changed lately, draws the paths through the code those bugs take as arrows between folders, and
 // hatches the folders no hunt has looked at. Click a folder or an arrow for its bugs, or Hunt here.
-// The Design view (design.js) draws the code itself in layers, an agent's changes lit up; the
-// Logical view (logical.js), its components and the links between them that imports don't show.
+// Architecture, its own button at the top on the same pane: the Logical view (logical.js), the
+// system's components and the links between them that imports don't show, and the Code view
+// (design.js), the code itself in layers, an agent's changes lit up.
 
 import { drawDesign, partName } from './design.js';
 import { drawLogical } from './logical.js';
 
 const SAVED = 'agentmgr.mapProject';
 const LAYER = 'agentmgr.mapLayer';
+const ARCH = 'agentmgr.archLayer';
+// The views on Architecture; the rest are Map's.
+const archOf = (l) => l === 'logical' || l === 'design';
 const SEV = { critical: 'Critical', high: 'High', medium: 'Medium', low: 'Low' };
 const EVERY_MS = 8000;
+
+const VIEWS = {
+  map: [
+    ['agents', 'Agents'],
+    ['bugs', 'Bugs', 'Where hunts found bugs, and the paths through the code they take'],
+    ['speed', 'Speed', 'Modules where speed matters: micro benchmarks for the Jira issues that change them'],
+  ],
+  arch: [
+    ['logical', 'Logical', "The system's components and the links between them that imports don't show: HTTP routes called, programs run, files, outside services, and the data each carries"],
+    ['design', 'Code', 'The code in layers, from the system in: its parts and the imports between them, an agent\'s changes and what uses them lit up'],
+  ],
+};
 
 const hue = (id) => [...String(id)].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 360, 17);
 const initials = (name) => String(name).split(/[^a-z0-9]+/i).filter(Boolean).slice(0, 2).map((w) => w[0].toUpperCase()).join('') || '?';
@@ -70,6 +86,9 @@ export function initCodeMap({ api, $, esc, agents, openAgent, openBugs, openCode
   let timer = null;
   let project = null;
   let layer = 'agents';
+  // The view each of Map and Architecture was last on.
+  let mapLayer = 'agents';
+  let archLayer = 'logical';
   let picked = null; // in the Bugs and Speed views: { module } or { from, to }
   // The Design view: the layer shown (a folder or file, '' for the system), the agent whose changes
   // are lit up, and whether to go to where its changes are on the next load.
@@ -93,8 +112,23 @@ export function initCodeMap({ api, $, esc, agents, openAgent, openBugs, openCode
   let findingParts = false;
   try {
     project = localStorage.getItem(SAVED) || null;
-    layer = ['bugs', 'speed', 'design', 'logical'].includes(localStorage.getItem(LAYER)) ? localStorage.getItem(LAYER) : 'agents';
+    const saved = localStorage.getItem(LAYER);
+    if (['bugs', 'speed'].includes(saved)) mapLayer = saved;
+    archLayer = archOf(localStorage.getItem(ARCH)) ? localStorage.getItem(ARCH) : archOf(saved) ? saved : 'logical';
   } catch {}
+  layer = mapLayer;
+
+  /** Another view, kept for its button to come back to. */
+  function setLayer(l) {
+    if (layer !== l) (data = null), (logicalCompose = null);
+    layer = l;
+    picked = null;
+    if (archOf(l)) archLayer = l;
+    else mapLayer = l;
+    try {
+      localStorage.setItem(archOf(l) ? ARCH : LAYER, l);
+    } catch {}
+  }
 
   const nameOf = (id) => data?.map.agents.find((a) => a.id === id)?.name ?? agents.get(id)?.name ?? id;
   const color = (id) => `hsl(${hue(id)} 70% 55%)`;
@@ -350,9 +384,9 @@ export function initCodeMap({ api, $, esc, agents, openAgent, openBugs, openCode
     const m = data?.map;
     const projects = data?.projects ?? [];
     $('#map-bar').innerHTML = `
-      <b>Map</b>
+      <b>${archOf(layer) ? 'Architecture' : 'Map'}</b>
       ${projects.length ? `<select data-map-set="project" aria-label="Project">${projects.map((p) => `<option value="${esc(p.key)}" ${p.key === data?.project?.key ? 'selected' : ''}>${esc(p.name)} (${p.running} running)</option>`).join('')}</select>` : ''}
-      <span class="chips map-layers" role="tablist"><button class="chip ${layer === 'agents' ? 'active' : ''}" data-map-layer="agents" role="tab" aria-selected="${layer === 'agents'}">Agents</button><button class="chip ${layer === 'bugs' ? 'active' : ''}" data-map-layer="bugs" role="tab" aria-selected="${layer === 'bugs'}" title="Where hunts found bugs, and the paths through the code they take">Bugs</button><button class="chip ${layer === 'speed' ? 'active' : ''}" data-map-layer="speed" role="tab" aria-selected="${layer === 'speed'}" title="Modules where speed matters: micro benchmarks for the Jira issues that change them">Speed</button><button class="chip ${layer === 'design' ? 'active' : ''}" data-map-layer="design" role="tab" aria-selected="${layer === 'design'}" title="The code in layers, from the system in: its parts and the imports between them, an agent's changes and what uses them lit up">Design</button><button class="chip ${layer === 'logical' ? 'active' : ''}" data-map-layer="logical" role="tab" aria-selected="${layer === 'logical'}" title="The system's components and the links between them that imports don't show: HTTP routes called, programs run, files, outside services, and the data each carries">Logical</button></span>
+      <span class="chips map-layers" role="tablist">${(archOf(layer) ? VIEWS.arch : VIEWS.map).map(([id, name, title]) => `<button class="chip ${layer === id ? 'active' : ''}" data-map-layer="${id}" role="tab" aria-selected="${layer === id}"${title ? ` title="${title}"` : ''}>${name}</button>`).join('')}</span>
       ${layer === 'logical'
         ? '<span class="map-legend"><span class="map-key logical-http"></span>HTTP or live stream <span class="map-key logical-code"></span>code imports <span class="map-key logical-ext"></span>to the outside <span class="map-key logical-guessed"></span>guessed by the model</span>'
         : layer === 'design'
@@ -670,28 +704,27 @@ export function initCodeMap({ api, $, esc, agents, openAgent, openBugs, openCode
     load();
   }
 
-  function show(on) {
+  /** Open or close the pane; `which` ('map' or 'arch') goes to that button's last view. */
+  function show(on, which) {
+    if (on && which && (which === 'arch') !== archOf(layer)) setLayer(which === 'arch' ? archLayer : mapLayer);
     open = on;
     view.hidden = !on;
+    view.setAttribute('aria-label', archOf(layer) ? "Architecture: the system's components and its code in layers" : 'Map: where agents are in the code');
     document.body.classList.toggle('mapping', on);
-    $('#map-btn')?.classList.toggle('active', on);
+    $('#map-btn')?.classList.toggle('active', on && !archOf(layer));
+    $('#arch-btn')?.classList.toggle('active', on && archOf(layer));
     clearInterval(timer);
     if (on) {
-      history.replaceState(null, '', '#map');
+      history.replaceState(null, '', archOf(layer) ? '#architecture' : '#map');
       load();
       timer = setInterval(() => document.visibilityState === 'visible' && load(), EVERY_MS);
-    } else if (location.hash === '#map') history.replaceState(null, '', '#');
+    } else if (['#map', '#architecture'].includes(location.hash)) history.replaceState(null, '', '#');
   }
 
   view.addEventListener('click', (e) => {
     const lay = e.target.closest('[data-map-layer]');
     if (lay) {
-      if (layer !== lay.dataset.mapLayer) (data = null), (logicalCompose = null);
-      layer = lay.dataset.mapLayer;
-      picked = null;
-      try {
-        localStorage.setItem(LAYER, layer);
-      } catch {}
+      setLayer(lay.dataset.mapLayer);
       return load();
     }
     if (layer === 'bugs') {
@@ -723,13 +756,9 @@ export function initCodeMap({ api, $, esc, agents, openAgent, openBugs, openCode
     if (layer === 'logical') {
       const code = e.target.closest('[data-logical-code]');
       if (code) {
-        // A part of a component, opened in the Design view.
-        layer = 'design';
+        // A part of a component, opened in the Code view.
+        setLayer('design');
         designAt = code.dataset.logicalCode;
-        data = null;
-        try {
-          localStorage.setItem(LAYER, layer);
-        } catch {}
         return load();
       }
       if (e.target.closest('[data-logical-describe]') && !findingParts) return findComponents();
@@ -896,13 +925,16 @@ export function initCodeMap({ api, $, esc, agents, openAgent, openBugs, openCode
   return {
     show,
     isOpen: () => open,
-    /** The Design view at where an agent's changes are, lit up. */
+    /** Its button pressed: open on that view, or close when it is the one shown. */
+    toggle(which) {
+      show(!(open && (which === 'arch') === archOf(layer)), which);
+    },
+    /** The Code view at where an agent's changes are, lit up. */
     showDesign(agentId) {
-      layer = 'design';
+      setLayer('design');
       designAgent = agentId;
       designFocus = true;
       project = null;
-      if (open) return load();
       show(true);
     },
   };

@@ -1,4 +1,4 @@
-// Map's Design view: one layer of the code as boxes in rows, callers above what they use, with an
+// Architecture's Code view: one layer of the code as boxes in rows, callers above what they use, with an
 // arrow for each pair of boxes whose files import one another (thicker for more imports). Click a
 // folder to go one layer in, a file for its functions and classes; the crumbs go back out. An
 // agent's changes are lit up, and the boxes with code that uses them, which it did not change.

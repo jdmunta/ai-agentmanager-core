@@ -182,7 +182,7 @@ test('the top bar fits the window: the view buttons that do not fit go into More
       menuOk: document.querySelector('#menu-btn').getBoundingClientRect().right <= innerWidth,
     })`);
     assert.ok(r.page <= w, `${w}px: the page is ${r.page}px wide`);
-    assert.equal(r.inRow + r.inMore, 24, `${w}px: every view button is in the row or in More`);
+    assert.equal(r.inRow + r.inMore, 25, `${w}px: every view button is in the row or in More`);
     assert.ok(r.newOk && r.menuOk, `${w}px: New agents and the account menu are on screen`);
     if (w >= 1024) assert.ok(r.inRow >= 3, `${w}px: only ${r.inRow} buttons in the row`);
   }
@@ -234,7 +234,7 @@ test('three columns: the views at the left in groups, back in the top bar by the
   const nav = () => js(`(() => { const n = document.querySelector('#top-nav'); const r = n.getBoundingClientRect(); const l = document.querySelector('.layout').getBoundingClientRect();
     return { fixed: getComputedStyle(n).position === 'fixed', left: Math.round(r.left), list: Math.round(l.left) >= Math.round(r.right), groups: [...n.querySelectorAll('.nav-group')].filter((g) => g.offsetHeight).map((g) => g.textContent),
       buttons: n.querySelectorAll(':scope > button').length, more: !document.querySelector('#top-more').hidden }; })()`);
-  assert.deepEqual(await nav(), { fixed: true, left: 0, list: true, groups: ['Work', 'Review', 'Plan', 'Insights', 'This computer'], buttons: 24, more: false });
+  assert.deepEqual(await nav(), { fixed: true, left: 0, list: true, groups: ['Work', 'Review', 'Plan', 'Insights', 'This computer'], buttons: 25, more: false });
   // The button by the logo puts them in the top bar (with More), remembered; and back.
   await js(`document.querySelector('#nav-toggle').click()`);
   await sleep(300);
@@ -569,6 +569,14 @@ test('design layers: from an agent to where its changes sit, out to the system, 
   await until(`document.body.classList.contains('mapping') && ${crumbs} === 'System › src › lib' && document.querySelector('#map-box .design-box.changed')`, 'Map at where its changes are', 15_000, crumbs);
   assert.equal(await js(`document.querySelector('[data-design-agent]').value`), x.id, 'its changes picked');
   assert.equal(await js(`document.querySelector('[data-map-layer="design"]').classList.contains('active')`), true);
+  // Architecture is its own button: Logical and Code there, Map keeps Agents, Bugs and Speed.
+  const chips = `[...document.querySelectorAll('#map-bar [data-map-layer]')].map((c) => c.dataset.mapLayer).join()`;
+  assert.equal(await js(chips), 'logical,design');
+  assert.equal(await js(`document.querySelector('#arch-btn').classList.contains('active') && !document.querySelector('#map-btn').classList.contains('active') && location.hash`), '#architecture');
+  await js(`document.querySelector('#map-btn').click()`);
+  await until(`${chips} === 'agents,bugs,speed' && document.querySelector('#map-btn').classList.contains('active') && location.hash === '#map'`, 'Map on its own views');
+  await js(`document.querySelector('#arch-btn').click()`);
+  await until(`${crumbs} === 'System › src › lib' && document.querySelector('[data-map-layer="design"].active')`, 'back on Architecture where it was');
   // Out to the system: web uses what it changed, with an arrow to src.
   await js(`document.querySelector('#map-warn [data-design-at=""]').click()`);
   await until(`${crumbs} === 'System' && document.querySelector('#map-box .design-box.dependent[data-design-at="web"]')`, 'the system, web lit up as using it');
