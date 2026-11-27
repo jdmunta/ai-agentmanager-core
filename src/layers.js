@@ -76,8 +76,8 @@ function packageOf(spec, lang) {
   return null;
 }
 
-const langOf = (f) => (JS.test(f) ? 'js' : PY.test(f) ? 'py' : GO.test(f) ? 'go' : JVM.test(f) ? 'jvm' : null);
-const dirOf = (f) => f.split('/').slice(0, -1).join('/');
+export const langOf = (f) => (JS.test(f) ? 'js' : PY.test(f) ? 'py' : GO.test(f) ? 'go' : JVM.test(f) ? 'jvm' : null);
+export const dirOf = (f) => f.split('/').slice(0, -1).join('/');
 function norm(p) {
   const out = [];
   for (const part of p.split('/')) {
@@ -303,10 +303,10 @@ export function commonFolder(files) {
 
 const under = (file, box) => box === '' || file === box || file.startsWith(`${box}/`);
 /** The file or folder an import lands on, as a path ("a/b" for a package folder). */
-const targetOf = (imp) => imp.file ?? imp.dir;
+export const targetOf = (imp) => imp.file ?? imp.dir;
 
 /** The boxes one level inside `at`: its folders (a chain of single folders as one) and files. */
-function childrenOf(paths, at) {
+export function childrenOf(paths, at) {
   const prefix = at ? `${at}/` : '';
   const kids = new Map();
   for (const f of paths) {

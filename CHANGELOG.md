@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.80.0 (2026-11-27)
+
+- **Logical view.** Map's new **Logical** tab draws a project as components and the links between them that imports don't show. See "Logical view" in the [README](README.md).
+  - **Found in the code:** a web page or CLI calling the server's HTTP routes (the URL paths in the code matched to the routes, with a router's mount), live streams, programs run (git, gh, docker…), hosts called, services used (PostgreSQL, Redis, SQLite…), and files read and written. Routes for Express-style servers, Flask and FastAPI, and Go's net/http, gin, echo and chi. Tests are left out.
+  - **Find components with AI:** one model call on names, definitions and the links found (not the code) groups the files into named components by what they do, from any folder, and names the data on each link and which way it moves. Links only the model sees are dotted, marked guessed. Kept for the project; before it, the components are the top-level folders.
+  - **Rows:** callers on top, servers next, the rest, then the outside. Only the main links are drawn (**Show all** for the rest). Tap a box for its files (each opens in the Design view) and links, an arrow for its data, routes and where in the code. **Changes of** lights up an agent's changes.
+  - `GET /api/logical`, `POST /api/logical/describe`.
+
 ## 1.79.0 (2026-11-27)
 
 - **Change the design** in Map's Design view. See "Design layers" in the [README](README.md). On a folder layer:

@@ -4,9 +4,11 @@
 // The Bugs view colours each folder by the bugs hunts found there (worst weigh most) and how much it
 // changed lately, draws the paths through the code those bugs take as arrows between folders, and
 // hatches the folders no hunt has looked at. Click a folder or an arrow for its bugs, or Hunt here.
-// The Design view (design.js) draws the code itself in layers, an agent's changes lit up.
+// The Design view (design.js) draws the code itself in layers, an agent's changes lit up; the
+// Logical view (logical.js), its components and the links between them that imports don't show.
 
 import { drawDesign, partName } from './design.js';
+import { drawLogical } from './logical.js';
 
 const SAVED = 'agentmgr.mapProject';
 const LAYER = 'agentmgr.mapLayer';
@@ -83,9 +85,13 @@ export function initCodeMap({ api, $, esc, agents, openAgent, openBugs, openCode
   let designPanel = null;
   let dragging = null;
   let dragged = false;
+  // The Logical view: the box or arrow tapped ({ kind: 'box', id } or { kind: 'edge', from, to }).
+  let logicalPick = null;
+  let logicalAll = false;
+  let findingParts = false;
   try {
     project = localStorage.getItem(SAVED) || null;
-    layer = ['bugs', 'speed', 'design'].includes(localStorage.getItem(LAYER)) ? localStorage.getItem(LAYER) : 'agents';
+    layer = ['bugs', 'speed', 'design', 'logical'].includes(localStorage.getItem(LAYER)) ? localStorage.getItem(LAYER) : 'agents';
   } catch {}
 
   const nameOf = (id) => data?.map.agents.find((a) => a.id === id)?.name ?? agents.get(id)?.name ?? id;
@@ -93,6 +99,7 @@ export function initCodeMap({ api, $, esc, agents, openAgent, openBugs, openCode
 
   async function load() {
     if (layer === 'design') return loadDesign();
+    if (layer === 'logical') return loadLogical();
     try {
       const q = new URLSearchParams({ ...(project ? { project } : {}), ...(layer !== 'agents' ? { layer } : {}) });
       data = await api('GET', `/codemap${q.size ? `?${q}` : ''}`);
@@ -126,6 +133,33 @@ export function initCodeMap({ api, $, esc, agents, openAgent, openBugs, openCode
     // stays), and not while writing in the panel or dragging.
     if ((designPanel || dragging) && $('#map-box').childElementCount) return;
     if (JSON.stringify(data) !== before || !$('#map-box').childElementCount) draw();
+  }
+
+  async function loadLogical() {
+    const before = JSON.stringify(data);
+    try {
+      const q = new URLSearchParams({ ...(project ? { project } : {}), ...(designAgent ? { agent: designAgent } : {}) });
+      data = await api('GET', `/logical${q.size ? `?${q}` : ''}`);
+      if (data.project && data.project.key !== project) project = data.project.key;
+      designAgent = data.agent;
+    } catch (e) {
+      toast?.(e.message, 5000);
+    }
+    if (JSON.stringify(data) !== before || !$('#map-box').childElementCount) draw();
+  }
+
+  /** The components found by a model; the view waits for it (a minute or two). */
+  async function findComponents() {
+    findingParts = true;
+    draw();
+    try {
+      data = await api('POST', '/logical/describe', { project, ...(designAgent ? { agent: designAgent } : {}) });
+      logicalPick = null;
+    } catch (e) {
+      toast?.(e.message, 6000);
+    }
+    findingParts = false;
+    draw();
   }
 
   /** The layer described by a model; the view waits for it (a minute or so). */
@@ -279,8 +313,10 @@ export function initCodeMap({ api, $, esc, agents, openAgent, openBugs, openCode
     $('#map-bar').innerHTML = `
       <b>Map</b>
       ${projects.length ? `<select data-map-set="project" aria-label="Project">${projects.map((p) => `<option value="${esc(p.key)}" ${p.key === data?.project?.key ? 'selected' : ''}>${esc(p.name)} (${p.running} running)</option>`).join('')}</select>` : ''}
-      <span class="chips map-layers" role="tablist"><button class="chip ${layer === 'agents' ? 'active' : ''}" data-map-layer="agents" role="tab" aria-selected="${layer === 'agents'}">Agents</button><button class="chip ${layer === 'bugs' ? 'active' : ''}" data-map-layer="bugs" role="tab" aria-selected="${layer === 'bugs'}" title="Where hunts found bugs, and the paths through the code they take">Bugs</button><button class="chip ${layer === 'speed' ? 'active' : ''}" data-map-layer="speed" role="tab" aria-selected="${layer === 'speed'}" title="Modules where speed matters: micro benchmarks for the Jira issues that change them">Speed</button><button class="chip ${layer === 'design' ? 'active' : ''}" data-map-layer="design" role="tab" aria-selected="${layer === 'design'}" title="The code in layers, from the system in: its parts and the imports between them, an agent's changes and what uses them lit up">Design</button></span>
-      ${layer === 'design'
+      <span class="chips map-layers" role="tablist"><button class="chip ${layer === 'agents' ? 'active' : ''}" data-map-layer="agents" role="tab" aria-selected="${layer === 'agents'}">Agents</button><button class="chip ${layer === 'bugs' ? 'active' : ''}" data-map-layer="bugs" role="tab" aria-selected="${layer === 'bugs'}" title="Where hunts found bugs, and the paths through the code they take">Bugs</button><button class="chip ${layer === 'speed' ? 'active' : ''}" data-map-layer="speed" role="tab" aria-selected="${layer === 'speed'}" title="Modules where speed matters: micro benchmarks for the Jira issues that change them">Speed</button><button class="chip ${layer === 'design' ? 'active' : ''}" data-map-layer="design" role="tab" aria-selected="${layer === 'design'}" title="The code in layers, from the system in: its parts and the imports between them, an agent's changes and what uses them lit up">Design</button><button class="chip ${layer === 'logical' ? 'active' : ''}" data-map-layer="logical" role="tab" aria-selected="${layer === 'logical'}" title="The system's components and the links between them that imports don't show: HTTP routes called, programs run, files, outside services, and the data each carries">Logical</button></span>
+      ${layer === 'logical'
+        ? '<span class="map-legend"><span class="map-key logical-http"></span>HTTP or live stream <span class="map-key logical-code"></span>code imports <span class="map-key logical-ext"></span>to the outside <span class="map-key logical-guessed"></span>guessed by the model</span>'
+        : layer === 'design'
         ? '<span class="map-legend"><span class="map-key design-changed"></span>changed by the agent <span class="map-key design-dependent"></span>uses what it changed <span class="map-key arrow"></span>uses (callers above)</span>'
         : layer === 'speed'
         ? `<span class="map-legend"><span class="map-key watched"></span>benchmarked <span class="map-key slower"></span>last issue made it over ${data?.speed?.slowerPct ?? 5}% slower <span class="map-key faster"></span>faster</span>`
@@ -292,6 +328,11 @@ export function initCodeMap({ api, $, esc, agents, openAgent, openBugs, openCode
       <button class="small" data-map="close" title="Back (Esc)">Close</button>`;
     if (layer === 'bugs') return drawBugs();
     if (layer === 'speed') return drawSpeed();
+    if (layer === 'logical') {
+      $('#map-agents').innerHTML = '';
+      if (data && !('view' in data)) return;
+      return drawLogical({ data, box: $('#map-box'), warn: $('#map-warn'), esc, describing: findingParts, pick: logicalPick, all: logicalAll });
+    }
     if (layer === 'design') {
       $('#map-agents').innerHTML = '';
       drawDesign({ data, box: $('#map-box'), warn: $('#map-warn'), esc, only: designOnly, describing, edit: designEdit, panel: designPanel });
@@ -604,6 +645,7 @@ export function initCodeMap({ api, $, esc, agents, openAgent, openBugs, openCode
   view.addEventListener('click', (e) => {
     const lay = e.target.closest('[data-map-layer]');
     if (lay) {
+      if (layer !== lay.dataset.mapLayer) data = null;
       layer = lay.dataset.mapLayer;
       picked = null;
       try {
@@ -637,6 +679,29 @@ export function initCodeMap({ api, $, esc, agents, openAgent, openBugs, openCode
         return openCode(data.from.id, data.layer.file.path, Number(code.dataset.designCode) > 1 ? Number(code.dataset.designCode) : undefined);
       }
     }
+    if (layer === 'logical') {
+      const code = e.target.closest('[data-logical-code]');
+      if (code) {
+        // A part of a component, opened in the Design view.
+        layer = 'design';
+        designAt = code.dataset.logicalCode;
+        data = null;
+        try {
+          localStorage.setItem(LAYER, layer);
+        } catch {}
+        return load();
+      }
+      if (e.target.closest('[data-logical-describe]') && !findingParts) return findComponents();
+      if (e.target.closest('[data-logical-close]')) return (logicalPick = null), draw();
+      if (e.target.closest('[data-logical-all]')) return (logicalAll = !logicalAll), draw();
+      const edge = e.target.closest('[data-logical-edge]');
+      if (edge) {
+        const [from, to] = JSON.parse(edge.dataset.logicalEdge);
+        return (logicalPick = logicalPick?.kind === 'edge' && logicalPick.from === from && logicalPick.to === to ? null : { kind: 'edge', from, to }), draw();
+      }
+      const b = e.target.closest('[data-logical-box]');
+      if (b) return (logicalPick = logicalPick?.kind === 'box' && logicalPick.id === b.dataset.logicalBox ? null : { kind: 'box', id: b.dataset.logicalBox }), draw();
+    }
     if (layer === 'speed') {
       const un = e.target.closest('[data-bench-unwatch]');
       if (un) return benchUnwatch(un.dataset.benchUnwatch);
@@ -669,7 +734,7 @@ export function initCodeMap({ api, $, esc, agents, openAgent, openBugs, openCode
     benchWatch(f);
   });
   view.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && e.target.matches?.('[data-design-at], [data-design-box]')) e.target.click();
+    if (e.key === 'Enter' && e.target.matches?.('[data-design-at], [data-design-box], [data-logical-box]')) e.target.click();
   });
   view.addEventListener('input', (e) => {
     if (e.target.matches('[data-design-text]') && designPanel) designPanel.text = e.target.value;
@@ -708,6 +773,10 @@ export function initCodeMap({ api, $, esc, agents, openAgent, openBugs, openCode
   view.addEventListener('pointerup', endDrag);
   view.addEventListener('pointercancel', endDrag);
   view.addEventListener('change', (e) => {
+    if (e.target.matches('[data-logical-agent]')) {
+      designAgent = e.target.value || null;
+      return load();
+    }
     if (e.target.matches('[data-design-agent]')) {
       designAgent = e.target.value || null;
       designFocus = Boolean(designAgent);
@@ -722,6 +791,7 @@ export function initCodeMap({ api, $, esc, agents, openAgent, openBugs, openCode
     designEdit = null;
     designEdits.clear();
     designPanel = null;
+    logicalPick = null;
     try {
       localStorage.setItem(SAVED, project);
     } catch {}
@@ -732,6 +802,7 @@ export function initCodeMap({ api, $, esc, agents, openAgent, openBugs, openCode
     // Escape closes the panel, then lets go of a tapped box, then the map.
     if (layer === 'design' && designPanel) return (designPanel = null), draw();
     if (layer === 'design' && designEdit?.pick) return (designEdit.pick = null), draw();
+    if (layer === 'logical' && logicalPick) return (logicalPick = null), draw();
     show(false);
   });
   let resizeTimer = null;

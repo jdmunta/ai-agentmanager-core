@@ -1457,6 +1457,8 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
   // ?layer=bugs adds where the bug hunts found bugs: heat per folder, and the paths through the code.
   // Design layers (layers.js): the project's code as nested boxes, with an agent's changes lit up.
   api.get('/layers', wrap((req) => manager.codeLayers(req.query.project ? String(req.query.project) : null, { agentId: req.query.agent ? String(req.query.agent) : null, at: req.query.focus ? null : req.query.at ? String(req.query.at) : '' })));
+  api.get('/logical', wrap((req) => manager.logicalLayer(req.query.project ? String(req.query.project) : null, { agentId: req.query.agent ? String(req.query.agent) : null })));
+  api.post('/logical/describe', wrap((req) => manager.describeLogical(req.body?.project ? String(req.body.project) : null, { agentId: req.body?.agent ? String(req.body.agent) : null })));
   api.post('/layers/describe', wrap((req) => manager.describeLayer(req.body?.project ? String(req.body.project) : null, { agentId: req.body?.agent ? String(req.body.agent) : null, at: req.body?.at ? String(req.body.at) : '' })));
   // Changes drawn on a layer, as a request to an agent: preview gives its text; sent, it is kept and its progress shown.
   const layerArgs = (b) => [b?.project ? String(b.project) : null, { agentId: b?.agent ? String(b.agent) : null, at: b?.at ? String(b.at) : '', to: b?.to ? String(b.to) : null }];
