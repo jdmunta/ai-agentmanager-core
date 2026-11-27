@@ -573,6 +573,11 @@ test('design layers: from an agent to where its changes sit, out to the system, 
   await js(`document.querySelector('#map-warn [data-design-at=""]').click()`);
   await until(`${crumbs} === 'System' && document.querySelector('#map-box .design-box.dependent[data-design-at="web"]')`, 'the system, web lit up as using it');
   assert.equal(await js(`document.querySelectorAll('#map-box .design-arrow.risk').length`), 1, 'the arrow from web to what changed');
+  // Described by a model: a summary and a line on each box.
+  await js(`document.querySelector('[data-design-describe]').click()`);
+  await until(`document.querySelector('#map-warn .design-summary') && document.querySelectorAll('#map-box .design-purpose').length === 2`, 'the layer described', 30_000);
+  assert.match(await js(`document.querySelector('#map-warn .design-summary').textContent`), /Fake summary of the whole repository/);
+  assert.equal(await js(`document.querySelector('[data-design-describe]').textContent`), 'Describe again');
   // Into web, then its file, then the code.
   await js(`document.querySelector('#map-box [data-design-at="web"]').click()`);
   await until(`document.querySelector('#map-box [data-design-at="web/app.js"]')`, 'inside web');

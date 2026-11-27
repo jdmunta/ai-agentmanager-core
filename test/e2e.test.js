@@ -1720,6 +1720,19 @@ test('design layers: the code in nested boxes from an agent\'s folder, its chang
   const plain = (await call('GET', `/layers?project=${encodeURIComponent(at.project.key)}`)).body;
   assert.equal(plain.agent, null);
   assert.equal(plain.layer.counts.changed, 0);
+  assert.equal(plain.notes, null, 'not described yet');
+  // Described by a model: a summary and a line on each box, kept for the project.
+  const d = await call('POST', '/layers/describe', { agent: a.id, at: '' });
+  assert.equal(d.status, 200, JSON.stringify(d.body));
+  assert.match(d.body.notes.summary, /^Fake summary of the whole repository/);
+  assert.equal(d.body.notes.stale, false);
+  assert.deepEqual(d.body.layer.boxes.map((b) => [b.id, b.purpose]).sort(), [['src/lib', 'Handles lib'], ['web', 'Handles web']]);
+  assert.equal((await call('GET', `/layers?project=${encodeURIComponent(at.project.key)}`)).body.layer.boxes.find((b) => b.id === 'web').purpose, 'Handles web', 'kept for everyone');
+  // A new top-level folder: the notes are older than what is there.
+  fs.mkdirSync(path.join(v.workdir, 'api'));
+  fs.writeFileSync(path.join(v.workdir, 'api', 'x.js'), 'export const y = 1;\n');
+  assert.equal((await call('GET', `/layers?agent=${a.id}`)).body.notes.stale, true);
+  assert.equal((await call('POST', '/layers/describe', { project: 'no-such-project-anywhere', at: 'nowhere' })).status, 400);
   await call('DELETE', `/agents/${a.id}`);
 });
 

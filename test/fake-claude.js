@@ -113,6 +113,14 @@ if (args.includes('--input-format') && args.includes('stream-json')) {
     }
     // The AI judge: JSON verdicts (see src/judge.js).
     const json = (o) => process.stdout.write(JSON.stringify(o), () => process.exit(0));
+    if (input.startsWith('Describe the design of one layer of a code repository')) {
+      // Design layers: a line on each entry; a busy folder's entries in three groups, in order.
+      const ids = [...input.matchAll(/^- (\S+) \((?:file|folder)/gm)].map((m) => m[1]);
+      const purposes = Object.fromEntries(ids.map((id) => [id, `Handles ${id.split('/').pop()}`]));
+      const third = Math.ceil(ids.length / 3);
+      const groups = input.includes('"groups": [{"name"') ? ['Entry points', 'Core', 'Helpers'].map((name, i) => ({ name, purpose: `The ${name.toLowerCase()}`, members: ids.slice(i * third, (i + 1) * third) })) : [];
+      return json({ summary: `Fake summary of ${input.match(/^Project: .*Layer: (.*)\.$/m)?.[1]}`, purposes: { ...purposes, 'not/there.js': 'ignored' }, groups });
+    }
     if (input.startsWith('Write a support runbook')) {
       // Runbooks: Markdown, not JSON, naming what it was given; "#norunbook" in the facts gives no runbook.
       if (input.includes('#norunbook')) return process.stdout.write('Sorry.', () => process.exit(0));

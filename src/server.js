@@ -1457,6 +1457,7 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
   // ?layer=bugs adds where the bug hunts found bugs: heat per folder, and the paths through the code.
   // Design layers (layers.js): the project's code as nested boxes, with an agent's changes lit up.
   api.get('/layers', wrap((req) => manager.codeLayers(req.query.project ? String(req.query.project) : null, { agentId: req.query.agent ? String(req.query.agent) : null, at: req.query.focus ? null : req.query.at ? String(req.query.at) : '' })));
+  api.post('/layers/describe', wrap((req) => manager.describeLayer(req.body?.project ? String(req.body.project) : null, { agentId: req.body?.agent ? String(req.body.agent) : null, at: req.body?.at ? String(req.body.at) : '' })));
   api.get('/codemap', wrap((req) => manager.codeMap(req.query.project ? String(req.query.project) : null, { bugs: req.query.layer === 'bugs' ? { findings: hunts.findings, hunts: hunts.hunts } : null, speed: req.query.layer === 'speed' ? benches : null })));
   // Modules to benchmark, and what their benchmarks found (benchmarks.js).
   api.post('/benchmodules', wrap((req) => benches.watch(req.body ?? {})));
