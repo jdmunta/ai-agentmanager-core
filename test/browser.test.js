@@ -621,14 +621,26 @@ test('design layers: from an agent to where its changes sit, out to the system, 
   // The Logical view: the folders and their links, then components found by a model; a box, an arrow, a part opened in the Design view.
   await js(`document.querySelector('[data-map-layer="logical"]').click()`);
   await until(`document.querySelector('#map-box [data-logical-box="c:web"]') && document.querySelector('#map-box [data-logical-box="c:src-lib"].changed')`, 'the folders as components, its change lit up');
+  // A route the web page calls, to follow as a feature.
+  fs.writeFileSync(path.join(a.workdir, 'src', 'server.js'), "import express from 'express';\nimport { fmt } from './lib/fmt.js';\nconst app = express();\napp.get('/money', (q, r) => r.send(fmt(1)));\n");
+  fs.writeFileSync(path.join(a.workdir, 'web', 'page.js'), "export function pay() {\n  return fetch('/money');\n}\n");
   await js(`document.querySelector('[data-logical-describe]').click()`);
   await until(`document.querySelector('#map-box [data-logical-box="c:pages"]') && /Fake system/.test(document.querySelector('#map-warn .design-summary')?.textContent)`, 'components found', 30_000);
   await js(`document.querySelector('#map-box [data-logical-box="c:pages"]').click()`);
   await until(`document.querySelector('#map-warn .logical-panel')`, 'what is in Pages');
-  assert.match(await js(`document.querySelector('#map-warn .logical-panel').textContent`), /Pages[\s\S]*What people see[\s\S]*web[\s\S]*Uses[\s\S]*Core formatted money · imports \(1\)/);
+  assert.match(await js(`document.querySelector('#map-warn .logical-panel').textContent`), /Pages[\s\S]*What people see[\s\S]*web[\s\S]*Uses[\s\S]*Core formatted money · HTTP: 1 route; imports \(1\)/);
   await js(`[...document.querySelectorAll('#map-box [data-logical-edge]')].find((h) => h.dataset.logicalEdge === JSON.stringify(['c:pages', 'c:core'])).dispatchEvent(new MouseEvent('click', { bubbles: true }))`);
-  await until(`document.querySelector('#map-warn .logical-panel')?.textContent.includes('The code shows: imports (1)')`, 'the link from Pages to Core');
+  await until(`document.querySelector('#map-warn .logical-panel')?.textContent.includes('The code shows: HTTP: 1 route; imports (1)')`, 'the link from Pages to Core');
   assert.match(await js(`document.querySelector('#map-warn .logical-panel').textContent`), /formatted money \(Core → Pages; named by the model\)/);
+  // Follow a feature: who calls it, the code it goes through, the components on its path lit.
+  await js(`document.querySelector('[data-logical-close]').click()`);
+  await js(`(() => { const s = document.querySelector('[data-logical-feature]'); s.value = 'money'; s.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+  await until(`document.querySelector('#map-warn .logical-flow')`, 'the feature followed');
+  assert.match(await js(`document.querySelector('#map-warn .logical-flow').textContent`), /money[\s\S]*Called from[\s\S]*web\/page\.js pay\(\)[\s\S]*GET \/money[\s\S]*src\/server\.js GET \/money[\s\S]*src\/lib\/fmt\.js fmt\(\)/);
+  assert.equal(await js(`document.querySelectorAll('#map-box .logical-arrow.follow').length`), 1, 'the hop from Pages to Core');
+  assert.equal(await js(`document.querySelector('#map-box [data-logical-box="c:core"]').classList.contains('on-path')`), true);
+  await js(`document.querySelector('[data-logical-unfollow]').click()`);
+  await until(`!document.querySelector('#map-warn .logical-flow')`, 'no longer followed');
   await js(`document.querySelector('[data-logical-box="c:pages"]').click()`);
   await until(`document.querySelector('#map-warn [data-logical-code="web/app.js"]')`, 'Pages again, its file');
   await js(`document.querySelector('#map-warn [data-logical-code="web/app.js"]').click()`);

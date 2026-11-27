@@ -145,6 +145,7 @@ import { answerMessage, loadQuestions, questionsPath, questionsPrompt } from './
 import { PROOF_FILE, proofBlock, proofFacts, proofPrompt } from './proof.js';
 import { LIMITS as LAYER_LIMITS, buildGraph, changeDone, changeWords, commonFolder, describePrompt, designFiles, folderEntries, layerView, notesFrom, partContext, requestPrompt, resolveChanges } from './layers.js';
 import { LOGICAL_HEAD, addLinks, logicalNotesFrom, logicalPrompt, logicalSig, logicalView } from './logical.js';
+import { addFlows, featureFlow, featureLines, featureList } from './flows.js';
 import { PRIVATE_MESSAGE, ideaPatch, keptPrivate, mustBeShareable } from './private.js';
 import { awaitsReview, readFirst } from './readfirst.js';
 import { traceOf } from './trace.js';
@@ -1270,7 +1271,7 @@ export class AgentManager extends EventEmitter {
    * that imports don't show (HTTP routes called, programs run, files, outside services), the data
    * each carries once a model has named it, an agent's changes lit up.
    */
-  async logicalLayer(projectKey, { agentId = null } = {}) {
+  async logicalLayer(projectKey, { agentId = null, feature = null } = {}) {
     const { g, list, agent, from } = this.designSource(projectKey, agentId);
     if (!g) return { project: null, projects: list, agents: [], view: null };
     if (agent) await this.updateChanges(agent);
@@ -1286,7 +1287,7 @@ export class AgentManager extends EventEmitter {
       read: { files: Object.keys(graph.files).length, capped: graph.capped },
       describe: this.config.design?.ai !== false,
       notes: saved ? { summary: saved.summary, at: saved.at, by: saved.by, stale: saved.sig !== logicalSig(graph) } : null,
-      view: logicalView(graph, { notes: saved, changed }),
+      view: logicalView(graph, { notes: saved, changed, features: featureList(graph), flow: feature ? (compOf) => featureFlow(graph, feature, { compOf }) : null }),
     };
   }
 
@@ -1295,7 +1296,7 @@ export class AgentManager extends EventEmitter {
    * names of its parts, what they define and the links the code shows, not the code), with what
    * data each link carries. Kept for the project until asked again.
    */
-  async describeLogical(projectKey, { agentId = null } = {}) {
+  async describeLogical(projectKey, { agentId = null, feature = null } = {}) {
     if (this.config.design?.ai === false) throw Object.assign(new Error('Describing the design is turned off ("design": { "ai": false } in config.json)'), { status: 400 });
     const { g, from } = this.designSource(projectKey, agentId);
     if (!g) throw Object.assign(new Error('No project with its code on this computer'), { status: 400 });
@@ -1305,9 +1306,9 @@ export class AgentManager extends EventEmitter {
     const key = `${LOGICAL_HEAD}\n${g.key}`;
     if (!this.describing.has(key)) {
       const writer = this.writerFor(from);
-      const run = this.oneShot(from, logicalPrompt(graph, { project: g.name }), { ...writer, timeoutMs: 300_000 })
+      const run = this.oneShot(from, logicalPrompt(graph, { project: g.name, features: featureLines(graph) }), { ...writer, timeoutMs: 300_000 })
         .then((text) => {
-          const notes = logicalNotesFrom(parseJsonReply(text), graph);
+          const notes = logicalNotesFrom(parseJsonReply(text), graph, { featureKeys: featureList(graph).map((f) => f.key) });
           if (!notes.components.length) throw new Error('The model gave no components');
           this.store.data.logicalNotes ??= {};
           this.store.data.logicalNotes[g.key] = { ...notes, sig: logicalSig(graph), at: now(), by: [writer.engine.label, writer.model].filter(Boolean).join(' · ') };
@@ -1317,7 +1318,7 @@ export class AgentManager extends EventEmitter {
       this.describing.set(key, run);
     }
     await this.describing.get(key);
-    return this.logicalLayer(g.key, { agentId });
+    return this.logicalLayer(g.key, { agentId, feature });
   }
 
   /** The import graph of the code in a folder, kept until its commit or working files change. */
@@ -1353,7 +1354,7 @@ export class AgentManager extends EventEmitter {
         if (module) goModules.push({ dir: f.split('/').slice(0, -1).join('/'), module });
       } catch {}
     }
-    const graph = addLinks(buildGraph(sources, { goModules, pkgJson: readJson('package.json') }), sources);
+    const graph = addFlows(addLinks(buildGraph(sources, { goModules, pkgJson: readJson('package.json') }), sources), sources);
     graph.capped = wanted.length >= LAYER_LIMITS.MAX_FILES;
     this.designGraphs.set(dir, { key, graph });
     if (this.designGraphs.size > 20) this.designGraphs.delete(this.designGraphs.keys().next().value);

@@ -1791,6 +1791,17 @@ test('design layers: the code in nested boxes from an agent\'s folder, its chang
   assert.deepEqual([e(found.body.view, 'c:pages', 'c:core')?.data, e(found.body.view, 'c:pages', 'c:core')?.flow, e(found.body.view, 'c:pages', 'c:core')?.guessed], ['formatted money', 'from', true]);
   assert.equal(e(found.body.view, 'c:pages', 'x:svc:PostgreSQL')?.data, 'orders');
   assert.equal((await call('GET', `/logical?project=${encodeURIComponent(at.project.key)}`)).body.view.described, true, 'kept for everyone');
+  // A feature followed: a route, who calls it, the functions it goes through.
+  fs.writeFileSync(path.join(v.workdir, 'api', 'server.js'), "import express from 'express';\nimport { fmt } from '../src/lib/fmt.js';\nconst app = express();\napp.get('/money', (q, r) => r.send(fmt(1)));\n");
+  fs.writeFileSync(path.join(v.workdir, 'web', 'page.js'), "export function pay() {\n  return fetch('/money');\n}\n");
+  const fl = (await call('GET', `/logical?agent=${a.id}&feature=money`)).body.view;
+  assert.deepEqual(fl.features.map((f) => f.key), ['money']);
+  assert.deepEqual(fl.flow.routes, ['GET /money']);
+  // Both files came after the components were found: not placed yet.
+  assert.deepEqual(fl.flow.callers.map((c) => `${c.file} ${c.name} ${c.comp}`), ['web/page.js pay c:not-placed-yet']);
+  assert.deepEqual(fl.flow.steps.map((st) => `${st.file} ${st.name}`), ['api/server.js GET /money', 'src/lib/fmt.js fmt']);
+  assert.deepEqual(fl.flow.hops, [['c:not-placed-yet', 'c:core']]);
+  assert.equal((await call('GET', `/logical?agent=${a.id}&feature=nope`)).body.view.flow, null);
   await call('DELETE', `/agents/${a.id}`);
 });
 

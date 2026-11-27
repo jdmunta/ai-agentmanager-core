@@ -18,6 +18,7 @@ import { passEnv, plist, serviceIsOurs, unit } from '../src/service.js';
 import { stripChrome } from '../src/judge.js';
 import { asksFromLines, buildTimeline, timelineMarkdown } from '../src/timeline.js';
 import { GROUP_OVER, buildGraph, changeDone, changeWords, commonFolder, describePrompt, designFiles, folderEntries, importSpecs, layerView, notesFrom, partContext, rankOf, requestPrompt, resolveChanges, serviceOf, symbolsOf } from '../src/layers.js';
+import { addFlows, callsIn, featureFlow, featureLines, featureList, routeKey, serviceNames } from '../src/flows.js';
 import { addLinks, httpLinks, logicalNotesFrom, logicalPrompt, logicalSig, logicalView, pathPattern } from '../src/logical.js';
 import { focusBoxes, layout } from '../public/design.js';
 import claude from '../src/engines/claude.js';
@@ -8135,4 +8136,53 @@ test('logical view: routes and the calls to them in JavaScript, Python and Go; p
   const guess = de('c:shop-ui', 'x:run:git');
   assert.ok(guess?.guessed && guess.data === 'commit ids', 'a flow the code does not show is kept, marked guessed');
   assert.equal(d.described, true);
+});
+
+test('features as flows: routes grouped by their main part, traced through the calls by name to what they do outside, with who calls them', () => {
+  const sources = Object.entries({
+    'web/app.js': "export async function list() {\n  return (await fetch(`/api/items${q}`)).json();\n}\nexport async function add(x) {\n  await fetch('/api/items', { method: 'POST', body: x });\n}\nexport function show(id) {\n  return fetch(`/api/items/${id}/stock`).then((r) => [r].join(','));\n}\n",
+    'server/main.js': "import express from 'express';\nimport { listItems, saveItem } from './items.js';\nconst app = express();\nconst api = express.Router();\napi.get('/items', (q, r) => r.json(listItems()));\napi.post('/items', (q, r) => {\n  saveItem(q.body);\n  r.end();\n});\napi.get('/items/:id/stock', (q, r) => r.json(stock.count(q.params.id)));\napp.use('/api', api);\n",
+    'server/items.js': "import pg from 'pg';\nimport fs from 'node:fs';\nimport { join } from './util.js';\nconst pool = new pg.Pool();\nexport function listItems() {\n  return pool.query('select * from items');\n}\nexport function saveItem(x) {\n  fs.writeFileSync('last.json', join([x]));\n  return audit(x);\n}\nfunction audit(x) {\n  return x;\n}\n",
+    'server/util.js': "export function join(xs) {\n  return xs.join(',');\n}\n",
+    'server/stock.js': "import { execFile } from 'node:child_process';\nexport function count(id) {\n  return execFile('git', ['log', id]);\n}\n",
+    'cli.py': "import sqlite3\nimport redis\nr = redis.Redis()\n\ndef main():\n    save()\n\ndef save():\n    sqlite3.connect('x.db')\n    r.lpush('q', 1)\n\nif __name__ == '__main__':\n    main()\n",
+  }).map(([p, text]) => ({ path: p, text }));
+  const graph = addFlows(addLinks(buildGraph(sources), sources), sources);
+  assert.deepEqual(['/api/agents/*/timeline', '/api/items', '/items/*/stock', '/v1/users/*', '/'].map((p) => routeKey(p)), ['timeline', 'items', 'stock', 'users', '/']);
+  assert.deepEqual(callsIn('a.b(); [1].join(); x.y.z(); f(g())').map((c) => `${c.recv}.${c.name}`), ['a.b', 'y.z', 'null.f', 'null.g'], 'calls on values are not followed');
+  assert.deepEqual(serviceNames('server/items.js', sources[2].text), { pg: 'PostgreSQL', pool: 'PostgreSQL' });
+  assert.deepEqual(serviceNames('cli.py', sources[5].text), { sqlite3: 'SQLite', redis: 'Redis', r: 'Redis' });
+  // A route's handler ends at its closing parenthesis.
+  const routes = graph.files['server/main.js'].links.routes;
+  assert.deepEqual(routes.map((r) => [r.path, r.line, r.end]), [['/api/items', 5, 5], ['/api/items', 6, 9], ['/api/items/*/stock', 10, 10]]);
+  assert.deepEqual(featureList(graph).map((f) => [f.key, f.routes.length]), [['items', 2], ['stock', 1], ['start:cli.py', 0]]);
+
+  const comp = (f) => `c:${f.split('/')[0]}`;
+  const items = featureFlow(graph, 'items', { compOf: comp });
+  assert.deepEqual(items.routes, ['GET /api/items', 'POST /api/items']);
+  assert.deepEqual(items.callers.map((c) => `${c.file} ${c.name}`), ['web/app.js list', 'web/app.js add'], 'a path with a query string after it is still a call');
+  const steps = items.steps.map((s) => `${s.depth} ${s.file} ${s.name}${s.does ? ` (${s.does})` : ''}`);
+  assert.deepEqual(steps, ['0 server/main.js GET /api/items', '0 server/main.js POST /api/items', '1 server/items.js listItems (uses PostgreSQL)', '1 server/items.js saveItem (writes files)', '2 server/util.js join', '2 server/items.js audit']);
+  assert.deepEqual(items.outside, { runs: [], hosts: [], services: ['PostgreSQL'], reads: 0, writes: 1 });
+  assert.deepEqual(items.comps, ['c:web', 'c:server']);
+  assert.deepEqual(items.hops, [['c:web', 'c:server']]);
+  // Called on something: followed only into the file named like it.
+  const stock = featureFlow(graph, 'stock', { compOf: comp });
+  assert.deepEqual(stock.steps.map((s) => `${s.file} ${s.name} ${s.does}`), ['server/main.js GET /api/items/*/stock ', 'server/stock.js count runs git']);
+  assert.deepEqual(stock.callers.map((c) => c.name), ['show']);
+  // Where the program starts: from main, through what it calls, to the services each function uses.
+  const start = featureFlow(graph, 'start:cli.py', { compOf: () => 'c:cli' });
+  assert.deepEqual(start.steps.map((s) => `${s.name} ${s.does}`), ['main ', 'save uses SQLite, Redis']);
+  assert.equal(featureFlow(graph, 'nope'), null);
+
+  // On the view: each step's work outside as a hop to its box; the model's names for the features.
+  const v = logicalView(graph, { notes: { features: { items: { name: 'Item list', what: 'See and add items' } } }, features: featureList(graph), flow: (compOf) => featureFlow(graph, 'items', { compOf }) });
+  assert.deepEqual(v.features.map((f) => f.name), ['Item list', 'stock', 'Starts: cli.py']);
+  assert.deepEqual([v.flow.name, v.flow.what], ['Item list', 'See and add items']);
+  assert.deepEqual(v.flow.hops, [['c:web', 'c:server'], ['c:server', 'x:svc:PostgreSQL'], ['c:server', 'x:files']]);
+  // The model's reply names the features listed, and only those.
+  const prompt = logicalPrompt(graph, { project: 'shop', features: featureLines(graph) });
+  assert.match(prompt, /- items: 2 routes, e\.g\. GET \/api\/items, POST \/api\/items\n- stock: 1 route, e\.g\. GET \/api\/items\/\*\/stock\n- start:cli\.py: where the program starts/);
+  const notes = logicalNotesFrom({ components: [{ name: 'All', members: ['cli.py'] }], features: [{ key: 'items', name: 'Item list', what: 'See them' }, { key: 'made-up', name: 'X' }] }, graph, { featureKeys: featureList(graph).map((f) => f.key) });
+  assert.deepEqual(notes.features, { items: { name: 'Item list', what: 'See them' } });
 });
