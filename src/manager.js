@@ -143,7 +143,7 @@ import { CONTAINER_ENGINES, claudeToken, containerName, containerRunning, engine
 import { conflictMessage, findConflicts, related, repoKey, summarize as summarizeConflicts } from './conflicts.js';
 import { answerMessage, loadQuestions, questionsPath, questionsPrompt } from './inbox.js';
 import { PROOF_FILE, proofBlock, proofFacts, proofPrompt } from './proof.js';
-import { LIMITS as LAYER_LIMITS, buildGraph, commonFolder, describePrompt, designFiles, folderEntries, layerView, notesFrom } from './layers.js';
+import { LIMITS as LAYER_LIMITS, buildGraph, changeDone, changeWords, commonFolder, describePrompt, designFiles, folderEntries, layerView, notesFrom, partContext, requestPrompt, resolveChanges } from './layers.js';
 import { PRIVATE_MESSAGE, ideaPatch, keptPrivate, mustBeShareable } from './private.js';
 import { awaitsReview, readFirst } from './readfirst.js';
 import { traceOf } from './trace.js';
@@ -1144,7 +1144,91 @@ export class AgentManager extends EventEmitter {
       describe: this.config.design?.ai !== false,
       notes: saved ? { summary: saved.summary, at: saved.at, by: saved.by, stale: saved.sig !== folderEntries(graph, folder).sig } : null,
       layer,
+      requests: layer.kind === 'folder' ? await this.designRequestsAt(g.key, spot, { from, layer }) : [],
     };
+  }
+
+  /**
+   * The design changes asked of agents at this layer, newest first, each change checked against
+   * the asked agent's code now. With that agent's code shown, the arrows since the request too.
+   */
+  async designRequestsAt(projectKey, at, { from, layer }) {
+    const mine = (this.store.data.designRequests ?? []).filter((r) => r.project === projectKey && r.at === at && !r.dismissed).slice(-3).reverse();
+    const out = [];
+    for (const r of mine) {
+      const agent = this.store.get(r.agent.id);
+      const graph = agent?.workdir && fs.existsSync(agent.workdir) ? await this.designGraph(agent.workdir) : null;
+      const changes = r.changes.map((c) => ({ kind: c.kind, from: c.from.id, to: c.to?.id ?? null, words: changeWords(c), done: graph ? changeDone(graph, c, r.changes) : null }));
+      const key = (e) => `${e.from}\n${e.to}`;
+      const before = new Set(r.edgesBefore.map(key));
+      const now = new Set(layer.edges.map(key));
+      out.push({
+        id: r.id,
+        when: r.when,
+        agent: { id: r.agent.id, name: agent?.name ?? r.agent.name, here: Boolean(graph) },
+        changes,
+        done: changes.filter((c) => c.done).length,
+        // Arrows that came or went since the request, when the code shown is that agent's.
+        since: from.id === r.agent.id ? { added: layer.edges.filter((e) => !before.has(key(e))).map(({ from: a, to: b }) => ({ from: a, to: b })), gone: r.edgesBefore.filter((e) => !now.has(key(e))) } : null,
+      });
+    }
+    return out;
+  }
+
+  /**
+   * Design changes drawn in the Design view, made a request to an agent: previewed (the text), or
+   * sent (`text` as edited, else as written) to `to` (default: the agent whose code is shown) and
+   * kept, so the view can show what of it the code now does.
+   */
+  async designRequest(projectKey, { agentId = null, at = '', changes, to = null, text = null, preview = false } = {}) {
+    const { g, from } = this.designSource(projectKey, agentId);
+    if (!g) throw Object.assign(new Error('No project with its code on this computer'), { status: 400 });
+    const spot = String(at ?? '').replace(/^\/+|\/+$/g, '');
+    const graph = await this.designGraph(from.workdir);
+    const notes = this.store.data.designNotes?.[`${g.key}\n${spot.split('#')[0]}`] ?? null;
+    const resolved = resolveChanges(graph, { at: spot, notes, changes });
+    const group = spot.includes('#') ? layerView(graph, { at: spot, notes }).group?.name ?? null : null;
+    const written = requestPrompt(graph, { project: g.name, at: spot, group, changes: resolved });
+    if (preview) return { text: written, changes: resolved.map(changeWords) };
+    const target = to ? g.agents.find((a) => a.id === to) : from;
+    if (!target) throw Object.assign(new Error('Pick an agent of this project to send it to'), { status: 400 });
+    const body = String(text ?? '').trim() || written;
+    this.tell(target.id, body, { source: 'design' });
+    // The arrows of this layer in the asked agent's code now, to show what came or went since.
+    const theirs = target.workdir && fs.existsSync(target.workdir) ? await this.designGraph(target.workdir) : graph;
+    const r = { id: crypto.randomUUID().slice(0, 8), project: g.key, at: spot, when: now(), agent: { id: target.id, name: target.name }, changes: resolved, edgesBefore: layerView(theirs, { at: spot, notes }).edges.map(({ from: a, to: b }) => ({ from: a, to: b })) };
+    this.store.data.designRequests = [...(this.store.data.designRequests ?? []), r].slice(-100);
+    this.store.save();
+    return { request: { id: r.id }, agent: { id: target.id, name: target.name } };
+  }
+
+  /** A design request put away: no longer shown. */
+  dismissDesignRequest(id) {
+    const r = (this.store.data.designRequests ?? []).find((x) => x.id === id);
+    if (!r) throw Object.assign(new Error('No such design request'), { status: 404 });
+    r.dismissed = now();
+    this.store.save();
+    return { ok: true };
+  }
+
+  /**
+   * Jump in at a box of the Design view: ask an agent about it, or start Debug there, with what the
+   * box holds, what it uses and what uses it.
+   */
+  async designAsk(projectKey, { agentId = null, at = '', id, to = null, kind = 'ask', text = '' } = {}) {
+    const { g, from } = this.designSource(projectKey, agentId);
+    if (!g) throw Object.assign(new Error('No project with its code on this computer'), { status: 400 });
+    const words = String(text ?? '').trim();
+    if (words.length < 3) throw Object.assign(new Error(kind === 'debug' ? 'Say what to debug' : 'Say what to ask'), { status: 400 });
+    const target = to ? g.agents.find((a) => a.id === to) : from;
+    if (!target) throw Object.assign(new Error('Pick an agent of this project'), { status: 400 });
+    const spot = String(at ?? '').replace(/^\/+|\/+$/g, '');
+    const graph = await this.designGraph(from.workdir);
+    const notes = this.store.data.designNotes?.[`${g.key}\n${spot.split('#')[0]}`] ?? null;
+    const ctx = partContext(graph, { at: spot, notes, id: String(id ?? spot) });
+    if (kind === 'debug') this.debug(target.id, { question: `${words} (In ${ctx.text})`.slice(0, 2000) });
+    else this.tell(target.id, `${words}\n\n(Asked from the Design view, about ${ctx.text})`, { source: 'design' });
+    return { agent: { id: target.id, name: target.name } };
   }
 
   /**

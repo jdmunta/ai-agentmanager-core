@@ -21,6 +21,8 @@ const stripNoise = (s) =>
   String(s ?? '')
     .replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '')
     .replace(/<(command-[\w-]+|local-command-[\w-]+)>[\s\S]*?<\/\1>/g, '')
+    // A long message is pasted into the session: its words, not the wrapper.
+    .replace(/<\/?pasted_content\b[^>]*>/g, '')
     .trim();
 const EDITS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
 const PR_URL = /https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+/g;
@@ -162,7 +164,10 @@ export function buildTimeline(agent, { asks = [], commits = [], busy = false } =
     // Busy alone isn't enough: a session resumed redraws its screen with nothing asked.
     const open = i === sorted.length - 1 && busy && !a.ended;
     const title = first ? '' : clip(firstLine(a.text), 200);
-    const changed = a.files.length || per[i].length || a.prs.length;
+    // What it edited with its tools, and what its commits changed (shell commands write files too);
+    // only the repository's files, not the agent's brief and notes kept elsewhere.
+    const files = [...new Set([...a.files.map(rel).filter((f) => !f.startsWith('/')), ...per[i].flatMap((c) => c.paths ?? [])])];
+    const changed = files.length || per[i].length || a.prs.length;
     if (!changed && !open && !first) {
       if (!talk) nodes.push((talk = { kind: 'talk', at: null, asks: [] }));
       talk.asks.push({ at: a.endAt ?? a.at, title, reply: clip(firstLine(a.reply), 300) });
@@ -178,8 +183,7 @@ export function buildTimeline(agent, { asks = [], commits = [], busy = false } =
       at: open ? null : (a.endAt ?? a.at),
       title,
       reply: clip(firstLine(a.reply), 300),
-      // What it edited with its tools, and what its commits changed (shell commands write files too).
-      files: [...new Set([...a.files.map(rel), ...per[i].flatMap((c) => c.paths ?? [])])],
+      files,
       commits: per[i].map((c) => ({ sha: c.sha.slice(0, 7), at: c.at, subject: clip(c.subject, 160), files: c.files })),
     });
   });

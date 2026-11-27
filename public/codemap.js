@@ -6,7 +6,7 @@
 // hatches the folders no hunt has looked at. Click a folder or an arrow for its bugs, or Hunt here.
 // The Design view (design.js) draws the code itself in layers, an agent's changes lit up.
 
-import { drawDesign } from './design.js';
+import { drawDesign, partName } from './design.js';
 
 const SAVED = 'agentmgr.mapProject';
 const LAYER = 'agentmgr.mapLayer';
@@ -76,6 +76,13 @@ export function initCodeMap({ api, $, esc, agents, openAgent, openBugs, openCode
   let designFocus = false;
   let describing = false;
   let designOnly = true; // with an agent picked: only its changes and what uses them, in a busy layer
+  // Changing the design: { at, mode, changes, pick }, each layer's kept while away from it; the
+  // panel under the head (asking about a box, or the request written); a box being dragged.
+  let designEdit = null;
+  const designEdits = new Map();
+  let designPanel = null;
+  let dragging = null;
+  let dragged = false;
   try {
     project = localStorage.getItem(SAVED) || null;
     layer = ['bugs', 'speed', 'design'].includes(localStorage.getItem(LAYER)) ? localStorage.getItem(LAYER) : 'agents';
@@ -108,7 +115,16 @@ export function initCodeMap({ api, $, esc, agents, openAgent, openBugs, openCode
     } catch (e) {
       toast?.(e.message, 5000);
     }
-    // The refresh every few seconds draws again only when something changed (a picker left open stays).
+    // Another layer: its own changes drawn, if any; a panel about this one goes.
+    if (designEdit && designEdit.at !== designAt) {
+      if (designEdit.changes.length) designEdits.set(designEdit.at, designEdit);
+      designEdit = designEdits.get(designAt) ?? null;
+      designPanel = null;
+    }
+    if (designPanel?.at !== undefined && designPanel.at !== designAt) designPanel = null;
+    // The refresh every few seconds draws again only when something changed (a picker left open
+    // stays), and not while writing in the panel or dragging.
+    if ((designPanel || dragging) && $('#map-box').childElementCount) return;
     if (JSON.stringify(data) !== before || !$('#map-box').childElementCount) draw();
   }
 
@@ -124,6 +140,127 @@ export function initCodeMap({ api, $, esc, agents, openAgent, openBugs, openCode
     }
     describing = false;
     draw();
+  }
+
+  // ---------------------------------------------------------------- changing the design
+
+  const boxKind = (id) => (String(id).startsWith('new:') ? 'new' : data?.layer?.boxes?.find((b) => b.id === id)?.kind);
+  const boxName = (id) => (String(id).startsWith('new:') ? id.slice(4) : data?.layer?.boxes?.find((b) => b.id === id)?.name ?? id);
+
+  /** A change drawn from one box to another, as the mode says. */
+  function addChange(from, to) {
+    const e = designEdit;
+    if (!e || from === to) return;
+    const same = (c) => c.from === from && c.to === to;
+    if (e.mode === 'move') {
+      if (!['file', 'folder'].includes(boxKind(from)) || boxKind(to) !== 'folder') return toast?.('Only a file or folder moves, and only into a folder', 4000);
+      e.changes = [...e.changes.filter((c) => !(c.kind === 'move' && c.from === from)), { kind: 'move', from, to }];
+    } else if (e.changes.some((c) => c.kind === 'unuse' && same(c))) e.changes = e.changes.filter((c) => !(c.kind === 'unuse' && same(c)));
+    else if (data.layer.edges.some(same)) return toast?.(`${boxName(from)} uses ${boxName(to)} already`, 3000);
+    else if (!e.changes.some((c) => c.kind === 'use' && same(c))) e.changes = [...e.changes, { kind: 'use', from, to }];
+    draw();
+  }
+
+  /** A box tapped while changing: the first is where the change starts, the second where it goes. */
+  function tapBox(id) {
+    if (!designEdit) return;
+    if (!designEdit.pick) designEdit.pick = id;
+    else if (designEdit.pick === id) designEdit.pick = null;
+    else {
+      const from = designEdit.pick;
+      designEdit.pick = null;
+      return addChange(from, id);
+    }
+    draw();
+  }
+
+  async function designSend() {
+    const p = designPanel;
+    if (!p || p.sending) return;
+    if (p.kind !== 'request' && p.text.trim().length < 3) return toast?.(p.kind === 'debug' ? 'Say what to debug' : 'Say what to ask', 3000);
+    p.sending = true;
+    draw();
+    const base = { project, ...(designAgent ? { agent: designAgent } : {}), at: designAt, to: p.to };
+    try {
+      const r =
+        p.kind === 'request'
+          ? await api('POST', '/layers/request', { ...base, changes: designEdit?.changes ?? [], text: p.text })
+          : await api('POST', '/layers/ask', { ...base, id: p.id, kind: p.kind, text: p.text });
+      const did = p.kind === 'request' ? `Request sent to ${r.agent.name}` : p.kind === 'debug' ? `Debug started in ${r.agent.name}` : `Asked ${r.agent.name}`;
+      toast?.(did, 5000, { label: 'Open', run: () => (show(false), openAgent(r.agent.id)) });
+      if (p.kind === 'request') {
+        designEdits.delete(designAt);
+        designEdit = null;
+      }
+      designPanel = null;
+      draw();
+      return load();
+    } catch (e) {
+      p.sending = false;
+      toast?.(e.message, 6000);
+      draw();
+    }
+  }
+
+  async function designPreview() {
+    try {
+      const r = await api('POST', '/layers/request', { project, ...(designAgent ? { agent: designAgent } : {}), at: designAt, changes: designEdit.changes, preview: true });
+      designPanel = { kind: 'request', at: designAt, text: r.text, to: designAgent ?? data.from?.id };
+      designEdit.pick = null;
+      draw();
+    } catch (e) {
+      toast?.(e.message, 6000);
+    }
+  }
+
+  /** A click in the Design view's own controls; true when it was one. */
+  function designClick(e) {
+    const t = e.target;
+    const on = (sel) => t.closest(sel);
+    const menu = on('[data-design-menu]');
+    if (menu) {
+      const id = menu.dataset.designMenu;
+      designPanel = { kind: 'ask', at: designAt, id, name: data.layer.kind === 'file' ? id : boxName(id), text: '', to: designAgent ?? data.from?.id };
+    } else if (on('[data-design-kind]') && designPanel) designPanel.kind = on('[data-design-kind]').dataset.designKind;
+    else if (on('[data-design-cancel]')) designPanel = null;
+    else if (on('[data-design-send]')) return designSend(), true;
+    else if (on('[data-design-edit]')) {
+      if (designEdit) {
+        if (designEdit.changes.length) designEdits.set(designAt, designEdit);
+        designEdit = null;
+      } else designEdit = designEdits.get(designAt) ?? { at: designAt, mode: 'use', changes: [], pick: null };
+      designPanel = null;
+    } else if (on('[data-design-mode]') && designEdit) {
+      designEdit.mode = on('[data-design-mode]').dataset.designMode;
+      designEdit.pick = null;
+    } else if (on('[data-design-undo]') && designEdit) {
+      const [gone] = designEdit.changes.splice(Number(on('[data-design-undo]').dataset.designUndo), 1);
+      // A new part taken back takes its arrows with it.
+      if (gone?.kind === 'new') designEdit.changes = designEdit.changes.filter((c) => c.from !== `new:${gone.name}` && c.to !== `new:${gone.name}`);
+    } else if (on('[data-design-clear]') && designEdit) {
+      designEdit.changes = [];
+      designEdit.pick = null;
+    } else if (on('[data-design-preview]') && designEdit?.changes.length) return designPreview(), true;
+    else if (on('[data-design-edge]') && designEdit) {
+      const [from, to] = JSON.parse(on('[data-design-edge]').dataset.designEdge);
+      const cut = (c) => c.kind === 'unuse' && c.from === from && c.to === to;
+      designEdit.changes = designEdit.changes.some(cut) ? designEdit.changes.filter((c) => !cut(c)) : [...designEdit.changes, { kind: 'unuse', from, to }];
+    } else if (on('[data-design-box]')) {
+      // The click after a drag is not a tap.
+      if (dragged) dragged = false;
+      else tapBox(on('[data-design-box]').dataset.designBox);
+      return true;
+    } else if (on('[data-design-show]')) {
+      designAgent = on('[data-design-show]').dataset.designShow;
+      return load(), true;
+    } else if (on('[data-design-dismiss]')) {
+      api('DELETE', `/layers/request/${encodeURIComponent(on('[data-design-dismiss]').dataset.designDismiss)}`)
+        .catch((err) => toast?.(err.message, 5000))
+        .then(load);
+      return true;
+    } else return false;
+    draw();
+    return true;
   }
 
   function sentence(l) {
@@ -157,7 +294,9 @@ export function initCodeMap({ api, $, esc, agents, openAgent, openBugs, openCode
     if (layer === 'speed') return drawSpeed();
     if (layer === 'design') {
       $('#map-agents').innerHTML = '';
-      return drawDesign({ data, box: $('#map-box'), warn: $('#map-warn'), esc, only: designOnly, describing });
+      drawDesign({ data, box: $('#map-box'), warn: $('#map-warn'), esc, only: designOnly, describing, edit: designEdit, panel: designPanel });
+      if (designPanel && !designPanel.sending) $('#map-warn [data-design-text]')?.focus();
+      return;
     }
     const warn = (m?.links ?? []).filter((l) => l.kind !== 'near');
     $('#map-warn').innerHTML = warn.length ? `<ul>${warn.map(sentence).join('')}</ul>` : m?.agents.length ? '<p class="hint">No agents are on the same code.</p>' : '';
@@ -486,6 +625,7 @@ export function initCodeMap({ api, $, esc, agents, openAgent, openBugs, openCode
       if (mod?.dataset.mapMod) return (picked = picked?.module === mod.dataset.mapMod ? null : { module: mod.dataset.mapMod }), draw();
     }
     if (layer === 'design') {
+      if (designClick(e)) return;
       const at = e.target.closest('[data-design-at]');
       if (at) return (designAt = at.dataset.designAt), load();
       if (e.target.closest('[data-design-focus]')) return (designFocus = true), load();
@@ -514,32 +654,85 @@ export function initCodeMap({ api, $, esc, agents, openAgent, openBugs, openCode
     if (b?.dataset.map === 'refresh') return load();
   });
   view.addEventListener('submit', (e) => {
+    const n = e.target.closest('[data-design-new]');
+    if (n) {
+      e.preventDefault();
+      const name = partName(n.elements.name.value);
+      if (!name || !designEdit) return;
+      if (designEdit.changes.some((c) => c.kind === 'new' && c.name === name) || data.layer.boxes.some((b) => b.name === name)) return toast?.(`There is already ${name} here`, 3000);
+      designEdit.changes = [...designEdit.changes, { kind: 'new', name }];
+      return draw();
+    }
     const f = e.target.closest('[data-bench-watch]');
     if (!f) return;
     e.preventDefault();
     benchWatch(f);
   });
   view.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && e.target.matches?.('[data-design-at]')) e.target.click();
+    if (e.key === 'Enter' && e.target.matches?.('[data-design-at], [data-design-box]')) e.target.click();
   });
+  view.addEventListener('input', (e) => {
+    if (e.target.matches('[data-design-text]') && designPanel) designPanel.text = e.target.value;
+  });
+  // Dragging from one box to another while changing the design; a short press is a tap.
+  view.addEventListener('pointerdown', (e) => {
+    dragged = false;
+    const b = designEdit && e.button === 0 && e.target.closest('[data-design-box]');
+    if (!b) return;
+    dragging = { from: b.dataset.designBox, x: e.clientX, y: e.clientY, moved: false };
+  });
+  view.addEventListener('pointermove', (e) => {
+    if (!dragging) return;
+    if (!dragging.moved && Math.hypot(e.clientX - dragging.x, e.clientY - dragging.y) < 8) return;
+    dragging.moved = true;
+    const box = $('#map-box');
+    const line = box.querySelector('.design-drag');
+    const from = box.querySelector(`[data-design-box="${CSS.escape(dragging.from)}"]`);
+    if (!line || !from) return;
+    const r = box.getBoundingClientRect();
+    line.setAttribute('x1', from.offsetLeft + from.offsetWidth / 2);
+    line.setAttribute('y1', from.offsetTop + from.offsetHeight / 2);
+    line.setAttribute('x2', e.clientX - r.left);
+    line.setAttribute('y2', e.clientY - r.top);
+    line.hidden = false;
+  });
+  const endDrag = (e) => {
+    const d = dragging;
+    dragging = null;
+    if (!d?.moved) return;
+    dragged = e.type === 'pointerup';
+    $('#map-box').querySelector('.design-drag')?.setAttribute('hidden', '');
+    const over = e.type === 'pointerup' ? document.elementFromPoint(e.clientX, e.clientY)?.closest('[data-design-box]') : null;
+    if (over && over.dataset.designBox !== d.from) addChange(d.from, over.dataset.designBox);
+  };
+  view.addEventListener('pointerup', endDrag);
+  view.addEventListener('pointercancel', endDrag);
   view.addEventListener('change', (e) => {
     if (e.target.matches('[data-design-agent]')) {
       designAgent = e.target.value || null;
       designFocus = Boolean(designAgent);
       return load();
     }
+    if (e.target.matches('[data-design-to]') && designPanel) return (designPanel.to = e.target.value);
     if (e.target.dataset.mapSet !== 'project') return;
     project = e.target.value;
     picked = null;
     designAt = '';
     designAgent = null;
+    designEdit = null;
+    designEdits.clear();
+    designPanel = null;
     try {
       localStorage.setItem(SAVED, project);
     } catch {}
     load();
   });
   document.addEventListener('keydown', (e) => {
-    if (open && e.key === 'Escape' && !document.querySelector('dialog[open]')) show(false);
+    if (!open || e.key !== 'Escape' || document.querySelector('dialog[open]')) return;
+    // Escape closes the panel, then lets go of a tapped box, then the map.
+    if (layer === 'design' && designPanel) return (designPanel = null), draw();
+    if (layer === 'design' && designEdit?.pick) return (designEdit.pick = null), draw();
+    show(false);
   });
   let resizeTimer = null;
   window.addEventListener('resize', () => {
