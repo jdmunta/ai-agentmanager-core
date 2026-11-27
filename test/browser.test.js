@@ -639,8 +639,23 @@ test('design layers: from an agent to where its changes sit, out to the system, 
   assert.match(await js(`document.querySelector('#map-warn .logical-flow').textContent`), /money[\s\S]*Called from[\s\S]*web\/page\.js pay\(\)[\s\S]*GET \/money[\s\S]*src\/server\.js GET \/money[\s\S]*src\/lib\/fmt\.js fmt\(\)/);
   assert.equal(await js(`document.querySelectorAll('#map-box .logical-arrow.follow').length`), 1, 'the hop from Pages to Core');
   assert.equal(await js(`document.querySelector('#map-box [data-logical-box="c:core"]').classList.contains('on-path')`), true);
+  // The agent made it: marked new, against its code when it started.
+  assert.match(await js(`document.querySelector('#map-warn .logical-flow').textContent`), /new\s+\S+ changed it: \+1 route, 3 new/);
+  // Change this feature: what should change, written with its flow, read, then sent.
+  await js(`document.querySelector('#map-warn [data-logical-change]').click()`);
+  await until(`document.querySelector('#map-warn [data-logical-words]')`, 'what should change');
+  await js(`(() => { const t = document.querySelector('#map-warn [data-logical-words]'); t.value = 'Show cents too'; t.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+  await js(`document.querySelector('[data-logical-write]').click()`);
+  await until(`/about the feature "money":\\n\\nShow cents too/.test(document.querySelector('#map-warn [data-logical-text]')?.value ?? '')`, 'the request written');
+  assert.match(await js(`document.querySelector('#map-warn [data-logical-text]').value`), /- Called from: pay\(\) in `web\/page\.js`/);
+  await js(`document.querySelector('[data-logical-send]').click()`);
+  await until(`document.querySelector('#map-warn .design-request') && !document.querySelector('#map-warn [data-logical-text]')`, 'sent and kept');
+  assert.match(await js(`document.querySelector('#map-warn .design-request').textContent`), /Asked[\s\S]*to change money: Show cents too[\s\S]*Nothing in it has changed in its code yet/);
   await js(`document.querySelector('[data-logical-unfollow]').click()`);
   await until(`!document.querySelector('#map-warn .logical-flow')`, 'no longer followed');
+  // Without a feature followed: what the agent's changes touch.
+  await until(`document.querySelector('#map-warn .logical-impact')`, 'what its changes touch');
+  assert.match(await js(`document.querySelector('#map-warn .logical-impact').textContent`), /new\s+money[\s\S]*Links between components[\s\S]*Pages → Core[\s\S]*now also GET \/money/);
   await js(`document.querySelector('[data-logical-box="c:pages"]').click()`);
   await until(`document.querySelector('#map-warn [data-logical-code="web/app.js"]')`, 'Pages again, its file');
   await js(`document.querySelector('#map-warn [data-logical-code="web/app.js"]').click()`);

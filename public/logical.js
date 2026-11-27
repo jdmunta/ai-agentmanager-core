@@ -11,6 +11,7 @@ const GAP_Y = 84; // room for the names of the links between rows
 const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 const lines = (n) => (n >= 10_000 ? `${Math.round(n / 1000)}k` : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
 const EXT_ICON = { run: '▶', host: '🌐', svc: '◆', files: '▤', other: '…' };
+const when = (s) => new Date(s).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 
 /** An edge's kind for its look: HTTP between parts, code imports, the outside, guessed by the model. */
 function edgeClass(e) {
@@ -63,8 +64,26 @@ export function mainEdges(V, all) {
   return { edges: drawn, hidden: V.edges.length - keep.length };
 }
 
-/** pick: { kind: 'box', id } or { kind: 'edge', from, to }, shown under the head. all: every link drawn. */
-export function drawLogical({ data, box, warn, esc, describing = false, pick = null, all = false }) {
+/** What changed in a feature, in a few words: "+1 route, 2 changed, 1 new". */
+function featureChangeWords(f) {
+  const n = (how) => f.steps.filter((s) => s.how === how).length + f.callers.filter((c) => c.how === how).length;
+  return [
+    f.routes.added.length && `+${plural(f.routes.added.length, 'route')}`,
+    f.routes.gone.length && `−${plural(f.routes.gone.length, 'route')}`,
+    n('changed') && `${n('changed')} changed`,
+    n('new') && `${n('new')} new`,
+    n('gone') && `${n('gone')} gone`,
+  ]
+    .filter(Boolean)
+    .join(', ');
+}
+
+/**
+ * pick: { kind: 'box', id } or { kind: 'edge', from, to }, shown under the head. all: every link
+ * drawn. compose: a change being asked ({ target, title, words, text, to, sending }; text null until
+ * written).
+ */
+export function drawLogical({ data, box, warn, esc, describing = false, pick = null, all = false, compose = null }) {
   const V = data?.view;
   if (!V) {
     box.innerHTML = `<p class="hint map-empty">${data?.project ? 'No agent in this project has its folder on this computer.' : 'No agents with a repository yet.'}</p>`;
@@ -72,7 +91,7 @@ export function drawLogical({ data, box, warn, esc, describing = false, pick = n
     return;
   }
   const byId = Object.fromEntries(V.components.map((c) => [c.id, c]));
-  const name = (id) => byId[id]?.name ?? id;
+  const name = (id) => byId[id]?.name ?? id.replace(/^x:\w+:/, '').replace(/^c:/, '');
   const agents = data.agents ?? [];
   const agentPick = `<label class="design-agent">Changes of <select data-logical-agent aria-label="Light up an agent's changes"><option value="">no agent</option>${agents.map((a) => `<option value="${esc(a.id)}" ${a.id === data.agent ? 'selected' : ''}>${esc(a.name)}${a.changed ? ` (${a.changed} changed)` : ''}</option>`).join('')}</select></label>`;
   const n = data.notes;
@@ -90,14 +109,32 @@ export function drawLogical({ data, box, warn, esc, describing = false, pick = n
   const featurePick = feats.length
     ? `<label class="design-agent">Follow <select data-logical-feature aria-label="Follow a feature through the code"><option value="">a feature…</option>${[...feats].sort((a, b) => (a.kind !== b.kind ? (a.kind === 'start' ? 1 : -1) : a.name.localeCompare(b.name))).map((f) => `<option value="${esc(f.key)}" ${f.key === F?.key ? 'selected' : ''}>${esc(f.name)}${f.routes ? ` (${plural(f.routes, 'route')})` : ''}</option>`).join('')}</select></label>`
     : '';
+  const I = !F && data.agent ? data.impact : null;
+  const toOptions = (to) => agents.map((a) => `<option value="${esc(a.id)}" ${a.id === to ? 'selected' : ''}>${esc(a.name)}</option>`).join('');
+  const changeBtn = (target) => `<button class="small" data-logical-change="${esc(JSON.stringify(target))}" title="Say what should change here; it becomes a request to an agent, with what the code shows of it, that you read before it is sent">Change this…</button>`;
+  const tag = (how) => (how ? `<span class="design-tag ${how}">${how}</span> ` : '');
   const open = (file, line, text) => `<button class="link" data-logical-open="${esc(JSON.stringify([file, line]))}" title="${esc(`Open ${file} at line ${line}`)}">${text}</button>`;
   let below = '';
-  if (F && !pick) {
+  if (compose) {
+    below = `<div class="design-panel logical-panel logical-compose"><div><b>Change ${esc(compose.title)}</b> <span class="hint">${compose.text == null ? 'Say what should change; it is sent with what the code shows of it.' : 'Change it as you like; nothing is sent until you press Send.'}</span></div>
+      ${compose.text == null
+        ? `<textarea data-logical-words rows="3" placeholder="What should change?" aria-label="What should change">${esc(compose.words)}</textarea>
+      <div class="design-panel-row"><button class="primary small" data-logical-write ${compose.writing ? 'disabled' : ''}>${compose.writing ? 'Writing…' : 'Write the request'}</button><button class="small" data-logical-cancel>Cancel</button></div>`
+        : `<textarea data-logical-text rows="10" aria-label="The request">${esc(compose.text)}</textarea>
+      <div class="design-panel-row"><label class="design-agent">To <select data-logical-to aria-label="The agent to send it to">${toOptions(compose.to)}</select></label><button class="primary small" data-logical-send ${compose.sending ? 'disabled' : ''}>${compose.sending ? 'Sending…' : 'Send'}</button><button class="small" data-logical-back>Back</button></div>`}</div>`;
+  } else if (F && !pick) {
+    const C = F.changes;
+    const howOf = new Map((C?.steps ?? []).map((s) => [`${s.file}#${s.name}`, s.how]));
+    const callerHow = new Map((C?.callers ?? []).map((c) => [`${c.file}#${c.name}`, c.how]));
+    const goneSteps = (C?.steps ?? []).filter((s) => s.how === 'gone');
+    const goneCallers = (C?.callers ?? []).filter((c) => c.how === 'gone');
     const reach = [...F.outside.services, ...F.outside.runs.map((r) => `runs ${r}`), ...F.outside.hosts, F.outside.reads || F.outside.writes ? [F.outside.reads && 'reads', F.outside.writes && 'writes'].filter(Boolean).join(' and ') + ' files' : ''].filter(Boolean);
-    below = `<div class="design-panel logical-panel logical-flow"><div class="design-panel-row"><b>${esc(F.name)}</b>${F.what ? ` <span>${esc(F.what)}</span>` : ''}<span class="spacer"></span><button class="small" data-logical-unfollow>Close</button></div>
-      ${F.callers.length ? `<div><span class="hint">Called from</span><ul class="logical-links">${F.callers.map((c) => `<li>${open(c.file, c.line, `<code>${esc(c.file)}</code>${c.name ? ` ${esc(c.name)}()` : ''}`)} <span class="hint">${esc(name(c.comp))}</span></li>`).join('')}</ul></div>` : F.kind === 'http' ? '<p class="hint">No page or command in this repository calls its routes (another program may).</p>' : ''}
-      ${F.routes.length ? `<div><span class="hint">Routes</span> ${F.routes.map((r) => `<code>${esc(r)}</code>`).join(' ')}</div>` : ''}
-      <div><span class="hint">Through the code</span><ul class="logical-steps">${F.steps.map((st) => `<li style="padding-left:${st.depth * 14}px">${open(st.file, st.line, `<code>${esc(st.file)}</code> ${esc(st.name)}${st.route ? '' : '()'}`)} <span class="hint">${esc(name(st.comp))}${st.does ? ` · ${esc(st.does)}` : ''}</span></li>`).join('')}</ul></div>
+    const agentName = agents.find((a) => a.id === data.agent)?.name ?? 'the agent';
+    below = `<div class="design-panel logical-panel logical-flow"><div class="design-panel-row"><b>${esc(F.name)}</b>${F.what ? ` <span>${esc(F.what)}</span>` : ''}<span class="spacer"></span>${changeBtn({ kind: 'feature', key: F.key })}<button class="small" data-logical-unfollow>Close</button></div>
+      ${C ? `<p class="logical-changed-note">${C.how === 'changed' ? '' : tag(C.how)}<b>${esc(agentName)}</b> changed it: ${esc(featureChangeWords(C) || 'its flow')}. <span class="hint">Marked below, against its code when it started.</span></p>` : ''}
+      ${F.callers.length ? `<div><span class="hint">Called from</span><ul class="logical-links">${F.callers.map((c) => `<li>${tag(callerHow.get(`${c.file}#${c.name}`))}${open(c.file, c.line, `<code>${esc(c.file)}</code>${c.name ? ` ${esc(c.name)}()` : ''}`)} <span class="hint">${esc(name(c.comp))}</span></li>`).join('')}${goneCallers.map((c) => `<li class="gone">${tag('gone')}<code>${esc(c.file)}</code> ${esc(c.name ?? '')}()</li>`).join('')}</ul></div>` : F.kind === 'http' ? '<p class="hint">No page or command in this repository calls its routes (another program may).</p>' : ''}
+      ${F.routes.length ? `<div><span class="hint">Routes</span> ${F.routes.map((r) => `${C?.routes.added.includes(r) ? tag('new') : ''}<code>${esc(r)}</code>`).join(' ')}${(C?.routes.gone ?? []).map((r) => ` ${tag('gone')}<code class="gone">${esc(r)}</code>`).join('')}</div>` : ''}
+      <div><span class="hint">Through the code</span><ul class="logical-steps">${F.steps.map((st) => `<li style="padding-left:${st.depth * 14}px">${tag(howOf.get(`${st.file}#${st.name}`))}${open(st.file, st.line, `<code>${esc(st.file)}</code> ${esc(st.name)}${st.route ? '' : '()'}`)} <span class="hint">${esc(name(st.comp))}${st.does ? ` · ${esc(st.does)}` : ''}</span></li>`).join('')}${goneSteps.map((st) => `<li class="gone">${tag('gone')}<code>${esc(st.file)}</code> ${esc(st.name)}${st.route ? '' : '()'}</li>`).join('')}</ul></div>
       ${reach.length ? `<div><span class="hint">Reaches</span> ${reach.map(esc).join(' · ')}</div>` : ''}
       <p class="hint">Followed by the names of the functions called; calls through variables, callbacks and events are not followed.</p></div>`;
   } else if (pick?.kind === 'box' && byId[pick.id]) {
@@ -105,7 +142,7 @@ export function drawLogical({ data, box, warn, esc, describing = false, pick = n
     const ins = V.edges.filter((e) => e.to === b.id);
     const outs = V.edges.filter((e) => e.from === b.id);
     const linkLi = (e, other, dir) => `<li><button class="link" data-logical-edge="${esc(JSON.stringify([e.from, e.to]))}">${dir} ${esc(name(other))}</button> <span class="hint">${esc([e.data, e.found || (e.guessed ? 'guessed by the model' : '')].filter(Boolean).join(' · '))}</span></li>`;
-    below = `<div class="design-panel logical-panel"><div class="design-panel-row"><b>${esc(b.name)}</b>${b.kind === 'external' ? ' <span class="hint">outside the code</span>' : ` <span class="hint">${plural(b.files, 'file')} · ${lines(b.lines)} lines${b.serves ? ` · serves ${plural(b.serves, 'route')}` : ''}</span>`}<span class="spacer"></span><button class="small" data-logical-close>Close</button></div>
+    below = `<div class="design-panel logical-panel"><div class="design-panel-row"><b>${esc(b.name)}</b>${b.kind === 'external' ? ' <span class="hint">outside the code</span>' : ` <span class="hint">${plural(b.files, 'file')} · ${lines(b.lines)} lines${b.serves ? ` · serves ${plural(b.serves, 'route')}` : ''}</span>`}<span class="spacer"></span>${b.kind === 'component' ? changeBtn({ kind: 'box', id: b.id }) : ''}<button class="small" data-logical-close>Close</button></div>
       ${b.purpose ? `<p>${esc(b.purpose)}</p>` : ''}
       ${b.members.length ? `<div><span class="hint">In it (open in the Design view):</span> <span class="logical-members">${b.members.map((m) => `<button class="link" data-logical-code="${esc(m)}"><code>${esc(m)}</code></button>`).join(' ')}</span></div>` : ''}
       ${b.changed.length ? `<div><span class="design-tag changed">${b.changed.length} changed</span> <span class="hint">${esc(b.changed.slice(0, 8).join(', '))}${b.changed.length > 8 ? ', …' : ''}</span></div>` : ''}
@@ -115,13 +152,34 @@ export function drawLogical({ data, box, warn, esc, describing = false, pick = n
     const e = V.edges.find((x) => x.from === pick.from && x.to === pick.to);
     if (e) {
       const way = e.flow === 'from' ? `${name(e.to)} → ${name(e.from)}` : e.flow === 'both' ? 'both ways' : `${name(e.from)} → ${name(e.to)}`;
-      below = `<div class="design-panel logical-panel"><div class="design-panel-row"><b><button class="link" data-logical-box="${esc(e.from)}">${esc(name(e.from))}</button> → <button class="link" data-logical-box="${esc(e.to)}">${esc(name(e.to))}</button></b><span class="spacer"></span><button class="small" data-logical-close>Close</button></div>
+      below = `<div class="design-panel logical-panel"><div class="design-panel-row"><b><button class="link" data-logical-box="${esc(e.from)}">${esc(name(e.from))}</button> → <button class="link" data-logical-box="${esc(e.to)}">${esc(name(e.to))}</button></b><span class="spacer"></span>${changeBtn({ kind: 'edge', from: e.from, to: e.to })}<button class="small" data-logical-close>Close</button></div>
         ${e.data ? `<p><b>${esc(e.data)}</b> <span class="hint">(${esc(way)}; named by the model)</span></p>` : ''}
         <p>${e.guessed ? '<span class="hint">The model saw this link from the names; the code does not show it.</span>' : `<span class="hint">The code shows:</span> ${esc(e.found)}`}</p>
         ${e.routes.length ? `<details ${e.routeCount <= 12 ? 'open' : ''}><summary class="hint">${plural(e.routeCount, 'route')} called</summary><ul class="logical-routes">${e.routes.map((r) => `<li><code>${esc(r)}</code></li>`).join('')}</ul>${e.routeCount > e.routes.length ? `<span class="hint">and ${e.routeCount - e.routes.length} more</span>` : ''}</details>` : ''}
         ${e.evidence.length ? `<details><summary class="hint">Where in the code</summary><ul class="logical-routes">${e.evidence.map((x) => `<li><code>${esc(x)}</code></li>`).join('')}</ul></details>` : ''}</div>`;
     }
+  } else if (I) {
+    const agentName = agents.find((a) => a.id === data.agent)?.name ?? 'the agent';
+    const L = I.links;
+    const linkLi = (e, how, more = '') => `<li class="${how}">${tag(how)}<button class="link" data-logical-edge="${esc(JSON.stringify([e.from, e.to]))}">${esc(name(e.from))} → ${esc(name(e.to))}</button> <span class="hint">${esc(more || e.found)}</span></li>`;
+    const routesWords = (r) => [r.added.length && `now also ${r.added.slice(0, 3).join(', ')}${r.added.length > 3 ? '…' : ''}`, r.gone.length && `no longer ${r.gone.slice(0, 3).join(', ')}${r.gone.length > 3 ? '…' : ''}`].filter(Boolean).join('; ');
+    const links = [...L.added.map((e) => linkLi(e, 'new')), ...L.gone.map((e) => linkLi(e, 'gone')), ...L.changed.map((e) => linkLi(e, 'changed', routesWords(e.routes)))];
+    below = `<div class="design-panel logical-panel logical-impact"><div><b>What ${esc(agentName)}'s changes touch</b> <span class="hint">against its code when it started</span></div>
+      ${I.features.length ? `<div><span class="hint">${plural(I.featureCount, 'feature')}; follow one for its steps</span><ul class="logical-links">${I.features.map((f) => `<li>${tag(f.how)}${f.how === 'gone' ? esc(f.name) : `<button class="link" data-logical-follow="${esc(f.key)}">${esc(f.name)}</button>`} <span class="hint">${esc(featureChangeWords(f))}</span></li>`).join('')}</ul>${I.featureCount > I.features.length ? `<span class="hint">and ${I.featureCount - I.features.length} more</span>` : ''}</div>` : '<p class="hint">No feature\'s flow changed.</p>'}
+      ${links.length ? `<div><span class="hint">Links between components</span><ul class="logical-links">${links.join('')}</ul></div>` : '<p class="hint">No link between components came, went or changed its routes.</p>'}</div>`;
   }
+  const reqs = compose ? [] : data.requests ?? [];
+  const sinceWords = (r) => {
+    if (!r.agent.here) return 'Its folder is gone.';
+    if (r.gone) return 'That is no longer in its code.';
+    const x = r.since;
+    if (!x || !(x.changed || x.new || x.gone)) return 'Nothing in it has changed in its code yet.';
+    return `Since then in its code: ${[x.changed && `${x.changed} changed`, x.new && `${x.new} new`, x.gone && `${x.gone} gone`].filter(Boolean).join(', ')}${x.names.length ? ` (${x.names.join(', ')})` : ''}.`;
+  };
+  const requests = reqs.length
+    ? `<div class="design-requests">${reqs.map((r) => `<div class="design-request"><b>Asked ${esc(r.agent.name)}</b> <span class="hint">${esc(when(r.when))}</span> to change ${r.target.kind === 'feature' && r.agent.here && !r.gone ? `<button class="link" data-logical-follow="${esc(r.target.key)}">${esc(r.title)}</button>` : `<b>${esc(r.title)}</b>`}: ${esc(r.words)}
+        <div><span class="hint">${esc(sinceWords(r))}</span> <button class="small" data-logical-dismiss="${esc(r.id)}">Put away</button></div></div>`).join('')}</div>`
+    : '';
   let { edges, hidden } = mainEdges(V, all);
   // Following a feature: only its hops, the components it goes through lit, the rest dimmed.
   const onPath = new Set(F ? [...F.comps, ...F.outsideIds] : []);
@@ -131,9 +189,16 @@ export function drawLogical({ data, box, warn, esc, describing = false, pick = n
       return { ...(e ?? { found: '', routes: [], routeCount: 0, data: null, flow: null, guessed: false, evidence: [], weight: 1 }), from: a, to: b, flow: e && e.from === a ? e.flow : null, follow: true };
     });
     hidden = 0;
+  } else if (I) {
+    // The agent's links: those that came marked, those that went drawn dashed.
+    const came = new Set(I.links.added.map((e) => `${e.from}\n${e.to}`));
+    edges = edges.map((e) => (came.has(`${e.from}\n${e.to}`) ? { ...e, came: true } : e));
+    // Drawn even where only the main links are (to files, say).
+    for (const e of V.edges) if (came.has(`${e.from}\n${e.to}`) && !edges.some((x) => x.from === e.from && x.to === e.to)) edges.push({ ...e, came: true });
+    for (const e of I.links.gone) edges.push({ from: e.from, to: e.to, found: e.found, routes: [], routeCount: 0, data: null, flow: null, guessed: false, evidence: [], weight: 1, went: true });
   }
   const toggle = hidden || all ? `<button class="small" data-logical-all aria-pressed="${all}" title="${all ? 'Only HTTP, live streams, outside systems and each component\'s biggest code links' : 'Every link the code shows, and the files read and written'}">${all ? 'Main links only' : `Show all ${V.edges.length} links`}</button>` : '';
-  warn.innerHTML = `<div class="design-head"><span class="design-crumbs"><b>Components</b></span>${agentPick}${featurePick}${F ? '' : toggle}${describe}</div>${about}<p class="hint design-facts">${facts}${hidden ? ` Showing the main links; ${plural(hidden, 'more link')} in each box (tap it) or with Show all.` : ''}</p>${below}`;
+  warn.innerHTML = `<div class="design-head"><span class="design-crumbs"><b>Components</b></span>${agentPick}${featurePick}${F ? '' : toggle}${describe}</div>${about}<p class="hint design-facts">${facts}${hidden ? ` Showing the main links; ${plural(hidden, 'more link')} in each box (tap it) or with Show all.` : ''}</p>${below}${requests}`;
   if (!V.components.length) {
     box.innerHTML = '<p class="hint map-empty">No source files here.</p>';
     return;
@@ -156,7 +221,7 @@ export function drawLogical({ data, box, warn, esc, describing = false, pick = n
       const end = e.flow !== 'from' ? `marker-end="url(#logical-head-${cls})"` : '';
       const start = e.flow === 'from' || e.flow === 'both' ? `marker-start="url(#logical-head-${cls})"` : '';
       const on = pick?.kind === 'edge' && ((pick.from === e.from && pick.to === e.to) || (e.twin && pick.from === e.to && pick.to === e.from));
-      const tip = `${name(e.from)} ${e.twin ? '⇄' : '→'} ${name(e.to)}${e.data ? `: ${e.data}` : ''}${e.found ? ` (${e.found})` : e.guessed ? ' (guessed by the model)' : ''}`;
+      const tip = `${e.went ? 'Went: ' : e.came ? 'Came: ' : ''}${name(e.from)} ${e.twin ? '⇄' : '→'} ${name(e.to)}${e.data ? `: ${e.data}` : ''}${e.found ? ` (${e.found})` : e.guessed ? ' (guessed by the model)' : ''}`;
       // Named on the arrow: HTTP and live streams between rows, and the one picked; the rest in their tips and panels.
       const across = pos[e.from].y !== pos[e.to].y;
       const label = ((cls === 'http' || cls === 'guessed') && across) || on ? edgeLabel(e) : '';
@@ -171,7 +236,7 @@ export function drawLogical({ data, box, warn, esc, describing = false, pick = n
         const cut = W < 600 ? 18 : 26;
         text = `<text class="logical-label ${cls}" x="${x.toFixed(0)}" y="${y.toFixed(0)}" text-anchor="middle" dominant-baseline="middle">${esc(label.length > cut ? `${label.slice(0, cut - 1)}…` : label)}</text>`;
       }
-      return `<path class="design-arrow logical-arrow ${cls} ${down ? '' : 'back'} ${on ? 'on' : ''} ${e.follow ? 'follow' : ''}" d="${d}" stroke-width="${sw}" ${end} ${start}><title>${esc(tip)}</title></path><path class="design-hit" d="${d}" data-logical-edge="${esc(JSON.stringify([e.from, e.to]))}"><title>${esc(tip)}</title></path>${text}`;
+      return `<path class="design-arrow logical-arrow ${cls} ${down ? '' : 'back'} ${on ? 'on' : ''} ${e.follow ? 'follow' : ''} ${e.came ? 'came' : ''} ${e.went ? 'went' : ''}" d="${d}" stroke-width="${sw}" ${end} ${start}><title>${esc(tip)}</title></path><path class="design-hit" d="${d}" data-logical-edge="${esc(JSON.stringify([e.from, e.to]))}"><title>${esc(tip)}</title></path>${text}`;
     })
     .join('');
   const tiles = boxes

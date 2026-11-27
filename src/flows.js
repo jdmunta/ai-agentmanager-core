@@ -66,6 +66,17 @@ export function serviceNames(file, text) {
   return out;
 }
 
+/** A short fingerprint of some code, to tell whether it changed: its lines, trailing spaces aside. */
+export function sigOf(text) {
+  let h = 5381;
+  for (const l of text.trimEnd().split('\n')) {
+    const t = l.trimEnd();
+    for (let i = 0; i < t.length; i++) h = (Math.imul(h, 33) ^ t.charCodeAt(i)) >>> 0;
+    h = (Math.imul(h, 33) ^ 10) >>> 0;
+  }
+  return h.toString(36);
+}
+
 /** The services a piece of code uses: those whose names it calls or reads from. */
 function servicesIn(body, names) {
   const used = new Set();
@@ -75,8 +86,8 @@ function servicesIn(body, names) {
 
 /**
  * A file's functions with what each calls and does outside the code, and the calls in each of its
- * routes' handlers: { fns: [{ name, line, end, calls, effects }], routeCalls: [[call]], top }. top:
- * the calls outside any function (a script's body).
+ * routes' handlers: { fns: [{ name, line, end, calls, effects, sig }], routeCalls: [{ calls, effects,
+ * sig }], top }. top: the calls outside any function (a script's body); sig: see sigOf.
  */
 export function codeOf(file, text, symbols = [], routes = []) {
   const lang = langOf(file);
@@ -88,25 +99,29 @@ export function codeOf(file, text, symbols = [], routes = []) {
   // Functions inside functions too (JavaScript), each its own step.
   const nested = lang === 'js' ? lines.flatMap((l, i) => (/^\s+(?:async\s+)?function\s*\*?\s*([A-Za-z_$][\w$]*)\s*\(/.test(l) ? [{ name: l.match(/function\s*\*?\s*([A-Za-z_$][\w$]*)/)[1], kind: 'function', line: i + 1 }] : [])) : [];
   const defs = [...symbols.filter((s) => s.kind !== 'type'), ...nested].sort((a, b) => a.line - b.line);
-  // A body ends at the next definition; in Python, also where the indentation comes back.
+  // A body ends at the next definition, or before that where the indentation comes back (with the
+  // line closing it: "}", ")").
   const indent = (l) => l.match(/^\s*/)[0].length;
-  const pyEnd = (line) => {
+  const blockEnd = (line) => {
     const k = indent(lines[line - 1]);
-    for (let i = line; i < lines.length; i++) if (lines[i].trim() && indent(lines[i]) <= k) return i;
+    for (let i = line; i < lines.length; i++) {
+      if (!lines[i].trim() || indent(lines[i]) > k) continue;
+      return /^\s*[}\])]/.test(lines[i]) ? i + 1 : i;
+    }
     return lines.length;
   };
   const fns = defs.map((s, i) => {
     const next = (defs[i + 1]?.line ?? lines.length + 1) - 1;
-    const end = lang === 'py' ? Math.min(next, pyEnd(s.line)) : next;
+    const end = Math.min(next, blockEnd(s.line));
     const body = at(s.line, end);
     const inner = body.split('\n').slice(1).join('\n');
-    return { name: s.name, kind: s.kind, line: s.line, end, calls: callsIn(inner), effects: effects(inner) };
+    return { name: s.name, kind: s.kind, line: s.line, end, calls: callsIn(inner), effects: effects(inner), sig: sigOf(body) };
   });
   const lineOf = routes.map((r) => r.line).sort((a, b) => a - b);
   const routeCalls = routes.map((r) => {
     const next = lineOf.find((l) => l > r.line) ?? Infinity;
     const body = at(r.line, Math.min(next - 1, r.end ?? r.line + SPAN - 1));
-    return { calls: callsIn(body), effects: effects(body) };
+    return { calls: callsIn(body), effects: effects(body), sig: sigOf(body) };
   });
   const inside = new Set();
   for (const f of fns) for (let l = f.line; l <= f.end; l++) inside.add(l);
@@ -124,10 +139,18 @@ export function addFlows(graph, sources) {
   return graph;
 }
 
-const memo = new WeakMap();
+const memo = { features: new WeakMap(), resolve: new WeakMap(), callers: new WeakMap() };
 
-/** Which function a call lands on, by name (see the top). */
+/** Which function a call lands on, by name (see the top). Kept for the graph. */
 function resolver(graph) {
+  const hit = memo.resolve.get(graph);
+  if (hit) return hit;
+  const r = makeResolver(graph);
+  memo.resolve.set(graph, r);
+  return r;
+}
+
+function makeResolver(graph) {
   const byName = new Map();
   for (const [f, info] of Object.entries(graph.files)) {
     for (const [i, fn] of (info.code?.fns ?? []).entries()) {
@@ -171,7 +194,7 @@ function trace(graph, resolve, from, calls, seen = new Set()) {
       const key = `${hit.file}#${fn.name}`;
       if (seen.has(key) || steps.length >= MAX_STEPS) continue;
       seen.add(key);
-      steps.push({ file: hit.file, name: fn.name, line: fn.line, depth, from: parent, effects: fn.effects });
+      steps.push({ file: hit.file, name: fn.name, line: fn.line, depth, from: parent, effects: fn.effects, sig: fn.sig });
       for (const cc of fn.calls) next.push({ c: cc, file: hit.file, parent: key });
     }
     wave = next;
@@ -189,9 +212,12 @@ export function routeKey(path) {
   return segs[0];
 }
 
-/** The calls to each route: Map("file\nindex" -> [{ file, line }]). */
+/** The calls to each route: Map("file\nindex" -> [{ file, line }]). Kept for the graph. */
 function routeCallers(graph) {
+  const hit = memo.callers.get(graph);
+  if (hit) return hit;
   const out = new Map();
+  memo.callers.set(graph, out);
   const http = httpLinks(graph);
   const fits = pathFits;
   for (const k of http.keys()) {
@@ -217,7 +243,7 @@ function routeCallers(graph) {
  * by key. HTTP routes grouped by their main part; each file where the program starts, one.
  */
 export function featureList(graph) {
-  const hit = memo.get(graph);
+  const hit = memo.features.get(graph);
   if (hit) return hit;
   const groups = new Map();
   for (const [f, info] of Object.entries(graph.files)) {
@@ -230,7 +256,7 @@ export function featureList(graph) {
   }
   for (const [f, info] of Object.entries(graph.files)) if (info.entry && !isTest(f) && info.code) groups.set(`start:${f}`, { key: `start:${f}`, kind: 'start', routes: [], file: f });
   const list = [...groups.values()].sort((a, b) => (a.kind !== b.kind ? (a.kind === 'start' ? 1 : -1) : b.routes.length - a.routes.length || (a.key < b.key ? -1 : 1)));
-  memo.set(graph, list);
+  memo.features.set(graph, list);
   return list;
 }
 
@@ -255,19 +281,19 @@ export function featureFlow(graph, key, { compOf = () => null } = {}) {
   if (f.kind === 'http') {
     for (const r of f.routes.slice(0, MAX_ROUTES_TRACED)) {
       const route = graph.files[r.file].links.routes[r.i];
-      const rc = graph.files[r.file].code?.routeCalls[r.i] ?? { calls: [], effects: null };
+      const rc = graph.files[r.file].code?.routeCalls[r.i] ?? { calls: [], effects: null, sig: null };
       const k = `${r.file}#${r.label}`;
-      entries.push({ file: r.file, name: r.label, line: route.line, depth: 0, from: null, effects: rc.effects, route: true });
+      entries.push({ file: r.file, name: r.label, line: route.line, depth: 0, from: null, effects: rc.effects, sig: rc.sig, route: true });
       for (const c of callersOf.get(`${r.file}\n${r.i}`) ?? []) {
         const fn = (graph.files[c.file].code?.fns ?? []).find((x) => x.line <= c.line && c.line <= x.end);
-        if (!callers.some((x) => x.file === c.file && x.name === (fn?.name ?? null))) callers.push({ file: c.file, name: fn?.name ?? null, line: fn?.line ?? c.line, comp: compOf(c.file) });
+        if (!callers.some((x) => x.file === c.file && x.name === (fn?.name ?? null))) callers.push({ file: c.file, name: fn?.name ?? null, line: fn?.line ?? c.line, comp: compOf(c.file), sig: fn?.sig ?? null });
       }
       for (const s of trace(graph, resolve, r.file, rc.calls)) add({ ...s, from: s.from ?? k });
     }
   } else {
     const code = graph.files[f.file].code;
     const main = code.fns.find((x) => /^main$/i.test(x.name));
-    entries.push({ file: f.file, name: main ? main.name : '(the file)', line: main?.line ?? 1, depth: 0, from: null, effects: main?.effects ?? null, route: false });
+    entries.push({ file: f.file, name: main ? main.name : '(the file)', line: main?.line ?? 1, depth: 0, from: null, effects: main?.effects ?? null, sig: main?.sig ?? sigOf(code.top.map((c) => `${c.recv}.${c.name}`).join('\n')), route: false });
     for (const s of trace(graph, resolve, f.file, main ? main.calls : code.top, new Set(main ? [`${f.file}#${main.name}`] : []))) add({ ...s, from: s.from ?? `${f.file}#${entries[0].name}` });
   }
   const all = [...entries, ...[...steps.values()].sort((a, b) => a.depth - b.depth).slice(0, MAX_FEATURE_STEPS)].map((s) => ({ ...s, comp: compOf(s.file) }));

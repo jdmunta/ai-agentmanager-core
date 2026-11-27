@@ -118,6 +118,8 @@ export function linksOf(file, text) {
   const lang = langOf(file);
   const out = { routes: [], calls: [], callAt: {}, runs: [], hosts: [], services: [], reads: 0, writes: 0, live: null };
   if (!lang || !text) return out;
+  // Comment lines read as blank (a path in a doc comment is not a call), the lines kept.
+  text = text.replace(lang === 'py' ? /^[ \t]*#.*$/gm : /^[ \t]*(?:\/\/|\/\*|\*).*$/gm, (c) => ' '.repeat(c.length));
   // The line of a place in the text.
   const starts = [0];
   for (let i = text.indexOf('\n'); i !== -1; i = text.indexOf('\n', i + 1)) starts.push(i + 1);
@@ -391,7 +393,7 @@ const foundFlow = (l) => (l.to === EXT_FILES ? (l.reads && l.writes ? 'both' : l
  * box too. Each edge: what the code shows (routes, imports, programs run…), what data the model
  * says it carries and which way, and a few lines of evidence. `notes` is what the model wrote.
  */
-export function logicalView(graph, { notes = null, changed = [], features = [], flow = null } = {}) {
+export function logicalView(graph, { notes = null, changed = [], features = [], flow = null, routesMax = 60 } = {}) {
   const units = logicalUnits(graph);
   const comps = componentsOf(graph, units, notes);
   const compOf = new Map();
@@ -438,7 +440,7 @@ export function logicalView(graph, { notes = null, changed = [], features = [], 
       from: e.from,
       to: e.to,
       found: linkWords(e),
-      routes: [...e.routes].sort().slice(0, 60),
+      routes: [...e.routes].sort().slice(0, routesMax),
       routeCount: e.routes.size,
       imports: e.imports,
       runs: [...e.runs],
@@ -523,6 +525,13 @@ export function logicalView(graph, { notes = null, changed = [], features = [], 
     features: features.map((f) => ({ key: f.key, kind: f.kind, routes: f.routes.length, name: notes?.features?.[f.key]?.name || (f.kind === 'start' ? `Starts: ${f.file}` : f.key), what: notes?.features?.[f.key]?.what ?? '' })),
     flow: flowIn(flow?.((f) => compOf.get(f) ?? null), { notes, keepExt, used, OTHER }),
   };
+}
+
+/** Each file's component: Map(file -> component id). */
+export function componentMap(graph, notes = null) {
+  const m = new Map();
+  for (const c of componentsOf(graph, logicalUnits(graph), notes)) for (const f of c.files) m.set(f, c.id);
+  return m;
 }
 
 /**

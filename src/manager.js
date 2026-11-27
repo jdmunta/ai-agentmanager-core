@@ -85,6 +85,16 @@ const stagedDir = () => path.join(paths.uploads, 'staged');
 const safeName = (name) => path.basename(String(name || 'file')).replace(/[^\w.@+-]+/g, '_').slice(-120) || 'file';
 
 /** Staged uploads named in a request, checked to be files in the staging folder. */
+/** A source file's text for the design graph, or null when it is too big or can't be read. */
+function readSource(dir, p) {
+  try {
+    const full = path.join(dir, p);
+    return fs.statSync(full).size <= LAYER_LIMITS.MAX_BYTES ? fs.readFileSync(full, 'utf8') : null;
+  } catch {
+    return null;
+  }
+}
+
 function stagedFiles(list) {
   if (list == null) return [];
   if (!Array.isArray(list)) throw Object.assign(new Error('attachments must be a list of uploaded files'), { status: 400 });
@@ -144,7 +154,8 @@ import { conflictMessage, findConflicts, related, repoKey, summarize as summariz
 import { answerMessage, loadQuestions, questionsPath, questionsPrompt } from './inbox.js';
 import { PROOF_FILE, proofBlock, proofFacts, proofPrompt } from './proof.js';
 import { LIMITS as LAYER_LIMITS, buildGraph, changeDone, changeWords, commonFolder, describePrompt, designFiles, folderEntries, layerView, notesFrom, partContext, requestPrompt, resolveChanges } from './layers.js';
-import { LOGICAL_HEAD, addLinks, logicalNotesFrom, logicalPrompt, logicalSig, logicalView } from './logical.js';
+import { LOGICAL_HEAD, addLinks, componentMap, logicalNotesFrom, logicalPrompt, logicalSig, logicalView } from './logical.js';
+import { changeImpact, logicalRequestPrompt, requestPart, requestSnapshot, snapshotCompared } from './impact.js';
 import { addFlows, featureFlow, featureLines, featureList } from './flows.js';
 import { PRIVATE_MESSAGE, ideaPatch, keptPrivate, mustBeShareable } from './private.js';
 import { awaitsReview, readFirst } from './readfirst.js';
@@ -1278,6 +1289,10 @@ export class AgentManager extends EventEmitter {
     const graph = await this.designGraph(from.workdir);
     const changed = agent ? Object.keys(this.changeSets.get(agent.id)?.files ?? {}) : [];
     const saved = this.store.data.logicalNotes?.[g.key] ?? null;
+    const view = logicalView(graph, { notes: saved, changed, features: featureList(graph), flow: feature ? (compOf) => featureFlow(graph, feature, { compOf }) : null });
+    const impact = agent && changed.length ? await this.logicalImpact(agent, graph, saved).catch(() => null) : null;
+    // Following a feature the agent changed: its steps marked.
+    if (view.flow && impact) view.flow.changes = impact.features.find((f) => f.key === view.flow.key) ?? null;
     return {
       project: { key: g.key, name: g.name },
       projects: list,
@@ -1287,8 +1302,131 @@ export class AgentManager extends EventEmitter {
       read: { files: Object.keys(graph.files).length, capped: graph.capped },
       describe: this.config.design?.ai !== false,
       notes: saved ? { summary: saved.summary, at: saved.at, by: saved.by, stale: saved.sig !== logicalSig(graph) } : null,
-      view: logicalView(graph, { notes: saved, changed, features: featureList(graph), flow: feature ? (compOf) => featureFlow(graph, feature, { compOf }) : null }),
+      view,
+      impact,
+      requests: await this.logicalRequestsOf(g.key),
     };
+  }
+
+  /**
+   * What an agent's change does at the level of features and components: compared with its code at
+   * its base. Kept until its code or the components change.
+   */
+  async logicalImpact(agent, graph, notes) {
+    const before = await this.baseGraph(agent);
+    if (!before) return null;
+    this.impacts ??= new WeakMap();
+    const hit = this.impacts.get(graph);
+    if (hit?.before === before && hit.notes === notes?.at) return hit.impact;
+    const impact = changeImpact(graph, before, { notes });
+    this.impacts.set(graph, { before, notes: notes?.at, impact });
+    return impact;
+  }
+
+  /** An agent's code as it was at its base: its changed files read from the base commit. Kept until its changes move. */
+  async baseGraph(agent) {
+    const cs = this.changeSets.get(agent.id);
+    if (!cs?.baseSha || !agent.workdir) return null;
+    this.baseGraphs ??= new Map();
+    const key = `${agent.workdir}\n${cs.baseSha}\n${cs.sig}`;
+    const hit = this.baseGraphs.get(agent.id);
+    if (hit?.key === key) return hit.graph;
+    const dir = agent.workdir;
+    const opts = { cwd: dir, timeout: 30_000 };
+    const changed = new Set(Object.keys(cs.files));
+    const old = new Map();
+    const wanted = designFiles([...changed]).slice(0, 400);
+    for (let i = 0; i < wanted.length; i += 8) {
+      await Promise.all(
+        wanted.slice(i, i + 8).map((p) =>
+          git
+            .run('git', ['show', `${cs.baseSha}:${p}`], { ...opts, trim: false })
+            .then((text) => old.set(p, text.length <= LAYER_LIMITS.MAX_BYTES ? text : null))
+            .catch(() => old.set(p, undefined)),
+        ),
+      );
+    }
+    // The files there now and those it removed; those it added were not there.
+    const listed = (await git.run('git', ['ls-files', '--cached', '--others', '--exclude-standard'], opts).catch(() => '')).split('\n').filter(Boolean);
+    const then = [...new Set([...listed, ...changed])].filter((p) => !old.has(p) || old.get(p) !== undefined);
+    const graph = this.graphOf(dir, then, (p) => (old.has(p) ? old.get(p) : readSource(dir, p)));
+    this.baseGraphs.set(agent.id, { key, graph });
+    if (this.baseGraphs.size > 10) this.baseGraphs.delete(this.baseGraphs.keys().next().value);
+    return graph;
+  }
+
+  /** The view of an agent's code, and a part of it a request is about (see impact.js requestPart). */
+  async logicalPart(g, agent, target) {
+    const graph = await this.designGraph(agent.workdir);
+    const notes = this.store.data.logicalNotes?.[g.key] ?? null;
+    const V = logicalView(graph, { notes, features: featureList(graph), flow: target.kind === 'feature' ? (compOf) => featureFlow(graph, target.key, { compOf }) : null });
+    return { graph, V, part: requestPart(V, target, componentMap(graph, notes)) };
+  }
+
+  /**
+   * A change asked about a feature, component or link of the Logical view: previewed (the text), or
+   * sent (\`text\` as edited, else as written) to \`to\` (default: the agent whose code is shown) and
+   * kept, with the functions it covers then, to show what changed in them since.
+   */
+  async logicalRequest(projectKey, { agentId = null, target, words = '', to = null, text = null, preview = false } = {}) {
+    const { g, from } = this.designSource(projectKey, agentId);
+    if (!g) throw Object.assign(new Error('No project with its code on this computer'), { status: 400 });
+    const t = target && typeof target === 'object' ? target : {};
+    const clean = t.kind === 'feature' ? { kind: 'feature', key: String(t.key ?? '') } : t.kind === 'box' ? { kind: 'box', id: String(t.id ?? '') } : t.kind === 'edge' ? { kind: 'edge', from: String(t.from ?? ''), to: String(t.to ?? '') } : null;
+    if (!clean) throw Object.assign(new Error('Say what the change is about: a feature, a component or a link'), { status: 400 });
+    const said = String(words ?? '').trim().slice(0, 4000);
+    if (said.length < 3 && !String(text ?? '').trim()) throw Object.assign(new Error('Say what should change'), { status: 400 });
+    const { V, part } = await this.logicalPart(g, from, clean);
+    if (!part) throw Object.assign(new Error('That is not in the code any more'), { status: 400 });
+    const written = logicalRequestPrompt(V, part, { project: g.name, words: said });
+    if (preview) return { text: written };
+    const target2 = to ? g.agents.find((a) => a.id === to) : from;
+    if (!target2) throw Object.assign(new Error('Pick an agent of this project to send it to'), { status: 400 });
+    const body = String(text ?? '').trim() || written;
+    // What it covers in the asked agent's code, to show what changed there since.
+    const theirs = target2.workdir && fs.existsSync(target2.workdir) ? await this.logicalPart(g, target2, clean) : null;
+    this.tell(target2.id, body, { source: 'logical' });
+    const r = { id: crypto.randomUUID().slice(0, 8), project: g.key, target: clean, title: part.short, words: said.slice(0, 300), when: now(), agent: { id: target2.id, name: target2.name }, snap: theirs?.part ? requestSnapshot(theirs.graph, theirs.part) : {} };
+    this.store.data.logicalRequests = [...(this.store.data.logicalRequests ?? []), r].slice(-100);
+    this.store.save();
+    return { request: { id: r.id }, agent: { id: target2.id, name: target2.name } };
+  }
+
+  /** The changes asked from the Logical view of a project, newest first, each with what changed in what it covers since. */
+  async logicalRequestsOf(projectKey) {
+    const mine = (this.store.data.logicalRequests ?? []).filter((r) => r.project === projectKey && !r.dismissed).slice(-3).reverse();
+    const g = { key: projectKey };
+    const out = [];
+    for (const r of mine) {
+      const agent = this.store.get(r.agent.id);
+      const here = Boolean(agent?.workdir && fs.existsSync(agent.workdir));
+      let since = null;
+      let gone = false;
+      if (here) {
+        // Kept until its code or the components change (the view asks every few seconds).
+        const graph = await this.designGraph(agent.workdir);
+        this.requestSince ??= new WeakMap();
+        const seen = this.requestSince.get(graph) ?? this.requestSince.set(graph, new Map()).get(graph);
+        const key = `${r.id}\n${this.store.data.logicalNotes?.[projectKey]?.at ?? ''}`;
+        if (!seen.has(key)) {
+          const { part } = await this.logicalPart(g, agent, r.target);
+          const c = part ? snapshotCompared(r.snap, requestSnapshot(graph, part)) : null;
+          seen.set(key, c ? { since: { changed: c.changed.length, new: c.new.length, gone: c.gone.length, names: [...c.changed, ...c.new].slice(0, 8).map((k) => k.split('#').pop()) }, gone: false } : { since: null, gone: true });
+        }
+        ({ since, gone } = seen.get(key));
+      }
+      out.push({ id: r.id, when: r.when, target: r.target, title: r.title, words: r.words, agent: { id: r.agent.id, name: agent?.name ?? r.agent.name, here }, since, gone });
+    }
+    return out;
+  }
+
+  /** A Logical view request put away: no longer shown. */
+  dismissLogicalRequest(id) {
+    const r = (this.store.data.logicalRequests ?? []).find((x) => x.id === id);
+    if (!r) throw Object.assign(new Error('No such request'), { status: 404 });
+    r.dismissed = now();
+    this.store.save();
+    return { ok: true };
   }
 
   /**
@@ -1325,21 +1463,34 @@ export class AgentManager extends EventEmitter {
   async designGraph(dir) {
     this.designGraphs ??= new Map();
     const opts = { cwd: dir, timeout: 30_000 };
-    const [head, status] = await Promise.all([git.run('git', ['rev-parse', 'HEAD'], opts).catch(() => ''), git.run('git', ['status', '--porcelain'], opts).catch(() => '')]);
-    const key = `${head}\n${status}`;
+    const [head, status] = await Promise.all([git.run('git', ['rev-parse', 'HEAD'], opts).catch(() => ''), git.run('git', ['status', '--porcelain', '--untracked-files=all'], { ...opts, trim: false }).catch(() => '')]);
+    // A file changed again shows the same status: its size and time tell.
+    const stamps = status
+      .split('\n')
+      .filter(Boolean)
+      .slice(0, 500)
+      .map((l) => {
+        try {
+          const st = fs.statSync(path.join(dir, l.slice(3).split(' -> ').pop().replace(/^"|"$/g, '')));
+          return `${st.size}:${st.mtimeMs}`;
+        } catch {
+          return '-';
+        }
+      });
+    const key = `${head}\n${status}\n${stamps.join(',')}`;
     const hit = this.designGraphs.get(dir);
     if (hit?.key === key) return hit.graph;
     const listed = (await git.run('git', ['ls-files', '--cached', '--others', '--exclude-standard'], opts).catch(() => '')).split('\n').filter(Boolean);
+    const graph = this.graphOf(dir, listed, (p) => readSource(dir, p));
+    this.designGraphs.set(dir, { key, graph });
+    if (this.designGraphs.size > 20) this.designGraphs.delete(this.designGraphs.keys().next().value);
+    return graph;
+  }
+
+  /** The design graph of the files listed in a folder, each read by textOf(path) (its text, or null). */
+  graphOf(dir, listed, textOf) {
     const wanted = designFiles(listed);
-    const sources = [];
-    for (const p of wanted) {
-      let text = null;
-      try {
-        const full = path.join(dir, p);
-        if (fs.statSync(full).size <= LAYER_LIMITS.MAX_BYTES) text = fs.readFileSync(full, 'utf8');
-      } catch {}
-      sources.push({ path: p, text });
-    }
+    const sources = wanted.map((p) => ({ path: p, text: textOf(p) }));
     const readJson = (f) => {
       try {
         return JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8'));
@@ -1356,8 +1507,6 @@ export class AgentManager extends EventEmitter {
     }
     const graph = addFlows(addLinks(buildGraph(sources, { goModules, pkgJson: readJson('package.json') }), sources), sources);
     graph.capped = wanted.length >= LAYER_LIMITS.MAX_FILES;
-    this.designGraphs.set(dir, { key, graph });
-    if (this.designGraphs.size > 20) this.designGraphs.delete(this.designGraphs.keys().next().value);
     return graph;
   }
 
