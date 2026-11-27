@@ -1459,6 +1459,11 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
   api.get('/layers', wrap((req) => manager.codeLayers(req.query.project ? String(req.query.project) : null, { agentId: req.query.agent ? String(req.query.agent) : null, at: req.query.focus ? null : req.query.at ? String(req.query.at) : '' })));
   api.get('/logical', wrap((req) => manager.logicalLayer(req.query.project ? String(req.query.project) : null, { agentId: req.query.agent ? String(req.query.agent) : null, feature: req.query.feature ? String(req.query.feature) : null })));
   api.post('/logical/describe', wrap((req) => manager.describeLogical(req.body?.project ? String(req.body.project) : null, { agentId: req.body?.agent ? String(req.body.agent) : null, feature: req.body?.feature ? String(req.body.feature) : null })));
+  api.post('/logical/request', wrap((req) => {
+    const b = req.body ?? {};
+    return manager.logicalRequest(b.project ? String(b.project) : null, { agentId: b.agent ? String(b.agent) : null, target: b.target, words: b.words, to: b.to ? String(b.to) : null, text: b.text ? String(b.text).slice(0, 20_000) : null, preview: b.preview === true });
+  }));
+  api.delete('/logical/request/:id', wrap((req) => manager.dismissLogicalRequest(req.params.id)));
   api.post('/layers/describe', wrap((req) => manager.describeLayer(req.body?.project ? String(req.body.project) : null, { agentId: req.body?.agent ? String(req.body.agent) : null, at: req.body?.at ? String(req.body.at) : '' })));
   // Changes drawn on a layer, as a request to an agent: preview gives its text; sent, it is kept and its progress shown.
   const layerArgs = (b) => [b?.project ? String(b.project) : null, { agentId: b?.agent ? String(b.agent) : null, at: b?.at ? String(b.at) : '', to: b?.to ? String(b.to) : null }];

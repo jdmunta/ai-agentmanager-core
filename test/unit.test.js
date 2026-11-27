@@ -18,8 +18,9 @@ import { passEnv, plist, serviceIsOurs, unit } from '../src/service.js';
 import { stripChrome } from '../src/judge.js';
 import { asksFromLines, buildTimeline, timelineMarkdown } from '../src/timeline.js';
 import { GROUP_OVER, buildGraph, changeDone, changeWords, commonFolder, describePrompt, designFiles, folderEntries, importSpecs, layerView, notesFrom, partContext, rankOf, requestPrompt, resolveChanges, serviceOf, symbolsOf } from '../src/layers.js';
+import { changeImpact, logicalRequestPrompt, requestPart, requestSnapshot, snapshotCompared } from '../src/impact.js';
 import { addFlows, callsIn, featureFlow, featureLines, featureList, routeKey, serviceNames } from '../src/flows.js';
-import { addLinks, httpLinks, logicalNotesFrom, logicalPrompt, logicalSig, logicalView, pathPattern } from '../src/logical.js';
+import { addLinks, componentMap, httpLinks, logicalNotesFrom, logicalPrompt, logicalSig, logicalView, pathPattern } from '../src/logical.js';
 import { focusBoxes, layout } from '../public/design.js';
 import claude from '../src/engines/claude.js';
 import { notInstalled } from '../src/engines/index.js';
@@ -8185,4 +8186,66 @@ test('features as flows: routes grouped by their main part, traced through the c
   assert.match(prompt, /- items: 2 routes, e\.g\. GET \/api\/items, POST \/api\/items\n- stock: 1 route, e\.g\. GET \/api\/items\/\*\/stock\n- start:cli\.py: where the program starts/);
   const notes = logicalNotesFrom({ components: [{ name: 'All', members: ['cli.py'] }], features: [{ key: 'items', name: 'Item list', what: 'See them' }, { key: 'made-up', name: 'X' }] }, graph, { featureKeys: featureList(graph).map((f) => f.key) });
   assert.deepEqual(notes.features, { items: { name: 'Item list', what: 'See them' } });
+});
+
+test("an agent's change at the Logical view's level: the features it touches, the links that came and went, and requests about a part", () => {
+  const was = {
+    'web/app.js': "export async function list() {\n  return (await fetch('/api/items')).json();\n}\nexport function show(id) {\n  return fetch(`/api/items/${id}/stock`);\n}\n",
+    'server/main.js': "import express from 'express';\nimport { listItems, saveItem } from './items.js';\nimport { count } from './stock.js';\nconst app = express();\napp.get('/api/items', (q, r) => r.json(listItems()));\napp.post('/api/items', (q, r) => r.json(saveItem(q.body)));\napp.get('/api/items/:id/stock', (q, r) => r.json(count(q.params.id)));\n",
+    'server/items.js': "import pg from 'pg';\nconst pool = new pg.Pool();\nexport function listItems() {\n  return pool.query('select * from items');\n}\nexport function saveItem(x) {\n  return audit(x);\n}\nfunction audit(x) {\n  return x;\n}\n",
+    'server/stock.js': "import { execFile } from 'node:child_process';\nexport function count(id) {\n  return execFile('git', ['log', id]);\n}\n",
+  };
+  // The agent: saveItem changed, a delete route and its caller added, stock (and its git) gone.
+  const is = {
+    ...was,
+    'web/app.js': was['web/app.js'].replace(/export function show[\s\S]*/, "export function remove(id) {\n  return fetch(`/api/items/${id}`, { method: 'DELETE' });\n}\n"),
+    'server/main.js': "import express from 'express';\nimport { listItems, saveItem, dropItem } from './items.js';\nconst app = express();\napp.get('/api/items', (q, r) => r.json(listItems()));\napp.post('/api/items', (q, r) => r.json(saveItem(q.body)));\napp.delete('/api/items/:id', (q, r) => r.json(dropItem(q.params.id)));\n",
+    'server/items.js': was['server/items.js'].replace('return audit(x);', 'if (!x) throw new Error("empty");\n  return audit(x);') + "export function dropItem(id) {\n  return pool.query('delete from items where id = $1', [id]);\n}\n",
+  };
+  delete is['server/stock.js'];
+  const graphOf = (files) => {
+    const sources = Object.entries(files).map(([p, text]) => ({ path: p, text }));
+    return addFlows(addLinks(buildGraph(sources), sources), sources);
+  };
+  const before = graphOf(was);
+  const now = graphOf(is);
+  const notes = { components: [{ name: 'Pages', members: ['web/app.js'] }, { name: 'API', members: ['server/main.js'] }, { name: 'Store', members: ['server/items.js', 'server/stock.js'] }], flows: [], features: { items: { name: 'Item list', what: 'See and change items' } } };
+  const imp = changeImpact(now, before, { notes });
+  const items = imp.features.find((f) => f.key === 'items');
+  assert.equal(items.name, 'Item list');
+  assert.equal(items.how, 'changed');
+  assert.deepEqual(items.routes, { added: ['DELETE /api/items/*'], gone: [] });
+  const how = (f) => Object.fromEntries(f.steps.map((s) => [s.name, s.how]));
+  assert.deepEqual(how(items), { 'DELETE /api/items/*': 'new', saveItem: 'changed', dropItem: 'new' }, 'a function changed, new steps; listItems and audit as they were');
+  assert.deepEqual(items.callers.map((c) => `${c.name} ${c.how}`), ['remove new']);
+  assert.equal(imp.features.find((f) => f.key === 'stock').how, 'gone');
+  assert.deepEqual(imp.features.map((f) => f.key), ['stock', 'items'], 'gone and new features first');
+  assert.deepEqual(imp.links.gone.map((e) => `${e.from} ${e.to}`), ['c:store x:run:git']);
+  assert.deepEqual(imp.links.changed.map((e) => [e.from, e.to, e.routes]), [['c:pages', 'c:api', { added: ['DELETE /api/items/*'], gone: ['GET /api/items/*/stock'] }]]);
+  assert.deepEqual(changeImpact(now, now, { notes }), { features: [], featureCount: 0, links: { added: [], gone: [], changed: [] } }, 'no change, nothing touched');
+
+  // A change asked about a feature: what it is, with its flow; what changed in it since.
+  const flowView = (g) => logicalView(g, { notes, features: featureList(g), flow: (compOf) => featureFlow(g, 'items', { compOf }) });
+  const V = flowView(before);
+  const part = requestPart(V, { kind: 'feature', key: 'items' }, componentMap(before, notes));
+  assert.equal(part.title, 'the feature "Item list"');
+  const text = logicalRequestPrompt(V, part, { project: 'shop', words: 'Let people delete items' });
+  assert.match(text, /^A change asked from the Logical view of shop in Agent Manager, about the feature "Item list":\n\nLet people delete items\n/);
+  assert.match(text, /- Called from: list\(\) in `web\/app\.js` \(line 1\)/);
+  assert.match(text, /- Routes: `GET \/api\/items`, `POST \/api\/items`/);
+  assert.match(text, /\n    - saveItem\(\) in `server\/items\.js` \(line 6\), Store\n      - audit\(\) in `server\/items\.js` \(line 9\), Store/);
+  assert.match(text, /- Components it goes through: Pages, API, Store/);
+  const snap = requestSnapshot(before, part);
+  const after = requestPart(flowView(now), { kind: 'feature', key: 'items' }, componentMap(now, notes));
+  const since = snapshotCompared(snap, requestSnapshot(now, after));
+  assert.deepEqual(since, { changed: ['server/items.js#saveItem'], new: ['server/main.js#DELETE /api/items/*', 'server/items.js#dropItem', 'web/app.js#remove'], gone: [] });
+  // About a component: its files and links; about a link: what the code shows of it.
+  const box = requestPart(V, { kind: 'box', id: 'c:store' }, componentMap(before, notes));
+  assert.deepEqual(box.files, ['server/items.js', 'server/stock.js']);
+  assert.match(logicalRequestPrompt(V, box, { project: 'shop', words: 'Split it' }), /- Its files: `server\/items\.js`, `server\/stock\.js`\n- It uses: PostgreSQL \(uses pg\); git \(runs git\)\n- Used by: API \(imports \(2\)\)/);
+  const edge = requestPart(V, { kind: 'edge', from: 'c:pages', to: 'c:api' }, componentMap(before, notes));
+  assert.equal(edge.short, 'Pages → API');
+  assert.match(logicalRequestPrompt(V, edge, { project: 'shop', words: 'Batch these' }), /- Routes called: `GET \/api\/items`, `GET \/api\/items\/\*\/stock`/);
+  assert.deepEqual(Object.keys(requestSnapshot(before, edge)).sort(), ['server/main.js#GET /api/items', 'server/main.js#GET /api/items/*/stock', 'server/main.js#POST /api/items', 'web/app.js#list', 'web/app.js#show'], 'both ends of the link, with the route handlers');
+  assert.equal(requestPart(V, { kind: 'box', id: 'c:nope' }, new Map()), null);
 });

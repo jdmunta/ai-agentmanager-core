@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.82.0 (2026-11-27)
+
+- **What an agent's changes touch,** in Map's Logical view. See "Logical view" in the [README](README.md). With an agent picked under **Changes of**, its code is compared with its code when it started (its changed files read from the base commit):
+  - **Features** whose flow changed: routes added or removed, functions changed, new or gone. Following one marks its steps and callers new, changed or gone.
+  - **Links between components** that came (drawn green), went (dashed) or call other routes now.
+- **Change this…** on a feature, a component or a link: say what should change, and it is written as a request with what the code shows of it (a feature's callers, routes and steps with files and lines; a component's files and links; a link's routes and where they are called). Read and edit it, pick the agent, and **Send**. It is kept on the view with what changed since in the functions it covers in that agent's code; **Put away** hides it. `POST /api/logical/request`, `DELETE /api/logical/request/<id>`.
+- Fixes: the Design and Logical views now see a file an agent changes again; a function's body ends where its indentation comes back (not at the next definition), so flows and changes are read more closely; URL paths in comment lines are no longer taken as calls.
+
 ## 1.81.0 (2026-11-27)
 
 - **Follow a feature** in Map's Logical view. See "Logical view" in the [README](README.md). The **Follow** picker lists the project's features: its HTTP routes grouped by their main path part (`/api/agents/:id/timeline` is "timeline"), and each file where the program starts. Picking one shows it as a flow:

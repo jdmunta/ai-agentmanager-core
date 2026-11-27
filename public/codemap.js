@@ -89,6 +89,7 @@ export function initCodeMap({ api, $, esc, agents, openAgent, openBugs, openCode
   let logicalPick = null;
   let logicalAll = false;
   let logicalFeature = null; // the feature followed through the code
+  let logicalCompose = null; // a change being asked: { target, title, words, text, to, writing, sending }
   let findingParts = false;
   try {
     project = localStorage.getItem(SAVED) || null;
@@ -146,7 +147,44 @@ export function initCodeMap({ api, $, esc, agents, openAgent, openBugs, openCode
     } catch (e) {
       toast?.(e.message, 5000);
     }
+    // Not while writing a change (the refresh every few seconds would lose the place in the text).
+    if (logicalCompose && $('#map-box').childElementCount) return;
     if (JSON.stringify(data) !== before || !$('#map-box').childElementCount) draw();
+  }
+
+  /** The request for a change asked in the Logical view, written by the server from what the code shows. */
+  async function logicalWrite() {
+    const c = logicalCompose;
+    if (!c || c.writing) return;
+    if (c.words.trim().length < 3) return toast?.('Say what should change', 3000);
+    c.writing = true;
+    draw();
+    try {
+      const r = await api('POST', '/logical/request', { project, ...(designAgent ? { agent: designAgent } : {}), target: c.target, words: c.words, preview: true });
+      c.text = r.text;
+    } catch (e) {
+      toast?.(e.message, 6000);
+    }
+    c.writing = false;
+    draw();
+  }
+
+  async function logicalSend() {
+    const c = logicalCompose;
+    if (!c || c.sending) return;
+    c.sending = true;
+    draw();
+    try {
+      const r = await api('POST', '/logical/request', { project, ...(designAgent ? { agent: designAgent } : {}), target: c.target, words: c.words, to: c.to, text: c.text });
+      toast?.(`Request sent to ${r.agent.name}`, 5000, { label: 'Open', run: () => (show(false), openAgent(r.agent.id)) });
+      logicalCompose = null;
+      draw();
+      return load();
+    } catch (e) {
+      c.sending = false;
+      toast?.(e.message, 6000);
+      draw();
+    }
   }
 
   /** The components found by a model; the view waits for it (a minute or two). */
@@ -332,7 +370,9 @@ export function initCodeMap({ api, $, esc, agents, openAgent, openBugs, openCode
     if (layer === 'logical') {
       $('#map-agents').innerHTML = '';
       if (data && !('view' in data)) return;
-      return drawLogical({ data, box: $('#map-box'), warn: $('#map-warn'), esc, describing: findingParts, pick: logicalPick, all: logicalAll });
+      drawLogical({ data, box: $('#map-box'), warn: $('#map-warn'), esc, describing: findingParts, pick: logicalPick, all: logicalAll, compose: logicalCompose });
+      if (logicalCompose && !logicalCompose.sending && !logicalCompose.writing) $('#map-warn').querySelector(logicalCompose.text == null ? '[data-logical-words]' : '[data-logical-text]')?.focus();
+      return;
     }
     if (layer === 'design') {
       $('#map-agents').innerHTML = '';
@@ -646,7 +686,7 @@ export function initCodeMap({ api, $, esc, agents, openAgent, openBugs, openCode
   view.addEventListener('click', (e) => {
     const lay = e.target.closest('[data-map-layer]');
     if (lay) {
-      if (layer !== lay.dataset.mapLayer) data = null;
+      if (layer !== lay.dataset.mapLayer) (data = null), (logicalCompose = null);
       layer = lay.dataset.mapLayer;
       picked = null;
       try {
@@ -696,6 +736,28 @@ export function initCodeMap({ api, $, esc, agents, openAgent, openBugs, openCode
       if (e.target.closest('[data-logical-close]')) return (logicalPick = null), draw();
       if (e.target.closest('[data-logical-all]')) return (logicalAll = !logicalAll), draw();
       if (e.target.closest('[data-logical-unfollow]')) return (logicalFeature = null), load();
+      const change = e.target.closest('[data-logical-change]');
+      if (change) {
+        const target = JSON.parse(change.dataset.logicalChange);
+        const V = data.view;
+        const nm = (id) => V.components.find((c) => c.id === id)?.name ?? id;
+        const title = target.kind === 'feature' ? `"${V.flow?.name ?? target.key}"` : target.kind === 'box' ? nm(target.id) : `${nm(target.from)} → ${nm(target.to)}`;
+        logicalCompose = { target, title, words: '', text: null, to: designAgent ?? data.from?.id };
+        return draw();
+      }
+      if (e.target.closest('[data-logical-write]')) return logicalWrite();
+      if (e.target.closest('[data-logical-send]')) return logicalSend();
+      if (e.target.closest('[data-logical-back]') && logicalCompose) return (logicalCompose.text = null), draw();
+      if (e.target.closest('[data-logical-cancel]')) return (logicalCompose = null), draw();
+      const follow = e.target.closest('[data-logical-follow]');
+      if (follow) return (logicalFeature = follow.dataset.logicalFollow), (logicalPick = null), load();
+      const dismiss = e.target.closest('[data-logical-dismiss]');
+      if (dismiss) {
+        api('DELETE', `/logical/request/${encodeURIComponent(dismiss.dataset.logicalDismiss)}`)
+          .catch((err) => toast?.(err.message, 5000))
+          .then(load);
+        return;
+      }
       const at = e.target.closest('[data-logical-open]');
       if (at && data?.from) {
         const [file, line] = JSON.parse(at.dataset.logicalOpen);
@@ -746,6 +808,8 @@ export function initCodeMap({ api, $, esc, agents, openAgent, openBugs, openCode
   });
   view.addEventListener('input', (e) => {
     if (e.target.matches('[data-design-text]') && designPanel) designPanel.text = e.target.value;
+    if (e.target.matches('[data-logical-words]') && logicalCompose) logicalCompose.words = e.target.value;
+    if (e.target.matches('[data-logical-text]') && logicalCompose) logicalCompose.text = e.target.value;
   });
   // Dragging from one box to another while changing the design; a short press is a tap.
   view.addEventListener('pointerdown', (e) => {
@@ -796,6 +860,7 @@ export function initCodeMap({ api, $, esc, agents, openAgent, openBugs, openCode
       return load();
     }
     if (e.target.matches('[data-design-to]') && designPanel) return (designPanel.to = e.target.value);
+    if (e.target.matches('[data-logical-to]') && logicalCompose) return (logicalCompose.to = e.target.value);
     if (e.target.dataset.mapSet !== 'project') return;
     project = e.target.value;
     picked = null;
@@ -806,6 +871,7 @@ export function initCodeMap({ api, $, esc, agents, openAgent, openBugs, openCode
     designPanel = null;
     logicalPick = null;
     logicalFeature = null;
+    logicalCompose = null;
     try {
       localStorage.setItem(SAVED, project);
     } catch {}
@@ -816,6 +882,7 @@ export function initCodeMap({ api, $, esc, agents, openAgent, openBugs, openCode
     // Escape closes the panel, then lets go of a tapped box, then the map.
     if (layer === 'design' && designPanel) return (designPanel = null), draw();
     if (layer === 'design' && designEdit?.pick) return (designEdit.pick = null), draw();
+    if (layer === 'logical' && logicalCompose) return (logicalCompose = null), draw();
     if (layer === 'logical' && logicalPick) return (logicalPick = null), draw();
     if (layer === 'logical' && logicalFeature) return (logicalFeature = null), load();
     show(false);

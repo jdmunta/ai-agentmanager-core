@@ -1802,6 +1802,38 @@ test('design layers: the code in nested boxes from an agent\'s folder, its chang
   assert.deepEqual(fl.flow.steps.map((st) => `${st.file} ${st.name}`), ['api/server.js GET /money', 'src/lib/fmt.js fmt']);
   assert.deepEqual(fl.flow.hops, [['c:not-placed-yet', 'c:core']]);
   assert.equal((await call('GET', `/logical?agent=${a.id}&feature=nope`)).body.view.flow, null);
+  // What the agent's changes touch, against its code when it started: the money feature is new.
+  const im = (await call('GET', `/logical?agent=${a.id}`)).body.impact;
+  const money = im.features.find((f) => f.key === 'money');
+  assert.deepEqual([money.how, money.routes.added, money.callers.map((c) => `${c.name} ${c.how}`)], ['new', ['GET /money'], ['pay new']]);
+  assert.deepEqual(im.links.gone.map((x) => `${x.from} ${x.to}`), ['c:pages c:core'], 'Pages no longer imports Core');
+  assert.equal((await call('GET', `/logical?agent=${a.id}&feature=money`)).body.view.flow.changes.how, 'new', 'marked on the feature followed');
+  assert.equal((await call('GET', `/logical?project=${encodeURIComponent(at.project.key)}`)).body.impact, null, 'no agent picked');
+
+  // A change asked about the feature: written with its flow, read before it is sent, kept.
+  const { told: told2, restore: restore2 } = recordTold();
+  const target = { kind: 'feature', key: 'money' };
+  const pre2 = await call('POST', '/logical/request', { agent: a.id, target, words: 'Show cents too', preview: true });
+  assert.equal(pre2.status, 200, JSON.stringify(pre2.body));
+  assert.match(pre2.body.text, /^A change asked from the Logical view of .+ in Agent Manager, about the feature "money":\n\nShow cents too\n/);
+  assert.match(pre2.body.text, /- Called from: pay\(\) in `web\/page\.js` \(line 1\)\n- Routes: `GET \/money`\n- Through the code:\n  - `GET \/money` in `api\/server\.js` \(line 4\)/);
+  assert.deepEqual(told2, [], 'a preview sends nothing');
+  assert.equal((await call('POST', '/logical/request', { agent: a.id, target, words: '' })).status, 400);
+  assert.equal((await call('POST', '/logical/request', { agent: a.id, target: { kind: 'box', id: 'c:nope' }, words: 'Split it' })).status, 400);
+  assert.equal((await call('POST', '/logical/request', { agent: a.id, words: 'Split it' })).status, 400);
+  const sent2 = await call('POST', '/logical/request', { agent: a.id, target, words: 'Show cents too', text: `${pre2.body.text}\nKeep it small.` });
+  assert.equal(sent2.status, 200, JSON.stringify(sent2.body));
+  assert.match(told2.at(-1), /Keep it small\.$/, 'as edited');
+  let lr = (await call('GET', `/logical?agent=${a.id}`)).body.requests;
+  assert.deepEqual([lr[0].title, lr[0].words, lr[0].since], ['money', 'Show cents too', { changed: 0, new: 0, gone: 0, names: [] }]);
+  // The agent changes fmt, which the feature goes through.
+  fs.writeFileSync(path.join(v.workdir, 'src', 'lib', 'fmt.js'), 'export function fmt(x) {\n  return `${x}.00`;\n}\nexport const money = (x) => `$${x}`;\n');
+  lr = (await call('GET', `/logical?agent=${a.id}`)).body.requests;
+  assert.deepEqual([lr[0].since.changed, lr[0].since.names], [1, ['fmt']]);
+  assert.equal((await call('DELETE', `/logical/request/${lr[0].id}`)).status, 200);
+  assert.deepEqual((await call('GET', `/logical?agent=${a.id}`)).body.requests, [], 'put away');
+  assert.equal((await call('DELETE', '/logical/request/nope')).status, 404);
+  restore2();
   await call('DELETE', `/agents/${a.id}`);
 });
 
