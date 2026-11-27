@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.79.0 (2026-11-27)
+
+- **Change the design** in Map's Design view. See "Design layers" in the [README](README.md). On a folder layer:
+  - **Draw:** drag from one box to another (or tap one, then the other) for "this should use that"; tap an arrow to cut it; **Move into** puts a file or folder into another folder; **New part** adds a dashed box to connect.
+  - **Write the request** turns the drawing into numbered points naming the files and imports each one touches, asking for a careful refactor that keeps behaviour, runs the tests and asks first about a bad change. Edit it and pick the agent; nothing is sent until **Send**.
+  - **After sending,** the layer shows the request with a tick on each point the agent's code now does, and, with that agent's code shown, the arrows that came (green) and went (dashed) since. **Put away** hides it.
+  - `POST /api/layers/request`, `DELETE /api/layers/request/<id>`.
+- **Jump in at a box:** a box's **⋯**, or **Ask or debug** on a file, asks an agent of the project about that part, or starts **Debug** in its session there, with what the part holds, uses and is used by. `POST /api/layers/ask`.
+- **Timeline** fixes: a long message no longer shows as a `<pasted_content …>` wrapper, and the agent's own brief files are no longer listed as changed files (which also made a plain question count as a change).
+
 ## 1.78.0 (2026-11-27)
 
 - **Describe with AI** in Map's Design view. See "Design layers" in the [README](README.md). One model call about the layer on screen:

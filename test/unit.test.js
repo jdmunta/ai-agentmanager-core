@@ -17,7 +17,7 @@ import { cleanLearning, memoryKey, memoryPrompt } from '../src/memory.js';
 import { passEnv, plist, serviceIsOurs, unit } from '../src/service.js';
 import { stripChrome } from '../src/judge.js';
 import { asksFromLines, buildTimeline, timelineMarkdown } from '../src/timeline.js';
-import { GROUP_OVER, buildGraph, commonFolder, describePrompt, designFiles, folderEntries, importSpecs, layerView, notesFrom, rankOf, serviceOf, symbolsOf } from '../src/layers.js';
+import { GROUP_OVER, buildGraph, changeDone, changeWords, commonFolder, describePrompt, designFiles, folderEntries, importSpecs, layerView, notesFrom, partContext, rankOf, requestPrompt, resolveChanges, serviceOf, symbolsOf } from '../src/layers.js';
 import { focusBoxes, layout } from '../public/design.js';
 import claude from '../src/engines/claude.js';
 import { notInstalled } from '../src/engines/index.js';
@@ -7777,10 +7777,12 @@ test('timeline: asks from a transcript, dated when each closed, the changes unde
     rec('user', '2026-11-20T10:05:01Z', [{ type: 'tool_result', tool_use_id: 't1', content: 'ok' }]),
     JSON.stringify({ type: 'assistant', timestamp: '2026-11-20T10:20:00Z', message: { stop_reason: 'end_turn', content: [{ type: 'text', text: 'Export added with a test.' }] } }),
     JSON.stringify({ type: 'system', subtype: 'turn_duration', timestamp: '2026-11-20T10:20:01Z' }),
-    rec('user', '2026-11-20T11:00:00Z', '<system-reminder>noise</system-reminder>looks good?'),
+    rec('user', '2026-11-20T11:00:00Z', '<system-reminder>noise</system-reminder>\n\n<pasted_content id="p1">\nlooks good?\n</pasted_content>'),
     rec('assistant', '2026-11-20T11:00:30Z', [{ type: 'text', text: 'Yes.' }]),
     rec('user', '2026-11-20T11:01:00Z', 'and the docs?', { isMeta: true }),
     rec('user', '2026-11-20T11:02:00Z', 'ok thanks'),
+    // Its brief, kept outside the repository: not a change to it.
+    rec('assistant', '2026-11-20T11:02:05Z', [{ type: 'tool_use', id: 'tb', name: 'Write', input: { file_path: '/home/briefs/a1/BRIEF.md' } }]),
     rec('assistant', '2026-11-20T11:02:10Z', [{ type: 'text', text: 'Welcome.' }]),
     rec('user', '2026-11-20T12:00:00Z', [{ type: 'text', text: 'Open a pull request' }]),
     rec('assistant', '2026-11-20T12:03:00Z', [{ type: 'text', text: 'Opened https://github.com/o/r/pull/7' }]),
@@ -7984,4 +7986,56 @@ test('design layers described: the prompt names each entry and the imports; the 
   assert.deepEqual(core.edges, [{ from: 'src/m1.js', to: 'src/m0.js', count: 1 }]);
   assert.equal(layerView(g, { at: 'src#gone', notes }).missing, true, 'a group no longer there');
   assert.equal(layerView(g, { at: 'src' }).boxes.length, 15, 'not described: its entries, as before');
+});
+
+test('design changed by hand: drawn changes checked against the layer, written as a numbered request, and seen done in the code', () => {
+  const g = (files) => buildGraph(Object.entries(files).map(([p, text]) => ({ path: p, text })));
+  const before = g({
+    'src/a.js': "import './b.js';\nexport function a() {}",
+    'src/b.js': 'export const b = 1;',
+    'src/c.js': "import { a } from './a.js';",
+    'src/util/d.js': 'export const d = 1;',
+  });
+  const changes = resolveChanges(before, {
+    at: 'src',
+    changes: [
+      { kind: 'use', from: 'src/c.js', to: 'src/util' },
+      { kind: 'unuse', from: 'src/a.js', to: 'src/b.js' },
+      { kind: 'move', from: 'src/b.js', to: 'src/util' },
+      { kind: 'new', name: 'cache store' },
+      { kind: 'use', from: 'new:cache store', to: 'src/b.js' },
+      { kind: 'use', from: 'src/c.js', to: 'src/util' },
+    ],
+  });
+  assert.equal(changes.length, 5, 'the same change drawn twice counts once');
+  assert.deepEqual(changes.map(changeWords), ['c.js uses util', 'a.js no longer uses b.js', 'b.js moved into util', 'New part "cache-store"', 'new "cache-store" uses b.js']);
+  const text = requestPrompt(before, { project: 'demo', at: 'src', changes });
+  assert.match(text, /^Change the design of demo, as drawn in Agent Manager's Design view\. The layer: src\.\n\n1\. `src\/c\.js` should use `src\/util\/`\. It does not import it now\.\n/);
+  assert.match(text, /\n2\. `src\/a\.js` should no longer use `src\/b\.js`\. Now it imports it once: `src\/a\.js` -> `src\/b\.js`\.\n/);
+  assert.match(text, /\n3\. Move `src\/b\.js` into `src\/util\/` \(as `src\/util\/b\.js`\), and change everything that imports it\.\n/);
+  assert.match(text, /\n4\. Add the new part "cache-store" \(`src\/cache-store`\) in `src\/`/);
+  assert.match(text, /\n5\. The new part "cache-store" \(`src\/cache-store`\) should use `src\/b\.js`/);
+  assert.match(text, /say so and ask before making it/);
+  assert.deepEqual(changes.map((c) => changeDone(before, c, changes)), [false, false, false, false, false]);
+  // Done in the code; the new part uses b.js where it was moved to.
+  const after = g({
+    'src/a.js': 'export function a() {}',
+    'src/util/b.js': 'export const b = 1;',
+    'src/c.js': "import { a } from './a.js';\nimport './util/d.js';",
+    'src/util/d.js': 'export const d = 1;',
+    'src/cache-store.js': "import './util/b.js';",
+  });
+  assert.deepEqual(changes.map((c) => changeDone(after, c, changes)), [true, true, true, true, true]);
+  // What makes no sense, or is not in the layer, is refused.
+  const refused = (c, at = 'src') => assert.throws(() => resolveChanges(before, { at, changes: c }), (e) => e.status === 400);
+  refused([{ kind: 'move', from: 'src/a.js', to: 'src/c.js' }]);
+  refused([{ kind: 'use', from: 'src/a.js', to: 'src/a.js' }]);
+  refused([{ kind: 'use', from: 'src/a.js', to: 'src/gone.js' }]);
+  refused([{ kind: 'unuse', from: 'new:x', to: 'src/a.js' }, { kind: 'new', name: 'x' }]);
+  refused([{ kind: 'new', name: 'util' }]);
+  refused([{ kind: 'use', from: 'src/a.js', to: 'src/b.js' }], 'src/a.js');
+  refused([]);
+  // A box asked about: what it holds, uses and what uses it.
+  assert.equal(partContext(before, { at: 'src', id: 'src/a.js' }).text, '`src/a.js`: one file. It uses src/b.js. Used by src/c.js.');
+  assert.equal(partContext(before, { at: 'src', id: 'src/util' }).text, '`src/util/`: 1 file (src/util/d.js). It uses nothing else in this repository. Nothing else in this repository uses it.');
 });

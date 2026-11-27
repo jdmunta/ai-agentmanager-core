@@ -578,6 +578,46 @@ test('design layers: from an agent to where its changes sit, out to the system, 
   await until(`document.querySelector('#map-warn .design-summary') && document.querySelectorAll('#map-box .design-purpose').length === 2`, 'the layer described', 30_000);
   assert.match(await js(`document.querySelector('#map-warn .design-summary').textContent`), /Fake summary of the whole repository/);
   assert.equal(await js(`document.querySelector('[data-design-describe]').textContent`), 'Describe again');
+  // A box's ⋯: ask the agent about it.
+  const typeIn = (text) => js(`(() => { const t = document.querySelector('#map-warn [data-design-text]'); t.value = ${JSON.stringify(text)}; t.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+  await js(`document.querySelector('#map-box [data-design-menu="src/lib"]').click()`);
+  await until(`document.querySelector('#map-warn .design-panel [data-design-text]')`, 'the ask panel');
+  assert.equal(await js(`document.querySelector('[data-design-to]').value`), x.id, 'to the agent lit up');
+  assert.equal(await js(`document.querySelector('#map-box [data-design-at="src/lib"]') !== null`), true, 'still on the system');
+  await typeIn('Why is fmt here?');
+  await js(`document.querySelector('[data-design-send]').click()`);
+  await until(`!document.querySelector('#map-warn .design-panel') && /Asked/.test(document.body.textContent)`, 'asked');
+  // Change the design: tap src/lib then web, cut the arrow from web, add a part, drag it onto src/lib.
+  await js(`document.querySelector('[data-design-edit]').click()`);
+  await until(`document.querySelector('#map-warn .design-editing') && document.querySelector('#map-box [data-design-box="web"]')`, 'changing');
+  await js(`document.querySelector('#map-box [data-design-box="src/lib"]').click()`);
+  await until(`document.querySelector('#map-box .design-box.picked')`, 'src/lib picked');
+  await js(`document.querySelector('#map-box [data-design-box="web"]').click()`);
+  await js(`document.querySelector('#map-box .design-hit').dispatchEvent(new MouseEvent('click', { bubbles: true }))`);
+  await js(`(() => { const f = document.querySelector('[data-design-new]'); f.elements.name.value = 'cache'; f.requestSubmit(); })()`);
+  await until(`document.querySelector('#map-box [data-design-box="new:cache"]')`, 'the new part');
+  await js(`(() => {
+    const at = (el) => { el.scrollIntoView({ block: 'center' }); const q = el.getBoundingClientRect(); return { clientX: q.left + q.width / 2, clientY: q.top + q.height / 2 }; };
+    const from = document.querySelector('#map-box [data-design-box="new:cache"]');
+    const to = document.querySelector('#map-box [data-design-box="src/lib"]');
+    const a = at(from);
+    from.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, ...a }));
+    const b = at(to);
+    to.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, ...b }));
+    to.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, ...b }));
+  })()`);
+  const drawn = `[...document.querySelectorAll('#map-warn .design-changes li')].map((l) => l.firstChild.textContent.trim())`;
+  await until(`${drawn}.length === 4`, 'four changes drawn', 5000, drawn);
+  assert.deepEqual(await js(drawn), ['src/lib uses web', 'web no longer uses src/lib', 'New part "cache"', 'new "cache" uses src/lib']);
+  assert.equal(await js(`document.querySelectorAll('#map-box .design-arrow.cut').length + document.querySelectorAll('#map-box .design-arrow.asked').length`), 3, 'cut and drawn arrows');
+  // Written as a request, read and changed before it is sent.
+  await js(`document.querySelector('[data-design-preview]').click()`);
+  await until(`/^Change the design of/.test(document.querySelector('#map-warn [data-design-text]')?.value ?? '')`, 'the request written');
+  assert.match(await js(`document.querySelector('#map-warn [data-design-text]').value`), /4\. The new part "cache" \(`cache`\) should use `src\/lib\/`/);
+  await typeIn('Change the design: only point 2, please.');
+  await js(`document.querySelector('[data-design-send]').click()`);
+  await until(`document.querySelector('#map-warn .design-request') && !document.querySelector('#map-warn .design-editing')`, 'sent and shown with its progress');
+  assert.match(await js(`document.querySelector('#map-warn .design-request').textContent`), /Asked[\s\S]*0 of 4 changes in its code now[\s\S]*web no longer uses src\/lib/);
   // Into web, then its file, then the code.
   await js(`document.querySelector('#map-box [data-design-at="web"]').click()`);
   await until(`document.querySelector('#map-box [data-design-at="web/app.js"]')`, 'inside web');

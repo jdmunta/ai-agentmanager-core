@@ -1517,6 +1517,37 @@ kbd { display: inline-block; min-width: 1.6em; padding: 1px 5px; border: 1px sol
 .design-symbols .link { padding: 0; color: var(--text); font-weight: 500; }
 .design-uses { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 0 24px; }
 .design-uses .link { display: block; padding: 1px 0; text-align: left; }
+.design-more { position: absolute; top: 3px; right: 4px; padding: 0 6px; border: 0; background: transparent; color: var(--muted); font-size: 15px; line-height: 1.2; border-radius: 6px; cursor: pointer; opacity: .55; }
+.design-box:hover .design-more, .design-more:focus-visible { opacity: 1; background: var(--bg); }
+.design-box .design-name { padding-right: 18px; }
+.design-box[data-design-box] { cursor: grab; touch-action: none; user-select: none; -webkit-user-select: none; }
+.design-box.picked { border-color: var(--green); box-shadow: 0 0 0 3px color-mix(in srgb, var(--green) 40%, transparent); }
+.design-box.new { border: 1.5px dashed var(--green); background: color-mix(in srgb, var(--green) 7%, var(--panel)); }
+.design-tag.move { border-color: var(--accent); color: var(--accent); }
+.design-hit { fill: none; stroke: transparent; stroke-width: 16; pointer-events: stroke; cursor: pointer; }
+.design-arrow.cut { stroke: var(--red); stroke-dasharray: 6 4; }
+.design-arrow.came { stroke: var(--green); }
+.design-arrow.asked { stroke: var(--green); stroke-dasharray: 3 4; }
+.design-arrow.went { stroke: color-mix(in srgb, var(--muted) 60%, transparent); stroke-dasharray: 2 5; }
+#design-head-cut path { fill: var(--red); }
+#design-head-came path, #design-head-asked path { fill: var(--green); }
+#design-head-went path { fill: color-mix(in srgb, var(--muted) 60%, transparent); }
+.design-drag { stroke: var(--green); stroke-width: 2; stroke-dasharray: 4 3; }
+.design-panel { display: flex; flex-direction: column; gap: 6px; margin: 0 0 10px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel); max-width: 980px; }
+.design-panel.design-editing { border-color: var(--green); }
+.design-panel p { margin: 0; }
+.design-panel textarea { width: 100%; box-sizing: border-box; font: inherit; font-size: 13px; resize: vertical; }
+.design-panel-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.design-new { display: inline-flex; gap: 6px; }
+.design-new input { width: 210px; max-width: 50vw; font-size: 12px; padding: 3px 6px; }
+.design-changes { margin: 0; padding-left: 20px; font-size: 13px; }
+.design-changes .link { padding: 2px 8px; color: var(--muted); }
+.design-requests { display: flex; flex-direction: column; gap: 6px; margin: 0 0 10px; max-width: 980px; }
+.design-request { padding: 8px 12px; border: 1px solid var(--border); border-left: 3px solid var(--green); border-radius: 8px; background: var(--panel); font-size: 13px; }
+.design-request ul { list-style: none; margin: 4px 0; padding: 0; }
+.design-request li.done { color: var(--green); }
+/* Not the agents' warnings, which the same box lists. */
+.map-warn .design-changes li, .map-warn .design-request li { padding: 1px 0; margin: 0; border: 0; border-radius: 0; background: none; }
 
 /* ---------- Timeline: an agent's milestones in a thread */
 .timeline-dialog { width: min(760px, calc(100vw - 32px)); }
@@ -1577,8 +1608,8 @@ body.mapping .layout, body.mapping .watch-view { display: none; }
 #map-btn.active { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
 /* Map, Bugs view: heat, the paths bugs take, cold spots */
 .map-layers { display: inline-flex; gap: 4px; }
-.map-layers .chip { font-size: 12px; padding: 3px 12px; border-radius: 999px; border: 1px solid var(--border); background: var(--panel); color: inherit; cursor: pointer; }
-.map-layers .chip.active { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+.map-layers .chip, .design-panel .chip { font-size: 12px; padding: 3px 12px; border-radius: 999px; border: 1px solid var(--border); background: var(--panel); color: inherit; cursor: pointer; }
+.map-layers .chip.active, .design-panel .chip.active { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
 .map-key.heat { background: linear-gradient(90deg, color-mix(in srgb, var(--red) 12%, var(--panel)), var(--red)); }
 .map-key.arrow { height: 0; border-top: 3px solid var(--accent); }
 .map-key.cold { background: repeating-linear-gradient(45deg, var(--border) 0 2px, transparent 2px 5px); border: 1px solid var(--border); }

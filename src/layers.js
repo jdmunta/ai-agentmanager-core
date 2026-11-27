@@ -355,6 +355,31 @@ function groupsOf(notes, entries) {
 }
 
 /**
+ * The boxes of a folder layer before they are measured: each { id, kind, name, purpose, files,
+ * paths } (paths: the entries it stands for, a group's members), its group if `at` is one, the
+ * folder's groups. missing: `at` is a group the folder no longer has.
+ */
+function layerBoxes(graph, at, notes) {
+  const [folder, groupSlug = null] = at.split('#');
+  const entries = childrenOf(Object.keys(graph.files), folder);
+  const groups = groupsOf(notes, entries);
+  const purposes = notes?.purposes ?? {};
+  const nameIn = (id) => (folder ? id.slice(folder.length + 1) : id);
+  const entry = (e) => ({ ...e, name: nameIn(e.id), purpose: purposes[e.id] ?? '', paths: [e.id] });
+  if (groupSlug != null) {
+    // Inside one group: its members.
+    const group = groups?.find((g) => g.slug === groupSlug) ?? null;
+    if (!group) return { boxes: [], group: null, groups, missing: true };
+    return { boxes: entries.filter((e) => group.members.includes(e.id)).map(entry), group, groups };
+  }
+  if (groups) {
+    const byId = new Map(entries.map((e) => [e.id, e]));
+    return { boxes: groups.map((g) => ({ id: `${folder}#${g.slug}`, kind: 'group', name: g.name, purpose: g.purpose, members: g.members.length, files: g.members.flatMap((m) => byId.get(m).files), paths: g.members })), group: null, groups };
+  }
+  return { boxes: entries.map(entry), group: null, groups };
+}
+
+/**
  * One layer: the boxes inside `at` with the arrows between them, the agent's changes and what
  * depends on them marked. `at` is a folder, a file (its symbols), or "folder#group" for one of the
  * groups the model made of a busy folder. `notes` (from describe) gives the folder's summary, a
@@ -369,7 +394,7 @@ export function layerView(graph, { at = '', changed = [], churn = {}, notes = nu
     if (changedSet.has(f)) continue;
     if (info.imports.some((imp) => (imp.file ? changedSet.has(imp.file) : [...changedSet].some((c) => dirOf(c) === imp.dir)))) dependents.add(f);
   }
-  const [folder, groupSlug = null] = at.split('#');
+  const [folder] = at.split('#');
   const crumbs = [{ id: '', name: 'System' }];
   if (folder) folder.split('/').forEach((_, i, parts) => crumbs.push({ id: parts.slice(0, i + 1).join('/'), name: parts[i] }));
 
@@ -382,22 +407,10 @@ export function layerView(graph, { at = '', changed = [], churn = {}, notes = nu
     };
   }
 
-  const entries = childrenOf(all, folder);
-  const groups = groupsOf(notes, entries);
-  const purposes = notes?.purposes ?? {};
-  const nameIn = (id) => (folder ? id.slice(folder.length + 1) : id);
-  let boxes;
-  let group = null;
-  if (groupSlug != null) {
-    // Inside one group: its members.
-    group = groups?.find((g) => g.slug === groupSlug) ?? null;
-    if (!group) return { at, crumbs, kind: 'folder', boxes: [], edges: [], rank: {}, talksTo: [], counts: { files: 0 }, missing: true };
-    crumbs.push({ id: at, name: group.name });
-    boxes = entries.filter((e) => group.members.includes(e.id)).map((e) => ({ ...e, name: nameIn(e.id), purpose: purposes[e.id] ?? '' }));
-  } else if (groups) {
-    const byId = new Map(entries.map((e) => [e.id, e]));
-    boxes = groups.map((g) => ({ id: `${folder}#${g.slug}`, kind: 'group', name: g.name, purpose: g.purpose, members: g.members.length, files: g.members.flatMap((m) => byId.get(m).files) }));
-  } else boxes = entries.map((e) => ({ ...e, name: nameIn(e.id), purpose: purposes[e.id] ?? '' }));
+  const { boxes: found, group, groups, missing } = layerBoxes(graph, at, notes);
+  let boxes = found;
+  if (missing) return { at, crumbs, kind: 'folder', boxes: [], edges: [], rank: {}, talksTo: [], counts: { files: 0 }, missing: true };
+  if (group) crumbs.push({ id: at, name: group.name });
   if (!boxes.length) return { at, crumbs, kind: 'folder', boxes: [], edges: [], rank: {}, talksTo: [], counts: { files: 0 } };
 
   // The boxes with the agent's changes or what uses them, then the biggest; the rest as one.
@@ -567,4 +580,162 @@ export function rankOf(ids, pairs) {
   };
   for (const id of ids) depth(id);
   return rank;
+}
+
+// ------------------------------------------------------------------ changed by hand
+
+// What can be drawn in the Design view, made a request to an agent: one part using another, no
+// longer using it, moved into a folder, a new part.
+const CHANGE_KINDS = ['use', 'unuse', 'move', 'new'];
+const MAX_CHANGES = 20;
+const REQUEST_HEAD = 'Change the design of';
+
+const bad = (message) => Object.assign(new Error(message), { status: 400 });
+const baseOf = (p) => p.split('/').pop();
+// A part takes in a file: an entry it stands for or inside one; a new part also by its name with an extension.
+const inPart = (f, part) => part.paths.some((p) => under(f, p) || (part.kind === 'new' && f.startsWith(`${p}.`)));
+const partName = (s) => String(s ?? '').trim().replace(/[^\w.-]+/g, '-').replace(/^[-.]+|-+$/g, '').slice(0, 60);
+const listed = (xs, n = 8) => xs.slice(0, n).join(', ') + (xs.length > n ? ` and ${xs.length - n} more` : '');
+
+/** The imports from one part's files into another's, as [{ from, to }] (to: a file or package folder). */
+export function importsBetween(graph, a, b) {
+  const out = [];
+  for (const [f, info] of Object.entries(graph.files)) {
+    if (!inPart(f, a) || inPart(f, b)) continue;
+    for (const imp of info.imports) {
+      const t = targetOf(imp);
+      if (inPart(t, b) || (imp.dir && b.paths.some((p) => dirOf(p) === t))) out.push({ from: f, to: t });
+    }
+  }
+  return out;
+}
+
+/** A part named for a person or an agent: a file, a folder/, a group with its members, a new part. */
+export function partLabel(p) {
+  if (p.kind === 'group') return `the "${p.name}" part (${listed(p.paths.map((x) => `\`${x}\``))})`;
+  if (p.kind === 'new') return `the new part "${p.name}" (\`${p.paths[0]}\`)`;
+  return p.kind === 'folder' ? `\`${p.id}/\`` : `\`${p.id}\``;
+}
+
+/**
+ * The changes drawn on a folder layer, each part looked up among its boxes ({ id, name, kind, paths }).
+ * changes: [{ kind, from, to, name }] with box ids; a new part is "new:<name>". Throws on a part
+ * not in the layer or a change that makes no sense.
+ */
+export function resolveChanges(graph, { at = '', notes = null, changes = [] }) {
+  if (graph.files[at]) throw bad('Changes are drawn on a folder, not a file');
+  const { boxes, missing } = layerBoxes(graph, at, notes);
+  if (missing) throw bad('This group is gone: the folder was described again');
+  if (!Array.isArray(changes) || !changes.length) throw bad('Draw a change first');
+  if (changes.length > MAX_CHANGES) throw bad(`At most ${MAX_CHANGES} changes in one request`);
+  const folder = at.split('#')[0];
+  const byId = new Map(boxes.map((b) => [b.id, { id: b.id, name: b.name, kind: b.kind, paths: b.paths }]));
+  const news = new Map();
+  for (const c of changes.filter((x) => x?.kind === 'new')) {
+    const name = partName(c.name);
+    if (!name) throw bad('Name the new part');
+    const p = folder ? `${folder}/${name}` : name;
+    if (byId.has(p) || Object.keys(graph.files).some((f) => under(f, p))) throw bad(`There is already ${p}`);
+    news.set(`new:${name}`, { id: `new:${name}`, name, kind: 'new', paths: [p] });
+  }
+  const part = (id) => byId.get(id) ?? news.get(String(id).startsWith('new:') ? `new:${partName(String(id).slice(4))}` : id) ?? (() => { throw bad(`${id} is not in this layer any more: draw it again`); })();
+  const out = [];
+  const seen = new Set();
+  for (const c of changes) {
+    if (!CHANGE_KINDS.includes(c?.kind)) throw bad(`Unknown change ${c?.kind}`);
+    const key = c.kind === 'new' ? `new\n${partName(c.name)}` : `${c.kind}\n${c.from}\n${c.to}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    if (c.kind === 'new') {
+      out.push({ kind: 'new', from: news.get(`new:${partName(c.name)}`), to: null });
+      continue;
+    }
+    const from = part(c.from);
+    const to = part(c.to);
+    if (from.id === to.id) throw bad('A change needs two different parts');
+    if (c.kind === 'unuse' && (from.kind === 'new' || to.kind === 'new')) throw bad('A new part uses nothing yet');
+    if (c.kind === 'move' && (!['file', 'folder'].includes(from.kind) || to.kind !== 'folder')) throw bad('Only a file or folder moves, and only into a folder');
+    out.push({ kind: c.kind, from, to });
+  }
+  return out;
+}
+
+/** One change in words, short, for the view. */
+export function changeWords(c) {
+  const a = c.from.kind === 'new' ? `new "${c.from.name}"` : c.from.name;
+  const b = c.to ? (c.to.kind === 'new' ? `new "${c.to.name}"` : c.to.name) : '';
+  return { use: `${a} uses ${b}`, unuse: `${a} no longer uses ${b}`, move: `${a} moved into ${b}`, new: `New part "${a.replace(/^new "|"$/g, '')}"` }[c.kind];
+}
+
+const movedTo = (c) => `${c.to.paths[0]}/${baseOf(c.from.paths[0])}`;
+
+/** Whether the code now does what a change asked; a part moved by another change of the request counts where it went. */
+export function changeDone(graph, c, all = []) {
+  const files = Object.keys(graph.files);
+  const there = (p) => {
+    const m = all.find((x) => x.kind === 'move' && x.from.id === p.id);
+    return m ? { ...p, kind: 'new', paths: [...p.paths, movedTo(m)] } : p;
+  };
+  if (c.kind === 'use') return importsBetween(graph, there(c.from), there(c.to)).length > 0;
+  if (c.kind === 'unuse') return importsBetween(graph, there(c.from), there(c.to)).length === 0;
+  if (c.kind === 'new') return files.some((f) => inPart(f, c.from));
+  // Moved: gone from where it was, there under its name in the folder.
+  const dest = { kind: 'new', paths: [movedTo(c)] };
+  return !files.some((f) => inPart(f, c.from)) && files.some((f) => inPart(f, dest));
+}
+
+/** The request to an agent for the changes drawn: each numbered, with the files it touches. */
+export function requestPrompt(graph, { project, at = '', group = null, changes }) {
+  const folder = at.split('#')[0];
+  const lines = changes.map((c, i) => {
+    const n = `${i + 1}.`;
+    const label = partLabel(c.from);
+    const a = label.replace(/^the /, 'The ');
+    if (c.kind === 'new') return `${n} Add ${label} in ${folder ? `\`${folder}/\`` : 'the top level'}: a file or folder for what the other points say it is used for.`;
+    const b = partLabel(c.to);
+    if (c.kind === 'use') return `${n} ${a} should use ${b}. It does not import it now${importsBetween(graph, c.to, c.from).length ? ' (the other way round, it does)' : ''}.`;
+    if (c.kind === 'unuse') {
+      const now = importsBetween(graph, c.from, c.to);
+      return `${n} ${a} should no longer use ${b}. Now it imports it ${now.length === 1 ? 'once' : `${now.length} times`}: ${listed(now.map((x) => `\`${x.from}\` -> \`${x.to}\``), 10)}.`;
+    }
+    return `${n} Move ${label} into ${b} (as \`${movedTo(c)}\`), and change everything that imports it.`;
+  });
+  return [
+    `${REQUEST_HEAD} ${project}, as drawn in Agent Manager's Design view. The layer: ${folder || 'the top level of the repository'}${group ? `, its "${group}" part` : ''}.`,
+    '',
+    ...lines,
+    '',
+    'Make these as a careful refactor: change the imports and every caller, keep the behaviour the same apart from these changes, update or add tests, and run them. If a change is a bad idea or needs more than it shows (a cycle, a large rewrite), say so and ask before making it. When done, say what you did for each numbered point.',
+  ].join('\n');
+}
+
+/** A box of a layer, or the file shown, with what it imports and what imports it, for an agent asked about it. */
+export function partContext(graph, { at = '', notes = null, id }) {
+  let p;
+  if (graph.files[id]) p = { id, name: baseOf(id), kind: 'file', paths: [id] };
+  else {
+    const b = layerBoxes(graph, at, notes).boxes.find((x) => x.id === id);
+    if (!b) throw bad(`${id} is not in this layer any more`);
+    p = { id: b.id, name: b.name, kind: b.kind, paths: b.paths };
+  }
+  const uses = new Set();
+  const usedBy = new Set();
+  for (const [f, info] of Object.entries(graph.files)) {
+    const mine = inPart(f, p);
+    for (const imp of info.imports) {
+      const t = targetOf(imp);
+      const there = inPart(t, p) || (imp.dir && p.paths.some((x) => dirOf(x) === t));
+      if (mine && !there) uses.add(t);
+      if (!mine && there) usedBy.add(f);
+    }
+  }
+  const files = Object.keys(graph.files).filter((f) => inPart(f, p));
+  return {
+    part: p,
+    text: [
+      `${partLabel(p)}: ${files.length === 1 && files[0] === p.id ? 'one file' : `${files.length} ${files.length === 1 ? 'file' : 'files'} (${listed(files)})`}.`,
+      uses.size ? `It uses ${listed([...uses].sort())}.` : 'It uses nothing else in this repository.',
+      usedBy.size ? `Used by ${listed([...usedBy].sort())}.` : 'Nothing else in this repository uses it.',
+    ].join(' '),
+  };
 }

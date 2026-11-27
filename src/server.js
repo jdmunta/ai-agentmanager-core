@@ -1458,6 +1458,18 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
   // Design layers (layers.js): the project's code as nested boxes, with an agent's changes lit up.
   api.get('/layers', wrap((req) => manager.codeLayers(req.query.project ? String(req.query.project) : null, { agentId: req.query.agent ? String(req.query.agent) : null, at: req.query.focus ? null : req.query.at ? String(req.query.at) : '' })));
   api.post('/layers/describe', wrap((req) => manager.describeLayer(req.body?.project ? String(req.body.project) : null, { agentId: req.body?.agent ? String(req.body.agent) : null, at: req.body?.at ? String(req.body.at) : '' })));
+  // Changes drawn on a layer, as a request to an agent: preview gives its text; sent, it is kept and its progress shown.
+  const layerArgs = (b) => [b?.project ? String(b.project) : null, { agentId: b?.agent ? String(b.agent) : null, at: b?.at ? String(b.at) : '', to: b?.to ? String(b.to) : null }];
+  api.post('/layers/request', wrap((req) => {
+    const [project, opts] = layerArgs(req.body);
+    return manager.designRequest(project, { ...opts, changes: req.body?.changes, text: req.body?.text ? String(req.body.text).slice(0, 20_000) : null, preview: req.body?.preview === true });
+  }));
+  api.delete('/layers/request/:id', wrap((req) => manager.dismissDesignRequest(req.params.id)));
+  // Jump in at a box: ask an agent about it, or start Debug there.
+  api.post('/layers/ask', wrap((req) => {
+    const [project, opts] = layerArgs(req.body);
+    return manager.designAsk(project, { ...opts, id: req.body?.id ? String(req.body.id) : null, kind: req.body?.kind === 'debug' ? 'debug' : 'ask', text: req.body?.text });
+  }));
   api.get('/codemap', wrap((req) => manager.codeMap(req.query.project ? String(req.query.project) : null, { bugs: req.query.layer === 'bugs' ? { findings: hunts.findings, hunts: hunts.hunts } : null, speed: req.query.layer === 'speed' ? benches : null })));
   // Modules to benchmark, and what their benchmarks found (benchmarks.js).
   api.post('/benchmodules', wrap((req) => benches.watch(req.body ?? {})));

@@ -1733,6 +1733,44 @@ test('design layers: the code in nested boxes from an agent\'s folder, its chang
   fs.writeFileSync(path.join(v.workdir, 'api', 'x.js'), 'export const y = 1;\n');
   assert.equal((await call('GET', `/layers?agent=${a.id}`)).body.notes.stale, true);
   assert.equal((await call('POST', '/layers/describe', { project: 'no-such-project-anywhere', at: 'nowhere' })).status, 400);
+
+  // Changes drawn on the system layer: previewed as a request, then sent to the agent and kept.
+  const { told, restore } = recordTold();
+  const changes = [{ kind: 'unuse', from: 'web', to: 'src/lib' }, { kind: 'new', name: 'cache' }, { kind: 'use', from: 'new:cache', to: 'src/lib' }];
+  const pre = await call('POST', '/layers/request', { agent: a.id, at: '', changes, preview: true });
+  assert.equal(pre.status, 200, JSON.stringify(pre.body));
+  assert.match(pre.body.text, /^Change the design of/);
+  assert.match(pre.body.text, /1\. `web\/` should no longer use `src\/lib\/`\. Now it imports it once: `web\/app\.js` -> `src\/lib\/fmt\.js`/);
+  assert.match(pre.body.text, /3\. The new part "cache" \(`cache`\) should use `src\/lib\/`/);
+  assert.deepEqual(told, [], 'a preview sends nothing');
+  assert.equal((await call('POST', '/layers/request', { agent: a.id, at: '', changes: [{ kind: 'use', from: 'web', to: 'gone' }] })).status, 400);
+  assert.equal((await call('POST', '/layers/request', { agent: a.id, at: '', changes: [{ kind: 'move', from: 'web', to: 'web/app.js' }] })).status, 400);
+  const sent = await call('POST', '/layers/request', { agent: a.id, at: '', changes, text: `${pre.body.text}\nKeep it small.` });
+  assert.equal(sent.status, 200, JSON.stringify(sent.body));
+  assert.equal(sent.body.agent.id, a.id);
+  assert.match(told.at(-1), /Keep it small\.$/, 'as edited');
+  let req = (await call('GET', `/layers?agent=${a.id}`)).body.requests;
+  assert.deepEqual(req[0].changes.map((c) => [c.words, c.done]), [['web no longer uses src/lib', false], ['New part "cache"', false], ['new "cache" uses src/lib', false]]);
+  assert.deepEqual(req[0].since, { added: [], gone: [] }, 'drawn from its code: nothing came or went yet');
+  // The agent does it: web stops importing src/lib, a new cache.js does.
+  fs.writeFileSync(path.join(v.workdir, 'web', 'app.js'), "import pg from 'pg';\nexport function show() {}\n");
+  fs.writeFileSync(path.join(v.workdir, 'cache.js'), "import { fmt } from './src/lib/fmt.js';\n");
+  req = (await call('GET', `/layers?agent=${a.id}`)).body.requests;
+  assert.deepEqual([req[0].done, req[0].since.gone, req[0].since.added], [3, [{ from: 'web', to: 'src/lib' }], [{ from: 'cache.js', to: 'src/lib' }]]);
+  // The project with no agent picked is read from its only agent's folder too: the same.
+  assert.deepEqual((await call('GET', `/layers?project=${encodeURIComponent(at.project.key)}`)).body.requests[0].since, req[0].since);
+  assert.equal((await call('DELETE', `/layers/request/${req[0].id}`)).status, 200);
+  assert.deepEqual((await call('GET', `/layers?agent=${a.id}`)).body.requests, [], 'put away');
+
+  // Jump in at a box: a question with what it holds and uses; Debug there.
+  const asked = await call('POST', '/layers/ask', { agent: a.id, at: '', id: 'src/lib', text: 'Why is fmt here?' });
+  assert.equal(asked.status, 200, JSON.stringify(asked.body));
+  assert.match(told.at(-1), /^Why is fmt here\?\n\n\(Asked from the Design view, about `src\/lib\/`: 1 file \(src\/lib\/fmt\.js\)\. It uses nothing else in this repository\. Used by cache\.js\.\)$/);
+  const dbg = await call('POST', '/layers/ask', { agent: a.id, at: 'web', id: 'web/app.js', kind: 'debug', text: 'show() returns nothing' });
+  assert.equal(dbg.status, 200, JSON.stringify(dbg.body));
+  assert.equal((await agentNow(a.id)).debug.asks.at(-1).text, 'show() returns nothing (In `web/app.js`: one file. It uses nothing else in this repository. Nothing else in this repository uses it.)');
+  assert.equal((await call('POST', '/layers/ask', { agent: a.id, at: '', id: 'web', text: '' })).status, 400);
+  restore();
   await call('DELETE', `/agents/${a.id}`);
 });
 
