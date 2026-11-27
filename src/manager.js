@@ -144,6 +144,7 @@ import { conflictMessage, findConflicts, related, repoKey, summarize as summariz
 import { answerMessage, loadQuestions, questionsPath, questionsPrompt } from './inbox.js';
 import { PROOF_FILE, proofBlock, proofFacts, proofPrompt } from './proof.js';
 import { LIMITS as LAYER_LIMITS, buildGraph, changeDone, changeWords, commonFolder, describePrompt, designFiles, folderEntries, layerView, notesFrom, partContext, requestPrompt, resolveChanges } from './layers.js';
+import { LOGICAL_HEAD, addLinks, logicalNotesFrom, logicalPrompt, logicalSig, logicalView } from './logical.js';
 import { PRIVATE_MESSAGE, ideaPatch, keptPrivate, mustBeShareable } from './private.js';
 import { awaitsReview, readFirst } from './readfirst.js';
 import { traceOf } from './trace.js';
@@ -1264,6 +1265,61 @@ export class AgentManager extends EventEmitter {
     return this.codeLayers(g.key, { agentId, at: spot });
   }
 
+  /**
+   * The logical view (logical.js) of a project's code: its components and the links between them
+   * that imports don't show (HTTP routes called, programs run, files, outside services), the data
+   * each carries once a model has named it, an agent's changes lit up.
+   */
+  async logicalLayer(projectKey, { agentId = null } = {}) {
+    const { g, list, agent, from } = this.designSource(projectKey, agentId);
+    if (!g) return { project: null, projects: list, agents: [], view: null };
+    if (agent) await this.updateChanges(agent);
+    const graph = await this.designGraph(from.workdir);
+    const changed = agent ? Object.keys(this.changeSets.get(agent.id)?.files ?? {}) : [];
+    const saved = this.store.data.logicalNotes?.[g.key] ?? null;
+    return {
+      project: { key: g.key, name: g.name },
+      projects: list,
+      agents: g.agents.map((a) => ({ id: a.id, name: a.name, changed: Object.keys(this.changeSets.get(a.id)?.files ?? {}).length })).sort((x, y) => y.changed - x.changed),
+      agent: agent?.id ?? null,
+      from: { id: from.id, name: from.name },
+      read: { files: Object.keys(graph.files).length, capped: graph.capped },
+      describe: this.config.design?.ai !== false,
+      notes: saved ? { summary: saved.summary, at: saved.at, by: saved.by, stale: saved.sig !== logicalSig(graph) } : null,
+      view: logicalView(graph, { notes: saved, changed }),
+    };
+  }
+
+  /**
+   * The project's files grouped into named components by a model (one tool-less call with the
+   * names of its parts, what they define and the links the code shows, not the code), with what
+   * data each link carries. Kept for the project until asked again.
+   */
+  async describeLogical(projectKey, { agentId = null } = {}) {
+    if (this.config.design?.ai === false) throw Object.assign(new Error('Describing the design is turned off ("design": { "ai": false } in config.json)'), { status: 400 });
+    const { g, from } = this.designSource(projectKey, agentId);
+    if (!g) throw Object.assign(new Error('No project with its code on this computer'), { status: 400 });
+    const graph = await this.designGraph(from.workdir);
+    if (!Object.keys(graph.files).length) throw Object.assign(new Error('No source files to describe'), { status: 400 });
+    this.describing ??= new Map();
+    const key = `${LOGICAL_HEAD}\n${g.key}`;
+    if (!this.describing.has(key)) {
+      const writer = this.writerFor(from);
+      const run = this.oneShot(from, logicalPrompt(graph, { project: g.name }), { ...writer, timeoutMs: 300_000 })
+        .then((text) => {
+          const notes = logicalNotesFrom(parseJsonReply(text), graph);
+          if (!notes.components.length) throw new Error('The model gave no components');
+          this.store.data.logicalNotes ??= {};
+          this.store.data.logicalNotes[g.key] = { ...notes, sig: logicalSig(graph), at: now(), by: [writer.engine.label, writer.model].filter(Boolean).join(' · ') };
+          this.store.save();
+        })
+        .finally(() => this.describing.delete(key));
+      this.describing.set(key, run);
+    }
+    await this.describing.get(key);
+    return this.logicalLayer(g.key, { agentId });
+  }
+
   /** The import graph of the code in a folder, kept until its commit or working files change. */
   async designGraph(dir) {
     this.designGraphs ??= new Map();
@@ -1297,7 +1353,7 @@ export class AgentManager extends EventEmitter {
         if (module) goModules.push({ dir: f.split('/').slice(0, -1).join('/'), module });
       } catch {}
     }
-    const graph = buildGraph(sources, { goModules, pkgJson: readJson('package.json') });
+    const graph = addLinks(buildGraph(sources, { goModules, pkgJson: readJson('package.json') }), sources);
     graph.capped = wanted.length >= LAYER_LIMITS.MAX_FILES;
     this.designGraphs.set(dir, { key, graph });
     if (this.designGraphs.size > 20) this.designGraphs.delete(this.designGraphs.keys().next().value);

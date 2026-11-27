@@ -1548,6 +1548,31 @@ kbd { display: inline-block; min-width: 1.6em; padding: 1px 5px; border: 1px sol
 .design-request li.done { color: var(--green); }
 /* Not the agents' warnings, which the same box lists. */
 .map-warn .design-changes li, .map-warn .design-request li { padding: 1px 0; margin: 0; border: 0; border-radius: 0; background: none; }
+/* ---------- Map's Logical view: components and the links imports don't show (logical.js) */
+.logical-arrow.http { stroke: var(--accent); }
+.logical-arrow.imports { stroke: color-mix(in srgb, var(--muted) 75%, transparent); }
+.logical-arrow.ext { stroke: color-mix(in srgb, #8b5cf6 70%, transparent); stroke-dasharray: 6 3; }
+.logical-arrow.guessed { stroke: color-mix(in srgb, var(--muted) 70%, transparent); stroke-dasharray: 2 4; }
+.logical-arrow.on { stroke-width: 4px; filter: drop-shadow(0 0 3px color-mix(in srgb, var(--accent) 60%, transparent)); }
+#logical-head-http path { fill: var(--accent); }
+#logical-head-imports path, #logical-head-guessed path { fill: color-mix(in srgb, var(--muted) 70%, transparent); }
+#logical-head-ext path { fill: #8b5cf6; }
+.logical-label { font-size: 10.5px; fill: var(--text); paint-order: stroke; stroke: var(--bg); stroke-width: 4px; stroke-linejoin: round; }
+.logical-label.ext { fill: color-mix(in srgb, #8b5cf6 80%, var(--text)); }
+.design-box.external { border-style: dashed; border-color: color-mix(in srgb, #8b5cf6 60%, var(--border)); background: color-mix(in srgb, #8b5cf6 6%, var(--panel)); box-shadow: none; }
+.design-box.unplaced { border-style: dashed; }
+.design-tag.http { border-color: var(--accent); color: var(--accent); }
+.logical-panel .spacer { flex: 1; }
+.logical-members { display: inline; }
+.logical-members .link { padding: 0 4px 0 0; }
+.logical-links, .logical-routes { list-style: none; margin: 2px 0 0; padding: 0; font-size: 13px; }
+.logical-routes { columns: 2 260px; font-size: 12px; }
+.logical-links .link { padding: 0; }
+.map-warn .logical-links li, .map-warn .logical-routes li { padding: 1px 0; margin: 0; border: 0; border-radius: 0; background: none; }
+.map-key.logical-http { height: 0; border-top: 2px solid var(--accent); border-radius: 0; }
+.map-key.logical-code { height: 0; border-top: 2px solid var(--muted); border-radius: 0; }
+.map-key.logical-ext { height: 0; border-top: 2px dashed #8b5cf6; border-radius: 0; }
+.map-key.logical-guessed { height: 0; border-top: 2px dotted var(--muted); border-radius: 0; }
 
 /* ---------- Timeline: an agent's milestones in a thread */
 .timeline-dialog { width: min(760px, calc(100vw - 32px)); }

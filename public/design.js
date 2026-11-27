@@ -19,13 +19,16 @@ const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 export const partName = (s) => String(s ?? '').trim().replace(/[^\w.-]+/g, '-').replace(/^[-.]+|-+$/g, '').slice(0, 60);
 const when = (s) => new Date(s).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 
-/** The curve from one box to another: down from a caller above, round the side otherwise. */
-function arrowPath(a, b) {
+/** The curve from one box to another: down from a caller above, round the side otherwise; at(t): a point on it. */
+export function arrowPath(a, b) {
   const down = b.y > a.y;
   const [x1, y1] = down ? [a.x + a.w / 2, a.y + a.h] : [a.x + a.w / 2, a.y + (b.y < a.y ? 0 : a.h)];
   const [x2, y2] = down ? [b.x + b.w / 2, b.y] : [b.x + b.w / 2, b.y + (b.y < a.y ? b.h : a.h)];
   const bend = down ? Math.max(18, (y2 - y1) / 2) : b.y < a.y ? -30 : 30;
-  return { d: `M${x1},${y1} C${x1},${y1 + bend} ${x2},${y2 - (down ? bend : -bend)} ${x2},${y2}`, down };
+  const [c1, c2] = [y1 + bend, y2 - (down ? bend : -bend)];
+  // A point along it, t from 0 to 1.
+  const at = (t) => [x1 + (x2 - x1) * (3 * (1 - t) * t * t + t * t * t), (1 - t) ** 3 * y1 + 3 * (1 - t) ** 2 * t * c1 + 3 * (1 - t) * t * t * c2 + t ** 3 * y2];
+  return { d: `M${x1},${y1} C${x1},${c1} ${x2},${c2} ${x2},${y2}`, down, at };
 }
 
 /** The changes drawn so far, in words. */
@@ -36,7 +39,7 @@ export function changeWords(c, nameOf) {
 const lines = (n) => (n >= 10_000 ? `${Math.round(n / 1000)}k` : n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
 
 /** Where each box goes: rows by rank, wrapped to the width. Returns { pos: { id: { x, y, w, h } }, height }. */
-export function layout(boxes, rank, W, boxH = BOX_H) {
+export function layout(boxes, rank, W, boxH = BOX_H, gapY = GAP_Y) {
   const ranks = [...new Set(boxes.map((b) => rank[b.id] ?? 0))].sort((a, b) => a - b);
   const pos = {};
   let y = 4;
@@ -51,10 +54,10 @@ export function layout(boxes, rank, W, boxH = BOX_H) {
         pos[b.id] = { x, y, w, h: boxH };
         x += w + GAP_X;
       }
-      y += boxH + GAP_Y;
+      y += boxH + gapY;
     }
   }
-  return { pos, height: Math.max(y - GAP_Y + 8, 120) };
+  return { pos, height: Math.max(y - gapY + 8, 120) };
 }
 
 // More boxes than this with an agent picked: only its changes and what uses them, unless all are asked for.

@@ -618,7 +618,24 @@ test('design layers: from an agent to where its changes sit, out to the system, 
   await js(`document.querySelector('[data-design-send]').click()`);
   await until(`document.querySelector('#map-warn .design-request') && !document.querySelector('#map-warn .design-editing')`, 'sent and shown with its progress');
   assert.match(await js(`document.querySelector('#map-warn .design-request').textContent`), /Asked[\s\S]*0 of 4 changes in its code now[\s\S]*web no longer uses src\/lib/);
+  // The Logical view: the folders and their links, then components found by a model; a box, an arrow, a part opened in the Design view.
+  await js(`document.querySelector('[data-map-layer="logical"]').click()`);
+  await until(`document.querySelector('#map-box [data-logical-box="c:web"]') && document.querySelector('#map-box [data-logical-box="c:src-lib"].changed')`, 'the folders as components, its change lit up');
+  await js(`document.querySelector('[data-logical-describe]').click()`);
+  await until(`document.querySelector('#map-box [data-logical-box="c:pages"]') && /Fake system/.test(document.querySelector('#map-warn .design-summary')?.textContent)`, 'components found', 30_000);
+  await js(`document.querySelector('#map-box [data-logical-box="c:pages"]').click()`);
+  await until(`document.querySelector('#map-warn .logical-panel')`, 'what is in Pages');
+  assert.match(await js(`document.querySelector('#map-warn .logical-panel').textContent`), /Pages[\s\S]*What people see[\s\S]*web[\s\S]*Uses[\s\S]*Core formatted money · imports \(1\)/);
+  await js(`[...document.querySelectorAll('#map-box [data-logical-edge]')].find((h) => h.dataset.logicalEdge === JSON.stringify(['c:pages', 'c:core'])).dispatchEvent(new MouseEvent('click', { bubbles: true }))`);
+  await until(`document.querySelector('#map-warn .logical-panel')?.textContent.includes('The code shows: imports (1)')`, 'the link from Pages to Core');
+  assert.match(await js(`document.querySelector('#map-warn .logical-panel').textContent`), /formatted money \(Core → Pages; named by the model\)/);
+  await js(`document.querySelector('[data-logical-box="c:pages"]').click()`);
+  await until(`document.querySelector('#map-warn [data-logical-code="web/app.js"]')`, 'Pages again, its file');
+  await js(`document.querySelector('#map-warn [data-logical-code="web/app.js"]').click()`);
+  await until(`document.querySelector('[data-map-layer="design"]').classList.contains('active') && document.querySelector('#map-box .design-file')`, 'its file in the Design view');
   // Into web, then its file, then the code.
+  await js(`document.querySelector('#map-warn [data-design-at=""]').click()`);
+  await until(`document.querySelector('#map-box [data-design-at="web"]')`, 'the system again');
   await js(`document.querySelector('#map-box [data-design-at="web"]').click()`);
   await until(`document.querySelector('#map-box [data-design-at="web/app.js"]')`, 'inside web');
   await js(`document.querySelector('#map-box [data-design-at="web/app.js"]').click()`);

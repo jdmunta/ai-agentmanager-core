@@ -18,6 +18,7 @@ import { passEnv, plist, serviceIsOurs, unit } from '../src/service.js';
 import { stripChrome } from '../src/judge.js';
 import { asksFromLines, buildTimeline, timelineMarkdown } from '../src/timeline.js';
 import { GROUP_OVER, buildGraph, changeDone, changeWords, commonFolder, describePrompt, designFiles, folderEntries, importSpecs, layerView, notesFrom, partContext, rankOf, requestPrompt, resolveChanges, serviceOf, symbolsOf } from '../src/layers.js';
+import { addLinks, httpLinks, logicalNotesFrom, logicalPrompt, logicalSig, logicalView, pathPattern } from '../src/logical.js';
 import { focusBoxes, layout } from '../public/design.js';
 import claude from '../src/engines/claude.js';
 import { notInstalled } from '../src/engines/index.js';
@@ -8038,4 +8039,100 @@ test('design changed by hand: drawn changes checked against the layer, written a
   // A box asked about: what it holds, uses and what uses it.
   assert.equal(partContext(before, { at: 'src', id: 'src/a.js' }).text, '`src/a.js`: one file. It uses src/b.js. Used by src/c.js.');
   assert.equal(partContext(before, { at: 'src', id: 'src/util' }).text, '`src/util/`: 1 file (src/util/d.js). It uses nothing else in this repository. Nothing else in this repository uses it.');
+});
+
+test('logical view: routes and the calls to them in JavaScript, Python and Go; programs, hosts, files; components found by a model, and the data on each link', () => {
+  const sources = Object.entries({
+    'web/app.js': "const api = (m, p) => fetch(`/api${p}`, { method: m });\nexport const list = () => api('GET', '/items');\nexport const one = (id) => fetch(`/api/items/${id}`);\nnew EventSource('/api/events');",
+    'web/util.js': 'export const fmt = (x) => x;',
+    'server/main.js': "import express from 'express';\nimport { load } from './store.js';\nimport { fmt } from '../web/util.js';\nconst app = express();\nconst api = express.Router();\napi.get('/items', (q, r) => r.json(load()));\napi.get('/items/:id', (q, r) => r.json(load()));\napi.post('/items', (q, r) => r.end());\napi.get('/events', (q, r) => r.set('content-type', 'text/event-stream'));\napp.use('/api', api);",
+    'server/store.js': "import fs from 'node:fs';\nimport { execFile } from 'node:child_process';\nexport const load = () => JSON.parse(fs.readFileSync('db.json', 'utf8'));\nexport const save = (x) => fs.writeFileSync('db.json', x);\nexport const head = () => execFile('git', ['rev-parse', 'HEAD']);\nconst BASE_URL = 'https://api.github.com';",
+    'py/app.py': "from flask import Flask, Blueprint\nimport requests\nimport sqlite3\nbp = Blueprint('users', __name__, url_prefix='/users')\n@bp.route('/<int:uid>', methods=['POST'])\ndef user(uid):\n    with open('out.txt', 'w') as f:\n        f.write('x')\n    return requests.get('https://hooks.slack.com/x').text\n@bp.route('/')\ndef index():\n    return sqlite3.connect('x.db')\n",
+    'go/main.go': 'package main\n\nimport (\n\t"net/http"\n\t"os/exec"\n)\n\nfunc main() {\n\thttp.HandleFunc("GET /health", nil)\n\texec.Command("docker", "ps")\n}\n',
+    'cli/run.py': "import subprocess\nimport urllib\nsubprocess.run(['tmux', 'ls'])\nurllib.request.urlopen('http://localhost:8080/users/7')\n",
+    'test/app.test.js': "fetch('/api/items');",
+  }).map(([p, text]) => ({ path: p, text }));
+  const graph = addLinks(buildGraph(sources), sources);
+  // Found in each file.
+  assert.deepEqual(graph.files['server/main.js'].links.routes.map((r) => `${r.method} ${r.path}`), ['GET /api/items', 'GET /api/items/*', 'POST /api/items', 'GET /api/events']);
+  assert.deepEqual(graph.files['py/app.py'].links.routes.map((r) => `${r.method} ${r.path}`), ['POST /users/*', 'ANY /users'], "a router's root is a route at its mount");
+  assert.deepEqual(graph.files['py/app.py'].links.services, ['SQLite'], 'a database in the standard library');
+  assert.deepEqual(graph.files['go/main.go'].links.routes.map((r) => `${r.method} ${r.path}`), ['GET /health']);
+  assert.deepEqual(graph.files['server/store.js'].links.runs, ['git']);
+  assert.deepEqual(graph.files['server/store.js'].links.hosts, ['api.github.com']);
+  assert.deepEqual([graph.files['server/store.js'].links.reads, graph.files['server/store.js'].links.writes], [1, 1]);
+  assert.deepEqual(graph.files['py/app.py'].links.hosts, ['hooks.slack.com']);
+  assert.equal(graph.files['py/app.py'].links.writes, 1);
+  assert.deepEqual(graph.files['go/main.go'].links.runs, ['docker']);
+  assert.deepEqual(graph.files['cli/run.py'].links.runs, ['tmux']);
+  assert.equal(graph.files['test/app.test.js'].links, undefined, 'tests are left out');
+  assert.equal(graph.files['web/app.js'].links.live, 'client');
+  assert.equal(pathPattern('/api/items/${id}?x=1'), 'api/items/*');
+  assert.equal(pathPattern('/users/{uid}'), 'users/*');
+  assert.equal(pathPattern('not/a/path'), null);
+  // Calls matched to routes: with the router's mount or without it, placeholders matching any part.
+  const http = httpLinks(graph);
+  assert.deepEqual([...http.get('web/app.js\nserver/main.js')].sort(), ['GET /api/events', 'GET /api/items', 'GET /api/items/*', 'POST /api/items']);
+  assert.deepEqual([...http.get('cli/run.py\npy/app.py')], ['POST /users/*']);
+
+  // Before a model: the top-level folders; links between them and to the outside.
+  const v = logicalView(graph, { changed: ['server/store.js'] });
+  assert.deepEqual(v.components.filter((c) => c.kind === 'component').map((c) => c.name), ['cli', 'go', 'py', 'server', 'web']);
+  const edge = (a, b) => v.edges.find((e) => e.from === a && e.to === b);
+  assert.equal(edge('c:web', 'c:server').routeCount, 4);
+  assert.equal(edge('c:web', 'c:server').found, 'HTTP: 4 routes; live stream');
+  assert.equal(edge('c:server', 'c:web').found, 'imports (1)');
+  assert.equal(edge('c:server', 'x:files').flow, 'both');
+  assert.equal(edge('c:py', 'x:files').flow, 'to', 'written only: data goes to the disk');
+  assert.equal(edge('c:web', 'c:server').flow, null, 'before the model: drawn from the caller');
+  assert.ok(v.edges.some((e) => e.from === 'c:py' && /uses .*sqlite/.test(e.found)), 'SQLite, maybe among the other outside systems');
+  assert.ok(v.components.filter((c) => c.kind === 'external').length <= 8, 'seven outside systems drawn, the rest as one');
+  assert.ok(edge('c:server', 'x:run:git') && edge('c:server', 'x:host:api.github.com') && edge('c:go', 'x:run:docker') && edge('c:cli', 'x:run:tmux'));
+  assert.equal(v.components.find((c) => c.id === 'c:server').serves, 4);
+  assert.deepEqual(v.components.find((c) => c.id === 'c:server').changed, ['server/store.js']);
+  assert.equal(v.counts.tests, 1);
+  // Rows: callers, servers, the rest, the outside; the web page above the server though the server imports its helper.
+  assert.equal(v.rank['c:web'], 0);
+  assert.equal(v.rank['c:cli'], 0);
+  assert.equal(v.rank['c:server'], 1);
+  assert.equal(v.rank['x:files'], 2, 'the outside right below');
+
+  // The model's prompt names the parts and the links; its reply is checked.
+  const prompt = logicalPrompt(graph, { project: 'shop' });
+  assert.match(prompt, /^Find the logical components of a code repository/);
+  assert.match(prompt, /- server\/main\.js \(file, \d+ lines\): (?:defines [^;]*; )?serves 4 HTTP routes \(\/api\/items, \/api\/events\)/);
+  assert.match(prompt, /- web\/app\.js -> server\/main\.js: HTTP: 4 routes; live stream e\.g\. GET \/api\/items/);
+  assert.match(prompt, /- web\/util\.js \(file, 1 line\): defines fmt/);
+  assert.match(prompt, /- server\/store\.js -> git: runs git/);
+  assert.doesNotMatch(prompt, /app\.test\.js/);
+  const notes = logicalNotesFrom(
+    {
+      summary: 'A shop.',
+      components: [
+        { name: 'Shop UI', purpose: 'Pages', members: ['web/app.js', 'web/util.js', 'nope.js'] },
+        { name: 'Shop API', purpose: 'Serves items', members: ['server/main.js', 'server/store.js', 'web/app.js'] },
+        { name: 'Empty', members: [] },
+      ],
+      flows: [
+        { from: 'Shop UI', to: 'Shop API', data: 'item lists and edits', direction: 'both' },
+        { from: 'Shop API', to: 'Files on disk', data: 'the item database', direction: 'sideways' },
+        { from: 'Shop API', to: 'Shop UI', data: 'formatting helpers', direction: 'from' },
+        { from: 'Shop UI', to: 'git', data: 'commit ids', direction: 'from' },
+      ],
+    },
+    graph,
+  );
+  assert.deepEqual(notes.components.map((c) => [c.name, c.members]), [['Shop UI', ['web/app.js', 'web/util.js']], ['Shop API', ['server/main.js', 'server/store.js']]]);
+  assert.equal(notes.flows[1].direction, 'both', 'an unknown direction is both');
+  const d = logicalView(graph, { notes: { ...notes, sig: logicalSig(graph) } });
+  const names = d.components.map((c) => c.name);
+  assert.deepEqual(names.slice(0, 3), ['Shop UI', 'Shop API', 'Not placed yet'], 'parts the model left out are kept');
+  const de = (a, b) => d.edges.find((e) => e.from === a && e.to === b);
+  assert.equal(de('c:shop-ui', 'c:shop-api').data, 'item lists and edits');
+  assert.equal(de('c:shop-api', 'c:shop-ui').data, 'formatting helpers', 'each way its own words');
+  assert.equal(de('c:shop-api', 'c:shop-ui').flow, 'from');
+  assert.equal(de('c:shop-api', 'x:files').data, 'the item database');
+  const guess = de('c:shop-ui', 'x:run:git');
+  assert.ok(guess?.guessed && guess.data === 'commit ids', 'a flow the code does not show is kept, marked guessed');
+  assert.equal(d.described, true);
 });

@@ -121,6 +121,16 @@ if (args.includes('--input-format') && args.includes('stream-json')) {
       const groups = input.includes('"groups": [{"name"') ? ['Entry points', 'Core', 'Helpers'].map((name, i) => ({ name, purpose: `The ${name.toLowerCase()}`, members: ids.slice(i * third, (i + 1) * third) })) : [];
       return json({ summary: `Fake summary of ${input.match(/^Project: .*Layer: (.*)\.$/m)?.[1]}`, purposes: { ...purposes, 'not/there.js': 'ignored' }, groups });
     }
+    if (input.startsWith('Find the logical components of a code repository')) {
+      // The logical view: the parts under web/ as "Pages", the rest as "Core", and the data between them.
+      const ids = [...input.matchAll(/^- (\S+) \((?:file|folder)/gm)].map((m) => m[1]);
+      const web = ids.filter((id) => id.startsWith('web'));
+      return json({
+        summary: 'Fake system: pages over a core.',
+        components: [{ name: 'Pages', purpose: 'What people see', members: web }, { name: 'Core', purpose: 'The rest', members: ids.filter((id) => !web.includes(id)) }],
+        flows: [{ from: 'Pages', to: 'Core', data: 'formatted money', direction: 'from' }, { from: 'Pages', to: 'PostgreSQL', data: 'orders', direction: 'both' }],
+      });
+    }
     if (input.startsWith('Write a support runbook')) {
       // Runbooks: Markdown, not JSON, naming what it was given; "#norunbook" in the facts gives no runbook.
       if (input.includes('#norunbook')) return process.stdout.write('Sorry.', () => process.exit(0));

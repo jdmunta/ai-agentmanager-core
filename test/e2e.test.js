@@ -1771,6 +1771,26 @@ test('design layers: the code in nested boxes from an agent\'s folder, its chang
   assert.equal((await agentNow(a.id)).debug.asks.at(-1).text, 'show() returns nothing (In `web/app.js`: one file. It uses nothing else in this repository. Nothing else in this repository uses it.)');
   assert.equal((await call('POST', '/layers/ask', { agent: a.id, at: '', id: 'web', text: '' })).status, 400);
   restore();
+
+  // The logical view: before a model, the top-level folders and the links the code shows.
+  const lg = (await call('GET', `/logical?agent=${a.id}`)).body;
+  assert.equal(lg.notes, null);
+  const comps = lg.view.components;
+  assert.deepEqual(comps.filter((c) => c.kind === 'component').map((c) => c.name).sort(), ['api', 'cache.js', 'src/lib', 'web'], 'cache.js: made by the agent for the request above');
+  assert.deepEqual(comps.find((c) => c.name === 'src/lib').changed, ['src/lib/fmt.js']);
+  const e = (v, from, to) => v.edges.find((x) => x.from === from && x.to === to);
+  // web no longer imports src/lib (the agent did the request above); the new cache.js does.
+  assert.deepEqual(lg.view.edges.map((x) => [x.from, x.to, x.found]), [['c:cache-js', 'c:src-lib', 'imports (1)'], ['c:web', 'x:svc:PostgreSQL', 'uses pg']]);
+  assert.equal(e(lg.view, 'c:web', 'x:svc:PostgreSQL')?.found, 'uses pg');
+  // Found by a model: named components, the data on each link, kept for the project.
+  const found = await call('POST', '/logical/describe', { agent: a.id });
+  assert.equal(found.status, 200, JSON.stringify(found.body));
+  assert.equal(found.body.notes.summary, 'Fake system: pages over a core.');
+  assert.deepEqual(found.body.view.components.filter((c) => c.kind === 'component').map((c) => c.name), ['Pages', 'Core']);
+  // The code no longer links Pages to Core: the model's flow is kept, marked guessed.
+  assert.deepEqual([e(found.body.view, 'c:pages', 'c:core')?.data, e(found.body.view, 'c:pages', 'c:core')?.flow, e(found.body.view, 'c:pages', 'c:core')?.guessed], ['formatted money', 'from', true]);
+  assert.equal(e(found.body.view, 'c:pages', 'x:svc:PostgreSQL')?.data, 'orders');
+  assert.equal((await call('GET', `/logical?project=${encodeURIComponent(at.project.key)}`)).body.view.described, true, 'kept for everyone');
   await call('DELETE', `/agents/${a.id}`);
 });
 
