@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.75.1 (2026-11-27)
+
+- **Views open in the pane at the right.** With the views in the column, picking one (Today, Glance, Reviews, Value, …) shows it beside the agent list instead of over the page, and its name is marked in the column. Another view, an agent, its Close or Escape puts it away; its expand button (`f`) widens it over the list. Narrower windows, phones and the views in the top bar open them over the page as before.
+- **Hide any column.** Three buttons left of the logo hide or show the views, the agent list and the page; each device remembers. Hidden views go to the top bar; the list and the page can't both be hidden; picking an agent or a view shows the page again.
+- **Fixed: Watch and Map** were partly under the views column.
+
 ## 1.75.0 (2026-11-27)
 
 - **A more professional look.** See "Three columns" in the [README](README.md).
