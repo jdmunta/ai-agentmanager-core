@@ -153,9 +153,12 @@ dialog.docked {
   body:not(.nav-top) .top-nav > button { display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 10px; text-align: left; }
   body:not(.nav-top) .top-nav > button[hidden] { display: none; }
   body:not(.nav-top) .top-nav > button > .badge, body:not(.nav-top) .top-nav > button > .spend-today { margin-left: auto; }
-  body:not(.nav-top) .nav-group { display: block; padding: 14px 10px 4px; font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+  body:not(.nav-top) .nav-group { display: block; padding: 16px 10px 5px; font-size: 12.5px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--text); }
   body:not(.nav-top) .nav-group:first-child { padding-top: 4px; }
-  body:not(.nav-top) .watch-view, body:not(.nav-top) .map-view { margin-left: var(--nav-w); }
+  body:not(.nav-top) .watch-view { margin-left: var(--nav-w); }
+  /* Map in the pane at the right, as a docked view: the agent list stays beside it. */
+  body:not(.nav-top).mapping .layout { display: grid; }
+  body:not(.nav-top) .map-view { position: fixed; inset: var(--topbar-h) 0 0 calc(var(--nav-w) + var(--side-w, 340px)); z-index: 3; border-left: 1px solid var(--border); }
   /* A column hidden by its button (columns.js): the others take its room. */
   body.list-hidden .sidebar, body.list-hidden .split-side, body.page-hidden .split-side, body.page-hidden .groups { display: none; }
   body.list-hidden .layout, body.page-hidden .layout { grid-template-columns: minmax(0, 1fr); }
@@ -168,7 +171,7 @@ dialog.docked {
     margin: 0; border: 0; border-left: 1px solid var(--border); border-radius: 0; resize: none; box-shadow: none; outline: none;
   }
   dialog.docked.expanded { left: var(--nav-w); }
-  body:not(.nav-top) .top-nav > button.active { background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--text); }
+  body:not(.nav-top) .top-nav > button.active, body:not(.nav-top) .top-nav > #watch-btn.active, body:not(.nav-top) .top-nav > #map-btn.active { background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--text); border-color: transparent; }
   body.term-max .layout { margin-left: 0; }
 }
 

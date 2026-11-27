@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.75.2 (2026-11-27)
+
+- **Map in the pane at the right.** In the three columns Map shows beside the agent list, like the other views, instead of over the list too; picking a view or an agent takes the pane back.
+- **Agents by priority.** The agent list's order menu has **By priority**: P0 first and P3 last, each agent with its priority shown; within a priority, open sessions first, then the most recently used. Each browser remembers the choice.
+- **Clearer groups** in the views column: Work, Review, Plan, Insights and This computer are bold and larger.
+- **Fixed:** a view closed and opened again at once could open over the page instead of in the pane.
+
 ## 1.75.1 (2026-11-27)
 
 - **Views open in the pane at the right.** With the views in the column, picking one (Today, Glance, Reviews, Value, …) shows it beside the agent list instead of over the page, and its name is marked in the column. Another view, an agent, its Close or Escape puts it away; its expand button (`f`) widens it over the list. Narrower windows, phones and the views in the top bar open them over the page as before.
