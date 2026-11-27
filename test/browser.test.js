@@ -247,6 +247,20 @@ test('three columns: the views at the left in groups, back in the top bar by the
   await js(`document.querySelector('#nav-toggle').click()`);
   await sleep(300);
   assert.equal((await nav()).fixed, true);
+  // The agent list and the page hide by their buttons too; not both: hiding one shows the other.
+  const cols = () => js(`({ list: document.querySelector('.sidebar').offsetWidth > 0, page: document.querySelector('#detail').offsetWidth > 0, pageLeft: Math.round(document.querySelector('#detail').getBoundingClientRect().left) })`);
+  await js(`document.querySelector('#list-toggle').click()`);
+  assert.deepEqual(await cols(), { list: false, page: true, pageLeft: 208 }, 'the page takes the list\'s room');
+  assert.equal(await js(`localStorage.getItem('agentmgr.list')`), 'hidden');
+  await js(`document.querySelector('#page-toggle').click()`);
+  assert.deepEqual(await cols(), { list: true, page: false, pageLeft: 0 }, 'hiding the page shows the list');
+  // Picking an agent shows the page again.
+  await js(`document.querySelector('#agent-list li[data-id]').click()`);
+  assert.equal((await cols()).page, true);
+  assert.equal(await js(`document.querySelector('#page-toggle').getAttribute('aria-pressed')`), 'true');
+  await js(`location.hash = ''`);
+  await reload();
+  await until(`document.querySelectorAll('#agent-list li[data-id]').length === 3`, 'the agents listed again');
   // An agent's actions: the main ones in the bar, the rest under More, which stays open while the page redraws.
   const id = await js(`document.querySelector('#agent-list li[data-id]').dataset.id`);
   await js(`document.querySelector('#agent-list li[data-id="${id}"]').click()`);
@@ -263,6 +277,35 @@ test('three columns: the views at the left in groups, back in the top bar by the
   await api('PATCH', `/agents/${id}`, { name });
   await js(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
   assert.equal(await js(`document.querySelector('#detail-body .d-more .menu').hidden`), true, 'Escape closes it');
+  // A view opens in the pane at the right, beside the list, not over the page; its button shows it is open.
+  const today = () => js(`(() => { const d = document.querySelector('#today-dialog'); const r = d.getBoundingClientRect(); const side = document.querySelector('.sidebar').getBoundingClientRect();
+    return { open: d.open, modal: d.matches(':modal'), beside: Math.round(r.left) === Math.round(side.right), toRight: Math.round(r.right) === innerWidth, active: document.querySelector('#today-btn').classList.contains('active') }; })()`);
+  await js(`document.querySelector('#today-btn').click()`);
+  await until(`document.querySelector('#today-dialog').open`, 'Today open');
+  assert.deepEqual(await today(), { open: true, modal: false, beside: true, toRight: true, active: true });
+  assert.ok(await js(`document.querySelector('#agent-list li[data-id]').getBoundingClientRect().width > 0`), 'the list still there');
+  // Another view takes its place; Escape closes it; an agent picked from the list takes the pane.
+  await js(`document.querySelector('#value-btn').click()`);
+  await until(`document.querySelector('#value-dialog.docked[open]') && !document.querySelector('#today-dialog').open`, 'Value in the pane instead of Today');
+  await js(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
+  assert.equal(await js(`document.querySelector('#value-dialog').open`), false, 'Escape closes it');
+  await js(`document.querySelector('#today-btn').click()`);
+  await until(`document.querySelector('#today-dialog.docked[open]')`, 'Today again');
+  await js(`document.querySelector('#agent-list li[data-id="${id}"]').click()`);
+  await until(`!document.querySelector('#today-dialog').open`, 'the agent in the pane');
+  // With the views in the top bar, or on a narrower window, a view opens over the page as before.
+  await js(`document.querySelector('#nav-toggle').click()`);
+  await js(`document.querySelector('#today-btn').click()`);
+  await until(`document.querySelector('#today-dialog').open`, 'Today open');
+  assert.equal((await today()).modal, true, 'over the page with the views in the top bar');
+  await js(`document.querySelector('#today-dialog').close(); document.querySelector('#nav-toggle').click()`);
+  await width(1024);
+  await sleep(300);
+  await js(`document.querySelector('#today-btn').click()`);
+  await until(`document.querySelector('#today-dialog').open`, 'Today open');
+  assert.equal((await today()).modal, true, 'over the page on a narrower window');
+  await js(`document.querySelector('#today-dialog').close()`);
+  await width(1600);
   await js(`location.hash = ''`);
   await reload();
   await until(`document.querySelectorAll('#agent-list li[data-id]').length === 3`, 'the agents listed again');

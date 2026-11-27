@@ -64,6 +64,8 @@ import { initWeekly } from '/weekly.js';
 import { initReadFirst, readFirstRow } from '/readfirst.js';
 import { initGlance } from '/glance.js';
 import { checklistRows } from '/checklist.js';
+import { initColumns } from '/columns.js';
+import { initDock } from '/dock.js';
 import { initUnderstand } from '/understand.js';
 import { kindHtml, optionsRows, parseKind, parsePaths, parseValue, pathsHtml, privateRow, valueHtml } from '/valuelens.js';
 
@@ -82,6 +84,9 @@ let teamFile = null; // { name, markdown } shown in the team view
 // #<id> selects an agent; #<id>/term also opens its terminal.
 // The agent whose More menu in its action bar is open: kept across re-renders.
 let moreFor = null;
+// Views docked in the pane at the right (dock.js) and the columns shown (columns.js), set up at the end.
+let dock = null;
+let columns = null;
 const loginHash = location.hash.match(/(?:^#|&)login=([\w-]+)/)?.[1] ?? null;
 // From the hub: #ticket=<one-time ticket>&go=<agent>/term
 const ticketHash = location.hash.match(/(?:^#|&)ticket=([\w-]+)/)?.[1] ?? null;
@@ -2987,6 +2992,11 @@ const perf = {
 };
 
 function select(id) {
+  // An agent picked from the list or a view takes the pane a docked view was in.
+  if (id) {
+    dock?.closeAll();
+    columns?.showPage();
+  }
   selectedId = id;
   // Closing the terminal puts its agent in the address; the one switched to goes there after.
   if (term.agentId && term.agentId !== id) term.close();
@@ -5790,17 +5800,17 @@ groupsUi = initGroups({
 });
 $('#group-split').onclick = () => groupsUi.split('row');
 const topNav = initTopNav({ $ });
-// The views in a column at the left (wide windows) or in the top bar: this device remembers which.
-try {
-  document.body.classList.toggle('nav-top', localStorage.getItem('agentmgr.nav') === 'top');
-} catch {}
-$('#nav-toggle').onclick = () => {
-  const top = document.body.classList.toggle('nav-top');
-  try {
-    localStorage.setItem('agentmgr.nav', top ? 'top' : 'side');
-  } catch {}
-  topNav.fit();
-};
+// The columns (views, agent list, page) hidden or shown by their buttons by the logo (columns.js).
+columns = initColumns({
+  $,
+  onChange: (k) => {
+    if (k === 'nav') {
+      topNav.fit();
+      dock.closeAll();
+    }
+  },
+});
+dock = initDock({ $, onDock: () => columns.showPage() });
 
 boot();
 setInterval(renderDetail, 30_000); // keep "x ago" labels fresh
