@@ -542,6 +542,49 @@ test("overlaps: behind their own button in the agent's detail, not on the page",
   assert.deepEqual(errors, [], 'no errors on the page');
 });
 
+test('design layers: from an agent to where its changes sit, out to the system, into a file and its code', { skip }, async () => {
+  const git = (cwd, ...args) => execFileSync('git', ['-c', 'commit.gpgsign=false', '-c', 'user.email=t@t', '-c', 'user.name=t', ...args], { cwd });
+  const origin = path.join(home, 'dl.git');
+  const seed = path.join(home, 'dl-seed');
+  execFileSync('git', ['init', '-q', '--bare', '-b', 'main', origin]);
+  execFileSync('git', ['clone', '-q', origin, seed]);
+  fs.mkdirSync(path.join(seed, 'src', 'lib'), { recursive: true });
+  fs.mkdirSync(path.join(seed, 'web'), { recursive: true });
+  fs.writeFileSync(path.join(seed, 'src', 'lib', 'fmt.js'), 'export function fmt(x) {\n  return x;\n}\n');
+  fs.writeFileSync(path.join(seed, 'web', 'app.js'), "import { fmt } from '../src/lib/fmt.js';\nexport function show() {}\n");
+  git(seed, 'add', '.');
+  git(seed, 'commit', '-q', '-m', 'code');
+  git(seed, 'push', '-q', 'origin', 'main');
+  const [x] = await api('POST', '/agents', { intents: ['Format money'], repo: `file://${origin}` });
+  let a;
+  for (let i = 0; i < 200 && !(a?.workdir && a.status === 'running'); i++) {
+    a = (await api('GET', '/agents')).find((v) => v.id === x.id);
+    await sleep(100);
+  }
+  fs.appendFileSync(path.join(a.workdir, 'src', 'lib', 'fmt.js'), 'export const money = (x) => x;\n');
+  await js(`document.querySelector('#agent-list li[data-id="${x.id}"]').click()`);
+  await until(`document.querySelector('#detail-body [data-act="design-map"]')`, 'Where its changes sit, under More');
+  await js(`document.querySelector('#detail-body [data-act="design-map"]').click()`);
+  const crumbs = `[...document.querySelectorAll('#map-warn .design-crumbs > :is(button, b)')].map((c) => c.textContent).join(' › ')`;
+  await until(`document.body.classList.contains('mapping') && ${crumbs} === 'System › src › lib' && document.querySelector('#map-box .design-box.changed')`, 'Map at where its changes are', 15_000, crumbs);
+  assert.equal(await js(`document.querySelector('[data-design-agent]').value`), x.id, 'its changes picked');
+  assert.equal(await js(`document.querySelector('[data-map-layer="design"]').classList.contains('active')`), true);
+  // Out to the system: web uses what it changed, with an arrow to src.
+  await js(`document.querySelector('#map-warn [data-design-at=""]').click()`);
+  await until(`${crumbs} === 'System' && document.querySelector('#map-box .design-box.dependent[data-design-at="web"]')`, 'the system, web lit up as using it');
+  assert.equal(await js(`document.querySelectorAll('#map-box .design-arrow.risk').length`), 1, 'the arrow from web to what changed');
+  // Into web, then its file, then the code.
+  await js(`document.querySelector('#map-box [data-design-at="web"]').click()`);
+  await until(`document.querySelector('#map-box [data-design-at="web/app.js"]')`, 'inside web');
+  await js(`document.querySelector('#map-box [data-design-at="web/app.js"]').click()`);
+  await until(`document.querySelector('#map-box .design-file')`, 'the file');
+  assert.match(await js(`document.querySelector('#map-box .design-file').textContent`), /uses what the agent changed[\s\S]*show[\s\S]*src\/lib\/fmt\.js/);
+  await js(`document.querySelector('#map-box [data-design-code]').click()`);
+  await until(`!document.body.classList.contains('mapping') && document.querySelector('#term-wrap.coding')`, 'its code open');
+  await fetch(`${base}/api/agents/${x.id}`, { method: 'DELETE', headers: { 'x-agentmgr': '1' } });
+  assert.deepEqual(errors, [], 'no errors on the page');
+});
+
 test('OS: this computer and its load, what an open session takes; the running count filters the list', { skip }, async () => {
   const [a] = await api('POST', '/agents', { intents: ['Watch the load'], workdir: home });
   for (let i = 0; i < 100 && (await api('GET', '/agents')).find((v) => v.id === a.id)?.status !== 'running'; i++) await sleep(100);

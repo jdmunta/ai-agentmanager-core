@@ -17,6 +17,8 @@ import { cleanLearning, memoryKey, memoryPrompt } from '../src/memory.js';
 import { passEnv, plist, serviceIsOurs, unit } from '../src/service.js';
 import { stripChrome } from '../src/judge.js';
 import { asksFromLines, buildTimeline, timelineMarkdown } from '../src/timeline.js';
+import { buildGraph, commonFolder, designFiles, importSpecs, layerView, rankOf, serviceOf, symbolsOf } from '../src/layers.js';
+import { focusBoxes, layout } from '../public/design.js';
 import claude from '../src/engines/claude.js';
 import { notInstalled } from '../src/engines/index.js';
 import { Cleanup, cleanupSettings } from '../src/cleanup.js';
@@ -7851,4 +7853,84 @@ test('timeline: asks from a transcript, dated when each closed, the changes unde
   const bare = buildTimeline({ id: 'b', name: 'b', intent: 'x', createdAt: '2026-11-20T10:00:00Z', engine: 'codex' }, { commits: [commits[0]] });
   assert.deepEqual(bare.nodes.map((n) => n.kind), ['start', 'commits']);
   assert.equal(bare.transcripts, false);
+});
+
+test('design layers: imports traced in JavaScript, Python, Go and Java; boxes, arrows, rows; an agent\'s changes and what uses them', () => {
+  assert.deepEqual(designFiles(['src/a.js', 'node_modules/x/i.js', 'dist/b.js', 'a.min.js', 'types.d.ts', 'README.md', 'app.py']), ['src/a.js', 'app.py']);
+  assert.deepEqual(importSpecs('a.ts', "import x from './x';\nimport type { T } from '../t'\nexport * from './y'\nimport './side.css';\nconst z = require('z');\nawait import('./lazy.js')"), ['./x', '../t', './y', './side.css', 'z', './lazy.js']);
+  assert.deepEqual(importSpecs('a.py', 'import os, json\nfrom app.db import session\nfrom . import util, models\nfrom ..core import x'), ['app.db', '.util', '.models', '..core', 'os', 'json']);
+  assert.deepEqual(importSpecs('a.py', 'from . import (\n  x,\n  y as w)\nfrom . import a  # c'), ['.x', '.y', '.a'], 'a list in parentheses over lines');
+  assert.deepEqual(importSpecs('main.go', 'package main\nimport "fmt"\nimport (\n  "example.com/shop/billing"\n  db "example.com/shop/store"\n)'), ['fmt', 'example.com/shop/billing', 'example.com/shop/store']);
+  assert.deepEqual(importSpecs('A.java', 'import com.shop.billing.Invoice;\nimport static com.shop.util.Strings.trim;\nimport java.util.List;'), ['com.shop.billing.Invoice', 'com.shop.util.Strings.trim', 'java.util.List']);
+
+  const src = {
+    'web/app.ts': "import { api } from './api';\nimport { fmt } from '@/lib/fmt';\nimport React from 'react';\nimport pg from 'pg';",
+    'web/api.ts': "import axios from 'axios';\nimport { fmt } from '../src/lib/fmt.js';\nexport async function api() {}",
+    'src/lib/fmt.ts': 'export function fmt(x) {\n  return x;\n}\nexport class Money {\n  add(a) {\n  }\n}',
+    'svc/app/__init__.py': '',
+    'svc/app/main.py': 'from app.db import session\nfrom . import util\nimport requests\n\nif __name__ == "__main__":\n    run()',
+    'svc/app/db.py': 'import sqlalchemy\nclass Session:\n    def get(self):\n        pass\ndef session():\n    pass',
+    'svc/app/util.py': 'import os',
+    'go/cmd/shop/main.go': 'package main\nimport (\n  "example.com/shop/billing"\n)\nfunc main() {}',
+    'go/billing/invoice.go': 'package billing\nimport "github.com/lib/pq"\ntype Invoice struct {}\nfunc (i *Invoice) Total() int { return 0 }\nfunc New() *Invoice { return nil }',
+    'jvm/src/main/java/com/shop/App.java': 'import com.shop.billing.Invoice;\npublic class App {\n  public static void main(String[] a) {}\n}',
+    'jvm/src/main/java/com/shop/billing/Invoice.java': 'package com.shop.billing;\npublic class Invoice {}',
+    'docs/notes.rb': 'puts 1',
+  };
+  // A Go module in a folder (go/go.mod).
+  const g = buildGraph(Object.entries(src).map(([p, text]) => ({ path: p, text })), { goModules: [{ dir: 'go', module: 'example.com/shop' }] });
+  assert.deepEqual(g.files['web/app.ts'].imports, [{ file: 'web/api.ts' }, { file: 'src/lib/fmt.ts' }], 'relative and the @/ alias for src');
+  assert.deepEqual(g.files['web/app.ts'].pkgs, ['react', 'pg']);
+  assert.deepEqual(g.files['web/api.ts'].imports, [{ file: 'src/lib/fmt.ts' }], './x.js written for x.ts');
+  assert.deepEqual(g.files['svc/app/main.py'].imports, [{ file: 'svc/app/db.py' }, { file: 'svc/app/util.py' }]);
+  assert.deepEqual(g.files['svc/app/main.py'].pkgs, ['requests'], 'the standard library left out');
+  assert.equal(g.files['svc/app/main.py'].entry, true);
+  assert.deepEqual(g.files['jvm/src/main/java/com/shop/App.java'].imports, [{ file: 'jvm/src/main/java/com/shop/billing/Invoice.java' }]);
+  assert.equal(g.files['jvm/src/main/java/com/shop/App.java'].entry, true);
+  assert.deepEqual(symbolsOf('a.ts', src['src/lib/fmt.ts']).map((x) => [x.name, x.kind, x.line]), [['fmt', 'function', 1], ['Money', 'class', 4], ['add', 'method', 5]]);
+  assert.deepEqual(symbolsOf('db.py', src['svc/app/db.py']).map((x) => [x.name, x.kind]), [['Session', 'class'], ['get', 'method'], ['session', 'function']]);
+  assert.deepEqual(symbolsOf('i.go', src['go/billing/invoice.go']).map((x) => [x.name, x.kind]), [['Invoice', 'class'], ['Invoice.Total', 'method'], ['New', 'function']]);
+  assert.equal(serviceOf('pg'), 'PostgreSQL');
+  assert.equal(serviceOf('github.com/lib/pq'), 'PostgreSQL');
+  assert.equal(serviceOf('left-pad'), null);
+
+  // The system: the top folders; the agent changed fmt.ts, which web/ uses.
+  const top = layerView(g, { changed: ['src/lib/fmt.ts', 'not/in/graph.js'], churn: { 'web/app.ts': 3 } });
+  assert.deepEqual(top.crumbs, [{ id: '', name: 'System' }]);
+  const box = (v, id) => v.boxes.find((b) => b.id === id);
+  assert.deepEqual(top.boxes.map((b) => b.id).sort(), ['docs', 'go', 'jvm/src/main/java/com/shop', 'src/lib', 'svc/app', 'web'].sort(), 'a chain of single folders as one box');
+  assert.deepEqual(box(top, 'web').changed, []);
+  assert.deepEqual(box(top, 'web').dependents.sort(), ['web/api.ts', 'web/app.ts']);
+  assert.deepEqual(box(top, 'src/lib').changed, ['src/lib/fmt.ts']);
+  assert.deepEqual(box(top, 'web').talksTo.sort(), ['HTTP APIs', 'PostgreSQL']);
+  assert.equal(box(top, 'web').churn, 3);
+  assert.deepEqual(box(top, 'svc/app').entry, ['svc/app/main.py']);
+  assert.deepEqual(top.edges, [{ from: 'web', to: 'src/lib', count: 2 }]);
+  assert.ok(top.rank.web < top.rank['src/lib'], 'callers above what they use');
+  assert.deepEqual(top.counts, { files: 12, changed: 1, dependents: 2 });
+
+  // One layer in, and a file.
+  const web = layerView(g, { at: 'web', changed: ['src/lib/fmt.ts'] });
+  assert.deepEqual(web.crumbs.map((c) => c.id), ['', 'web']);
+  assert.deepEqual(web.edges, [{ from: 'web/app.ts', to: 'web/api.ts', count: 1 }]);
+  assert.deepEqual([box(web, 'web/app.ts').out, box(web, 'web/api.ts').out], [1, 1], 'imports leaving the layer counted');
+  const goLayer = layerView(g, { at: 'go' });
+  assert.deepEqual(goLayer.edges, [{ from: 'go/cmd/shop', to: 'go/billing', count: 1 }], 'a Go package import lands on its folder');
+  const f = layerView(g, { at: 'src/lib/fmt.ts', changed: ['src/lib/fmt.ts'] });
+  assert.equal(f.kind, 'file');
+  assert.deepEqual([f.file.changed, f.file.importedBy.sort(), f.file.symbols.length], [true, ['web/api.ts', 'web/app.ts'], 3]);
+
+  const cyc = rankOf(['a', 'b', 'c'], [['a', 'b'], ['b', 'c'], ['c', 'a']]);
+  assert.equal(new Set(Object.values(cyc)).size, 3, 'a cycle is cut where it closes, not endless');
+  assert.deepEqual(rankOf(['x', 'y', 'z'], [['x', 'y'], ['x', 'z'], ['y', 'z']]), { x: 0, y: 1, z: 2 });
+  assert.equal(commonFolder(['src/a/x.js', 'src/a/b/y.js']), 'src/a');
+  assert.equal(commonFolder(['src/x.js', 'web/y.js']), '');
+
+  // Drawing: rows by rank, wrapped; with an agent picked in a busy layer, only what it touches.
+  const { pos } = layout([{ id: 'a' }, { id: 'b' }, { id: 'c' }], { a: 0, b: 1, c: 1 }, 400);
+  assert.ok(pos.a.y < pos.b.y && pos.b.y === pos.c.y && pos.b.x < pos.c.x);
+  const many = { boxes: Array.from({ length: 12 }, (_, i) => ({ id: `m${i}`, name: `m${i}`, kind: 'file', files: 1, lines: 10, changed: i === 0 ? ['m0'] : [], dependents: i === 1 ? ['m1'] : [] })), edges: [{ from: 'm1', to: 'm0', count: 1 }, { from: 'm2', to: 'm0', count: 1 }] };
+  const shown = focusBoxes(many, true);
+  assert.deepEqual([shown.boxes.map((b) => b.name), shown.edges.length, shown.hidden], [['m0', 'm1', '10 others'], 1, 10]);
+  assert.equal(focusBoxes(many, false).boxes.length, 12);
 });

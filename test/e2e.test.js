@@ -1683,6 +1683,46 @@ test('timeline: the asks in its transcript and its commits, dated, from the API 
   await call('DELETE', `/agents/${a.id}`);
 });
 
+test('design layers: the code in nested boxes from an agent\'s folder, its changes and what uses them lit up', async () => {
+  const origin = makeOrigin('layers');
+  const seed = path.join(home, 'layers-seed');
+  fs.mkdirSync(path.join(seed, 'src', 'lib'), { recursive: true });
+  fs.mkdirSync(path.join(seed, 'web'), { recursive: true });
+  fs.writeFileSync(path.join(seed, 'src', 'lib', 'fmt.js'), 'export function fmt(x) {\n  return x;\n}\n');
+  fs.writeFileSync(path.join(seed, 'web', 'app.js'), "import { fmt } from '../src/lib/fmt.js';\nimport pg from 'pg';\nexport function show() {}\n");
+  fs.writeFileSync(path.join(seed, 'web', 'other.js'), 'export const n = 1;\n');
+  gitc(seed, 'add', '.');
+  gitc(seed, 'commit', '-qm', 'code');
+  execFileSync('git', ['push', '-q', 'origin', 'main'], { cwd: seed });
+  const [a] = (await call('POST', '/agents', { intent: 'Format money', repo: `file://${origin}` })).body;
+  const v = await waitFor(async () => {
+    const x = await agentNow(a.id);
+    return x.workdir && x.status === 'running' ? x : null;
+  }, 20000, 'the agent in its worktree');
+  fs.appendFileSync(path.join(v.workdir, 'src', 'lib', 'fmt.js'), 'export const money = (x) => `$${x}`;\n');
+
+  const at = await waitFor(async () => {
+    const r = (await call('GET', `/layers?agent=${a.id}&focus=1`)).body;
+    return r.layer?.counts?.changed ? r : null;
+  }, 10000, 'its change seen');
+  assert.equal(at.agent, a.id);
+  assert.equal(at.from.id, a.id, "read from the agent's folder");
+  assert.equal(at.layer.at, 'src/lib', 'the folder holding its changes');
+  assert.deepEqual(at.layer.boxes.map((b) => [b.id, b.changed]), [['src/lib/fmt.js', ['src/lib/fmt.js']]]);
+
+  const top = (await call('GET', `/layers?agent=${a.id}`)).body.layer;
+  const web = top.boxes.find((b) => b.id === 'web');
+  assert.deepEqual([web.dependents, web.talksTo, top.counts], [['web/app.js'], ['PostgreSQL'], { files: 3, changed: 1, dependents: 1 }]);
+  assert.deepEqual(top.edges, [{ from: 'web', to: 'src/lib', count: 1 }]);
+  const file = (await call('GET', `/layers?agent=${a.id}&at=src/lib/fmt.js`)).body.layer;
+  assert.deepEqual([file.kind, file.file.importedBy, file.file.symbols.map((x) => x.name)], ['file', ['web/app.js'], ['fmt', 'money']]);
+  // Without an agent: the project's code, nothing lit up.
+  const plain = (await call('GET', `/layers?project=${encodeURIComponent(at.project.key)}`)).body;
+  assert.equal(plain.agent, null);
+  assert.equal(plain.layer.counts.changed, 0);
+  await call('DELETE', `/agents/${a.id}`);
+});
+
 test('proof: the agent is told to record it; what it recorded is shown with what it left out; the commands are run again when you ask, not when the agent does', async () => {
   const origin = makeOrigin('proof');
   const [a] = (await call('POST', '/agents', { intent: 'Add a version file', repo: `file://${origin}` })).body;

@@ -1476,6 +1476,44 @@ kbd { display: inline-block; min-width: 1.6em; padding: 1px 5px; border: 1px sol
   .standup-text { font-size: 16px; }
 }
 
+/* ---------- Map's Design view: the code in layers (design.js) */
+.design-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin-bottom: 4px; }
+.design-crumbs { font-size: 14px; }
+.design-crumbs .link { padding: 0; color: var(--accent); }
+.design-agent { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+.design-agent select { width: auto; max-width: 260px; font-size: 12px; padding: 3px 6px; }
+.design-facts { margin: 0 0 8px; }
+.design-ext, .design-tag { display: inline-block; font-size: 10.5px; padding: 1px 6px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); background: var(--panel); white-space: nowrap; }
+.map-box:has(.design-arrows), .map-box:has(.design-file) { overflow: visible; background: transparent; }
+.design-arrows { position: absolute; inset: 0; pointer-events: none; overflow: visible; }
+.design-arrow { fill: none; stroke: color-mix(in srgb, var(--muted) 55%, transparent); }
+.design-arrow.back { stroke-dasharray: 5 4; }
+.design-arrow.risk { stroke: var(--yellow); }
+#design-head path { fill: color-mix(in srgb, var(--muted) 70%, transparent); }
+#design-head-risk path { fill: var(--yellow); }
+.design-box { position: absolute; box-sizing: border-box; display: flex; flex-direction: column; gap: 2px; padding: 7px 10px; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--panel); box-shadow: var(--shadow-sm); overflow: hidden; cursor: pointer; z-index: 1; }
+.design-box:hover, .design-box:focus-visible { border-color: var(--accent); outline: none; box-shadow: var(--ring); }
+.design-box.more { cursor: default; border-style: dashed; background: var(--bg); box-shadow: none; }
+.design-box.file { border-radius: 4px; }
+.design-box.changed { background: color-mix(in srgb, var(--accent) 14%, var(--panel)); border-color: var(--accent); }
+.design-box.dependent:not(.changed) { border-color: var(--yellow); box-shadow: 0 0 0 2px color-mix(in srgb, var(--yellow) 35%, transparent); }
+.design-name { font-weight: 600; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.design-size { font-size: 11px; color: var(--muted); }
+.design-tags { display: flex; flex-wrap: nowrap; gap: 4px; overflow: hidden; }
+.design-tag.changed { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+.design-tag.dependent { border-color: var(--yellow); color: var(--text); background: color-mix(in srgb, var(--yellow) 18%, var(--panel)); }
+.design-tag.entry { border-color: var(--green); color: var(--green); }
+.map-key.design-changed { background: color-mix(in srgb, var(--accent) 30%, var(--panel)); border: 1px solid var(--accent); }
+.map-key.design-dependent { border: 2px solid var(--yellow); }
+.design-file { background: var(--panel); border: 1px solid var(--border); border-radius: 8px; padding: 12px 16px; }
+.design-file h4 { margin: 14px 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+.design-symbols { list-style: none; margin: 0; padding: 0; columns: 2 260px; font-size: 13px; }
+.design-symbols li { padding: 2px 0; break-inside: avoid; }
+.design-symbols li.method { padding-left: 14px; }
+.design-symbols .link { padding: 0; color: var(--text); font-weight: 500; }
+.design-uses { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 0 24px; }
+.design-uses .link { display: block; padding: 1px 0; text-align: left; }
+
 /* ---------- Timeline: an agent's milestones in a thread */
 .timeline-dialog { width: min(760px, calc(100vw - 32px)); }
 #timeline-body { max-height: min(68vh, 720px); overflow-y: auto; }
