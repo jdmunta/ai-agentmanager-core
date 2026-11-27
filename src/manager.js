@@ -143,7 +143,7 @@ import { CONTAINER_ENGINES, claudeToken, containerName, containerRunning, engine
 import { conflictMessage, findConflicts, related, repoKey, summarize as summarizeConflicts } from './conflicts.js';
 import { answerMessage, loadQuestions, questionsPath, questionsPrompt } from './inbox.js';
 import { PROOF_FILE, proofBlock, proofFacts, proofPrompt } from './proof.js';
-import { LIMITS as LAYER_LIMITS, buildGraph, commonFolder, designFiles, layerView } from './layers.js';
+import { LIMITS as LAYER_LIMITS, buildGraph, commonFolder, describePrompt, designFiles, folderEntries, layerView, notesFrom } from './layers.js';
 import { PRIVATE_MESSAGE, ideaPatch, keptPrivate, mustBeShareable } from './private.js';
 import { awaitsReview, readFirst } from './readfirst.js';
 import { traceOf } from './trace.js';
@@ -1095,13 +1095,8 @@ export class AgentManager extends EventEmitter {
     return out;
   }
 
-  /**
-   * Design layers (layers.js) of a project's code, read from an agent's folder (the shared clone may
-   * have no files checked out): the boxes inside `at`, with the agent's changes and what depends on
-   * them marked when `agentId` is given. The graph is built again only when the folder changed.
-   */
-  async codeLayers(projectKey, { agentId = null, at = '' } = {}) {
-    // at null: where the agent's changes are (the folder holding them all).
+  /** The project, its agents and the agent folder the design is read from (layers.js). */
+  designSource(projectKey, agentId) {
     const withCode = this.store.list().filter((a) => a.workdir && !NO_REPO.has(a.kind) && fs.existsSync(a.workdir));
     const groups = new Map();
     for (const a of withCode) {
@@ -1112,17 +1107,33 @@ export class AgentManager extends EventEmitter {
     const running = (g) => g.agents.filter((a) => this.runtimes.get(a.id)?.pty).length;
     const projects = [...groups.values()].sort((x, y) => running(y) - running(x) || y.agents.length - x.agents.length);
     const picked = agentId ? withCode.find((a) => a.id === agentId) : null;
-    const g = (picked && groups.get(this.projectInfo(picked)?.key)) || (projectKey && groups.get(projectKey)) || projects[0];
+    const g = (picked && groups.get(this.projectInfo(picked)?.key)) || (projectKey && groups.get(projectKey)) || projects[0] || null;
     const list = projects.map((p) => ({ key: p.key, name: p.name, agents: p.agents.length, running: running(p) }));
-    if (!g) return { project: null, projects: list, agents: [], layer: null };
+    if (!g) return { g: null, list };
     const agent = picked && g.agents.includes(picked) ? picked : null;
     const from = agent ?? [...g.agents].sort((x, y) => Date.parse(y.activeAt ?? y.createdAt) - Date.parse(x.activeAt ?? x.createdAt))[0];
-    const dir = from.workdir;
+    return { g, list, agent, from };
+  }
+
+  /**
+   * Design layers (layers.js) of a project's code, read from an agent's folder (the shared clone may
+   * have no files checked out): the boxes inside `at`, with the agent's changes and what depends on
+   * them marked when `agentId` is given. The graph is built again only when the folder changed.
+   * at null: where the agent's changes are (the folder holding them all).
+   */
+  async codeLayers(projectKey, { agentId = null, at = '' } = {}) {
+    const { g, list, agent, from } = this.designSource(projectKey, agentId);
+    if (!g) return { project: null, projects: list, agents: [], layer: null };
     if (agent) await this.updateChanges(agent);
-    const graph = await this.designGraph(dir);
+    const graph = await this.designGraph(from.workdir);
     const churn = {};
-    for (const c of await this.churn(dir)) for (const f of c) churn[f] = (churn[f] ?? 0) + 1;
+    for (const c of await this.churn(from.workdir)) for (const f of c) churn[f] = (churn[f] ?? 0) + 1;
     const changed = agent ? Object.keys(this.changeSets.get(agent.id)?.files ?? {}) : [];
+    const spot = at === null ? commonFolder(changed.filter((f) => graph.files[f])) : String(at).replace(/^\/+|\/+$/g, '');
+    // What the model wrote about this folder, if it has been described.
+    const folder = graph.files[spot] ? '' : spot.split('#')[0];
+    const saved = graph.files[spot] ? null : this.store.data.designNotes?.[`${g.key}\n${folder}`];
+    const layer = layerView(graph, { at: spot, changed, churn, notes: saved });
     return {
       project: { key: g.key, name: g.name },
       projects: list,
@@ -1130,8 +1141,43 @@ export class AgentManager extends EventEmitter {
       agent: agent?.id ?? null,
       from: { id: from.id, name: from.name },
       read: { files: Object.keys(graph.files).length, capped: graph.capped },
-      layer: layerView(graph, { at: at === null ? commonFolder(changed.filter((f) => graph.files[f])) : String(at).replace(/^\/+|\/+$/g, ''), changed, churn }),
+      describe: this.config.design?.ai !== false,
+      notes: saved ? { summary: saved.summary, at: saved.at, by: saved.by, stale: saved.sig !== folderEntries(graph, folder).sig } : null,
+      layer,
     };
+  }
+
+  /**
+   * One folder of the design described by a model (one tool-less call with the names of its files,
+   * what they define and the imports between them, not the code): what it is, a line on each entry,
+   * and for a busy folder, its entries in named groups. Kept for the project until asked again.
+   */
+  async describeLayer(projectKey, { agentId = null, at = '' } = {}) {
+    if (this.config.design?.ai === false) throw Object.assign(new Error('Describing the design is turned off ("design": { "ai": false } in config.json)'), { status: 400 });
+    const { g, from } = this.designSource(projectKey, agentId);
+    if (!g) throw Object.assign(new Error('No project with its code on this computer'), { status: 400 });
+    const graph = await this.designGraph(from.workdir);
+    const spot = String(at ?? '').replace(/^\/+|\/+$/g, '');
+    const folder = graph.files[spot] ? spot.split('/').slice(0, -1).join('/') : spot.split('#')[0];
+    const { entries, sig } = folderEntries(graph, folder);
+    if (!entries.length) throw Object.assign(new Error('Nothing here to describe'), { status: 400 });
+    const key = `${g.key}\n${folder}`;
+    this.describing ??= new Map();
+    if (!this.describing.has(key)) {
+      const writer = this.writerFor(from);
+      const run = this.oneShot(from, describePrompt(graph, { project: g.name, folder, entries }), { ...writer, timeoutMs: 300_000 })
+        .then((text) => {
+          const notes = notesFrom(parseJsonReply(text), entries);
+          if (!notes.summary && !Object.keys(notes.purposes).length) throw new Error('The model gave no description');
+          this.store.data.designNotes ??= {};
+          this.store.data.designNotes[key] = { ...notes, sig, at: now(), by: [writer.engine.label, writer.model].filter(Boolean).join(' · ') };
+          this.store.save();
+        })
+        .finally(() => this.describing.delete(key));
+      this.describing.set(key, run);
+    }
+    await this.describing.get(key);
+    return this.codeLayers(g.key, { agentId, at: spot });
   }
 
   /** The import graph of the code in a folder, kept until its commit or working files change. */

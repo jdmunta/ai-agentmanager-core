@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.78.0 (2026-11-27)
+
+- **Describe with AI** in Map's Design view. See "Design layers" in the [README](README.md). One model call about the layer on screen:
+  - **A summary** of what the layer is, above its boxes, and **a line in each box** on what it does.
+  - **Named groups:** a folder with more than 12 entries is split into 3 to 9 groups, each a box you can open, with the imports between them.
+  - **Kept for the project,** so everyone looking sees it; when files are added or removed it says so and offers **Describe again**.
+  - The model sees only file and folder names, what each file defines and the imports between them, not the code. It uses the engine and model of Explain; `"design": { "ai": false }` in config.json turns it off. `POST /api/layers/describe`.
+
 ## 1.77.0 (2026-11-27)
 
 - **Design layers.** Map's new **Design** view draws a project's code as nested boxes, from the outside in. See "Design layers" in the [README](README.md).

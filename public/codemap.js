@@ -74,6 +74,7 @@ export function initCodeMap({ api, $, esc, agents, openAgent, openBugs, openCode
   let designAt = '';
   let designAgent = null;
   let designFocus = false;
+  let describing = false;
   let designOnly = true; // with an agent picked: only its changes and what uses them, in a busy layer
   try {
     project = localStorage.getItem(SAVED) || null;
@@ -111,6 +112,20 @@ export function initCodeMap({ api, $, esc, agents, openAgent, openBugs, openCode
     if (JSON.stringify(data) !== before || !$('#map-box').childElementCount) draw();
   }
 
+  /** The layer described by a model; the view waits for it (a minute or so). */
+  async function describeLayer() {
+    describing = true;
+    draw();
+    try {
+      data = await api('POST', '/layers/describe', { project, ...(designAgent ? { agent: designAgent } : {}), at: designAt });
+      designAt = data.layer?.at ?? designAt;
+    } catch (e) {
+      toast?.(e.message, 6000);
+    }
+    describing = false;
+    draw();
+  }
+
   function sentence(l) {
     const a = `<button class="link" data-map-open="${esc(l.a)}">${esc(nameOf(l.a))}</button>`;
     const b = `<button class="link" data-map-open="${esc(l.b)}">${esc(nameOf(l.b))}</button>`;
@@ -142,7 +157,7 @@ export function initCodeMap({ api, $, esc, agents, openAgent, openBugs, openCode
     if (layer === 'speed') return drawSpeed();
     if (layer === 'design') {
       $('#map-agents').innerHTML = '';
-      return drawDesign({ data, box: $('#map-box'), warn: $('#map-warn'), esc, only: designOnly });
+      return drawDesign({ data, box: $('#map-box'), warn: $('#map-warn'), esc, only: designOnly, describing });
     }
     const warn = (m?.links ?? []).filter((l) => l.kind !== 'near');
     $('#map-warn').innerHTML = warn.length ? `<ul>${warn.map(sentence).join('')}</ul>` : m?.agents.length ? '<p class="hint">No agents are on the same code.</p>' : '';
@@ -475,6 +490,7 @@ export function initCodeMap({ api, $, esc, agents, openAgent, openBugs, openCode
       if (at) return (designAt = at.dataset.designAt), load();
       if (e.target.closest('[data-design-focus]')) return (designFocus = true), load();
       if (e.target.closest('[data-design-only]')) return (designOnly = !designOnly), draw();
+      if (e.target.closest('[data-design-describe]') && !describing) return describeLayer();
       const code = e.target.closest('[data-design-code]');
       if (code && data?.layer?.file && data.from) {
         show(false);

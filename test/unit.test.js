@@ -17,7 +17,7 @@ import { cleanLearning, memoryKey, memoryPrompt } from '../src/memory.js';
 import { passEnv, plist, serviceIsOurs, unit } from '../src/service.js';
 import { stripChrome } from '../src/judge.js';
 import { asksFromLines, buildTimeline, timelineMarkdown } from '../src/timeline.js';
-import { buildGraph, commonFolder, designFiles, importSpecs, layerView, rankOf, serviceOf, symbolsOf } from '../src/layers.js';
+import { GROUP_OVER, buildGraph, commonFolder, describePrompt, designFiles, folderEntries, importSpecs, layerView, notesFrom, rankOf, serviceOf, symbolsOf } from '../src/layers.js';
 import { focusBoxes, layout } from '../public/design.js';
 import claude from '../src/engines/claude.js';
 import { notInstalled } from '../src/engines/index.js';
@@ -7933,4 +7933,55 @@ test('design layers: imports traced in JavaScript, Python, Go and Java; boxes, a
   const shown = focusBoxes(many, true);
   assert.deepEqual([shown.boxes.map((b) => b.name), shown.edges.length, shown.hidden], [['m0', 'm1', '10 others'], 1, 10]);
   assert.equal(focusBoxes(many, false).boxes.length, 12);
+});
+
+test('design layers described: the prompt names each entry and the imports; the reply is checked; a busy folder in named groups to go into', () => {
+  const n = GROUP_OVER + 2;
+  const src = Object.fromEntries(Array.from({ length: n }, (_, i) => [`src/m${i}.js`, i ? `import { f0 } from './m0.js';\nexport function f${i}() {}` : 'export function f0() {}']));
+  src['src/sub/deep.js'] = "import pg from 'pg';";
+  const g = buildGraph(Object.entries(src).map(([path, text]) => ({ path, text })));
+  const { entries, sig } = folderEntries(g, 'src');
+  assert.equal(entries.length, n + 1);
+  const prompt = describePrompt(g, { project: 'shop', folder: 'src', entries });
+  assert.ok(prompt.startsWith('Describe the design of one layer of a code repository'));
+  assert.ok(prompt.includes('- src/m3.js (file, 2 lines): defines f3') && prompt.includes('- src/sub (folder, 1 files, 1 lines): deep.js'), prompt);
+  assert.ok(prompt.includes('src/m1.js -> src/m0.js (1)'), 'the imports between entries');
+  assert.ok(prompt.includes('Put every entry in exactly one group'), 'a busy folder is to be grouped');
+  assert.ok(!describePrompt(g, { project: 'shop', folder: 'src', entries: entries.slice(0, 3) }).includes('Put every entry'), 'a small one is not');
+
+  const notes = notesFrom({
+    summary: '  The shop\'s   code. ',
+    purposes: { 'src/m0.js': 'Base helpers', 'src/nope.js': 'made up', 'src/m1.js': '' },
+    groups: [
+      { name: 'Core', purpose: 'The base', members: ['src/m0.js', 'src/m1.js', 'src/ghost.js'] },
+      { name: 'Data', purpose: 'Storage', members: ['src/sub'] },
+      { name: 'Empty', members: ['src/ghost.js'] },
+    ],
+  }, entries);
+  assert.deepEqual(notes, {
+    summary: "The shop's code.",
+    purposes: { 'src/m0.js': 'Base helpers' },
+    groups: [{ name: 'Core', purpose: 'The base', members: ['src/m0.js', 'src/m1.js'] }, { name: 'Data', purpose: 'Storage', members: ['src/sub'] }],
+  }, 'only what is there, made-up entries and empty groups dropped');
+  assert.deepEqual(notesFrom({ summary: 's', groups: [{ name: 'A', members: ['src/m0.js'] }] }, entries.slice(0, 3)).groups, [], 'no groups for a small folder');
+
+  // The groups as boxes; the entries left out as Other; into a group.
+  const top = layerView(g, { at: 'src', notes: { ...notes, sig }, changed: ['src/m0.js'] });
+  assert.equal(top.grouped, true);
+  assert.deepEqual(top.boxes.map((b) => [b.id, b.kind, b.name, b.members, b.purpose]).sort(), [
+    ['src#core', 'group', 'Core', 2, 'The base'],
+    ['src#data', 'group', 'Data', 1, 'Storage'],
+    ['src#other', 'group', 'Other', n - 2, ''],
+  ]);
+  assert.deepEqual(top.boxes.find((b) => b.id === 'src#core').changed, ['src/m0.js']);
+  assert.deepEqual(top.boxes.find((b) => b.id === 'src#other').dependents.length, n - 2, 'what uses the change, counted in its group');
+  assert.deepEqual(top.edges.sort((a, b) => a.from.localeCompare(b.from)), [{ from: 'src#other', to: 'src#core', count: n - 2 }]);
+  assert.deepEqual(top.talksTo, [{ name: 'PostgreSQL', pkgs: ['pg'] }]);
+  const core = layerView(g, { at: 'src#core', notes });
+  assert.deepEqual(core.crumbs.map((c) => c.name), ['System', 'src', 'Core']);
+  assert.deepEqual([core.group, core.grouped], [{ name: 'Core', purpose: 'The base' }, false]);
+  assert.deepEqual(core.boxes.map((b) => [b.id, b.purpose]).sort(), [['src/m0.js', 'Base helpers'], ['src/m1.js', '']]);
+  assert.deepEqual(core.edges, [{ from: 'src/m1.js', to: 'src/m0.js', count: 1 }]);
+  assert.equal(layerView(g, { at: 'src#gone', notes }).missing, true, 'a group no longer there');
+  assert.equal(layerView(g, { at: 'src' }).boxes.length, 15, 'not described: its entries, as before');
 });

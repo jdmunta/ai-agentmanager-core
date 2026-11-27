@@ -1499,6 +1499,10 @@ kbd { display: inline-block; min-width: 1.6em; padding: 1px 5px; border: 1px sol
 .design-box.dependent:not(.changed) { border-color: var(--yellow); box-shadow: 0 0 0 2px color-mix(in srgb, var(--yellow) 35%, transparent); }
 .design-name { font-weight: 600; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .design-size { font-size: 11px; color: var(--muted); }
+.design-box > * { flex: none; }
+.design-purpose { font-size: 11.5px; line-height: 1.3; max-height: 2.6em; color: var(--text); opacity: .85; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.design-box.group { border-width: 1.5px; background: color-mix(in srgb, var(--accent) 4%, var(--panel)); }
+.design-summary { margin: 0 0 8px; font-size: 13px; max-width: 980px; }
 .design-tags { display: flex; flex-wrap: nowrap; gap: 4px; overflow: hidden; }
 .design-tag.changed { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
 .design-tag.dependent { border-color: var(--yellow); color: var(--text); background: color-mix(in srgb, var(--yellow) 18%, var(--panel)); }

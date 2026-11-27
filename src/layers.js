@@ -329,11 +329,38 @@ function childrenOf(paths, at) {
   return [...kids.values()];
 }
 
+const slug = (name) => String(name).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'part';
+
+/** The groups of a folder's entries as written by the model, each entry in one; the rest as "Other". */
+function groupsOf(notes, entries) {
+  if (!notes?.groups?.length) return null;
+  const ids = new Set(entries.map((e) => e.id));
+  const seen = new Set();
+  const out = [];
+  for (const g of notes.groups) {
+    const members = (g.members ?? []).filter((m) => ids.has(m) && !seen.has(m));
+    members.forEach((m) => seen.add(m));
+    if (members.length) out.push({ name: g.name, purpose: g.purpose ?? '', members, slug: slug(g.name) });
+  }
+  const rest = entries.filter((e) => !seen.has(e.id)).map((e) => e.id);
+  if (rest.length) out.push({ name: 'Other', purpose: '', members: rest, slug: 'other' });
+  // Two groups named alike keep apart.
+  const used = new Map();
+  for (const g of out) {
+    const n = used.get(g.slug) ?? 0;
+    used.set(g.slug, n + 1);
+    if (n) g.slug = `${g.slug}-${n + 1}`;
+  }
+  return out;
+}
+
 /**
  * One layer: the boxes inside `at` with the arrows between them, the agent's changes and what
- * depends on them marked. `changed` is the agent's changed files. A file `at` gives its symbols.
+ * depends on them marked. `at` is a folder, a file (its symbols), or "folder#group" for one of the
+ * groups the model made of a busy folder. `notes` (from describe) gives the folder's summary, a
+ * line on what each box does, and its groups.
  */
-export function layerView(graph, { at = '', changed = [], churn = {} } = {}) {
+export function layerView(graph, { at = '', changed = [], churn = {}, notes = null } = {}) {
   const all = Object.keys(graph.files);
   const changedSet = new Set(changed.filter((f) => graph.files[f]));
   // Files that import a changed file (or its package folder) and were not changed themselves.
@@ -342,8 +369,9 @@ export function layerView(graph, { at = '', changed = [], churn = {} } = {}) {
     if (changedSet.has(f)) continue;
     if (info.imports.some((imp) => (imp.file ? changedSet.has(imp.file) : [...changedSet].some((c) => dirOf(c) === imp.dir)))) dependents.add(f);
   }
+  const [folder, groupSlug = null] = at.split('#');
   const crumbs = [{ id: '', name: 'System' }];
-  if (at) at.split('/').forEach((_, i, parts) => crumbs.push({ id: parts.slice(0, i + 1).join('/'), name: parts[i] }));
+  if (folder) folder.split('/').forEach((_, i, parts) => crumbs.push({ id: parts.slice(0, i + 1).join('/'), name: parts[i] }));
 
   if (graph.files[at]) {
     const info = graph.files[at];
@@ -354,28 +382,43 @@ export function layerView(graph, { at = '', changed = [], churn = {} } = {}) {
     };
   }
 
-  let boxes = childrenOf(all, at);
-  if (!boxes.length) return { at, crumbs, kind: 'folder', boxes: [], edges: [], talksTo: [], counts: { files: 0 } };
+  const entries = childrenOf(all, folder);
+  const groups = groupsOf(notes, entries);
+  const purposes = notes?.purposes ?? {};
+  const nameIn = (id) => (folder ? id.slice(folder.length + 1) : id);
+  let boxes;
+  let group = null;
+  if (groupSlug != null) {
+    // Inside one group: its members.
+    group = groups?.find((g) => g.slug === groupSlug) ?? null;
+    if (!group) return { at, crumbs, kind: 'folder', boxes: [], edges: [], rank: {}, talksTo: [], counts: { files: 0 }, missing: true };
+    crumbs.push({ id: at, name: group.name });
+    boxes = entries.filter((e) => group.members.includes(e.id)).map((e) => ({ ...e, name: nameIn(e.id), purpose: purposes[e.id] ?? '' }));
+  } else if (groups) {
+    const byId = new Map(entries.map((e) => [e.id, e]));
+    boxes = groups.map((g) => ({ id: `${folder}#${g.slug}`, kind: 'group', name: g.name, purpose: g.purpose, members: g.members.length, files: g.members.flatMap((m) => byId.get(m).files) }));
+  } else boxes = entries.map((e) => ({ ...e, name: nameIn(e.id), purpose: purposes[e.id] ?? '' }));
+  if (!boxes.length) return { at, crumbs, kind: 'folder', boxes: [], edges: [], rank: {}, talksTo: [], counts: { files: 0 } };
+
   // The boxes with the agent's changes or what uses them, then the biggest; the rest as one.
   const size = (b) => b.files.reduce((s, f) => s + (graph.files[f]?.lines ?? 0), 0);
   const touched = (b) => b.files.some((f) => changedSet.has(f) || dependents.has(f));
   boxes.sort((a, b) => touched(b) - touched(a) || size(b) - size(a));
-  let more = null;
   if (boxes.length > MAX_BOXES) {
     const rest = boxes.slice(MAX_BOXES - 1);
-    boxes = boxes.slice(0, MAX_BOXES - 1);
-    more = { id: `${at ? `${at}/` : ''}…`, name: `${rest.length} more`, kind: 'more', files: rest.flatMap((b) => b.files) };
+    boxes = [...boxes.slice(0, MAX_BOXES - 1), { id: `${at ? `${at}/` : ''}…`, name: `${rest.length} more`, kind: 'more', purpose: '', files: rest.flatMap((b) => b.files) }];
   }
-  const list = more ? [...boxes, more] : boxes;
-  const of = (file) => list.find((b) => (b.kind === 'more' ? b.files.includes(file) : under(file, b.id)))?.id ?? null;
+  // Which box each file is in; an import of a package folder lands on the box holding its files.
+  const boxOf = new Map();
+  for (const b of boxes) for (const f of b.files) boxOf.set(f, b.id);
+  const ofTarget = (t) => boxOf.get(t) ?? boxes.find((b) => b.files.some((f) => dirOf(f) === t))?.id ?? null;
 
   const edges = new Map();
-  const io = new Map(list.map((b) => [b.id, { in: 0, out: 0 }]));
+  const io = new Map(boxes.map((b) => [b.id, { in: 0, out: 0 }]));
   for (const [f, info] of Object.entries(graph.files)) {
-    const from = under(f, at) ? of(f) : null;
+    const from = boxOf.get(f) ?? null;
     for (const imp of info.imports) {
-      const t = targetOf(imp);
-      const to = under(t, at) ? of(t) : null;
+      const to = ofTarget(targetOf(imp));
       if (from && to && from !== to) {
         const k = `${from}\n${to}`;
         edges.set(k, (edges.get(k) ?? 0) + 1);
@@ -396,26 +439,28 @@ export function layerView(graph, { at = '', changed = [], churn = {} } = {}) {
     }
     return [...s].map(([name, pkgs]) => ({ name, pkgs }));
   };
-  const inside = all.filter((f) => under(f, at));
-  const out = list.map((b) => {
-    const files = b.files;
-    return {
-      id: b.id,
-      name: b.kind === 'more' ? b.name : at ? b.id.slice(at.length + 1) : b.id,
-      kind: b.kind,
-      files: files.length,
-      lines: files.reduce((s, f) => s + (graph.files[f]?.lines ?? 0), 0),
-      churn: files.reduce((s, f) => s + (churn[f] ?? 0), 0),
-      entry: files.filter((f) => graph.files[f]?.entry).slice(0, 5),
-      changed: files.filter((f) => changedSet.has(f)),
-      dependents: files.filter((f) => dependents.has(f)),
-      talksTo: talks(files).map((t) => t.name),
-      in: io.get(b.id).in,
-      out: io.get(b.id).out,
-    };
-  });
+  const inside = boxes.flatMap((b) => b.files);
+  const out = boxes.map((b) => ({
+    id: b.id,
+    name: b.name,
+    kind: b.kind,
+    purpose: b.purpose ?? '',
+    ...(b.members ? { members: b.members } : {}),
+    files: b.files.length,
+    lines: b.files.reduce((s, f) => s + (graph.files[f]?.lines ?? 0), 0),
+    churn: b.files.reduce((s, f) => s + (churn[f] ?? 0), 0),
+    entry: b.files.filter((f) => graph.files[f]?.entry).slice(0, 5),
+    changed: b.files.filter((f) => changedSet.has(f)),
+    dependents: b.files.filter((f) => dependents.has(f)),
+    talksTo: talks(b.files).map((t) => t.name),
+    in: io.get(b.id).in,
+    out: io.get(b.id).out,
+  }));
   return {
     at, crumbs, kind: 'folder',
+    folder,
+    group: group ? { name: group.name, purpose: group.purpose } : null,
+    grouped: Boolean(groups && !group),
     boxes: out,
     edges: [...edges].map(([k, count]) => {
       const [from, to] = k.split('\n');
@@ -425,6 +470,81 @@ export function layerView(graph, { at = '', changed = [], churn = {} } = {}) {
     talksTo: talks(inside),
     counts: { files: inside.length, changed: inside.filter((f) => changedSet.has(f)).length, dependents: inside.filter((f) => dependents.has(f)).length },
   };
+}
+
+// ------------------------------------------------------------------ described by a model
+
+// More entries than this in a folder: the model also groups them into parts.
+export const GROUP_OVER = 12;
+export const DESCRIBE_HEAD = 'Describe the design of one layer of a code repository';
+
+/** What a folder holds, for the model and for knowing when its notes went out of date. */
+export function folderEntries(graph, folder) {
+  const entries = childrenOf(Object.keys(graph.files), folder);
+  const sig = entries.map((e) => e.id).sort().join('\n');
+  return { entries, sig };
+}
+
+/** The prompt: each entry with its size and what it defines, the imports between them. */
+export function describePrompt(graph, { project, folder, entries }) {
+  const group = entries.length > GROUP_OVER;
+  const byFile = new Map();
+  for (const e of entries) for (const f of e.files) byFile.set(f, e.id);
+  const pairs = new Map();
+  for (const e of entries)
+    for (const f of e.files)
+      for (const imp of graph.files[f]?.imports ?? []) {
+        const t = targetOf(imp);
+        const to = byFile.get(t) ?? entries.find((x) => x.files.some((g) => dirOf(g) === t))?.id;
+        if (to && to !== e.id) pairs.set(`${e.id} -> ${to}`, (pairs.get(`${e.id} -> ${to}`) ?? 0) + 1);
+      }
+  const lines = entries.map((e) => {
+    const n = e.files.reduce((s, f) => s + (graph.files[f]?.lines ?? 0), 0);
+    if (e.kind === 'file') {
+      const syms = (graph.files[e.id]?.symbols ?? []).filter((x) => x.kind !== 'method').slice(0, 14).map((x) => x.name);
+      const pk = (graph.files[e.id]?.pkgs ?? []).slice(0, 6);
+      return `- ${e.id} (file, ${n} lines)${syms.length ? `: defines ${syms.join(', ')}` : ''}${pk.length ? `; uses packages ${pk.join(', ')}` : ''}`;
+    }
+    const names = e.files.slice(0, 10).map((f) => f.slice(e.id.length + 1));
+    return `- ${e.id} (folder, ${e.files.length} files, ${n} lines): ${names.join(', ')}${e.files.length > 10 ? ', …' : ''}`;
+  });
+  const edgeLines = [...pairs].sort((a, b) => b[1] - a[1]).slice(0, 80).map(([k, c]) => `${k} (${c})`);
+  let text = [
+    `${DESCRIBE_HEAD}, for a developer who needs to understand it quickly.`,
+    `Project: ${project}. Layer: ${folder || 'the whole repository (its top level)'}.`,
+    '',
+    'Its entries (files and folders), with the names they define:',
+    ...lines,
+    '',
+    'Imports between them ("a -> b (n)": a imports b, n times):',
+    ...(edgeLines.length ? edgeLines : ['(none)']),
+    '',
+    'Reply with only a JSON object:',
+    '{"summary": "<one sentence: what this layer is and does>",',
+    ' "purposes": {"<entry id exactly as listed>": "<what it does, under 14 words>", ...one for every entry},',
+    group
+      ? ' "groups": [{"name": "<a short name for a part of the design, 1-3 words>", "purpose": "<what this part does, under 16 words>", "members": ["<entry id>", ...]}]}'
+      : ' "groups": []}',
+    group
+      ? `Put every entry in exactly one group: 3 to 9 groups of entries that work together for one purpose (the imports between them are the best clue), named for what they do, not how. Order the groups from the entry points down to the foundations.`
+      : 'Leave groups empty.',
+    "Say only what the names, definitions and imports show; where they don't show a purpose, say what it holds.",
+  ].join('\n');
+  if (text.length > 60_000) text = `${text.slice(0, 60_000)}\n…`;
+  return text;
+}
+
+/** The model's reply checked against what is there: { summary, purposes, groups }. */
+export function notesFrom(reply, entries) {
+  const ids = new Set(entries.map((e) => e.id));
+  const line = (s, n) => String(s ?? '').replace(/\s+/g, ' ').trim().slice(0, n);
+  const purposes = {};
+  for (const [k, v] of Object.entries(reply?.purposes ?? {})) if (ids.has(k) && line(v, 160)) purposes[k] = line(v, 160);
+  const groups = (Array.isArray(reply?.groups) ? reply.groups : [])
+    .map((g) => ({ name: line(g?.name, 40), purpose: line(g?.purpose, 200), members: (Array.isArray(g?.members) ? g.members : []).filter((m) => ids.has(m)) }))
+    .filter((g) => g.name && g.members.length)
+    .slice(0, 12);
+  return { summary: line(reply?.summary, 300), purposes, groups: entries.length > GROUP_OVER ? groups : [] };
 }
 
 /**
