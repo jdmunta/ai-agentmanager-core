@@ -80,6 +80,8 @@ const teams = new Map(); // team id -> team view
 let openTeamId = null;
 let teamFile = null; // { name, markdown } shown in the team view
 // #<id> selects an agent; #<id>/term also opens its terminal.
+// The agent whose More menu in its action bar is open: kept across re-renders.
+let moreFor = null;
 const loginHash = location.hash.match(/(?:^#|&)login=([\w-]+)/)?.[1] ?? null;
 // From the hub: #ticket=<one-time ticket>&go=<agent>/term
 const ticketHash = location.hash.match(/(?:^#|&)ticket=([\w-]+)/)?.[1] ?? null;
@@ -1101,12 +1103,7 @@ function insightsBox(a) {
   return { button, box };
 }
 
-const OUTCOME = {
-  done: ['✅', 'Done'],
-  partial: ['🟡', 'Partial'],
-  blocked: ['⛔', 'Blocked'],
-  'in progress': ['🔄', 'In progress'],
-};
+const OUTCOME = { done: 'Done', partial: 'Partial', blocked: 'Blocked', 'in progress': 'In progress' };
 
 /** The scorecard before you review: the score, Improve, and the full card. */
 function scoreStrip(a) {
@@ -1119,10 +1116,10 @@ function scoreStrip(a) {
 function resultsCard(a) {
   const r = a.results;
   if (!r) return '';
-  const [icon, label] = OUTCOME[r.outcome] ?? ['🔄', r.outcome];
+  const label = OUTCOME[r.outcome] ?? r.outcome;
   const item = (x, cls) => `<li class="${cls}">${x.url ? `<a href="${esc(x.url)}" target="_blank" rel="noopener">${md(x.text).replace(/^<p>|<\/p>\s*$/g, '')}</a>` : md(x.text).replace(/^<p>|<\/p>\s*$/g, '')}</li>`;
   return `<div class="results ${r.outcome.replace(' ', '-')}">
-    <h4>Results <span class="outcome">${icon} ${label}</span>${r.fromAgent ? '' : ' <span class="hint">(from what AI Agent Manager can see; the agent adds its own when it next updates its brief)</span>'}</h4>
+    <h4>Results <span class="outcome">${esc(label)}</span>${r.fromAgent ? '' : ' <span class="hint">(from what AI Agent Manager can see; the agent adds its own when it next updates its brief)</span>'}</h4>
     ${scoreStrip(a)}
     ${r.confidence ? `<p class="own-conf"><span class="tag conf-${esc(r.confidence.level)}" title="The agent's own confidence in what it built, as it wrote it in its brief. The review scorecard is the separate check.">Its own confidence: ${r.confidence.percent}%</span> ${esc(r.confidence.why)}</p>` : r.fromAgent && ['done', 'partial'].includes(r.outcome) ? '<p class="hint own-conf">The agent has not said how confident it is in this.</p>' : ''}
     ${r.blockers.length ? `<ul class="blockers">${r.blockers.map((x) => item(x, 'blocker')).join('')}</ul>` : ''}
@@ -1261,7 +1258,7 @@ function agentItem(a, { project = false } = {}) {
   const idle = !isActive(a);
   const p = project && a.projectInfo && !['other', 'general', 'assistant'].includes(a.projectInfo.key) ? a.projectInfo : null;
   return `<li data-id="${a.id}" ${a.kind === 'general' || a.kind === 'assistant' ? '' : 'draggable="true" '}class="agent pr${a.priority ?? 2} ${a.id === selectedId ? 'selected' : ''} ${idle ? 'idle' : ''} ${a.runtime.running ? `running ${st}` : ''}">
-    <div class="line1">${prioChip(a.priority ?? 2)}${a.results?.outcome === 'blocked' ? '<span class="outcome-mark" title="Blocked">⛔</span>' : a.results?.outcome === 'done' ? '<span class="outcome-mark" title="Done">✅</span>' : ''}<span class="name" title="${esc(describeTitle(a) || (a.kind === 'assistant' ? 'Finds new work and starts agents for it' : 'General session'))}">${esc(a.name)}</span>${flags(a)}<span class="pill ${st}">${pillText(st)}</span></div>
+    <div class="line1">${prioChip(a.priority ?? 2)}${a.results?.outcome === 'blocked' ? '<span class="outcome-mark blocked" title="Blocked" aria-label="Blocked"></span>' : a.results?.outcome === 'done' ? '<span class="outcome-mark done" title="Done" aria-label="Done"></span>' : ''}<span class="name" title="${esc(describeTitle(a) || (a.kind === 'assistant' ? 'Finds new work and starts agents for it' : 'General session'))}">${esc(a.name)}</span>${flags(a)}<span class="pill ${st}">${pillText(st)}</span></div>
     ${a.status === 'preparing' && a.progress ? `<div class="progress-line">${esc(progressText(a.progress))}</div>` : ''}
     <div class="meta">
       <span class="mono">${a.id}</span>
@@ -2754,22 +2751,28 @@ function renderDetail() {
           : a.status === 'error' && !a.workdir
             ? ''
             : `<button data-act="start" ${a.status === 'preparing' ? 'disabled' : ''}>Resume in background</button>`}
-        <button data-act="fresh" ${running || a.status === 'preparing' ? 'disabled' : ''} title="Start over with a new session ID (old ones are kept)">New session</button>
-        ${(a.engine ?? 'claude') === 'claude' && a.isolation !== 'container' && !a.movedTo && !REMOTE ? `<button data-act="desktop" ${a.sessionId && a.workdir && a.status !== 'preparing' ? '' : 'disabled'} title="Continue this conversation in the Claude desktop app. Its session here closes; Resume here later picks up what was said there">Open in Claude desktop</button>` : ''}
         <button data-act="shell" ${a.workdir && a.status !== 'preparing' ? '' : 'disabled'} title="A separate terminal in this agent's folder for running commands by hand">Open shell</button>
         ${noRepo(a) ? '' : `<button data-act="changes" ${a.workdir && a.status !== 'preparing' ? '' : 'disabled'} title="Read its changes, comment on lines for the agent, commit and open a pull request">Review changes${a.git?.dirtyFiles ? ` <span class="count">${a.git.dirtyFiles}</span>` : ''}</button>`}
         ${a.aiReview?.verdict ? `<button data-act="overview" title="The AI review: what's done, what's missing, the risks">Overview${a.aiReview.seen ? '' : ' <span class="count">new</span>'}</button>` : ''}
         ${a.questions?.length ? `<button data-act="questions" title="What the agent asked you, and your answers">Questions${openQuestions(a) ? ` <span class="count">${openQuestions(a)}</span>` : ''}</button>` : ''}
         ${a.conflicts?.length ? `<button data-act="overlaps" title="Other agents changing the same files: which, who should merge first, and what to do">⚔ Overlaps <span class="count">${a.conflicts.length}</span></button>` : ''}
-        <button data-act="debug" class="desk-only" ${a.workdir && a.status !== 'preparing' ? '' : 'disabled'} title="Debug with this agent: say what to debug (a failure, instability at scale, slowness under load). It investigates in its session and writes a report beside it: animated diagrams of the code path and data flow, findings and recommended fixes">🐞 Debug${a.specDocs?.debug ? ' <span class="count">report</span>' : ''}</button>
-        <button data-act="security" class="desk-only" ${a.workdir && a.status !== 'preparing' ? '' : 'disabled'} title="Security audit with this agent: it maps where untrusted input comes in, follows it through the code, checks each finding a second time, and writes a report beside its session: the attack surface, findings by severity with evidence and fixes, and what was not covered. It changes no code until you ask for fixes">🛡 Security audit${a.specDocs?.security ? ' <span class="count">report</span>' : ''}</button>
-        <button data-act="reverse" class="desk-only" ${a.workdir && a.status !== 'preparing' ? '' : 'disabled'} title="Reverse engineer with this agent and REA's tools: name a target (an app's folder, a binary, a website) and what you want to understand. It investigates in its session and writes a report beside it: how it works with animated diagrams, the evidence, what could not be determined, and a plan to build your own version">🔍 Reverse engineer${a.specDocs?.reverse ? ' <span class="count">report</span>' : ''}</button>
-        <button data-act="mcp" ${a.workdir && a.status !== 'preparing' ? '' : 'disabled'} title="The MCP servers and tools Claude Code has in this agent's folder; run one in its session or once in the workspace">MCP tools</button>
-        <button data-act="fork" ${a.workdir && a.git?.branch ? '' : 'disabled'} title="A new agent with this one's code and conversation, in its own worktree, to try another approach">Fork</button>
         <button data-act="edit" title="Change its name, request, project, priority, permission mode or model">Edit</button>
-        <button data-act="refresh" title="Re-scan git, PRs and transcripts">Refresh</button>
-        <button data-act="keep" class="${a.keep ? 'on' : ''}" title="${a.keep ? 'Kept: clean up never closes or deletes it. Click to let clean up handle it again' : 'Clean up never closes or deletes an agent marked Keep'}">${a.keep ? '📌 Kept' : 'Keep'}</button>
-        <button class="danger" data-act="delete">Delete</button>
+        <div class="menu-wrap d-more">
+          <button type="button" data-act="more" aria-haspopup="menu" aria-expanded="${moreFor === a.id}" title="More for this agent: a new session, the desktop app, Debug, Security audit, Reverse engineer, MCP tools, Fork, Refresh, Keep, Delete">More ▾</button>
+          <div class="menu" role="menu" ${moreFor === a.id ? '' : 'hidden'}>
+            <button data-act="fresh" ${running || a.status === 'preparing' ? 'disabled' : ''} title="Start over with a new session ID (old ones are kept)">New session</button>
+            ${(a.engine ?? 'claude') === 'claude' && a.isolation !== 'container' && !a.movedTo && !REMOTE ? `<button data-act="desktop" ${a.sessionId && a.workdir && a.status !== 'preparing' ? '' : 'disabled'} title="Continue this conversation in the Claude desktop app. Its session here closes; Resume here later picks up what was said there">Open in Claude desktop</button>` : ''}
+            <button data-act="debug" class="desk-only" ${a.workdir && a.status !== 'preparing' ? '' : 'disabled'} title="Debug with this agent: say what to debug (a failure, instability at scale, slowness under load). It investigates in its session and writes a report beside it: animated diagrams of the code path and data flow, findings and recommended fixes">Debug${a.specDocs?.debug ? ' <span class="count">report</span>' : ''}</button>
+            <button data-act="security" class="desk-only" ${a.workdir && a.status !== 'preparing' ? '' : 'disabled'} title="Security audit with this agent: it maps where untrusted input comes in, follows it through the code, checks each finding a second time, and writes a report beside its session: the attack surface, findings by severity with evidence and fixes, and what was not covered. It changes no code until you ask for fixes">Security audit${a.specDocs?.security ? ' <span class="count">report</span>' : ''}</button>
+            <button data-act="reverse" class="desk-only" ${a.workdir && a.status !== 'preparing' ? '' : 'disabled'} title="Reverse engineer with this agent and REA's tools: name a target (an app's folder, a binary, a website) and what you want to understand. It investigates in its session and writes a report beside it: how it works with animated diagrams, the evidence, what could not be determined, and a plan to build your own version">Reverse engineer${a.specDocs?.reverse ? ' <span class="count">report</span>' : ''}</button>
+            <button data-act="mcp" ${a.workdir && a.status !== 'preparing' ? '' : 'disabled'} title="The MCP servers and tools Claude Code has in this agent's folder; run one in its session or once in the workspace">MCP tools</button>
+            <button data-act="fork" ${a.workdir && a.git?.branch ? '' : 'disabled'} title="A new agent with this one's code and conversation, in its own worktree, to try another approach">Fork</button>
+            <button data-act="refresh" title="Re-scan git, PRs and transcripts">Refresh</button>
+            <button data-act="keep" class="${a.keep ? 'on' : ''}" title="${a.keep ? 'Kept: clean up never closes or deletes it. Click to let clean up handle it again' : 'Clean up never closes or deletes an agent marked Keep'}">${a.keep ? 'Kept' : 'Keep'}</button>
+            <div class="menu-sep"></div>
+            <button class="danger" data-act="delete">Delete</button>
+          </div>
+        </div>
       </div>
     </div>
     ${(() => {
@@ -4271,6 +4274,21 @@ document.addEventListener('dragend', () => {
   }
 });
 
+// The agent whose More menu (in its action bar) is open (moreFor, declared at the top); a click elsewhere or Escape closes it.
+function closeMore() {
+  if (moreFor == null) return;
+  moreFor = null;
+  const m = $('#detail-body .d-more');
+  m?.querySelector('.menu')?.setAttribute('hidden', '');
+  m?.querySelector('[data-act="more"]')?.setAttribute('aria-expanded', 'false');
+}
+document.addEventListener('click', (e) => {
+  if (!e.target.closest?.('.d-more')) closeMore();
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') closeMore();
+});
+
 // The title goes home: the Agents tab with no agent open.
 $('#home-link').onclick = (e) => {
   e.preventDefault();
@@ -4283,6 +4301,12 @@ $('#detail-body').addEventListener('click', async (e) => {
   if (!a) return;
   const btn = e.target.closest('button');
   if (!btn) return;
+  // More in the action bar: open or closed across re-renders; picking an item closes it.
+  if (btn.dataset.act === 'more') {
+    moreFor = moreFor === a.id ? null : a.id;
+    return renderDetail();
+  }
+  if (btn.closest('.d-more .menu')) closeMore();
 
   if (btn.dataset.backlogAccept) return act(() => api('POST', `/backlog/${btn.dataset.backlogAccept}/accept`), 'Accepted: done');
   if (btn.dataset.backlogReopen) {
@@ -5107,7 +5131,7 @@ function connectEvents() {
     { events: true },
     {
       onOpen: () => {
-        $('#conn').textContent = $('#conn').title = REMOTE ? 'connected (remote)' : 'daemon connected';
+        $('#conn').textContent = $('#conn').title = REMOTE ? 'Connected (remote)' : 'Connected';
         $('#conn').className = 'conn ok';
         reloadIfUpdated();
       },
@@ -5765,7 +5789,18 @@ groupsUi = initGroups({
   focusMain: () => (term.agentId && !$('#term-wrap').hidden ? term.xterm.focus() : $('#detail').focus?.()),
 });
 $('#group-split').onclick = () => groupsUi.split('row');
-initTopNav({ $ });
+const topNav = initTopNav({ $ });
+// The views in a column at the left (wide windows) or in the top bar: this device remembers which.
+try {
+  document.body.classList.toggle('nav-top', localStorage.getItem('agentmgr.nav') === 'top');
+} catch {}
+$('#nav-toggle').onclick = () => {
+  const top = document.body.classList.toggle('nav-top');
+  try {
+    localStorage.setItem('agentmgr.nav', top ? 'top' : 'side');
+  } catch {}
+  topNav.fit();
+};
 
 boot();
 setInterval(renderDetail, 30_000); // keep "x ago" labels fresh

@@ -22,7 +22,8 @@
   <body>
     <header class="topbar">
       <div class="brand">
-        <a href="#" id="home-link" class="home-link" title="Home: all agents"><span class="logo" aria-hidden="true">◆</span><h1>AI Agent Manager</h1></a>
+        <button id="nav-toggle" class="nav-toggle" type="button" title="Views in a column at the left, or in the top bar" aria-label="Views in a column or in the top bar"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M6 2.5v11" stroke="currentColor" stroke-width="1.3"/></svg></button>
+        <a href="#" id="home-link" class="home-link" title="Home: all agents"><span class="logo" aria-hidden="true"><svg width="20" height="20" viewBox="0 0 20 20"><rect width="20" height="20" rx="5" fill="currentColor"/><path d="M6 13.5 10 6l4 7.5M7.6 10.8h4.8" fill="none" stroke="var(--accent-text)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg></span><h1>AI Agent Manager</h1></a>
         <button id="about-btn" class="about-btn" type="button" title="About AI Agent Manager: version, release, links">About</button>
         <button id="update-btn" class="update-btn" type="button" hidden></button>
         <span id="conn" class="conn" title="Daemon connection">connecting…</span>
@@ -32,30 +33,35 @@
         <input id="filter" type="search" placeholder="Filter agents" aria-label="Filter agents" />
         <button id="go-btn" class="go-btn" title="Go to: find a view, an agent or a setting by name (Ctrl+K or ⌘K)" aria-label="Go to a view, an agent or a setting">⌕ Go to</button>
         <nav class="top-nav" id="top-nav" aria-label="Views">
+        <span class="nav-group" aria-hidden="true">Work</span>
         <button id="today-btn" title="Today: what needs you, from every list, most pressing first, and why (y)">Today <span id="today-count" class="badge ready"></span></button>
         <button id="glance-btn" title="At a glance: every agent on one line, grouped by what it needs from you (act now, fix, review, working, follow up, tidy up, idle), and why">Glance <span id="glance-count" class="badge"></span></button>
         <button id="readfirst-btn" title="Read first: finished work waiting for your review, the pieces that need reading most first, and why">Read first <span id="readfirst-count" class="badge"></span></button>
         <button id="assistant-btn" title="An always-on session that finds new work and starts agents for it">Assistant <span id="assistant-dot" class="assistant-dot" hidden></span></button>
-        <button id="spend-btn" title="Results across agents (merge rate, time to PR, cost per merged PR), what they cost, and spending limits">Results <span id="spend-today" class="spend-today"></span></button>
-        <button id="standup-btn" title="Today's standup: each agent's news read aloud, and what they need from you">Standup <span id="standup-dot" class="assistant-dot" hidden></span></button>
-        <button id="actions-btn" title="Actions: what's asked of you in Slack and in meeting notes, found by the assistant; decide on each one">Actions <span id="actions-count" class="badge ready"></span></button>
-        <button id="issues-btn" title="Jira: every issue an agent works on, with its Jira status, pull request and agent, the ones waiting for your review first">Jira <span id="issues-count" class="badge ready"></span></button>
-        <button id="designs-btn" title="Designs: every agent's design doc with its summary and links, the ones waiting for your review first">Designs <span id="designs-count" class="badge ready"></span></button>
-        <button id="bugs-btn" title="Bugs: background hunts in a project or folder, and what they found, checked and worst first">Bugs <span id="bugs-count" class="badge"></span></button>
-        <button id="reviews-btn" title="Reviews: pull requests you review. Reviewer agents ask the critical questions and find what blocks approval; you post what you pick">Reviews <span id="reviews-count" class="badge ready"></span></button>
-        <button id="value-btn" title="Value: what the delivered work is worth, and the pull requests merged, by day, week, month, quarter and year, against the AI cost and your time; reports for management">Value</button>
-        <button id="quality-btn" title="Quality: what happened to the agents' pull requests after they merged: reverted, fixed afterwards, failed checks, or held up; and how often a reviewer asked for changes">Quality</button>
-        <button id="decide-btn" title="Decide: what waits for you with its options and a recommendation, your standing decisions and what was decided for you, the backlog by impact, dates at risk as choices, and a look back at past decisions">Decide <span id="decide-count" class="badge"></span></button>
-        <button id="plan-btn" title="Plan: a project's dates (code complete, RC, GA) with their checklists and reminders, the decision log, and the tech debt radar">Plan <span id="plan-count" class="badge"></span></button>
-        <button id="news-btn" title="AI News: the frontier labs' latest releases (Anthropic, OpenAI, Google and the other top labs), each summarized, with links">AI News <span id="news-count" class="badge ready"></span></button>
-        <button id="map-btn" title="The codebase map: where each agent is changing and reading code, and who is about to collide">Map</button>
+        <button id="ask-btn" title="A general session with no repo or folder, on Claude Code or another engine you have (Codex, Muse Code, …)">Ask Agent</button>
         <button id="board-btn" title="Board: every agent as a card in the column for where its work stands: starting, working, needs you, waiting, in review, done, closed (B)">Board</button>
         <button id="watch-btn" title="Running agents' sessions side by side, live: follow them all without clicking from one to the next">Watch</button>
+        <span class="nav-group" aria-hidden="true">Review</span>
+        <button id="reviews-btn" title="Reviews: pull requests you review. Reviewer agents ask the critical questions and find what blocks approval; you post what you pick">Reviews <span id="reviews-count" class="badge ready"></span></button>
+        <button id="designs-btn" title="Designs: every agent's design doc with its summary and links, the ones waiting for your review first">Designs <span id="designs-count" class="badge ready"></span></button>
+        <button id="issues-btn" title="Jira: every issue an agent works on, with its Jira status, pull request and agent, the ones waiting for your review first">Jira <span id="issues-count" class="badge ready"></span></button>
+        <button id="bugs-btn" title="Bugs: background hunts in a project or folder, and what they found, checked and worst first">Bugs <span id="bugs-count" class="badge"></span></button>
+        <button id="actions-btn" title="Actions: what's asked of you in Slack and in meeting notes, found by the assistant; decide on each one">Actions <span id="actions-count" class="badge ready"></span></button>
+        <span class="nav-group" aria-hidden="true">Plan</span>
+        <button id="decide-btn" title="Decide: what waits for you with its options and a recommendation, your standing decisions and what was decided for you, the backlog by impact, dates at risk as choices, and a look back at past decisions">Decide <span id="decide-count" class="badge"></span></button>
+        <button id="plan-btn" title="Plan: a project's dates (code complete, RC, GA) with their checklists and reminders, the decision log, and the tech debt radar">Plan <span id="plan-count" class="badge"></span></button>
+        <button id="standup-btn" title="Today's standup: each agent's news read aloud, and what they need from you">Standup <span id="standup-dot" class="assistant-dot" hidden></span></button>
+        <span class="nav-group" aria-hidden="true">Insights</span>
+        <button id="spend-btn" title="Results across agents (merge rate, time to PR, cost per merged PR), what they cost, and spending limits">Results <span id="spend-today" class="spend-today"></span></button>
+        <button id="value-btn" title="Value: what the delivered work is worth, and the pull requests merged, by day, week, month, quarter and year, against the AI cost and your time; reports for management">Value</button>
+        <button id="quality-btn" title="Quality: what happened to the agents' pull requests after they merged: reverted, fixed afterwards, failed checks, or held up; and how often a reviewer asked for changes">Quality</button>
+        <button id="map-btn" title="The codebase map: where each agent is changing and reading code, and who is about to collide">Map</button>
+        <button id="news-btn" title="AI News: the frontier labs' latest releases (Anthropic, OpenAI, Google and the other top labs), each summarized, with links">AI News <span id="news-count" class="badge ready"></span></button>
+        <span class="nav-group" aria-hidden="true">This computer</span>
         <button id="mcp-btn" title="MCP: the MCP servers Claude Code has (yours, projects', claude.ai connectors and plugins), their tools, and running one in an agent's session or workspace">MCP</button>
         <button id="os-btn" title="OS: this computer and how loaded it is right now: processor, memory, disks, what each open agent session takes, and the busiest processes">OS</button>
         <button id="machine-btn" title="A terminal on this computer (your home folder), from any device you're signed in on">Terminal</button>
         <button id="screen-btn" title="This computer's screen, to answer a pop-up or watch another program, from any device you're signed in on">Screen <span id="screen-dot" class="assistant-dot" hidden></span></button>
-        <button id="ask-btn" title="A general session with no repo or folder, on Claude Code or another engine you have (Codex, Muse Code, …)">Ask Agent</button>
         <div class="menu-wrap top-more" id="top-more" hidden>
           <button id="top-more-btn" type="button" aria-haspopup="menu" aria-expanded="false">More ▾</button>
           <div id="top-more-menu" class="menu" role="menu" hidden></div>

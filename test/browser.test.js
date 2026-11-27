@@ -228,6 +228,46 @@ test('the top bar fits the window: the view buttons that do not fit go into More
   await until(`document.querySelectorAll('#agent-list li[data-id]').length === 3`, 'the agents listed again');
 });
 
+test('three columns: the views at the left in groups, back in the top bar by the button, and More in an agent\'s actions', { skip }, async () => {
+  await width(1600);
+  await sleep(300);
+  const nav = () => js(`(() => { const n = document.querySelector('#top-nav'); const r = n.getBoundingClientRect(); const l = document.querySelector('.layout').getBoundingClientRect();
+    return { fixed: getComputedStyle(n).position === 'fixed', left: Math.round(r.left), list: Math.round(l.left) >= Math.round(r.right), groups: [...n.querySelectorAll('.nav-group')].filter((g) => g.offsetHeight).map((g) => g.textContent),
+      buttons: n.querySelectorAll(':scope > button').length, more: !document.querySelector('#top-more').hidden }; })()`);
+  assert.deepEqual(await nav(), { fixed: true, left: 0, list: true, groups: ['Work', 'Review', 'Plan', 'Insights', 'This computer'], buttons: 24, more: false });
+  // The button by the logo puts them in the top bar (with More), remembered; and back.
+  await js(`document.querySelector('#nav-toggle').click()`);
+  await sleep(300);
+  const top = await nav();
+  assert.equal(top.fixed, false);
+  assert.deepEqual(top.groups, [], 'no group names in the top bar');
+  assert.equal(await js(`localStorage.getItem('agentmgr.nav')`), 'top');
+  await reload();
+  assert.equal(await js(`document.body.classList.contains('nav-top')`), true, 'remembered');
+  await js(`document.querySelector('#nav-toggle').click()`);
+  await sleep(300);
+  assert.equal((await nav()).fixed, true);
+  // An agent's actions: the main ones in the bar, the rest under More, which stays open while the page redraws.
+  const id = await js(`document.querySelector('#agent-list li[data-id]').dataset.id`);
+  await js(`document.querySelector('#agent-list li[data-id="${id}"]').click()`);
+  await until(`document.querySelector('#detail-body .d-more')`, 'the More button');
+  const bar = await js(`[...document.querySelectorAll('#detail-body .d-actions > button')].map((b) => b.dataset.act)`);
+  assert.ok(bar.includes('terminal') && bar.includes('edit') && !bar.includes('delete') && !bar.includes('fork'), `in the bar: ${bar}`);
+  await js(`document.querySelector('#detail-body [data-act="more"]').click()`);
+  await until(`!document.querySelector('#detail-body .d-more .menu').hidden`, 'More open');
+  assert.deepEqual(await js(`['delete', 'fork', 'debug', 'keep'].map((k) => Boolean(document.querySelector('#detail-body .d-more .menu [data-act="' + k + '"]')))`), [true, true, true, true]);
+  const name = await js(`document.querySelector('#detail-body .d-name').textContent`);
+  await api('PATCH', `/agents/${id}`, { name: 'redrawn-agent' });
+  await until(`document.querySelector('#detail-body .d-name').textContent === 'redrawn-agent'`, 'the page redrawn');
+  assert.equal(await js(`document.querySelector('#detail-body .d-more .menu').hidden`), false, 'still open after a redraw');
+  await api('PATCH', `/agents/${id}`, { name });
+  await js(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`);
+  assert.equal(await js(`document.querySelector('#detail-body .d-more .menu').hidden`), true, 'Escape closes it');
+  await js(`location.hash = ''`);
+  await reload();
+  await until(`document.querySelectorAll('#agent-list li[data-id]').length === 3`, 'the agents listed again');
+});
+
 test('split screen: split, load, type, follow sizes, keys, reload, close', { skip }, async () => {
   const ids = await js(`[...document.querySelectorAll('#agent-list li[data-id]')].map((l) => l.dataset.id)`);
   const xtermRows = (sel) => `document.querySelector('${sel} .xterm-rows')?.textContent ?? ''`;
