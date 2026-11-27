@@ -1643,6 +1643,46 @@ test('autonomy and ground rules: your rules reach every agent; an agent that run
   }
 });
 
+test('timeline: the asks in its transcript and its commits, dated, from the API and the command line', async () => {
+  const origin = makeOrigin('timeline');
+  const [a] = (await call('POST', '/agents', { intent: 'Add a version file', repo: `file://${origin}` })).body;
+  const v = await waitFor(async () => {
+    const x = await agentNow(a.id);
+    return x.workdir && x.status === 'running' ? x : null;
+  }, 20000, 'the agent running in its worktree');
+  const { transcriptPath } = await import('../src/tracker.js');
+  const file = transcriptPath(v.workdir, a.sessionId);
+  await waitFor(() => fs.existsSync(file), 8000, 'its transcript');
+  const t0 = Date.parse(v.createdAt);
+  const at = (min) => new Date(t0 + min * 60_000).toISOString();
+  const line = (type, m, content) => JSON.stringify({ type, timestamp: at(m), message: { content } }) + '\n';
+  fs.appendFileSync(file, [
+    line('user', 0.1, 'Add a version file\n\nThe rest of the instructions'),
+    line('assistant', 1, [{ type: 'tool_use', id: 'w', name: 'Write', input: { file_path: path.join(v.workdir, 'VERSION') } }]),
+    line('assistant', 2, [{ type: 'text', text: 'VERSION added.' }]),
+    line('user', 3, 'thanks'),
+    line('assistant', 3.5, [{ type: 'text', text: 'Glad to help.' }]),
+  ].join(''));
+  fs.writeFileSync(path.join(v.workdir, 'VERSION'), '1.0.0\n');
+  gitc(v.workdir, 'add', 'VERSION');
+  execFileSync('git', ['-c', 'commit.gpgsign=false', '-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-qm', 'Add VERSION'], { cwd: v.workdir, env: { ...process.env, GIT_COMMITTER_DATE: at(1.5), GIT_AUTHOR_DATE: at(1.5) } });
+
+  // While it works, its last ask is the one in progress; once idle, it is closed.
+  await waitFor(async () => !(await agentNow(a.id)).runtime?.busy, 15000, 'the agent idle');
+  const tl = (await call('GET', `/agents/${a.id}/timeline`)).body;
+  assert.deepEqual(tl.nodes.map((n) => n.kind), ['start', 'ask', 'talk'], JSON.stringify(tl.nodes));
+  const ask = tl.nodes[1];
+  assert.deepEqual([ask.title, ask.at, ask.files, ask.reply, ask.commits.map((c) => c.subject)], ['', at(2), ['VERSION'], 'VERSION added.', ['Add VERSION']]);
+  assert.deepEqual(tl.counts, { asks: 2, changes: 1, commits: 1, prs: 0, merged: 0 });
+  const md = (await call('GET', `/agents/${a.id}/timeline?format=md`)).body.markdown;
+  assert.ok(md.includes('· The request done**') && md.includes('  - Commit `') && md.includes('1 ask with no changes:** thanks'), md);
+  const { execFile } = await import('node:child_process');
+  const out = await new Promise((resolve) => execFile(process.execPath, [path.join(here, '..', 'bin', 'agentmgr.js'), 'timeline', a.id], { env: process.env, timeout: 60_000 }, (e, o, err) => resolve(`${o}${err}`)));
+  assert.ok(out.includes('# Timeline: ') && out.includes('Changed 1 file: `VERSION`'), out);
+  assert.equal((await call('GET', '/agents/nope/timeline')).status, 404);
+  await call('DELETE', `/agents/${a.id}`);
+});
+
 test('proof: the agent is told to record it; what it recorded is shown with what it left out; the commands are run again when you ask, not when the agent does', async () => {
   const origin = makeOrigin('proof');
   const [a] = (await call('POST', '/agents', { intent: 'Add a version file', repo: `file://${origin}` })).body;
@@ -5235,8 +5275,17 @@ test('limits: an agent stopped at a usage limit shows it, and continues on anoth
 });
 
 test('Codex agents: launch with instructions, adopt the session Codex picks, usage, prompts, trust, resume, Explain', async () => {
-  const codexLaunches = () => readLog(process.env.FAKE_CODEX_LOG);
   const dir = fs.mkdtempSync(path.join(home, 'codex-proj-'));
+  // This agent's launches only: another test's agent may have gone on in Codex (one stopped at a limit
+  // that resets late, depending on the time of day).
+  const real = (p) => {
+    try {
+      return fs.realpathSync(p);
+    } catch {
+      return p;
+    }
+  };
+  const codexLaunches = () => readLog(process.env.FAKE_CODEX_LOG).filter((l) => real(l.cwd) === real(dir));
   assert.equal((await call('POST', '/agents', { intent: 'x', engine: 'codex', permissionMode: 'bogus' })).status, 400);
   const [a] = (await call('POST', '/agents', { intent: 'Fix the login #ask #stuck', dir, engine: 'codex', plan: true })).body;
   assert.equal(a.engine, 'codex');

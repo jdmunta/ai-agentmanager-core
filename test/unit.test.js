@@ -16,6 +16,7 @@ import { cleanSchedule, nextRun, placeholders, render } from '../src/playbooks.j
 import { cleanLearning, memoryKey, memoryPrompt } from '../src/memory.js';
 import { passEnv, plist, serviceIsOurs, unit } from '../src/service.js';
 import { stripChrome } from '../src/judge.js';
+import { asksFromLines, buildTimeline, timelineMarkdown } from '../src/timeline.js';
 import claude from '../src/engines/claude.js';
 import { notInstalled } from '../src/engines/index.js';
 import { Cleanup, cleanupSettings } from '../src/cleanup.js';
@@ -7763,4 +7764,91 @@ test('your calibration: guesses at the start against what happened, by kind, nex
   ]);
   assert.match(calibrationMarkdown(c), /\| f1 \| Bug fixes \| yes → yes \| 1 → 3 \| skim → read closely \|/);
   assert.match(calibrationLines(calibration([]))[0], /^No guess has settled yet/);
+});
+
+test('timeline: asks from a transcript, dated when each closed, the changes under them, pull requests, and asks with no changes folded', () => {
+  const W = '/w/agent';
+  const rec = (type, timestamp, content, extra = {}) => JSON.stringify({ type, timestamp, message: { content }, ...extra });
+  const lines = [
+    rec('user', '2026-11-20T10:00:05Z', 'Add CSV export to orders\n\nSystem instructions follow…'),
+    rec('assistant', '2026-11-20T10:05:00Z', [{ type: 'tool_use', id: 't1', name: 'Edit', input: { file_path: `${W}/src/orders.js` } }]),
+    rec('user', '2026-11-20T10:05:01Z', [{ type: 'tool_result', tool_use_id: 't1', content: 'ok' }]),
+    JSON.stringify({ type: 'assistant', timestamp: '2026-11-20T10:20:00Z', message: { stop_reason: 'end_turn', content: [{ type: 'text', text: 'Export added with a test.' }] } }),
+    JSON.stringify({ type: 'system', subtype: 'turn_duration', timestamp: '2026-11-20T10:20:01Z' }),
+    rec('user', '2026-11-20T11:00:00Z', '<system-reminder>noise</system-reminder>looks good?'),
+    rec('assistant', '2026-11-20T11:00:30Z', [{ type: 'text', text: 'Yes.' }]),
+    rec('user', '2026-11-20T11:01:00Z', 'and the docs?', { isMeta: true }),
+    rec('user', '2026-11-20T11:02:00Z', 'ok thanks'),
+    rec('assistant', '2026-11-20T11:02:10Z', [{ type: 'text', text: 'Welcome.' }]),
+    rec('user', '2026-11-20T12:00:00Z', [{ type: 'text', text: 'Open a pull request' }]),
+    rec('assistant', '2026-11-20T12:03:00Z', [{ type: 'text', text: 'Opened https://github.com/o/r/pull/7' }]),
+    rec('user', '2026-11-20T12:10:00Z', 'Now add paging'),
+    rec('assistant', '2026-11-20T12:11:00Z', [{ type: 'tool_use', id: 't2', name: 'Write', input: { file_path: `${W}/src/page.js` } }]),
+    rec('user', '2026-11-20T12:11:00Z', '[Request interrupted by user]'),
+    'not json',
+  ];
+  const asks = asksFromLines(lines);
+  assert.deepEqual(asks.map((a) => [a.text.split('\n')[0], a.endAt]), [
+    ['Add CSV export to orders', '2026-11-20T10:20:00Z'],
+    ['looks good?', '2026-11-20T11:00:30Z'],
+    ['ok thanks', '2026-11-20T11:02:10Z'],
+    ['Open a pull request', '2026-11-20T12:03:00Z'],
+    ['Now add paging', '2026-11-20T12:11:00Z'],
+  ], 'tool results, meta lines and interruptions are not asks');
+  assert.deepEqual(asks[0].files, [`${W}/src/orders.js`]);
+  assert.deepEqual(asks.map((a) => a.ended), [true, false, false, false, false], 'only a turn Claude Code marked as ended');
+  assert.equal(buildTimeline({ id: 'x', name: 'x', intent: 'y', createdAt: '2026-11-20T10:00:00Z' }, { asks: asks.slice(0, 1), busy: true }).nodes[1].open, false, 'busy, but its turn on the last ask ended: a resumed session redrawing');
+  assert.equal(asks[0].reply, 'Export added with a test.');
+  assert.deepEqual(asks[3].prs, ['https://github.com/o/r/pull/7']);
+
+  const agent = {
+    id: 'a1', name: 'csv-export', intent: 'Add CSV export to orders', createdAt: '2026-11-20T10:00:00Z', workdir: W, git: { branch: 'agent/csv' }, baseRef: 'main @ abc1234',
+    prs: { u: { url: 'https://github.com/o/r/pull/7', number: 7, title: 'CSV export', state: 'MERGED', openedAt: '2026-11-20T12:02:00Z', mergedAt: '2026-11-21T09:00:00Z', source: 'branch' } },
+    brief: { status: 'done', updatedAt: '2026-11-20T12:01:00Z', solution: 'Orders export as CSV.' },
+  };
+  const commits = [
+    { sha: '1111111aaaa', at: '2026-11-20T10:15:00Z', subject: 'CSV export', files: 2, paths: ['src/orders.js', 'src/export.js'] },
+    { sha: '2222222bbbb', at: '2026-11-20T09:00:00Z', subject: 'by hand before', files: 1 },
+  ];
+  const tl = buildTimeline(agent, { asks, commits, busy: true });
+  assert.deepEqual(tl.nodes.map((n) => [n.kind, n.event ?? null, n.at]), [
+    ['start', null, '2026-11-20T10:00:00Z'],
+    ['commits', null, '2026-11-20T09:00:00Z'],
+    ['ask', null, '2026-11-20T10:20:00Z'],
+    ['talk', null, '2026-11-20T11:02:10Z'],
+    ['pr', 'opened', '2026-11-20T12:02:00Z'],
+    ['ask', null, '2026-11-20T12:03:00Z'],
+    ['done', null, '2026-11-20T12:03:00Z'],
+    ['pr', 'merged', '2026-11-21T09:00:00Z'],
+    ['ask', null, null],
+  ]);
+  const [, , first, talk, , pr, , , open] = tl.nodes;
+  // Done was written during the "Open a pull request" ask: dated when that ask closed, after it.
+  assert.equal(first.first, true);
+  assert.equal(first.title, '', 'the first ask is the request (shown once, at the start), not the instructions sent with it');
+  assert.deepEqual(first.files, ['src/orders.js', 'src/export.js'], 'edited, and changed by its commits');
+  assert.deepEqual(first.commits.map((c) => c.sha), ['1111111']);
+  assert.deepEqual(talk.asks.map((a) => a.title), ['looks good?', 'ok thanks']);
+  assert.equal(pr.title, 'Open a pull request', 'an ask that opened a pull request is a milestone');
+  assert.equal(open.open, true, 'the ask it is working on is last, not dated');
+  assert.deepEqual(tl.counts, { asks: 5, changes: 2, commits: 2, prs: 1, merged: 1 });
+
+  const md = timelineMarkdown(tl);
+  assert.ok(md.startsWith('# Timeline: csv-export\n'));
+  const local = (iso) => {
+    const d = new Date(iso);
+    const p = (n) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+  };
+  assert.ok(md.includes(`- **${local('2026-11-20T10:20:00Z')} · The request done**\n`), md);
+  assert.ok(md.includes('  - Changed 2 files: `src/orders.js`, `src/export.js`'));
+  assert.ok(md.includes('  - Commit `1111111` CSV export'));
+  assert.ok(md.includes('2 asks with no changes:** looks good? / ok thanks'));
+  assert.deepEqual(talk.asks.map((a) => a.reply), ['Yes.', 'Welcome.'], 'with what it said to each');
+  assert.ok(md.includes('· Pull request merged:** [#7 CSV export](https://github.com/o/r/pull/7)'));
+  assert.ok(md.includes('- **Now · Working on:** Now add paging'));
+
+  const bare = buildTimeline({ id: 'b', name: 'b', intent: 'x', createdAt: '2026-11-20T10:00:00Z', engine: 'codex' }, { commits: [commits[0]] });
+  assert.deepEqual(bare.nodes.map((n) => n.kind), ['start', 'commits']);
+  assert.equal(bare.transcripts, false);
 });

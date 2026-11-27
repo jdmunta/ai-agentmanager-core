@@ -266,7 +266,14 @@ test('three columns: the views at the left in groups, back in the top bar by the
   await js(`document.querySelector('#agent-list li[data-id="${id}"]').click()`);
   await until(`document.querySelector('#detail-body .d-more')`, 'the More button');
   const bar = await js(`[...document.querySelectorAll('#detail-body .d-actions > button')].map((b) => b.dataset.act)`);
-  assert.ok(bar.includes('terminal') && bar.includes('edit') && !bar.includes('delete') && !bar.includes('fork'), `in the bar: ${bar}`);
+  assert.ok(bar.includes('terminal') && bar.includes('edit') && bar.includes('timeline') && !bar.includes('delete') && !bar.includes('fork'), `in the bar: ${bar}`);
+  // Its timeline: the milestones in a thread, from its start.
+  await js(`document.querySelector('#detail-body [data-act="timeline"]').click()`);
+  await until(`document.querySelector('#timeline-dialog').open && document.querySelector('#timeline-body .tl-start')`, 'the timeline with its start');
+  assert.match(await js(`document.querySelector('#timeline-title').textContent`), /^Timeline: /);
+  assert.match(await js(`document.querySelector('#timeline-body > p.hint').textContent`), /^\d+ asks?, \d+ with changes/);
+  await js(`document.querySelector('[data-timeline="close"]').click()`);
+  await until(`!document.querySelector('#timeline-dialog').open`, 'the timeline closed');
   await js(`document.querySelector('#detail-body [data-act="more"]').click()`);
   await until(`!document.querySelector('#detail-body .d-more .menu').hidden`, 'More open');
   assert.deepEqual(await js(`['delete', 'fork', 'debug', 'keep'].map((k) => Boolean(document.querySelector('#detail-body .d-more .menu [data-act="' + k + '"]')))`), [true, true, true, true]);

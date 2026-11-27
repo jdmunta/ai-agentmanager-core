@@ -60,6 +60,7 @@ import { morph } from '/morph.js';
 import { acceptanceRow, acceptanceWaits, initAcceptance } from '/acceptance.js';
 import { autoNeedHtml, autonomyNeeds, autonomyRow, initAutonomy, needsPermissionHint } from '/autonomy.js';
 import { initProof, proofRows } from '/proof.js';
+import { initTimeline } from '/timeline.js';
 import { initWeekly } from '/weekly.js';
 import { initReadFirst, readFirstRow } from '/readfirst.js';
 import { initGlance } from '/glance.js';
@@ -208,6 +209,8 @@ async function act(fn, okMsg) {
 const reviewUi = initReview({ api, esc, toast, agents, $ });
 const acceptUi = initAcceptance({ dialog: $('#accept-dialog'), api, esc, toast, ago, agentOf: (id) => agents.get(id), upsert: (a) => upsert(a) });
 const proofUi = initProof({ dialog: $('#proof-dialog'), api, esc, toast, ago, agentOf: (id) => agents.get(id) });
+// Timeline: the agent's asks closed and pull requests, dated, from its start to now.
+const timelineUi = initTimeline({ dialog: $('#timeline-dialog'), api, esc, toast, agentOf: (id) => agents.get(id) });
 const autoUi = initAutonomy({ dialog: $('#auto-dialog'), api, esc, toast, ago, agentOf: (id) => agents.get(id), upsert: (a) => upsert(a) });
 // Past "Ask me", what done means is agreed first: that is what the answers given for you are checked against.
 // And a permission prompt is never answered for you: say so where the mode would stop it at each one.
@@ -2763,6 +2766,7 @@ function renderDetail() {
         ${a.aiReview?.verdict ? `<button data-act="overview" title="The AI review: what's done, what's missing, the risks">Overview${a.aiReview.seen ? '' : ' <span class="count">new</span>'}</button>` : ''}
         ${a.questions?.length ? `<button data-act="questions" title="What the agent asked you, and your answers">Questions${openQuestions(a) ? ` <span class="count">${openQuestions(a)}</span>` : ''}</button>` : ''}
         ${a.conflicts?.length ? `<button data-act="overlaps" title="Other agents changing the same files: which, who should merge first, and what to do">⚔ Overlaps <span class="count">${a.conflicts.length}</span></button>` : ''}
+        ${noRepo(a) ? '' : '<button data-act="timeline" title="Its work from the start to now: each ask closed and each pull request, dated, with what it changed">Timeline</button>'}
         <button data-act="edit" title="Change its name, request, project, priority, permission mode or model">Edit</button>
         <div class="menu-wrap d-more">
           <button type="button" data-act="more" aria-haspopup="menu" aria-expanded="${moreFor === a.id}" title="More for this agent: a new session, the desktop app, Debug, Security audit, Reverse engineer, MCP tools, Fork, Refresh, Keep, Delete">More ▾</button>
@@ -4172,6 +4176,7 @@ function agentChanged(a) {
   acceptUi.agentChanged(a);
   autoUi.agentChanged(a);
   proofUi.agentChanged(a);
+  timelineUi.agentChanged(a);
   sidePane?.agentChanged(a);
 }
 
@@ -4422,6 +4427,8 @@ $('#detail-body').addEventListener('click', async (e) => {
       return select(btn.dataset.agent);
     case 'proof-open':
       return proofUi.open(a.id);
+    case 'timeline':
+      return timelineUi.open(a.id);
     case 'auto-open':
       return autoUi.open(a.id);
     case 'accept-skip':

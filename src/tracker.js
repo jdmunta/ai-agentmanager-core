@@ -222,7 +222,7 @@ export function scanTranscript(file, cursor, bugPatterns = []) {
 /** The gh CLI to run (AGENTMGR_GH_BIN points the tests at a fake one). */
 export const ghBin = () => process.env.AGENTMGR_GH_BIN || 'gh';
 
-const PR_FIELDS = 'number,title,url,state,isDraft,headRefOid,reviewDecision,mergeable,mergeStateStatus,statusCheckRollup,createdAt,mergedAt';
+const PR_FIELDS = 'number,title,url,state,isDraft,headRefOid,reviewDecision,mergeable,mergeStateStatus,statusCheckRollup,createdAt,mergedAt,closedAt';
 const FAILED = new Set(['FAILURE', 'ERROR', 'TIMED_OUT', 'CANCELLED', 'ACTION_REQUIRED', 'STARTUP_FAILURE']);
 const PASSED = new Set(['SUCCESS', 'NEUTRAL', 'SKIPPED']);
 
