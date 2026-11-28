@@ -1937,6 +1937,8 @@ export async function startServer({ port = PORT, host = HOST, evalTimer = true }
   }));
   api.post('/agents/:id/land/update', wrap((req) => landing.updateBranch(req.params.id, req.body ?? {})));
   api.post('/agents/:id/land/fix', wrap((req) => landing.fix(req.params.id, req.body ?? {})));
+  api.get('/agents/:id/pr-impact', wrap((req) => manager.prImpact(req.params.id, req.query.url)));
+  api.post('/agents/:id/pr-impact/post', wrap((req) => manager.postPrImpact(req.params.id, req.body?.url)));
   api.post('/agents/:id/land/merge', wrap((req) => landing.merge(req.params.id, req.body ?? {})));
   api.get('/cleanup', wrap(() => cleanup.status()));
   api.put('/cleanup', wrap(async (req) => {

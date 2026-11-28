@@ -18,7 +18,7 @@ import { passEnv, plist, serviceIsOurs, unit } from '../src/service.js';
 import { stripChrome } from '../src/judge.js';
 import { asksFromLines, buildTimeline, timelineMarkdown } from '../src/timeline.js';
 import { GROUP_OVER, buildGraph, changeDone, changeWords, commonFolder, describePrompt, designFiles, folderEntries, importSpecs, layerView, notesFrom, partContext, rankOf, requestPrompt, resolveChanges, serviceOf, symbolsOf } from '../src/layers.js';
-import { changeImpact, logicalRequestPrompt, requestPart, requestSnapshot, snapshotCompared } from '../src/impact.js';
+import { changeImpact, impactMarkdown, logicalRequestPrompt, requestPart, requestSnapshot, snapshotCompared } from '../src/impact.js';
 import { addFlows, callsIn, featureFlow, featureLines, featureList, routeKey, serviceNames } from '../src/flows.js';
 import { addLinks, componentMap, httpLinks, logicalNotesFrom, logicalPrompt, logicalSig, logicalView, pathPattern } from '../src/logical.js';
 import { focusBoxes, layout } from '../public/design.js';
@@ -8222,7 +8222,9 @@ test("an agent's change at the Logical view's level: the features it touches, th
   assert.deepEqual(imp.features.map((f) => f.key), ['stock', 'items'], 'gone and new features first');
   assert.deepEqual(imp.links.gone.map((e) => `${e.from} ${e.to}`), ['c:store x:run:git']);
   assert.deepEqual(imp.links.changed.map((e) => [e.from, e.to, e.routes]), [['c:pages', 'c:api', { added: ['DELETE /api/items/*'], gone: ['GET /api/items/*/stock'] }]]);
-  assert.deepEqual(changeImpact(now, now, { notes }), { features: [], featureCount: 0, links: { added: [], gone: [], changed: [] } }, 'no change, nothing touched');
+  const same = changeImpact(now, now, { notes });
+  assert.deepEqual({ ...same, names: undefined }, { features: [], featureCount: 0, links: { added: [], gone: [], changed: [] }, names: undefined }, 'no change, nothing touched');
+  assert.equal(same.names['c:pages'], 'Pages', 'the components named, for links shown elsewhere');
 
   // A change asked about a feature: what it is, with its flow; what changed in it since.
   const flowView = (g) => logicalView(g, { notes, features: featureList(g), flow: (compOf) => featureFlow(g, 'items', { compOf }) });
@@ -8248,4 +8250,22 @@ test("an agent's change at the Logical view's level: the features it touches, th
   assert.match(logicalRequestPrompt(V, edge, { project: 'shop', words: 'Batch these' }), /- Routes called: `GET \/api\/items`, `GET \/api\/items\/\*\/stock`/);
   assert.deepEqual(Object.keys(requestSnapshot(before, edge)).sort(), ['server/main.js#GET /api/items', 'server/main.js#GET /api/items/*/stock', 'server/main.js#POST /api/items', 'web/app.js#list', 'web/app.js#show'], 'both ends of the link, with the route handlers');
   assert.equal(requestPart(V, { kind: 'box', id: 'c:nope' }, new Map()), null);
+});
+
+test("a pull request's changes as a comment: names a model wrote can't format it or mention anyone", () => {
+  const md = impactMarkdown(
+    {
+      features: [{ name: 'Ping @octo *now*', how: 'new', routes: { added: ['POST /a'], gone: [] }, steps: Array.from({ length: 10 }, (_, i) => ({ how: 'new', name: `f${i}`, file: 'a.js', line: i + 1 })), more: 2, callers: [] }],
+      featureCount: 1,
+      links: { added: [{ from: 'c:a', to: 'c:b', found: 'writes' }], gone: [], changed: [] },
+      names: { 'c:a': 'A_b', 'c:b': '@team' },
+    },
+    { from: 'main' },
+  );
+  assert.match(md, /^### What this changes in the system\n\nFeatures and the links between components, against main\./);
+  assert.match(md, /- \*\*Ping @\u200bocto \\\*now\\\*\*\*: new; \+1 route, 10 new/);
+  assert.match(md, /  - route added: `POST \/a`/);
+  assert.match(md, /  - new: `f7` in `a\.js:8`\n  - and 4 more functions/);
+  assert.doesNotMatch(md, /`f8`/);
+  assert.match(md, /- new: A\\_b → @\u200bteam \(writes\)/);
 });
