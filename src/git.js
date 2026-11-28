@@ -347,3 +347,38 @@ export async function fullDiff(dir, baseSha, max = 400_000) {
   }
   return out.length > max ? `${out.slice(0, max)}\n… (diff truncated)` : out;
 }
+
+/**
+ * Files at commits, read in one `git cat-file --batch`: specs like "<sha>:<path>" to a Map of their
+ * text (undefined for one not there, null for one over `max` bytes).
+ */
+export function readAt(dir, specs, { max = Infinity, timeout = 60_000 } = {}) {
+  return new Promise((resolve, reject) => {
+    const out = new Map();
+    if (!specs.length) return resolve(out);
+    const child = spawn('git', ['cat-file', '--batch'], { cwd: dir, env: baseEnv(), stdio: ['pipe', 'pipe', 'ignore'] });
+    const timer = setTimeout(() => child.kill(), timeout);
+    const chunks = [];
+    child.stdout.on('data', (c) => chunks.push(c));
+    child.on('error', (e) => (clearTimeout(timer), reject(e)));
+    child.on('close', () => {
+      clearTimeout(timer);
+      const buf = Buffer.concat(chunks);
+      let at = 0;
+      for (const spec of specs) {
+        const nl = buf.indexOf(10, at);
+        if (nl < 0) break;
+        const head = buf.toString('utf8', at, nl);
+        at = nl + 1;
+        const m = head.match(/^\S+ (\S+) (\d+)$/);
+        if (!m) continue; // "<spec> missing"
+        const size = Number(m[2]);
+        if (m[1] === 'blob') out.set(spec, size <= max ? buf.toString('utf8', at, at + size) : null);
+        at += size + 1;
+      }
+      resolve(out);
+    });
+    child.stdin.on('error', () => {});
+    child.stdin.end(`${specs.join('\n')}\n`);
+  });
+}

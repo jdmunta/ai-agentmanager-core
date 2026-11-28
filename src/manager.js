@@ -155,7 +155,7 @@ import { answerMessage, loadQuestions, questionsPath, questionsPrompt } from './
 import { PROOF_FILE, proofBlock, proofFacts, proofPrompt } from './proof.js';
 import { LIMITS as LAYER_LIMITS, buildGraph, changeDone, changeWords, commonFolder, describePrompt, designFiles, folderEntries, layerView, notesFrom, partContext, requestPrompt, resolveChanges } from './layers.js';
 import { LOGICAL_HEAD, addLinks, componentMap, logicalNotesFrom, logicalPrompt, logicalSig, logicalView } from './logical.js';
-import { changeImpact, logicalRequestPrompt, requestPart, requestSnapshot, snapshotCompared } from './impact.js';
+import { changeImpact, impactMarkdown, logicalRequestPrompt, requestPart, requestSnapshot, snapshotCompared } from './impact.js';
 import { addFlows, featureFlow, featureLines, featureList } from './flows.js';
 import { PRIVATE_MESSAGE, ideaPatch, keptPrivate, mustBeShareable } from './private.js';
 import { awaitsReview, readFirst } from './readfirst.js';
@@ -182,6 +182,7 @@ import { DRIVE_DOCS, DRIVE_TOOLS, docUrl, driveHtml, drivePrompt, folderUrl, par
 import {
   bugFromRef,
   extractRefs,
+  ghBin,
   landState,
   leadingJiraKey,
   prDetails,
@@ -1353,6 +1354,67 @@ export class AgentManager extends EventEmitter {
     this.baseGraphs.set(agent.id, { key, graph });
     if (this.baseGraphs.size > 10) this.baseGraphs.delete(this.baseGraphs.keys().next().value);
     return graph;
+  }
+
+  /**
+   * What an agent's pull request changes at the level of features and components: the code at its
+   * head commit against the commit where it branched from the branch it targets, both read from git
+   * (not the folder, which may hold more). Kept per head commit and the project's components.
+   */
+  async prImpact(ref, url) {
+    const agent = this.mustGet(ref);
+    const prs = Object.values(agent.prs ?? {}).filter((p) => p.source !== 'mentioned');
+    const pr = url ? prs.find((p) => p.url === url) : prs.find((p) => p.state === 'OPEN');
+    if (!pr) throw Object.assign(new Error(url ? 'That pull request is not on this agent' : 'This agent has no open pull request'), { status: 404 });
+    const dir = agent.workdir;
+    if (!dir || !fs.existsSync(dir)) throw Object.assign(new Error('Its folder is gone'), { status: 400 });
+    if (!pr.head) throw Object.assign(new Error("GitHub hasn't said which commit it is at yet"), { status: 400 });
+    const opts = { cwd: dir, timeout: 30_000 };
+    const project = this.projectInfo(agent);
+    const notes = (project && this.store.data.logicalNotes?.[project.key]) ?? null;
+    const key = `${pr.head}\n${notes?.at ?? ''}`;
+    this.prImpacts ??= new Map();
+    const hit = this.prImpacts.get(pr.url);
+    if (hit?.key === key) return hit.out;
+    if (!(await git.run('git', ['cat-file', '-e', `${pr.head}^{commit}`], opts).then(() => true, () => false))) {
+      await git.fetch(dir).catch(() => {});
+      if (!(await git.run('git', ['cat-file', '-e', `${pr.head}^{commit}`], opts).then(() => true, () => false))) throw Object.assign(new Error(`Its head commit ${pr.head.slice(0, 7)} is not in the agent's folder`), { status: 400 });
+    }
+    const target = pr.baseRefName ?? agent.baseRef?.split(' @ ')[0]?.replace(/^origin\//, '') ?? null;
+    const tip = await git.resolveBase(dir, target).catch(() => null);
+    const base = tip ? await git.run('git', ['merge-base', pr.head, tip.sha], opts).catch(() => null) : null;
+    if (!base) throw Object.assign(new Error(`Couldn't find where it branched from ${target ?? 'its base'}`), { status: 400 });
+    const listed = (await git.run('git', ['ls-tree', '-r', '--name-only', pr.head], { ...opts, trim: false })).split('\n').filter(Boolean);
+    const changed = new Set((await git.run('git', ['diff', '--name-only', '--no-renames', base, pr.head], opts)).split('\n').filter(Boolean));
+    const max = LAYER_LIMITS.MAX_BYTES;
+    const wanted = designFiles([...new Set([...listed, ...changed])]);
+    const read = new Set(wanted);
+    const nowText = await git.readAt(dir, wanted.map((p) => `${pr.head}:${p}`), { max });
+    const oldText = await git.readAt(dir, wanted.filter((p) => changed.has(p)).map((p) => `${base}:${p}`), { max });
+    const at = (m, sha, p) => (m.has(`${sha}:${p}`) ? m.get(`${sha}:${p}`) : undefined);
+    const graphNow = this.graphOf(dir, listed, (p) => at(nowText, pr.head, p) ?? null);
+    // Before: the same files, with those it changed as they were (those it added weren't there).
+    const then = [...new Set([...listed, ...changed])].filter((p) => !changed.has(p) || !read.has(p) || at(oldText, base, p) !== undefined);
+    const graphThen = this.graphOf(dir, then, (p) => (changed.has(p) ? at(oldText, base, p) : at(nowText, pr.head, p)) ?? null);
+    const out = {
+      pr: { url: pr.url, number: pr.number ?? null, title: pr.title ?? null, head: pr.head },
+      base: { ref: target ?? tip.ref, sha: base },
+      files: changed.size,
+      components: notes ? 'named' : 'folders',
+      impact: changeImpact(graphNow, graphThen, { notes }),
+    };
+    this.prImpacts.set(pr.url, { key, out });
+    if (this.prImpacts.size > 30) this.prImpacts.delete(this.prImpacts.keys().next().value);
+    return out;
+  }
+
+  /** The PR's changes at the feature level posted on it as a comment, when you press Post. */
+  async postPrImpact(ref, url) {
+    const agent = this.mustGet(ref);
+    const r = await this.prImpact(agent.id, url);
+    const body = `${impactMarkdown(r.impact, { from: `where it branched from \`${r.base.ref}\` (${r.base.sha.slice(0, 7)})` })}\n\n<sub>At ${r.pr.head.slice(0, 7)}.</sub>`;
+    await git.run(ghBin(), ['pr', 'comment', r.pr.url, '--body', body], { cwd: agent.workdir, timeout: 60_000 });
+    return { posted: true, url: r.pr.url };
   }
 
   /** The view of an agent's code, and a part of it a request is about (see impact.js requestPart). */

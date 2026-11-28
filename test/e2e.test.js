@@ -5805,6 +5805,80 @@ test('review changes: diff with new files, comments to the agent, commit, push',
   await call('POST', `/agents/${a.id}/stop`);
 });
 
+test("a pull request at the feature level: its head against where it branched, not the folder's other changes; posted on it", async () => {
+  const origin = path.join(home, 'primpact-origin.git');
+  const seed = path.join(home, 'primpact-seed');
+  const g = (cwd, ...args) => execFileSync('git', ['-c', 'commit.gpgsign=false', '-c', 'user.email=t@t', '-c', 'user.name=t', ...args], { cwd }).toString().trim();
+  execFileSync('git', ['init', '-q', '--bare', '-b', 'main', origin]);
+  execFileSync('git', ['clone', '-q', origin, seed]);
+  fs.mkdirSync(path.join(seed, 'server'));
+  fs.mkdirSync(path.join(seed, 'web'));
+  fs.writeFileSync(path.join(seed, 'package.json'), '{"name":"shop","dependencies":{"express":"4"}}\n');
+  fs.writeFileSync(path.join(seed, 'server', 'app.js'), "import express from 'express';\nconst app = express();\napp.get('/api/items', (q, r) => r.json(list()));\nfunction list() {\n  return [];\n}\n");
+  fs.writeFileSync(path.join(seed, 'web', 'page.js'), "export function show() {\n  return fetch('/api/items');\n}\n");
+  g(seed, 'add', '.');
+  g(seed, 'commit', '-q', '-m', 'seed');
+  g(seed, 'push', '-q', 'origin', 'main');
+  const [a] = (await call('POST', '/agents', { intent: 'Delete items', repo: `file://${origin}`, start: false })).body;
+  const ready = await waitFor(async () => ((await agentNow(a.id)).status === 'stopped' ? agentNow(a.id) : null), 20000);
+  const dir = ready.workdir;
+  for (const [k, v] of [['user.email', 't@t'], ['user.name', 't'], ['commit.gpgsign', 'false']]) g(dir, 'config', k, v);
+  // Committed: a delete route the page calls. Not committed: another route, not in the pull request.
+  fs.writeFileSync(path.join(dir, 'server', 'app.js'), "import express from 'express';\nconst app = express();\napp.get('/api/items', (q, r) => r.json(list()));\napp.delete('/api/items/:id', (q, r) => r.json(drop(q.params.id)));\nfunction list() {\n  return [];\n}\nfunction drop(id) {\n  return id;\n}\n");
+  fs.writeFileSync(path.join(dir, 'web', 'page.js'), "export function show() {\n  return fetch('/api/items');\n}\nexport function remove(id) {\n  return fetch(`/api/items/${id}`, { method: 'DELETE' });\n}\n");
+  g(dir, 'add', '.');
+  g(dir, 'commit', '-q', '-m', 'Delete items');
+  const head = g(dir, 'rev-parse', 'HEAD');
+
+  const ghState = path.join(home, 'fake-gh-primpact.json');
+  const ghLog = path.join(home, 'fake-gh-primpact.log');
+  const saved = { bin: process.env.AGENTMGR_GH_BIN, noGh: process.env.AGENTMGR_NO_GH, state: process.env.FAKE_GH_STATE, log: process.env.FAKE_GH_LOG };
+  Object.assign(process.env, { AGENTMGR_GH_BIN: path.join(here, 'fake-gh.js'), FAKE_GH_STATE: ghState, FAKE_GH_LOG: ghLog });
+  delete process.env.AGENTMGR_NO_GH;
+  try {
+    fs.writeFileSync(ghState, JSON.stringify({ prs: [] }));
+    const opened = await call('POST', `/agents/${a.id}/changes/pr`, { title: 'Delete items', draft: false });
+    assert.equal(opened.status, 200, JSON.stringify(opened.body));
+    const st = JSON.parse(fs.readFileSync(ghState, 'utf8'));
+    Object.assign(st.prs[0], { headRefOid: head, baseRefName: 'main' });
+    fs.writeFileSync(ghState, JSON.stringify(st));
+    await call('POST', `/agents/${a.id}/refresh`);
+    await waitFor(async () => ((await agentNow(a.id)).prs ?? []).find((p) => p.head === head), 10000, 'its head commit');
+    fs.appendFileSync(path.join(dir, 'server', 'app.js'), "app.get('/api/stats', (q, r) => r.json({}));\n");
+
+    const r = await call('GET', `/agents/${a.id}/pr-impact?url=${encodeURIComponent(opened.body.url)}`);
+    assert.equal(r.status, 200, JSON.stringify(r.body));
+    assert.equal(r.body.pr.head, head);
+    assert.equal(r.body.base.ref, 'main');
+    assert.equal(r.body.files, 2);
+    const I = r.body.impact;
+    const items = I.features.find((f) => f.key === 'items');
+    assert.ok(items, JSON.stringify(I.features.map((f) => f.key)));
+    assert.deepEqual(items.routes.added, ['DELETE /api/items/*']);
+    assert.ok(items.callers.some((c) => c.name === 'remove' && c.how === 'new'), JSON.stringify(items.callers));
+    assert.ok(!I.features.some((f) => f.key === 'stats'), 'the uncommitted route is not in it');
+    const web = I.links.changed.find((e) => I.names[e.from] === 'web' && I.names[e.to] === 'server');
+    assert.deepEqual(web?.routes.added, ['DELETE /api/items/*'], JSON.stringify(I.links));
+
+    const posted = await call('POST', `/agents/${a.id}/pr-impact/post`, { url: opened.body.url });
+    assert.equal(posted.status, 200, JSON.stringify(posted.body));
+    const c = readLog(ghLog).find((x) => x[0] === 'pr' && x[1] === 'comment');
+    assert.equal(c[2], opened.body.url);
+    const body = c[c.indexOf('--body') + 1];
+    assert.match(body, /^### What this changes in the system/);
+    assert.match(body, /\*\*items\*\*: \+1 route[\s\S]*route added: `DELETE \/api\/items\/\*`[\s\S]*new: `drop` in `server\/app\.js:\d+`/);
+    assert.match(body, /changed: web → server, now also `DELETE \/api\/items\/\*`/);
+    assert.match(body, new RegExp(`At ${head.slice(0, 7)}`));
+
+    assert.equal((await call('GET', `/agents/${a.id}/pr-impact?url=nope`)).status, 404);
+  } finally {
+    for (const [k, v] of [['AGENTMGR_GH_BIN', saved.bin], ['AGENTMGR_NO_GH', saved.noGh], ['FAKE_GH_STATE', saved.state], ['FAKE_GH_LOG', saved.log]]) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  }
+});
+
 test('landing: open a PR, failing checks and requested changes go back to the agent once per commit, update, merge', async () => {
   const origin = path.join(home, 'land-origin.git');
   const seed = path.join(home, 'land-seed');

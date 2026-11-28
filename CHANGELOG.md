@@ -1,5 +1,9 @@
 # Changelog
 
+## 1.84.0 (2026-11-28)
+
+- **What it changes,** on each pull request in **Land**: the features whose flow it changes (routes added or removed; functions changed, new or gone, with files and lines; callers) and the links between components that came, went or call other routes. It compares the pull request's head commit with where it branched from its target branch, both read from git, so the agent's uncommitted work is left out. **Post on the pull request** adds it as a comment, as you. See "Landing" in the [README](README.md).
+
 ## 1.83.0 (2026-11-27)
 
 - **Architecture** is its own button at the top, beside Map (`A`, or `#architecture`), with the **Logical** view and the **Code** view (what was Map's Design view). Map keeps Agents, Bugs and Speed. Each button opens on the view it was last on; an agent's **Where its changes sit** opens Architecture's Code view.

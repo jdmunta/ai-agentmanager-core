@@ -5,6 +5,7 @@
 
 import { featureFlow, featureList } from './flows.js';
 import { componentMap, logicalView } from './logical.js';
+import { featureChangeWords } from '../public/logical.js';
 
 const MAX_FEATURES = 60;
 const MAX_STEPS = 30; // changed steps listed for one feature
@@ -115,7 +116,44 @@ export function changeImpact(now, before, { notes = null } = {}) {
     }
   }
   for (const [key, e] of was) if (!is.has(key)) links.gone.push(brief(e));
-  return { features: features.slice(0, MAX_FEATURES), featureCount: features.length, links };
+  // The components' names, for the links shown away from the view.
+  const names = {};
+  for (const c of [...W.components, ...V.components]) names[c.id] = c.name;
+  return { features: features.slice(0, MAX_FEATURES), featureCount: features.length, links, names };
+}
+
+/**
+ * A pull request's changes at the level of features and components, as Markdown for a comment on
+ * it: each feature with its routes and the functions changed, new or gone, then the links.
+ */
+export function impactMarkdown(impact, { from = 'its base' } = {}) {
+  // Names written by a model: no Markdown of their own, and no @mention that would notify someone.
+  const plain = (s) => String(s).replace(/[\\`*_[\]<>#|~]/g, (c) => `\\${c}`).replace(/@/g, '@\u200b');
+  const name = (id) => plain(impact.names?.[id] ?? id);
+  const code = (s) => `\`${String(s).replace(/`/g, "'")}\``;
+  const out = [`### What this changes in the system`, '', `Features and the links between components, against ${from}. Read from the code by AI Agent Manager; no model wrote it.`, ''];
+  if (impact.features.length) {
+    out.push(`**Features** (${impact.featureCount})`, '');
+    for (const f of impact.features) {
+      out.push(`- **${plain(f.name)}**: ${f.how === 'changed' ? '' : `${f.how}; `}${featureChangeWords(f) || 'its flow changed'}`);
+      for (const r of f.routes.added) out.push(`  - route added: ${code(r)}`);
+      for (const r of f.routes.gone) out.push(`  - route removed: ${code(r)}`);
+      for (const s of f.steps.slice(0, 8)) out.push(`  - ${s.how}: ${code(`${s.name}`)} in ${code(`${s.file}:${s.line}`)}`);
+      const left = f.steps.length + f.more - Math.min(8, f.steps.length);
+      if (left) out.push(`  - and ${left} more ${left === 1 ? 'function' : 'functions'}`);
+      for (const c of f.callers) out.push(`  - caller ${c.how}: ${code(c.name)} in ${code(c.file)}`);
+    }
+    if (impact.featureCount > impact.features.length) out.push(`- and ${impact.featureCount - impact.features.length} more`);
+    out.push('');
+  } else out.push("No feature's flow changed.", '');
+  const L = impact.links;
+  if (L.added.length || L.gone.length || L.changed.length) {
+    out.push('**Links between components**', '');
+    for (const e of L.added) out.push(`- new: ${name(e.from)} → ${name(e.to)}${e.found ? ` (${plain(e.found)})` : ''}`);
+    for (const e of L.gone) out.push(`- gone: ${name(e.from)} → ${name(e.to)}`);
+    for (const e of L.changed) out.push(`- changed: ${name(e.from)} → ${name(e.to)}${e.routes.added.length ? `, now also ${e.routes.added.map(code).join(', ')}` : ''}${e.routes.gone.length ? `, no longer ${e.routes.gone.map(code).join(', ')}` : ''}`);
+  } else out.push('No link between components came, went or changed.');
+  return out.join('\n');
 }
 
 // ------------------------------------------------------------------ change requests

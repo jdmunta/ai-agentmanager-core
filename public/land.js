@@ -1,10 +1,13 @@
 // Land tab: every agent's open pull request, grouped by what it needs to get merged, with
 // Review, Update, Ask to fix and Merge. Ones whose Eval is 100% on their latest commit come first.
 // Settings for sending failures back to agents, and for merging on the Eval, at the bottom.
+// What it changes shows a pull request at the level of features and the links between components
+// (its head against where it branched), and posts that on it when you press Post.
 
 import { listenHtml } from './speak.js';
 import { evalChip } from './eval.js';
 import { sureToMerge } from './sure.js';
+import { featureChangeWords } from './logical.js';
 const SHORT = { ready: 'ready', fix: 'to fix', behind: 'behind', waiting: 'waiting', draft: 'draft' };
 const GROUPS = [
   ['ready', 'Ready to merge'],
@@ -32,6 +35,8 @@ export function prChips(pr, esc) {
 export function initLand({ api, esc, toast, agents, $, scoreBadge = () => '', select, openReview, isOpen }) {
   const view = $('#land-view');
   let settings = null;
+  // What a pull request changes, by its URL: { open, loading, data, error, posting, posted }.
+  const impacts = new Map();
 
   const rows = () => {
     const out = [];
@@ -69,6 +74,53 @@ export function initLand({ api, esc, toast, agents, $, scoreBadge = () => '', se
     return '';
   }
 
+  /** A pull request's features and links changed, under its row. */
+  function impactHtml(pr) {
+    const x = impacts.get(pr.url);
+    if (!x?.open) return '';
+    if (x.loading) return '<div class="land-impact"><p class="hint">Reading its code at its head and where it branched…</p></div>';
+    if (x.error) return `<div class="land-impact"><p class="hint fail">${esc(x.error)}</p></div>`;
+    const { impact: I, base, files } = x.data;
+    const tag = (how) => `<span class="design-tag ${how}">${how}</span> `;
+    const name = (id) => I.names?.[id] ?? id;
+    const at = (s) => `<code>${esc(s.file)}${s.line ? `:${s.line}` : ''}</code>`;
+    const feature = (f) => {
+      const inner = [
+        ...f.routes.added.map((r) => `<li>${tag('new')}route <code>${esc(r)}</code></li>`),
+        ...f.routes.gone.map((r) => `<li>${tag('gone')}route <code>${esc(r)}</code></li>`),
+        ...f.callers.map((c) => `<li>${tag(c.how)}called from <b>${esc(c.name)}</b> ${at(c)}</li>`),
+        ...f.steps.map((st) => `<li>${tag(st.how)}<b>${esc(st.name)}</b> ${at(st)}</li>`),
+        f.more ? `<li class="hint">and ${f.more} more</li>` : '',
+      ].join('');
+      return `<li>${f.how === 'changed' ? '' : tag(f.how)}<details data-land-feature="${esc(f.key)}" ${x.expanded?.has(f.key) ? 'open' : ''}><summary><b>${esc(f.name)}</b> <span class="hint">${esc(featureChangeWords(f) || 'its flow changed')}</span></summary><ul class="logical-routes">${inner}</ul></details></li>`;
+    };
+    const L = I.links;
+    const routes = (r) => [r.added.length && `now also ${r.added.join(', ')}`, r.gone.length && `no longer ${r.gone.join(', ')}`].filter(Boolean).join('; ');
+    const links = [
+      ...L.added.map((e) => `<li>${tag('new')}${esc(name(e.from))} → ${esc(name(e.to))} <span class="hint">${esc(e.found)}</span></li>`),
+      ...L.gone.map((e) => `<li>${tag('gone')}${esc(name(e.from))} → ${esc(name(e.to))}</li>`),
+      ...L.changed.map((e) => `<li>${tag('changed')}${esc(name(e.from))} → ${esc(name(e.to))} <span class="hint">${esc(routes(e.routes))}</span></li>`),
+    ];
+    return `<div class="land-impact">
+      <p class="hint">${files} file${files === 1 ? '' : 's'} changed, against where it branched from <code>${esc(base.ref)}</code> (${esc(base.sha.slice(0, 7))})${x.data.components === 'folders' ? '. Components are the top folders until Architecture → Logical → Find components with AI names them' : ''}.</p>
+      ${I.features.length ? `<div><b>Features</b> <span class="hint">${I.featureCount}</span><ul class="logical-links">${I.features.map(feature).join('')}</ul>${I.featureCount > I.features.length ? `<span class="hint">and ${I.featureCount - I.features.length} more</span>` : ''}</div>` : '<p class="hint">No feature\'s flow changed.</p>'}
+      ${links.length ? `<div><b>Links between components</b><ul class="logical-links">${links.join('')}</ul></div>` : '<p class="hint">No link between components came, went or changed its routes.</p>'}
+      <div class="bl-actions">${x.posted ? '<span class="hint">Posted on the pull request</span>' : `<button class="small" data-land="impact-post" ${x.posting ? 'disabled' : ''} title="Add this as a comment on the pull request on GitHub, as you">${x.posting ? 'Posting…' : 'Post on the pull request'}</button>`}</div>
+    </div>`;
+  }
+
+  async function loadImpact(id, url) {
+    const x = impacts.get(url);
+    try {
+      x.data = await api('GET', `/agents/${id}/pr-impact?url=${encodeURIComponent(url)}`);
+      x.error = null;
+    } catch (err) {
+      x.error = err.message;
+    }
+    x.loading = false;
+    render();
+  }
+
   function rowHtml({ a, pr, land, sure }) {
     const canFix = land === 'fix' || land === 'behind';
     return `<li class="agent land-row" data-agent="${a.id}" data-url="${esc(pr.url)}">
@@ -78,12 +130,14 @@ export function initLand({ api, esc, toast, agents, $, scoreBadge = () => '', se
       <div class="land-chips">${scoreBadge(a.docs?.scorecard, esc)} ${evalChip(a.eval, esc)} ${sure.sure ? `<span class="tag open" title="${esc(sure.why)}">Sure to merge</span>` : ''} ${prChips(pr, esc)}</div>
       <div class="bl-actions">
         <button class="small" data-land="review" title="Its diff, line comments for the agent, commit and push">Review</button>
+        <button class="small ${impacts.get(pr.url)?.open ? 'active' : ''}" data-land="impact" title="The features and links between components it changes: its head against where it branched">What it changes</button>
         ${listenHtml(`prvoice:${a.id}`, { title: 'Explain the review aloud: the PR, its checks, the AI review, the riskiest changes and what is left', label: 'Explain' })}
         ${land === 'behind' || pr.mergeable === 'CONFLICTING' ? '<button class="small" data-land="update" title="Merge the base branch in here (when the agent is idle and its work is committed) and push; otherwise, or on conflicts, ask the agent">Update</button>' : ''}
         ${canFix ? '<button class="small" data-land="fix" title="Send the failures, requested changes or conflicts to the agent">Ask to fix</button>' : ''}
         ${land === 'ready' ? '<button class="small primary" data-land="merge">Merge</button>' : ''}
         ${land === 'waiting' || land === 'behind' ? '<button class="small" data-land="auto" title="GitHub merges it once checks and reviews allow">Auto-merge</button>' : ''}
       </div>
+      ${impactHtml(pr)}
     </li>`;
   }
 
@@ -152,6 +206,31 @@ export function initLand({ api, esc, toast, agents, $, scoreBadge = () => '', se
         return select(id);
       case 'review':
         return openReview(id);
+      case 'impact': {
+        const x = impacts.get(url);
+        const head = rows().find((r) => r.pr.url === url)?.pr.head;
+        if (x?.open) return (x.open = false), render();
+        // Read again when its head moved.
+        if (x && x.data?.pr.head === head && !x.error) return (x.open = true), render();
+        impacts.set(url, { open: true, loading: true });
+        render();
+        return loadImpact(id, url);
+      }
+      case 'impact-post': {
+        const x = impacts.get(url);
+        if (!x?.data || !confirm('Post what it changes as a comment on the pull request, as you?')) return;
+        x.posting = true;
+        render();
+        try {
+          await api('POST', `/agents/${id}/pr-impact/post`, { url });
+          x.posted = true;
+          toast('Posted on the pull request', 4000);
+        } catch (err) {
+          toast(`Error: ${err.message}`, 6000);
+        }
+        x.posting = false;
+        return render();
+      }
       case 'refresh':
         return run(async () => {
           const ids = [...new Set(rows().map((r) => r.a.id))];
@@ -169,6 +248,20 @@ export function initLand({ api, esc, toast, agents, $, scoreBadge = () => '', se
         return run(() => api('POST', `/agents/${id}/land/merge`, { url, auto: true }), 'Auto-merge is on: GitHub merges it once it may');
     }
   });
+
+  // A feature opened stays open when the list is drawn again.
+  view.addEventListener(
+    'toggle',
+    (e) => {
+      const d = e.target.closest?.('[data-land-feature]');
+      const x = d && impacts.get(d.closest('[data-url]')?.dataset.url);
+      if (!x) return;
+      x.expanded ??= new Set();
+      if (d.open) x.expanded.add(d.dataset.landFeature);
+      else x.expanded.delete(d.dataset.landFeature);
+    },
+    true,
+  );
 
   view.addEventListener('change', async (e) => {
     const k = e.target.dataset.set;

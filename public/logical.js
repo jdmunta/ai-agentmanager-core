@@ -65,7 +65,8 @@ export function mainEdges(V, all) {
 }
 
 /** What changed in a feature, in a few words: "+1 route, 2 changed, 1 new". */
-function featureChangeWords(f) {
+/** A feature's change in a few words: "+1 route, 2 changed, 1 new". */
+export function featureChangeWords(f) {
   const n = (how) => f.steps.filter((s) => s.how === how).length + f.callers.filter((c) => c.how === how).length;
   return [
     f.routes.added.length && `+${plural(f.routes.added.length, 'route')}`,
